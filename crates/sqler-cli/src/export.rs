@@ -13,17 +13,18 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use anyhow::{Context, anyhow};
 use sqler_config::redact_credentials;
-use sqler_driver_api::sqler_core::{DriverId, Query};
+use sqler_driver_api::sqler_core::Query;
 use sqler_driver_api::{DriverError, QueryEvent, QueryStream};
 use sqler_export::{
     CSV, CancelToken, ExportControl, ExportError, ExportOptions, Exporter, Format, JSON, MARKDOWN,
     Registry, SQL, Sink, Summary,
 };
 use sqler_sql::{Dialect, StatementClass, classify_each};
+use tokio::sync::Notify;
 
 use crate::args::{ExportArgs, Output, USAGE};
 use crate::{connection_config, registry};
@@ -38,7 +39,7 @@ pub(crate) enum Failure {
     Usage(String),
     /// The write gate refused the statement (exit 3).
     Refused(String),
-    /// Ctrl+C (exit 130).
+    /// Ctrl+C (exit 130). A second signal while the export winds down exits 130 at once.
     Cancelled,
     /// SIGTERM (exit 143).
     Terminated,
@@ -88,7 +89,7 @@ impl From<anyhow::Error> for Failure {
 fn driver_failure(err: DriverError) -> Failure {
     match err {
         DriverError::Cancelled => Failure::Cancelled,
-        other => Failure::Runtime(other.into()),
+        other => Failure::Runtime(anyhow!(crate::driver_message(&other))),
     }
 }
 
@@ -97,7 +98,14 @@ fn export_failure(err: ExportError) -> Failure {
         ExportError::Cancelled => Failure::Cancelled,
         // The variant's own text repeats the cause that the error chain already prints.
         ExportError::Io(err) => Failure::Runtime(anyhow::Error::new(err).context("write failed")),
-        other => Failure::Runtime(other.into()),
+        // Their texts can carry option and identifier values from the command line.
+        ExportError::InvalidOptions(_) => Failure::Runtime(anyhow!(
+            "the export options cannot be used with this format"
+        )),
+        ExportError::Sql(_) => Failure::Runtime(anyhow!(
+            "the --table or --schema name cannot be used as an SQL identifier"
+        )),
+        _ => Failure::Runtime(anyhow!("export failed")),
     }
 }
 
@@ -137,36 +145,40 @@ fn resolve_format<'r>(
     registry: &'r Registry,
     args: &ExportArgs,
 ) -> Result<(&'r dyn Format, ExportOptions), Failure> {
+    // Only literals and registered ids are printed, never the argument itself.
     let id = args.format.as_str();
     let Some(format) = registry.get(id) else {
-        if id == "parquet" || id == "xlsx" {
+        let compiled_out = match id {
+            "parquet" => Some("parquet"),
+            "xlsx" => Some("xlsx"),
+            _ => None,
+        };
+        if let Some(name) = compiled_out {
             return Err(Failure::Usage(format!(
-                "format `{id}` is not available in this build of sqler-cli (built without the \
-                 `export-{id}` feature)"
+                "format `{name}` is not available in this build of sqler-cli (built without the \
+                 `export-{name}` feature)"
             )));
         }
         let known: Vec<&str> = registry.formats().map(Format::id).collect();
         return Err(Failure::Usage(format!(
-            "unknown format `{id}`; available: {}",
+            "unknown format; available: {}",
             known.join(", ")
         )));
     };
     if args.output == Output::Stdout && !TEXT_FORMATS.contains(&format.id()) {
         return Err(Failure::Usage(format!(
-            "{id} is a binary format; --output - is not allowed"
+            "{} is a binary format; --output - is not allowed",
+            format.id()
         )));
     }
     let mut options = ExportOptions::default();
-    if id == SQL {
+    if format.id() == SQL {
         let table = args
             .table
             .clone()
             .ok_or_else(|| Failure::Usage("the sql format needs --table".to_owned()))?;
         let dialect = Dialect::from_driver_id(&args.driver).ok_or_else(|| {
-            Failure::Usage(format!(
-                "the sql format does not support driver `{}`",
-                args.driver
-            ))
+            Failure::Usage("the sql format does not support this driver".to_owned())
         })?;
         options.sql.table = table;
         options.sql.schema.clone_from(&args.schema);
@@ -188,11 +200,11 @@ impl PartialFile {
     /// Creates the temporary file; returns it with the handle to write to.
     fn create(target: &Path) -> anyhow::Result<(Self, File)> {
         if target.is_dir() {
-            return Err(anyhow!("--output is a directory: {}", target.display()));
+            return Err(anyhow!("--output is a directory"));
         }
         let name = target
             .file_name()
-            .ok_or_else(|| anyhow!("--output has no file name: {}", target.display()))?;
+            .ok_or_else(|| anyhow!("--output has no file name"))?;
         let dir = match target.parent() {
             Some(p) if !p.as_os_str().is_empty() => p,
             _ => Path::new("."),
@@ -205,7 +217,7 @@ impl PartialFile {
             .write(true)
             .create_new(true)
             .open(&path)
-            .with_context(|| format!("cannot create {}", path.display()))?;
+            .context("cannot create the output file")?;
         let keep = file
             .try_clone()
             .context("cannot duplicate the output handle")?;
@@ -225,8 +237,7 @@ impl PartialFile {
         if let Some(file) = self.keep.take() {
             file.sync_all().context("cannot sync the output file")?;
         }
-        fs::rename(&self.path, &self.target)
-            .with_context(|| format!("cannot write {}", self.target.display()))?;
+        fs::rename(&self.path, &self.target).context("cannot write the output file")?;
         self.committed = true;
         Ok(())
     }
@@ -368,9 +379,9 @@ impl Interrupts {
 async fn run_export(args: &ExportArgs) -> Result<(), Failure> {
     let drivers = registry()?;
     // Before the gate: an unknown driver is a runtime error, not a refusal to write.
-    let id = DriverId::new(&args.driver).map_err(|e| Failure::Runtime(e.into()))?;
+    let id = crate::driver_id(&args.driver)?;
     if drivers.get(&id).is_none() {
-        return Err(Failure::Runtime(anyhow!("unknown driver: {}", args.driver)));
+        return Err(Failure::Runtime(anyhow!(crate::UNKNOWN_DRIVER)));
     }
     let warning = gate(args)?;
     let formats = Registry::with_builtin();
@@ -385,19 +396,37 @@ async fn run_export(args: &ExportArgs) -> Result<(), Failure> {
         session = drivers.connect(&config) => session,
         failure = interrupts.wait() => return Err(failure),
     };
-    let mut session = connected.map_err(|e| Failure::Runtime(e.into()))?;
+    let mut session = connected.map_err(driver_failure)?;
 
     let token = CancelToken::new();
     let signalled = Arc::new(AtomicU8::new(0));
+    let finished = Arc::new(AtomicBool::new(false));
+    let cancel_sent = Arc::new(Notify::new());
     let handle = session.cancel_handle();
     let watcher = {
         let token = token.clone();
         let signalled = Arc::clone(&signalled);
+        let finished = Arc::clone(&finished);
+        let cancel_sent = Arc::clone(&cancel_sent);
         tokio::spawn(async move {
-            let failure = interrupts.wait().await;
-            signalled.store(failure.exit_code(), Ordering::SeqCst);
+            let first = interrupts.wait().await;
+            // A signal once the export is over (while the session closes) is not a cancel: leave
+            // at once.
+            if finished.load(Ordering::SeqCst) {
+                std::process::exit(i32::from(first.exit_code()));
+            }
+            signalled.store(first.exit_code(), Ordering::SeqCst);
             token.cancel();
-            let _ = handle.cancel().await;
+            // The cancel request is sent from this task and awaited before the task ends, so it
+            // is never dropped half-way. A second signal gives up on it.
+            tokio::select! {
+                _ = handle.cancel() => {}
+                second = interrupts.wait() => std::process::exit(i32::from(second.exit_code())),
+            }
+            cancel_sent.notify_one();
+            // Still listening: a second signal forces the exit, even while the session closes.
+            let second = interrupts.wait().await;
+            std::process::exit(i32::from(second.exit_code()));
         })
     };
     // Let the watcher run once: a signal that arrived during connect is seen before any file is
@@ -405,8 +434,13 @@ async fn run_export(args: &ExportArgs) -> Result<(), Failure> {
     tokio::task::yield_now().await;
 
     let result = export_stream(&mut *session, args, format, &options, &token).await;
-    watcher.abort();
+    finished.store(true, Ordering::SeqCst);
+    if signalled.load(Ordering::SeqCst) != 0 {
+        // The server-side cancel goes out before the session is closed.
+        cancel_sent.notified().await;
+    }
     let closed = session.close().await;
+    watcher.abort();
     let pumped = match result {
         Ok(pumped) => pumped,
         Err(_) if token.is_cancelled() => {
@@ -417,7 +451,7 @@ async fn run_export(args: &ExportArgs) -> Result<(), Failure> {
         }
         Err(err) => return Err(err),
     };
-    closed.map_err(|e| Failure::Runtime(e.into()))?;
+    closed.map_err(driver_failure)?;
 
     let Pumped {
         summary,

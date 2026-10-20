@@ -148,8 +148,9 @@ Windows the file is not marked hidden). With `--output -` the output already wri
 stdout, truncated; the exit code says so. A write error on stdout (a closed pipe, a full disk) fails the export with exit code 1. A stdout that is closed before the process starts (`>&-`) is not an error: the Rust runtime replaces it with `/dev/null` at start-up.
 
 The rename replaces the target as a directory entry. A symbolic link as `--output` is replaced by
-a regular file and the file it pointed to is not touched; a read-only existing target is replaced
-too (only the directory must be writable); the new file has the default permissions of the
+a regular file and the file it pointed to is not touched; on Unix a read-only existing target is
+replaced too (only the directory must be writable; on Windows a rename over a read-only target can
+fail with access denied, not verified); the new file has the default permissions of the
 process, not those of the file it replaces.
 
 ## Exit codes
@@ -163,13 +164,19 @@ process, not those of the file it replaces.
 | 130 | `export` only: cancelled with Ctrl+C |
 | 143 | `export` only: terminated by `SIGTERM` (Unix) |
 
-Messages never contain the target, so a password in a URL does not reach stderr.
+Error messages never repeat an argument (driver id, format, `--table`, `--schema`, target, SQL) and
+the text of a driver error is replaced by a fixed one per kind (connection failed, query failed, ...),
+so a URL in the wrong place, such as `--driver postgres://user:pw@host/db`, does not put its password
+on stderr. A file error names no path. The cause of a failed query is withheld too: run the statement
+in the app to see it. Only the success summary names the output file.
 
 ## Cancellation
 
-`export` handles Ctrl+C and, on Unix, `SIGTERM` (see above). `run` has no handler; the process exits on a signal.
+`export` handles Ctrl+C and, on Unix, `SIGTERM` (see above), also while the connection closes. `run` has no handler; the process exits on a signal.
 
 `PostgreSQL` cancels on the server: the running statement is stopped and the stream ends with a
 cancelled error. The `SQLite` driver cancels cooperatively: a cancel request is checked between
 batches of rows. A single step that produces no rows for a long time, such as sorting a very large
-table before the first row, cannot be interrupted. A second Ctrl+C while cancelling is ignored.
+table before the first row, cannot be interrupted. A second Ctrl+C or `SIGTERM` while `export` is cancelling or closing the connection exits at once
+with 130 or 143; the cancel request is sent before the connection is closed, and a hidden file that
+is still there at that moment is left behind.

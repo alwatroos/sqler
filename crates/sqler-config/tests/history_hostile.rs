@@ -109,9 +109,18 @@ fn redactor_hostile_sql() {
         "'".to_owned() + &"é".repeat(500_000),
     ];
     // Every hostile input must be handled without panicking. Speed is checked by scaling below,
-    // not by a wall-clock bound, which fails on a loaded machine.
+    // and here only by a very loose absolute bound per case (a hundred times what a linear scan
+    // needs on a slow machine), which still catches a catastrophic regression without failing on
+    // a loaded one.
     for c in &cases {
+        let start = std::time::Instant::now();
         let _ = redact_credentials(c).len();
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "took {:?} on an input of {} bytes",
+            start.elapsed(),
+            c.len()
+        );
     }
     // A quadratic blow-up shows as a time ratio near 64 for an 8x larger input, a linear scan as
     // one near 8. The bound of 30 sits between them and ignores machine speed and load.

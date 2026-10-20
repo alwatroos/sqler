@@ -492,7 +492,7 @@ fn export_unknown_driver_is_a_runtime_error_not_a_refusal() {
         "export", "--driver", "nope", "--format", "csv", "--output", "-", "x", "select 1",
     ]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
-    assert!(stderr(&out).contains("unknown driver: nope"));
+    assert!(stderr(&out).contains("unknown driver"));
     assert!(!stderr(&out).contains("allow-write"));
 }
 
@@ -532,4 +532,100 @@ fn export_postgres_failure_does_not_leak_the_password() {
     assert!(!stderr(&out).contains("s3cret"), "{}", stderr(&out));
     assert!(!stdout(&out).contains("s3cret"));
     assert!(!path.exists());
+}
+
+const LEAK_URL: &str = "postgres://leakuser:s3cretpw@db.leak.example:5432/leakdb";
+
+/// No stderr text may carry any piece of the URL. (Stdout is the export itself: a `--table` name
+/// legitimately appears in the generated `INSERT`.)
+fn assert_no_leak(args: &[&str]) {
+    let out = cli(args);
+    let text = stderr(&out);
+    for needle in ["s3cretpw", "leakuser", "db.leak.example", "leakdb"] {
+        assert!(!text.contains(needle), "{args:?} leaked {needle}: {text}");
+    }
+}
+
+#[test]
+fn export_never_echoes_arguments_in_errors() {
+    let dir = tmp("noleak");
+    let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join("out.csv");
+    let file = file.to_str().unwrap();
+    let eq_driver = format!("--driver={LEAK_URL}");
+    let eq_format = format!("--format={LEAK_URL}");
+    let url_file = format!("{LEAK_URL}/x.csv");
+    let dash_url = format!("--{LEAK_URL}");
+    let base = ["--format", "csv", "--output", "-"];
+    let with = |head: &[&str], tail: &[&str]| {
+        let mut v = vec!["export"];
+        v.extend_from_slice(head);
+        v.extend_from_slice(tail);
+        assert_no_leak(&v);
+    };
+    // The URL in the --driver slot, in every form, and a --driver without its value.
+    with(
+        &["--driver", LEAK_URL],
+        &[base[0], base[1], base[2], base[3], ":memory:", "select 1"],
+    );
+    with(
+        &[&eq_driver],
+        &[base[0], base[1], base[2], base[3], ":memory:", "select 1"],
+    );
+    with(&base, &["--driver", LEAK_URL, "select 1"]);
+    with(&base, &["--driver"]);
+    with(
+        &["--driver", "--format", "csv", "--output", "-"],
+        &[LEAK_URL, "select 1"],
+    );
+    // The URL in the other value slots.
+    with(
+        &["--format", LEAK_URL, "--output", "-"],
+        &[":memory:", "select 1"],
+    );
+    with(&[&eq_format, "--output", "-"], &[":memory:", "select 1"]);
+    with(
+        &["--format", "sql", "--table", LEAK_URL, "--output", "-"],
+        &[":memory:", "select 1"],
+    );
+    with(
+        &[
+            "--format", "sql", "--table", "t", "--schema", LEAK_URL, "--output", "-",
+        ],
+        &[":memory:", "select 1"],
+    );
+    with(
+        &["--format", "csv", "--output", LEAK_URL],
+        &[":memory:", "select 1"],
+    );
+    with(
+        &["--format", "csv", "--output", &url_file],
+        &[":memory:", "select 1"],
+    );
+    with(
+        &["--format", "csv", "--output", file, "--bogus"],
+        &[LEAK_URL],
+    );
+    with(&[&dash_url, "--format", "csv", "--output", "-"], &[]);
+    with(&base, &[":memory:", "select 1", LEAK_URL]);
+    // A server URL given to the sqlite driver, and a query that fails.
+    with(&base, &[LEAK_URL, "selekt"]);
+    // The first word.
+    assert_no_leak(&[LEAK_URL]);
+    assert_no_leak(&[&dash_url]);
+}
+
+#[test]
+fn run_never_echoes_arguments_in_errors() {
+    let eq_driver = format!("--driver={LEAK_URL}");
+    let bad_sql = format!("selekt {LEAK_URL}");
+    assert_no_leak(&["run", "--driver", LEAK_URL, ":memory:", "select 1"]);
+    assert_no_leak(&["run", &eq_driver, ":memory:", "select 1"]);
+    assert_no_leak(&["run", "--driver"]);
+    assert_no_leak(&["run", "--driver", "nope", LEAK_URL, "select 1"]);
+    assert_no_leak(&["run", LEAK_URL, "select 1"]);
+    assert_no_leak(&["run", LEAK_URL]);
+    assert_no_leak(&["run", "--bogus", LEAK_URL, "select 1"]);
+    assert_no_leak(&["run", ":memory:", "select 1", LEAK_URL]);
+    assert_no_leak(&["run", ":memory:", &bad_sql]);
 }

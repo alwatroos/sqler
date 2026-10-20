@@ -112,8 +112,8 @@ pub(crate) fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, U
         "--version" | "-V" => Ok(Command::Version),
         "run" => parse_run(args),
         "export" => parse_export(args),
-        other if other.starts_with('-') => Err(UsageError(format!("unknown option: {other}"))),
-        other => Err(UsageError(format!("unknown command: {other}"))),
+        other if other.starts_with('-') => Err(UsageError("unknown option; see --help".to_owned())),
+        _ => Err(UsageError("unknown command; see --help".to_owned())),
     }
 }
 
@@ -130,7 +130,7 @@ fn parse_run(mut args: impl Iterator<Item = String>) -> Result<Command, UsageErr
         } else if let Some(value) = arg.strip_prefix("--driver=") {
             value.clone_into(&mut driver);
         } else if arg.starts_with('-') && arg.len() > 1 {
-            return Err(UsageError(format!("unknown option: {arg}")));
+            return Err(UsageError("unknown option; see --help".to_owned()));
         } else {
             positional.push(arg);
         }
@@ -190,7 +190,7 @@ fn parse_export(mut args: impl Iterator<Item = String>) -> Result<Command, Usage
         } else if arg == "--allow-write" {
             allow_write = true;
         } else if arg.starts_with('-') && arg.len() > 1 {
-            return Err(UsageError(format!("unknown option: {arg}")));
+            return Err(UsageError("unknown option; see --help".to_owned()));
         } else {
             positional.push(arg);
         }
