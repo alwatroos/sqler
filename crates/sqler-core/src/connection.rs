@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: The SQLer Authors
 
 use std::fmt;
+use std::path::PathBuf;
 
 use crate::CoreError;
 
@@ -77,6 +78,96 @@ impl Environment {
     }
 }
 
+/// How a driver secures the network connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum TlsMode {
+    /// No TLS.
+    Disable,
+    /// Use TLS if the server offers it.
+    #[default]
+    Prefer,
+    /// Require TLS; do not verify the certificate.
+    Require,
+    /// Require TLS and verify the certificate chain.
+    VerifyCa,
+    /// Require TLS, verify the chain and the host name.
+    VerifyFull,
+}
+
+impl TlsMode {
+    /// The identifier: `disable`, `prefer`, `require`, `verify-ca` or `verify-full`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disable => "disable",
+            Self::Prefer => "prefer",
+            Self::Require => "require",
+            Self::VerifyCa => "verify-ca",
+            Self::VerifyFull => "verify-full",
+        }
+    }
+
+    /// Parses an identifier produced by [`TlsMode::as_str`] (exact lowercase match).
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "disable" => Some(Self::Disable),
+            "prefer" => Some(Self::Prefer),
+            "require" => Some(Self::Require),
+            "verify-ca" => Some(Self::VerifyCa),
+            "verify-full" => Some(Self::VerifyFull),
+            _ => None,
+        }
+    }
+}
+
+/// TLS options for a network connection. The paths are not secret.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct TlsConfig {
+    /// The TLS mode.
+    pub mode: TlsMode,
+    /// Root certificate (CA) file.
+    pub ca_cert: Option<PathBuf>,
+    /// Client certificate file.
+    pub client_cert: Option<PathBuf>,
+    /// Client private key file.
+    pub client_key: Option<PathBuf>,
+}
+
+impl TlsConfig {
+    /// A config with `mode` and no files.
+    #[must_use]
+    pub fn new(mode: TlsMode) -> Self {
+        Self {
+            mode,
+            ..Self::default()
+        }
+    }
+
+    /// Sets the CA certificate file.
+    #[must_use]
+    pub fn with_ca_cert(mut self, path: impl Into<PathBuf>) -> Self {
+        self.ca_cert = Some(path.into());
+        self
+    }
+
+    /// Sets the client certificate file.
+    #[must_use]
+    pub fn with_client_cert(mut self, path: impl Into<PathBuf>) -> Self {
+        self.client_cert = Some(path.into());
+        self
+    }
+
+    /// Sets the client key file.
+    #[must_use]
+    pub fn with_client_key(mut self, path: impl Into<PathBuf>) -> Self {
+        self.client_key = Some(path.into());
+        self
+    }
+}
+
 /// How to reach one database.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -93,6 +184,9 @@ pub struct ConnectionConfig {
     pub environment: Option<Environment>,
     /// Optional accent colour as lowercase `#rrggbb`; validated by `sqler-config`.
     pub color: Option<String>,
+    /// TLS options. `None` means the driver follows the target's own parameters (such as
+    /// `sslmode=`) and otherwise uses `prefer`; `Some` is explicit and overrides them.
+    pub tls: Option<TlsConfig>,
 }
 
 impl ConnectionConfig {
@@ -105,6 +199,7 @@ impl ConnectionConfig {
             target: target.into(),
             environment: None,
             color: None,
+            tls: None,
         }
     }
 
@@ -119,6 +214,13 @@ impl ConnectionConfig {
     #[must_use]
     pub fn with_color(mut self, color: impl Into<String>) -> Self {
         self.color = Some(color.into());
+        self
+    }
+
+    /// Sets the TLS options.
+    #[must_use]
+    pub fn with_tls(mut self, tls: TlsConfig) -> Self {
+        self.tls = Some(tls);
         self
     }
 
@@ -137,6 +239,7 @@ impl fmt::Debug for ConnectionConfig {
             .field("target", &redact_target(&self.target))
             .field("environment", &self.environment)
             .field("color", &self.color)
+            .field("tls", &self.tls)
             .finish()
     }
 }
@@ -282,6 +385,56 @@ mod tests {
             .with_color("#112233");
         let out = format!("{c:?}");
         assert!(out.contains("Staging") && out.contains("#112233"));
+        assert!(!out.contains("hunter2") && !out.contains("bob"));
+    }
+
+    #[test]
+    fn tls_mode_ids() {
+        for (m, id) in [
+            (TlsMode::Disable, "disable"),
+            (TlsMode::Prefer, "prefer"),
+            (TlsMode::Require, "require"),
+            (TlsMode::VerifyCa, "verify-ca"),
+            (TlsMode::VerifyFull, "verify-full"),
+        ] {
+            assert_eq!(m.as_str(), id);
+            assert_eq!(TlsMode::from_id(id), Some(m));
+        }
+        for bad in ["", "Disable", "verify_ca", "verify", " require"] {
+            assert_eq!(TlsMode::from_id(bad), None);
+        }
+        assert_eq!(TlsMode::default(), TlsMode::Prefer);
+    }
+
+    #[test]
+    fn tls_config_builders() {
+        let t = TlsConfig::new(TlsMode::VerifyFull);
+        assert_eq!(t.mode, TlsMode::VerifyFull);
+        assert_eq!(
+            (&t.ca_cert, &t.client_cert, &t.client_key),
+            (&None, &None, &None)
+        );
+        assert_eq!(TlsConfig::default().mode, TlsMode::Prefer);
+        let t = t
+            .with_ca_cert("/ca.pem")
+            .with_client_cert("/c.pem")
+            .with_client_key("/k.pem");
+        assert_eq!(t.ca_cert, Some(PathBuf::from("/ca.pem")));
+        assert_eq!(t.client_cert, Some(PathBuf::from("/c.pem")));
+        assert_eq!(t.client_key, Some(PathBuf::from("/k.pem")));
+    }
+
+    #[test]
+    fn config_tls_default_and_debug() {
+        let d = DriverId::new("postgres").unwrap();
+        let c = ConnectionConfig::new("p", d, "postgres://bob:hunter2@db/x");
+        assert_eq!(c.tls, None);
+        assert!(format!("{c:?}").contains("tls: None"));
+        let tls = TlsConfig::new(TlsMode::VerifyCa).with_ca_cert("/ca.pem");
+        let c = c.with_tls(tls.clone());
+        assert_eq!(c.tls, Some(tls));
+        let out = format!("{c:?}");
+        assert!(out.contains("VerifyCa") && out.contains("/ca.pem"));
         assert!(!out.contains("hunter2") && !out.contains("bob"));
     }
 }

@@ -18,4 +18,12 @@ pub enum CoreError {
         /// Number of values in the rejected row.
         actual: usize,
     },
+    /// A text could not be parsed or a part was out of range for a typed value.
+    #[error("invalid {kind} value: {input}")]
+    InvalidValue {
+        /// One of `date`, `time`, `timestamp`, `timestamptz` or `decimal`.
+        kind: &'static str,
+        /// The rejected input.
+        input: String,
+    },
 }

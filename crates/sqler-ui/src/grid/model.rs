@@ -215,8 +215,9 @@ impl GridModel {
                 total += row.0.capacity() * size_of::<Value>();
                 for value in &row.0 {
                     total += match value {
-                        Value::Text(s) => s.capacity(),
+                        Value::Text(s) | Value::Json(s) => s.capacity(),
                         Value::Bytes(b) => b.capacity(),
+                        Value::Decimal(d) => d.as_str().len(),
                         // `Value` is non-exhaustive; the other variants own no heap data.
                         _ => 0,
                     };
@@ -467,6 +468,19 @@ mod tests {
         assert!(s.send(Msg::Rows(rows(0, 1000))));
         m.poll(usize::MAX);
         assert!(m.heap_bytes() > one + 1000 * size_of::<Value>());
+    }
+
+    #[test]
+    fn heap_bytes_counts_json_and_decimal() {
+        let (mut m, s) = grid_channel();
+        assert!(s.send(Msg::Columns(cols())));
+        m.poll(usize::MAX);
+        let empty = m.heap_bytes();
+        let json = Value::Json("j".repeat(500));
+        let dec = Value::Decimal("1".repeat(300).parse().unwrap());
+        assert!(s.send(Msg::Rows(vec![Row(vec![json, dec])])));
+        m.poll(usize::MAX);
+        assert!(m.heap_bytes() >= empty + 800);
     }
 
     #[test]

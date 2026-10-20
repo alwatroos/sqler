@@ -9,6 +9,7 @@ Available now:
 - [Keybindings](keybindings.md): the command palette, default shortcuts and how to rebind them
 - [Settings](settings.md): settings, keybindings and saved connections files
 - [Results grid](results-grid.md): the virtual results table, opened today with a synthetic 1M-row result
+- [Databases](databases/index.md): object kinds, value display and TLS modes per database
 
 Planned topics:
 
