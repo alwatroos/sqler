@@ -26,3 +26,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sqler-cli run`: runs one SQL statement through a registered driver and prints TSV; the `driver-sqlite` feature (default) registers the `SQLite` driver.
 - User guide page for the command-line interface.
 - `sqlx` 0.9.0, `tokio` 1.54.0, `futures-core` 0.3.34 and `anyhow` 1.0.104 dependencies, with rationale in `docs/src/dependencies.md`.
+- Iteration 001 report (`docs/reports/iteration-001.md`) and the first benchmark numbers for `sqler-cli`.

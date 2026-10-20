@@ -98,7 +98,7 @@ cargo run -p xtask
 - SPDX check (`sh .github/scripts/check-spdx.sh`) prints the offending paths and exits 1 when a tracked `*.rs` file lacks the header on line 1; it prints nothing otherwise.
 - CI tools (pinned, see `docs/src/dependencies.md`): `cargo install --locked cargo-nextest@0.9.148 cargo-deny@0.20.2 mdbook@0.5.4`.
 - `.github/workflows/pages.yml` publishes the book (`target/book/`) to GitHub Pages on push to `main`.
-- Bench: none yet.
+- Bench: no benchmark harness exists yet; measure the release CLI by hand as described in `docs/src/benchmarks.md` (Method).
 
 ## 4. Coding standards
 
@@ -194,10 +194,10 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 
 ## 9. Roadmap status
 
-Current: **M0 active** (bootstrap). Next: M1 (UI foundation).
+Current: **M0 done** (bootstrap). Next: **M1** (UI foundation). See `docs/reports/iteration-001.md`.
 
 M0 covers the workspace skeleton, this handbook, the mdBook skeleton, CI on three OSes, `cargo-deny`,
-license headers, ADR-0000 to ADR-0003, and a `sqler-cli` that runs a query on `SQLite`.
+license headers, ADR-0000 to ADR-0004, and a `sqler-cli` that runs a query on `SQLite`.
 Later milestones: M1 UI foundation, M2 connections and drivers, M3 editor and intellisense,
 M4 results and editing, M5 AI, M6 plugins, M7 release 1.0. Do not start a milestone before the
 previous one's Definition of Done is met.
