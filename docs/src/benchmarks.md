@@ -135,7 +135,7 @@ Run from the repository root on the commit being recorded:
 
 At `e98f4c8` the prefix p95 is 158,333 to 241,167 ns over three runs (the 7a7dd54 runs were 138,042 to 145,917 ns), still about 4 times under the 1 ms budget; the first run after a build was the high one. Linux CI, PR #29: snapshot p95 50 ns, prefix p95 322,381 ns, fuzzy p95 260,054 ns.
 
-Budgets (fake source): snapshot p95 10 us, prefix p95 1 ms, fuzzy p95 5 ms, index size 4 MiB. Prefix p95 is about 140 us and fuzzy p95 about 157 us, so both are far inside their budgets.
+Budgets (fake source): snapshot p95 10 us, prefix p95 1 ms, fuzzy p95 5 ms, index size 4 MiB. Prefix p95 is about 140 to 240 us (158 to 241 us at `e98f4c8`) and fuzzy p95 about 150 to 157 us, so both are far inside their budgets.
 
 Notes:
 

@@ -240,7 +240,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 
 ## 9. Roadmap status
 
-Current: **M3 done (code merged; maintainer-only checks run by the owner in parallel, see the list); M4 next** (results and editing). See `docs/reports/iteration-004.md`. The owner decided to close M3 with the checks listed, not to wait for them (intake decision 3 of the iteration-004 report).
+Current: **M3 done (code merged; maintainer-only checks run by the owner in parallel, see the list); M4 next** (results and editing). See `docs/reports/iteration-004.md`. The owner waived the wait for the maintainer-only display and hardware checks and closed M3 with them listed (intake decision 3 of the iteration-004 report); every code-verifiable Definition of Done item was met.
 
 M3 delivered: SSH RSA keys and the `MySQL` RSA password exchange without the `rsa` crate (ADR-0018), `verify-full` TLS through an SSH tunnel on Unix (ADR-0019), SQL text services (ADR-0020), query history and saved queries (ADR-0021), the catalog snapshot and name index (ADR-0022), the completion engine with hover and diagnostics (ADR-0023), query execution with the prod write gate (ADR-0024), the SQL editor tab (ADR-0025), editor intellisense (ADR-0026) and the history tab. Measured fresh at `e98f4c8` on macOS arm64 (Apple M4 Pro): cold start 113.7 ms, idle RSS 72.0 MiB with three connections configured and not opened (lower than M2 for no known reason; repeat it), binary 42.3 MiB (44,319,056 bytes), 1595 tests run and passed (2 skipped), coverage not measured (`cargo llvm-cov` not installed). Completion p95 on 5,000 tables: engine 405 us (worst of all scenarios 2.49 ms, `diagnose` on a 2,000-statement script), editor end to end 282 us, against the 16 ms budget: met. Headless editor work per keystroke 1.63 ms at worst; input-to-paint latency is not measured.
 
@@ -250,10 +250,10 @@ Pending maintainer-only checks (need a display, an OS desktop session or a real 
 
 - M1 (iteration-002 report): interactive checks of the workspace shell (PR #11), settings and themes (#12), palette and keybindings (#13) and grid scrolling (#14).
 - M2: idle RSS with three sessions actually opened (the app has no headless way to open sessions); keychain (PR #16: `cargo test -p sqler-config -- --ignored keychain_round_trip` on macOS, Windows and Linux desktop sessions, and a look at the OS keychain UI; still open); SSH bastion (PR #19: `SQLER_TEST_BASTION_*` and `cargo test -p sqler-tunnel --test real_bastion -- --ignored`; the Windows named-pipe agent code is compiled by CI only; still open); connection manager (PR #24: masked inputs, focus, Escape, drag preview, keychain prompts on three OSes, SSH host-key prompt with a real bastion); object browser (PR #25: context menus, DROP dialog and the `prod` second step, DDL and Properties tabs, scrolling 5,000 tables, keyboard navigation, clipboard).
-- RSA and TLS (M3): an RSA user key against a real bastion, an agent-held RSA key, a plaintext `MySQL` RSA exchange against a real server, and the `aws-lc-sys` build on Windows and macOS CI (PR #31); `verify-full` through a real bastion on macOS and Linux (PR #28).
-- SQL editor on a display (PR #36): highlighting in light and dark themes, tab header, Alt-click, add cursor above and below, add next occurrence, bracket frame, `editor:format-sql` as one undo step, `editor:new`, "Open in SQL Editor", typing and scrolling speed on the 10,000-line script.
+- RSA and TLS (M3, PR #31): an RSA user key against a real bastion with `rsa-sha2-256`/`-512`, an agent-held RSA key, the readable "use Ed25519/ECDSA" error against a SHA-1-only `ssh-rsa` server, a plaintext `MySQL` RSA exchange against a real server with `ssl-mode=disabled` and that `prefer` with no TLS offered is refused with the readable error, the `aws-lc-sys` build on Windows and macOS CI, the first CI run of the `db` job with `ssh` in `SQLER_TEST_REQUIRE_DB`; `verify-full` through a real bastion on macOS and Linux (PR #28). CI-only first runs: the `catalog_index` (PR #29) and completion (PR #30) bench steps in `bench.yml`.
+- SQL editor on a display (PR #36): highlighting in light and dark themes, tab header, Alt-click, add cursor above and below, add next occurrence, bracket frame, `editor:format-sql` as one undo step, `editor:new` by key and palette, "Open in SQL Editor" from the browser menu and the DDL tab, `dev:open-large-sql-script` responsiveness, typing and scrolling speed on the 10,000-line script, run selection, statement and all from the editor with the results display.
 - Query execution (PR #34): each run mode by key and palette, per-statement result tabs, "Cancelled", cancel of `pg_sleep` and `SLEEP`, the parameter dialog, the prod confirmation, cancel on tab close and quit, a responsive window during a sleep.
-- History and saved queries (PR #37): history rows, live search and the "All connections" toggle, Open and Run again (prod confirmation, truncated and redacted entries), Clear history, the Save query dialog, the SAVED QUERIES section, `query:open-saved`, rename and delete, persistence after a restart, a large history file, `<redacted>` for a statement with a password, focus after dialogs.
+- History and saved queries (PR #37): history rows, live search and the "All connections" toggle, Open and Run again (prod confirmation, truncated and redacted entries), double-click opens an entry, Clear history, the Save query dialog, the SAVED QUERIES section, `query:open-saved`, rename and delete, persistence after a restart, a large history file, `<redacted>` for a statement with a password, focus after dialogs.
 - Intellisense (PR #38): popup for tables and for `u.` columns that arrive late, Ctrl+Space (also the macOS input-source conflict and the palette command), hover, the diagnostics underline after 300 ms, pick-up of a catalog refresh, no popup without a catalog, views in the popup, smooth typing on the 10,000-line script.
 - Editor input-to-paint latency has no probe; the figure in `docs/src/benchmarks.md` is headless work only.
 
@@ -265,7 +265,10 @@ M0 covers the workspace skeleton, this handbook, the mdBook skeleton, CI on thre
 license headers, ADR-0000 to ADR-0004, and a `sqler-cli` that runs a query on `SQLite`.
 Later milestones: M1 UI foundation, M2 connections and drivers, M3 editor and intellisense,
 M4 results and editing, M5 AI, M6 plugins, M7 release 1.0. Do not start a milestone before the
-previous one's Definition of Done is met.
+previous one's Definition of Done is met. The only exception is an explicit owner waiver recorded
+in the iteration report: maintainer-only display and hardware checks may be carried as an explicit
+pending list (as for M3, section 9 above); all code-verifiable Definition of Done items must still
+be met.
 
 M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build job, which is deferred (see Gotchas); `bench.yml` covers benchmark regressions.
 
