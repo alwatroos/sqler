@@ -410,12 +410,14 @@ fn classify_body(dialect: Dialect, body: &str) -> StatementClass {
         // `RESET MASTER` and `RESET REPLICA` destroy server state.
         return StatementClass::Write;
     } else if word.eq_ignore_ascii_case("SET")
-        && (["GLOBAL", "PERSIST", "PERSIST_ONLY", "PASSWORD"]
-            .iter()
-            .any(|w| next_is(w))
+        && (next_is("PASSWORD")
             || sig.iter().any(|t| {
+                // Any assignment in the list may be server-wide: `SET a = 1, GLOBAL b = 2`.
                 let text = t.text(body).to_ascii_lowercase();
-                text.starts_with("@@global") || text.starts_with("@@persist")
+                (t.kind == TokenKind::Word
+                    && ["global", "persist", "persist_only"].contains(&text.as_str()))
+                    || text.starts_with("@@global")
+                    || text.starts_with("@@persist")
             }))
     {
         StatementClass::Write
@@ -566,6 +568,29 @@ fn sequence_form(src: &str, sig: &[Token], i: usize) -> Option<StatementClass> {
     }
 }
 
+/// The unquoted text of a word or quoted name, lower-cased.
+fn bare_name(src: &str, tok: &Token) -> String {
+    tok.text(src)
+        .trim_matches(['`', '"', '[', ']'])
+        .to_ascii_lowercase()
+}
+
+/// Names that run without parentheses and may write or read hidden state: `SQLite` `pragma_*`
+/// table-valued functions (`pragma_optimize` writes `sqlite_stat1`) and the writable
+/// `sqlite_dbpage`; `MariaDB` sequence members (`seq.nextval` in `sql_mode=ORACLE`, bare `nextval`).
+fn parenless_hazard(dialect: Dialect, src: &str, sig: &[Token], i: usize) -> bool {
+    let name = bare_name(src, &sig[i]);
+    let qualified = i > 0 && is_punct(&sig[i - 1], src, ".");
+    match dialect {
+        Dialect::Sqlite => name.starts_with("pragma_") || name == "sqlite_dbpage",
+        Dialect::MySql => {
+            matches!(name.as_str(), "nextval" | "currval" | "lastval")
+                || (qualified && name == "previous")
+        }
+        Dialect::Postgres => false,
+    }
+}
+
 /// Words after which a table, expression or operator may start, so a following structural word
 /// is a function name: they are never operands. Everything in [`STRUCTURAL`] counts as well.
 const OPENER_WORDS: &[&str] = &["ONLY", "ORDER", "WINDOW"];
@@ -661,6 +686,11 @@ fn scan(
             // A stray character (NUL, backslash, a foreign quote) means the text is not plain SQL.
             TokenKind::Other => return StatementClass::Unknown,
             TokenKind::Op if tok.text(src) == ":=" => return StatementClass::Unknown,
+            TokenKind::Word | TokenKind::QuotedIdent { .. }
+                if parenless_hazard(dialect, src, sig, i) =>
+            {
+                return StatementClass::Unknown;
+            }
             TokenKind::Word => {
                 let text = tok.text(src);
                 if in_list(text, UNKNOWN_WORDS) {

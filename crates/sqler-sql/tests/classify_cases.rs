@@ -839,3 +839,55 @@ fn structural_word_calls_are_never_read() {
         }
     }
 }
+
+/// Round 3: parenless table-valued functions and sequence members.
+#[test]
+fn parenless_hazards_are_unknown() {
+    check(
+        Dialect::Sqlite,
+        &[
+            ("select * from pragma_optimize", Unknown),
+            ("SELECT * FROM PRAGMA_OPTIMIZE", Unknown),
+            ("select * from main.pragma_optimize", Unknown),
+            ("select * from main.\"pragma_optimize\"", Unknown),
+            (
+                "with c as (select * from pragma_optimize) select * from c",
+                Unknown,
+            ),
+            ("select * from pragma_table_info('t')", Unknown),
+            ("select * from sqlite_dbpage", Unknown),
+            ("select * from dbstat", Read),
+            ("select a as pragma from t", Read),
+        ],
+    );
+    check(
+        Dialect::MySql,
+        &[
+            ("select seq.nextval", Unknown),
+            ("select seq.currval", Unknown),
+            ("select db.seq.lastval", Unknown),
+            ("select seq.previous", Unknown),
+            ("select s.`NEXTVAL` from s", Unknown),
+            ("select nextval", Unknown),
+            ("select previous from t", Read),
+            ("select 1 as previous", Read),
+        ],
+    );
+}
+
+/// Round 3: `SET` lists may carry a server-wide assignment anywhere.
+#[test]
+fn set_lists_with_global_assignments_are_writes() {
+    check(
+        Dialect::MySql,
+        &[
+            ("set sql_mode = '', global x = 1", Write),
+            ("set a = 1, persist b = 2", Write),
+            ("set a = 1, PERSIST_ONLY b = 2", Write),
+            ("set a = 1, @@global.b = 2", Write),
+            ("set session a = 1, b = 2", Other),
+            ("set a = 1, b = 2", Other),
+            ("set @x = 1", Other),
+        ],
+    );
+}
