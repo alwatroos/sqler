@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use sqler_config::ConfigDir;
 use sqler_driver_api::{DriverError, DriverRegistry};
+use sqler_ui::settings::SettingsModel;
 use sqler_ui::workspace::{Startup, run};
 
 use crate::args::{Command, USAGE, UsageError};
@@ -57,14 +58,17 @@ fn start(exit_after_first_frame: bool) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let connections = ConfigDir::platform()
-        .and_then(|dir| dir.load_connections())
-        .map_err(|err| err.to_string());
+    let dir = ConfigDir::platform();
+    let connections = dir
+        .as_ref()
+        .map_err(ToString::to_string)
+        .and_then(|dir| dir.load_connections().map_err(|err| err.to_string()));
     run(Startup {
         connections,
         registry: Arc::new(registry),
         runtime: runtime.handle().clone(),
         exit_after_first_frame,
+        settings: SettingsModel::load(dir),
     });
     ExitCode::SUCCESS
 }

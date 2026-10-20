@@ -13,8 +13,12 @@ use super::TabStrip;
 use crate::workspace::{WorkspaceAction, WorkspaceView};
 
 /// Renders the tab strip.
+///
+/// With `highlight_active` false (the settings tab is shown) no connection tab gets the active
+/// fill or text.
 pub(crate) fn tab_strip(
     tabs: &TabStrip,
+    highlight_active: bool,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
@@ -43,7 +47,7 @@ pub(crate) fn tab_strip(
     for tab in tabs.iter() {
         let id = tab.id();
         let header = tab.header();
-        let active = active_id == Some(id);
+        let active = highlight_active && active_id == Some(id);
         // Prod tabs get the theme's danger colour as a tint; a theme change recolours them.
         let mut bg = if active { active_fill } else { rest_fill };
         if header.is_prod {

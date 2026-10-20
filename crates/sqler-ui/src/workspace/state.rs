@@ -9,8 +9,10 @@ use sqler_driver_api::Session;
 use sqler_driver_api::sqler_core::ConnectionConfig;
 
 use super::action::WorkspaceAction;
+use crate::settings::SettingsModel;
 use crate::sidebar::SidebarModel;
 use crate::tabs::{TabConnection, TabId, TabKind, TabStrip};
+use crate::theme::{self, Appearance};
 
 /// Identifies one connect attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -32,6 +34,8 @@ pub enum Effect {
     CloseSession(Box<dyn Session>),
     /// Quit the application.
     Quit,
+    /// The settings changed: save them and re-apply the theme and font size.
+    ApplySettings,
 }
 
 impl std::fmt::Debug for Effect {
@@ -45,8 +49,20 @@ impl std::fmt::Debug for Effect {
                 .finish(),
             Self::CloseSession(_) => f.write_str("CloseSession(..)"),
             Self::Quit => f.write_str("Quit"),
+            Self::ApplySettings => f.write_str("ApplySettings"),
         }
     }
+}
+
+/// The settings tab sits after the last connection tab; it is not a `TabStrip` entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsTab {
+    /// Not open.
+    Closed,
+    /// Open, but a connection tab is shown.
+    Background,
+    /// Open and shown.
+    Active,
 }
 
 /// The workspace state. Holds no UI types.
@@ -56,6 +72,9 @@ pub struct Workspace {
     sessions: HashMap<TabId, Box<dyn Session>>,
     requests: HashMap<RequestId, usize>,
     next_request: u64,
+    settings: SettingsModel,
+    settings_tab: SettingsTab,
+    system_appearance: Appearance,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -65,6 +84,7 @@ impl std::fmt::Debug for Workspace {
             .field("tabs", &self.tabs)
             .field("sessions", &self.sessions.len())
             .field("requests", &self.requests)
+            .field("settings_tab", &self.settings_tab)
             .finish_non_exhaustive()
     }
 }
@@ -79,7 +99,53 @@ impl Workspace {
             sessions: HashMap::new(),
             requests: HashMap::new(),
             next_request: 0,
+            settings: SettingsModel::default(),
+            settings_tab: SettingsTab::Closed,
+            system_appearance: Appearance::Light,
         }
+    }
+
+    /// Replaces the settings (the binary loads them at startup).
+    #[must_use]
+    pub fn with_settings(mut self, settings: SettingsModel) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// The settings.
+    #[must_use]
+    pub fn settings(&self) -> &SettingsModel {
+        &self.settings
+    }
+
+    /// Saves the settings (a no-op when they are not persistent).
+    pub fn save_settings(&mut self) {
+        self.settings.save();
+    }
+
+    /// The look in use: the theme preference resolved against the OS appearance.
+    #[must_use]
+    pub fn appearance(&self) -> Appearance {
+        theme::resolve(self.settings.settings().theme, self.system_appearance)
+    }
+
+    /// Records the OS appearance; `true` if [`appearance`](Self::appearance) changed.
+    pub fn set_system_appearance(&mut self, system: Appearance) -> bool {
+        let before = self.appearance();
+        self.system_appearance = system;
+        self.appearance() != before
+    }
+
+    /// Whether the settings tab is open.
+    #[must_use]
+    pub fn settings_tab_open(&self) -> bool {
+        self.settings_tab != SettingsTab::Closed
+    }
+
+    /// Whether the settings tab is the one shown.
+    #[must_use]
+    pub fn settings_tab_active(&self) -> bool {
+        self.settings_tab == SettingsTab::Active
     }
 
     /// The sidebar state.
@@ -103,23 +169,89 @@ impl Workspace {
             }
             WorkspaceAction::OpenConnection(index) => self.open_connection(index),
             WorkspaceAction::ActivateTab(id) => {
-                self.tabs.activate(id);
+                if self.tabs.activate(id) && self.settings_tab == SettingsTab::Active {
+                    self.settings_tab = SettingsTab::Background;
+                }
                 Effect::None
             }
             WorkspaceAction::CloseTab(id) => self.close_tab(id),
-            WorkspaceAction::CloseActiveTab => match self.tabs.active().map(crate::tabs::Tab::id) {
-                Some(id) => self.close_tab(id),
-                None => Effect::None,
-            },
+            WorkspaceAction::CloseActiveTab => {
+                if self.settings_tab == SettingsTab::Active {
+                    self.settings_tab = SettingsTab::Closed;
+                    return Effect::None;
+                }
+                match self.tabs.active().map(crate::tabs::Tab::id) {
+                    Some(id) => self.close_tab(id),
+                    None => Effect::None,
+                }
+            }
             WorkspaceAction::NextTab => {
-                self.tabs.next();
+                self.step_tab(true);
                 Effect::None
             }
             WorkspaceAction::PreviousTab => {
-                self.tabs.previous();
+                self.step_tab(false);
                 Effect::None
             }
             WorkspaceAction::Quit => Effect::Quit,
+            WorkspaceAction::OpenSettings => {
+                self.settings_tab = SettingsTab::Active;
+                Effect::None
+            }
+            WorkspaceAction::CloseSettings => {
+                self.settings_tab = SettingsTab::Closed;
+                Effect::None
+            }
+            WorkspaceAction::ToggleThemeMode => {
+                let pref = self.settings.settings().theme;
+                let next = theme::toggled(pref, self.system_appearance);
+                Self::changed(self.settings.set_theme(next))
+            }
+            WorkspaceAction::SetTheme(pref) => Self::changed(self.settings.set_theme(pref)),
+            WorkspaceAction::SetUiFontSize(size) => {
+                Self::changed(self.settings.set_ui_font_size(size))
+            }
+        }
+    }
+
+    fn changed(changed: bool) -> Effect {
+        if changed {
+            Effect::ApplySettings
+        } else {
+            Effect::None
+        }
+    }
+
+    /// Moves to the next or previous tab; the settings tab, when open, comes after the last
+    /// connection tab.
+    fn step_tab(&mut self, forward: bool) {
+        let first = self.tabs.iter().next().map(crate::tabs::Tab::id);
+        let last = self.tabs.iter().last().map(crate::tabs::Tab::id);
+        let active = self.tabs.active().map(crate::tabs::Tab::id);
+        match self.settings_tab {
+            SettingsTab::Closed => {
+                if forward {
+                    self.tabs.next();
+                } else {
+                    self.tabs.previous();
+                }
+            }
+            SettingsTab::Active => {
+                // With no connection tabs the settings tab stays active.
+                if let Some(id) = if forward { first } else { last } {
+                    self.tabs.activate(id);
+                    self.settings_tab = SettingsTab::Background;
+                }
+            }
+            SettingsTab::Background => {
+                if active == if forward { last } else { first } {
+                    self.settings_tab = SettingsTab::Active;
+                } else if forward {
+                    self.tabs.next();
+                } else {
+                    self.tabs.previous();
+                }
+            }
         }
     }
 
@@ -140,6 +272,9 @@ impl Workspace {
     fn close_tab(&mut self, id: TabId) -> Effect {
         if !self.tabs.close(id) {
             return Effect::None;
+        }
+        if self.tabs.is_empty() && self.settings_tab == SettingsTab::Background {
+            self.settings_tab = SettingsTab::Active;
         }
         match self.sessions.remove(&id) {
             Some(session) => Effect::CloseSession(session),
@@ -172,6 +307,9 @@ impl Workspace {
                     TabKind::Query,
                 );
                 self.sessions.insert(id, session);
+                if self.settings_tab == SettingsTab::Active {
+                    self.settings_tab = SettingsTab::Background;
+                }
                 Some(id)
             }
             Err(message) => {
@@ -200,6 +338,7 @@ mod tests {
     use super::*;
     use crate::sidebar::ConnectionStatus;
     use crate::workspace::testing::FakeSession;
+    use sqler_config::ThemePreference;
     use sqler_driver_api::sqler_core::{DriverId, Environment};
 
     fn ws() -> Workspace {
@@ -348,6 +487,210 @@ mod tests {
             w.dispatch(WorkspaceAction::OpenConnection(5)),
             Effect::None
         ));
+    }
+
+    fn open_tabs(w: &mut Workspace, n: usize) -> Vec<TabId> {
+        (0..n)
+            .map(|_| {
+                let request = connect(w, 0);
+                let (session, _) = FakeSession::boxed();
+                w.connect_finished(request, Ok(session)).unwrap()
+            })
+            .collect()
+    }
+
+    fn active(w: &Workspace) -> Option<TabId> {
+        w.tabs().active().map(crate::tabs::Tab::id)
+    }
+
+    #[test]
+    fn open_settings_activates_and_close_closes() {
+        let mut w = ws();
+        assert!(!w.settings_tab_open());
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::OpenSettings),
+            Effect::None
+        ));
+        assert!(w.settings_tab_open() && w.settings_tab_active());
+        w.dispatch(WorkspaceAction::CloseSettings);
+        assert!(!w.settings_tab_open() && !w.settings_tab_active());
+    }
+
+    #[test]
+    fn close_active_tab_closes_settings_only_when_active() {
+        let mut w = ws();
+        let tabs = open_tabs(&mut w, 2);
+        w.dispatch(WorkspaceAction::OpenSettings);
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::CloseActiveTab),
+            Effect::None
+        ));
+        assert!(!w.settings_tab_open());
+        assert_eq!(w.tabs().len(), 2);
+        // Background: the connection tab closes and settings stays open.
+        w.dispatch(WorkspaceAction::OpenSettings);
+        w.dispatch(WorkspaceAction::ActivateTab(tabs[1]));
+        assert!(w.settings_tab_open() && !w.settings_tab_active());
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::CloseActiveTab),
+            Effect::CloseSession(_)
+        ));
+        assert!(w.settings_tab_open() && !w.settings_tab_active());
+        assert_eq!(w.tabs().len(), 1);
+    }
+
+    #[test]
+    fn activate_tab_and_connect_move_settings_to_background() {
+        let mut w = ws();
+        let tabs = open_tabs(&mut w, 1);
+        w.dispatch(WorkspaceAction::OpenSettings);
+        w.dispatch(WorkspaceAction::ActivateTab(tabs[0]));
+        assert!(w.settings_tab_open() && !w.settings_tab_active());
+        w.dispatch(WorkspaceAction::OpenSettings);
+        let request = connect(&mut w, 1);
+        let (session, _) = FakeSession::boxed();
+        let tab = w.connect_finished(request, Ok(session)).unwrap();
+        assert!(w.settings_tab_open() && !w.settings_tab_active());
+        assert_eq!(active(&w), Some(tab));
+    }
+
+    #[test]
+    fn activate_unknown_tab_keeps_settings_active() {
+        let mut w = ws();
+        let tabs = open_tabs(&mut w, 1);
+        w.dispatch(WorkspaceAction::CloseTab(tabs[0]));
+        w.dispatch(WorkspaceAction::OpenSettings);
+        w.dispatch(WorkspaceAction::ActivateTab(tabs[0]));
+        assert!(w.settings_tab_active());
+    }
+
+    #[test]
+    fn next_and_previous_cycle_through_settings_tab() {
+        let mut w = ws();
+        let tabs = open_tabs(&mut w, 2);
+        w.dispatch(WorkspaceAction::OpenSettings);
+        // Active -> next -> first connection tab.
+        w.dispatch(WorkspaceAction::NextTab);
+        assert!(!w.settings_tab_active());
+        assert_eq!(active(&w), Some(tabs[0]));
+        w.dispatch(WorkspaceAction::NextTab);
+        assert_eq!(active(&w), Some(tabs[1]));
+        // From the last connection tab -> settings.
+        w.dispatch(WorkspaceAction::NextTab);
+        assert!(w.settings_tab_active());
+        // Previous mirrors it.
+        w.dispatch(WorkspaceAction::PreviousTab);
+        assert!(!w.settings_tab_active());
+        assert_eq!(active(&w), Some(tabs[1]));
+        w.dispatch(WorkspaceAction::PreviousTab);
+        assert_eq!(active(&w), Some(tabs[0]));
+        w.dispatch(WorkspaceAction::PreviousTab);
+        assert!(w.settings_tab_active());
+        w.dispatch(WorkspaceAction::PreviousTab);
+        assert_eq!(active(&w), Some(tabs[1]));
+    }
+
+    #[test]
+    fn next_with_settings_closed_wraps_connection_tabs() {
+        let mut w = ws();
+        let tabs = open_tabs(&mut w, 2);
+        w.dispatch(WorkspaceAction::NextTab);
+        assert_eq!(active(&w), Some(tabs[0]));
+        assert!(!w.settings_tab_open());
+    }
+
+    #[test]
+    fn settings_stays_active_without_connection_tabs() {
+        let mut w = ws();
+        w.dispatch(WorkspaceAction::OpenSettings);
+        w.dispatch(WorkspaceAction::NextTab);
+        assert!(w.settings_tab_active());
+        w.dispatch(WorkspaceAction::PreviousTab);
+        assert!(w.settings_tab_active());
+    }
+
+    #[test]
+    fn closing_last_connection_tab_activates_open_settings() {
+        let mut w = ws();
+        let tabs = open_tabs(&mut w, 1);
+        w.dispatch(WorkspaceAction::OpenSettings);
+        w.dispatch(WorkspaceAction::ActivateTab(tabs[0]));
+        w.dispatch(WorkspaceAction::CloseTab(tabs[0]));
+        assert!(w.settings_tab_active());
+        // With settings closed nothing is activated.
+        let mut w = ws();
+        let tabs = open_tabs(&mut w, 1);
+        w.dispatch(WorkspaceAction::CloseTab(tabs[0]));
+        assert!(!w.settings_tab_open());
+    }
+
+    #[test]
+    fn toggle_theme_mode_stores_explicit_opposite() {
+        let mut w = ws();
+        // System + Light: shows light, toggles to dark.
+        assert_eq!(w.appearance(), Appearance::Light);
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::ToggleThemeMode),
+            Effect::ApplySettings
+        ));
+        assert_eq!(w.settings().settings().theme, ThemePreference::Dark);
+        assert_eq!(w.appearance(), Appearance::Dark);
+        w.dispatch(WorkspaceAction::ToggleThemeMode);
+        assert_eq!(w.settings().settings().theme, ThemePreference::Light);
+        // Follow system on a dark OS: toggles to light.
+        let mut w = ws();
+        w.set_system_appearance(Appearance::Dark);
+        w.dispatch(WorkspaceAction::ToggleThemeMode);
+        assert_eq!(w.settings().settings().theme, ThemePreference::Light);
+        assert_eq!(w.appearance(), Appearance::Light);
+    }
+
+    #[test]
+    fn set_theme_and_font_size_apply_only_when_changed() {
+        let mut w = ws();
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::SetTheme(ThemePreference::System)),
+            Effect::None
+        ));
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::SetTheme(ThemePreference::Dark)),
+            Effect::ApplySettings
+        ));
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::SetUiFontSize(14)),
+            Effect::None
+        ));
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::SetUiFontSize(49)),
+            Effect::None
+        ));
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::SetUiFontSize(20)),
+            Effect::ApplySettings
+        ));
+        assert_eq!(w.settings().settings().ui_font_size, 20);
+    }
+
+    #[test]
+    fn system_appearance_matters_only_under_system_preference() {
+        let mut w = ws();
+        assert!(w.set_system_appearance(Appearance::Dark));
+        assert_eq!(w.appearance(), Appearance::Dark);
+        assert!(!w.set_system_appearance(Appearance::Dark));
+        assert!(w.set_system_appearance(Appearance::Light));
+        w.dispatch(WorkspaceAction::SetTheme(ThemePreference::Dark));
+        assert!(!w.set_system_appearance(Appearance::Light));
+        assert!(!w.set_system_appearance(Appearance::Dark));
+        w.dispatch(WorkspaceAction::SetTheme(ThemePreference::Light));
+        assert!(!w.set_system_appearance(Appearance::Light));
+    }
+
+    #[test]
+    fn with_settings_replaces_the_model() {
+        let mut model = SettingsModel::default();
+        model.set_theme(ThemePreference::Dark);
+        let w = ws().with_settings(model);
+        assert_eq!(w.appearance(), Appearance::Dark);
     }
 
     #[test]
