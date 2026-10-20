@@ -1,0 +1,17 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"WITH Recent AS (SELECT Total FROM orders) SELECT x.| FROM Recent x\",\n6)"
+---
+sql: WITH Recent AS (SELECT Total FROM orders) SELECT x.| FROM Recent x
+
+== postgres ==
+context: Qualified, replace: 51..51 "", items: 1
+ 1. "total" [Column] insert="total" detail="x"
+
+== mysql ==
+context: Qualified, replace: 51..51 "", items: 1
+ 1. "Total" [Column] insert="Total" detail="x"
+
+== sqlite ==
+context: Qualified, replace: 51..51 "", items: 1
+ 1. "Total" [Column] insert="Total" detail="x"

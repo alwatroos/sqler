@@ -1,0 +1,44 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT * FROM users u WHERE e|\", 10)"
+---
+sql: SELECT * FROM users u WHERE e|
+
+== postgres ==
+context: Expression, replace: 28..29 "e", items: 15
+ 1. "email" [Column] insert="email" detail="u · text"
+ 2. "exp" [Function] insert="exp($1)" snippet detail="exp(x) -> number"
+ 3. "extract" [Function] insert="extract($1)" snippet detail="extract(field from source) -> numeric"
+ 4. "end" [Keyword] insert="end" detail="-"
+ 5. "else" [Keyword] insert="else" detail="-"
+ 6. "escape" [Keyword] insert="escape" detail="-"
+ 7. "except" [Keyword] insert="except" detail="-"
+ 8. "exists" [Keyword] insert="exists" detail="-"
+ 9. "explain" [Keyword] insert="explain" detail="-"
+10. "extension" [Keyword] insert="extension" detail="-"
+
+== mysql ==
+context: Expression, replace: 28..29 "e", items: 12
+ 1. "email" [Column] insert="email" detail="u · text"
+ 2. "exp" [Function] insert="exp($1)" snippet detail="exp(x) -> number"
+ 3. "end" [Keyword] insert="end" detail="-"
+ 4. "else" [Keyword] insert="else" detail="-"
+ 5. "engine" [Keyword] insert="engine" detail="-"
+ 6. "escape" [Keyword] insert="escape" detail="-"
+ 7. "except" [Keyword] insert="except" detail="-"
+ 8. "exists" [Keyword] insert="exists" detail="-"
+ 9. "explain" [Keyword] insert="explain" detail="-"
+10. "json_extract" [Function] insert="json_extract($1)" snippet detail="json_extract(doc, path, ...) -> json"
+
+== sqlite ==
+context: Expression, replace: 28..29 "e", items: 12
+ 1. "email" [Column] insert="email" detail="u · text"
+ 2. "exp" [Function] insert="exp($1)" snippet detail="exp(x) -> number"
+ 3. "end" [Keyword] insert="end" detail="-"
+ 4. "else" [Keyword] insert="else" detail="-"
+ 5. "escape" [Keyword] insert="escape" detail="-"
+ 6. "except" [Keyword] insert="except" detail="-"
+ 7. "exists" [Keyword] insert="exists" detail="-"
+ 8. "explain" [Keyword] insert="explain" detail="-"
+ 9. "json_each" [Function] insert="json_each($1)" snippet detail="json_each(json [, path]) -> table"
+10. "json_extract" [Function] insert="json_extract($1)" snippet detail="json_extract(json, path, ...) -> value"

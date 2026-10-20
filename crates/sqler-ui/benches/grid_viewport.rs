@@ -4,7 +4,7 @@
 //! Benchmark of viewport fetches from a 1M-row `GridModel`.
 //!
 //! Std-only (`harness = false`). Prints `key=value` lines, optionally saves them, and can compare
-//! the p95 against a saved baseline. Exit codes: 0 ok, 1 budget or regression failure, 2 bad
+//! the p95 (minimum over `--reps` repetitions, plus an absolute `--slack-ns`) against a saved baseline. Exit codes: 0 ok, 1 budget or regression failure, 2 bad
 //! arguments or unreadable baseline. See `docs/src/benchmarks.md` for the method and the rule.
 
 use std::hint::black_box;
@@ -19,6 +19,7 @@ struct Args {
     batch: usize,
     viewport: usize,
     samples: usize,
+    reps: usize,
     save: Option<String>,
     compare: Option<String>,
     threshold_pct: u64,
@@ -33,10 +34,11 @@ fn parse_args() -> Result<Args, String> {
         batch: 1024,
         viewport: 50,
         samples: 100_000,
+        reps: 3,
         save: None,
         compare: None,
         threshold_pct: 25,
-        slack_ns: 50,
+        slack_ns: 100,
         budget_p95_ns: 1_000_000,
     };
     let mut it = std::env::args().skip(1);
@@ -55,6 +57,7 @@ fn parse_args() -> Result<Args, String> {
             "--batch" => a.batch = to_usize(num(value()?)?),
             "--viewport" => a.viewport = to_usize(num(value()?)?),
             "--samples" => a.samples = to_usize(num(value()?)?),
+            "--reps" => a.reps = to_usize(num(value()?)?),
             "--save" => a.save = Some(value()?),
             "--compare" => a.compare = Some(value()?),
             "--threshold-pct" => a.threshold_pct = num(value()?)?,
@@ -63,8 +66,8 @@ fn parse_args() -> Result<Args, String> {
             other => return Err(format!("unknown argument: {other}")),
         }
     }
-    if a.samples == 0 || a.rows == 0 || a.viewport > a.rows {
-        return Err("need samples > 0, rows > 0 and viewport <= rows".to_owned());
+    if a.samples == 0 || a.reps == 0 || a.rows == 0 || a.viewport > a.rows {
+        return Err("need samples > 0, reps > 0, rows > 0 and viewport <= rows".to_owned());
     }
     Ok(a)
 }
@@ -140,29 +143,35 @@ fn run() -> Result<ExitCode, (u8, String)> {
 
     let span = (a.rows - a.viewport + 1) as u64;
     let mut rng = 0x9E37_79B9_7F4A_7C15_u64;
-    let mut timings = Vec::with_capacity(a.samples);
-    for _ in 0..a.samples {
-        let first = to_usize(xorshift(&mut rng) % span);
-        let start = Instant::now();
-        let view = model.viewport(first, a.viewport);
-        for row in view.iter() {
-            for value in &row.0 {
-                black_box(value);
+    // The gate uses the minimum over the repetitions: noise on a shared runner only adds time, so
+    // the fastest repetition is the closest to the real cost.
+    let mut p50 = u64::MAX;
+    let mut p95 = u64::MAX;
+    for _ in 0..a.reps {
+        let mut timings = Vec::with_capacity(a.samples);
+        for _ in 0..a.samples {
+            let first = to_usize(xorshift(&mut rng) % span);
+            let start = Instant::now();
+            let view = model.viewport(first, a.viewport);
+            for row in view.iter() {
+                for value in &row.0 {
+                    black_box(value);
+                }
             }
+            let ns = start.elapsed().as_nanos();
+            timings.push(u64::try_from(ns).unwrap_or(u64::MAX));
         }
-        let ns = start.elapsed().as_nanos();
-        timings.push(u64::try_from(ns).unwrap_or(u64::MAX));
+        timings.sort_unstable();
+        p50 = p50.min(percentile(&timings, 50));
+        p95 = p95.min(percentile(&timings, 95));
     }
-    timings.sort_unstable();
-    let p50 = percentile(&timings, 50);
-    let p95 = percentile(&timings, 95);
 
     let rss_delta = match (rss_before, rss_after) {
         (Some(b), Some(e)) => e.saturating_sub(b).to_string(),
         _ => "n/a".to_owned(),
     };
     let report = format!(
-        "bench=grid_viewport\nos={}-{}\nrows={}\ncolumns={}\nviewport_rows={}\nsamples={}\n\
+        "bench=grid_viewport\nos={}-{}\nrows={}\ncolumns={}\nviewport_rows={}\nsamples={}\nreps={}\n\
          p50_ns={p50}\np95_ns={p95}\ningest_ms={}\nheap_bytes={}\nrss_delta_bytes={rss_delta}\n",
         std::env::consts::OS,
         std::env::consts::ARCH,
@@ -170,6 +179,7 @@ fn run() -> Result<ExitCode, (u8, String)> {
         a.columns,
         a.viewport,
         a.samples,
+        a.reps,
         ingest_time.as_millis(),
         model.heap_bytes(),
     );

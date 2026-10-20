@@ -1,0 +1,20 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT * FROM us|\", 6)"
+---
+sql: SELECT * FROM us|
+
+== postgres ==
+context: Relation, replace: 14..16 "us", items: 2
+ 1. "users" [Table] insert="users" detail="public · table"
+ 2. "active_users" [View] insert="active_users" detail="public · view"
+
+== mysql ==
+context: Relation, replace: 14..16 "us", items: 2
+ 1. "users" [Table] insert="users" detail="shop · table"
+ 2. "active_users" [View] insert="active_users" detail="shop · view"
+
+== sqlite ==
+context: Relation, replace: 14..16 "us", items: 2
+ 1. "users" [Table] insert="users" detail="main · table"
+ 2. "active_users" [View] insert="active_users" detail="main · view"

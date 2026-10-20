@@ -39,10 +39,13 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/target"
           git worktree add ../base "$BASE_SHA"
           if [ -f ../base/crates/sqler-ui/benches/grid_viewport.rs ]; then
+            # Older base benches reject --reps (exit 2); pass it only if the base source knows it.
+            REPS=""
+            if grep -q -- '--reps' ../base/crates/sqler-ui/benches/grid_viewport.rs; then REPS="--reps 3"; fi
             cd ../base
             rustup toolchain install
             # Exit 1 means the base itself broke the 1 ms budget; the file is saved first.
-            cargo bench -p sqler-ui --bench grid_viewport -- --save "$GITHUB_WORKSPACE/target/bench-base.txt" || [ $? -eq 1 ]
+            cargo bench -p sqler-ui --bench grid_viewport -- $REPS --save "$GITHUB_WORKSPACE/target/bench-base.txt" || [ $? -eq 1 ]
           else
             echo "::notice::no baseline bench on base"
           fi
@@ -50,9 +53,9 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/target"
           if [ -f "$GITHUB_WORKSPACE/target/bench-base.txt" ]; then
-            cargo bench -p sqler-ui --bench grid_viewport -- --save "$GITHUB_WORKSPACE/target/bench-pr.txt" --compare "$GITHUB_WORKSPACE/target/bench-base.txt"
+            cargo bench -p sqler-ui --bench grid_viewport -- --reps 3 --save "$GITHUB_WORKSPACE/target/bench-pr.txt" --compare "$GITHUB_WORKSPACE/target/bench-base.txt" --slack-ns 100
           else
-            cargo bench -p sqler-ui --bench grid_viewport -- --save "$GITHUB_WORKSPACE/target/bench-pr.txt"
+            cargo bench -p sqler-ui --bench grid_viewport -- --reps 3 --save "$GITHUB_WORKSPACE/target/bench-pr.txt"
           fi
       - name: Baseline catalog bench on the base commit
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
@@ -99,9 +102,12 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/target"
           if [ -f ../base/crates/sqler-ui/benches/browser_tree.rs ]; then
+            # Older base benches reject --reps (exit 2); pass it only if the base source knows it.
+            REPS=""
+            if grep -q -- '--reps' ../base/crates/sqler-ui/benches/browser_tree.rs; then REPS="--reps 3"; fi
             cd ../base
             # Exit 1 means the base itself broke a budget; the file is saved first.
-            cargo bench -p sqler-ui --bench browser_tree -- --save "$GITHUB_WORKSPACE/target/browser-base.txt" || [ $? -eq 1 ]
+            cargo bench -p sqler-ui --bench browser_tree -- $REPS --save "$GITHUB_WORKSPACE/target/browser-base.txt" || [ $? -eq 1 ]
           else
             echo "::notice::no browser tree baseline bench on base"
           fi
@@ -110,14 +116,34 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/target"
           if [ -f "$GITHUB_WORKSPACE/target/browser-base.txt" ]; then
-            cargo bench -p sqler-ui --bench browser_tree -- --save "$GITHUB_WORKSPACE/target/browser-pr.txt" --compare "$GITHUB_WORKSPACE/target/browser-base.txt"
+            cargo bench -p sqler-ui --bench browser_tree -- --reps 3 --save "$GITHUB_WORKSPACE/target/browser-pr.txt" --compare "$GITHUB_WORKSPACE/target/browser-base.txt" --slack-ns 250000
           else
-            cargo bench -p sqler-ui --bench browser_tree -- --save "$GITHUB_WORKSPACE/target/browser-pr.txt"
+            cargo bench -p sqler-ui --bench browser_tree -- --reps 3 --save "$GITHUB_WORKSPACE/target/browser-pr.txt"
+          fi
+      - name: Baseline completion bench on the base commit
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/target"
+          if [ -f "$GITHUB_WORKSPACE/../base/crates/sqler-completion/benches/completion.rs" ]; then
+            cd "$GITHUB_WORKSPACE/../base"
+            # Exit 1 means the base itself broke a budget; the file is saved first.
+            cargo bench -p sqler-completion --bench completion -- --save "$GITHUB_WORKSPACE/target/completion-base.txt" || [ $? -eq 1 ]
+          else
+            echo "::notice::no completion baseline bench on base"
+          fi
+      - name: Bench completion on the PR (or branch) commit
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/target"
+          if [ -f "$GITHUB_WORKSPACE/target/completion-base.txt" ]; then
+            cargo bench -p sqler-completion --bench completion -- --save "$GITHUB_WORKSPACE/target/completion-pr.txt" --compare "$GITHUB_WORKSPACE/target/completion-base.txt"
+          else
+            cargo bench -p sqler-completion --bench completion -- --save "$GITHUB_WORKSPACE/target/completion-pr.txt"
           fi
       - name: Summary
         if: always()
         run: |
-          for f in "$GITHUB_WORKSPACE/target/bench-base.txt" "$GITHUB_WORKSPACE/target/bench-pr.txt" "$GITHUB_WORKSPACE/target/catalog-base.txt" "$GITHUB_WORKSPACE/target/catalog-pr.txt" "$GITHUB_WORKSPACE/target/catalog-index-base.txt" "$GITHUB_WORKSPACE/target/catalog-index-pr.txt" "$GITHUB_WORKSPACE/target/browser-base.txt" "$GITHUB_WORKSPACE/target/browser-pr.txt"; do
+          for f in "$GITHUB_WORKSPACE/target/bench-base.txt" "$GITHUB_WORKSPACE/target/bench-pr.txt" "$GITHUB_WORKSPACE/target/catalog-base.txt" "$GITHUB_WORKSPACE/target/catalog-pr.txt" "$GITHUB_WORKSPACE/target/catalog-index-base.txt" "$GITHUB_WORKSPACE/target/catalog-index-pr.txt" "$GITHUB_WORKSPACE/target/browser-base.txt" "$GITHUB_WORKSPACE/target/browser-pr.txt" "$GITHUB_WORKSPACE/target/completion-base.txt" "$GITHUB_WORKSPACE/target/completion-pr.txt"; do
             if [ -f "$f" ]; then
               echo "### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"

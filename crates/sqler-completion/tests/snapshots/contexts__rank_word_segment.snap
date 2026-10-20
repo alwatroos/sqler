@@ -1,0 +1,17 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT * FROM orders WHERE uid|\", 6)"
+---
+sql: SELECT * FROM orders WHERE uid|
+
+== postgres ==
+context: Expression, replace: 27..30 "uid", items: 1
+ 1. "user_id" [Column] insert="user_id" detail="orders · integer"
+
+== mysql ==
+context: Expression, replace: 27..30 "uid", items: 1
+ 1. "user_id" [Column] insert="user_id" detail="orders · integer"
+
+== sqlite ==
+context: Expression, replace: 27..30 "uid", items: 1
+ 1. "user_id" [Column] insert="user_id" detail="orders · integer"

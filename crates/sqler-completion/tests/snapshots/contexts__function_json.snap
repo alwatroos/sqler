@@ -1,0 +1,37 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT json| FROM orders\", 8)"
+---
+sql: SELECT json| FROM orders
+
+== postgres ==
+context: Expression, replace: 7..11 "json", items: 10
+ 1. "json_agg" [Function] insert="json_agg($1)" snippet detail="json_agg(expr) -> json"
+ 2. "jsonb_agg" [Function] insert="jsonb_agg($1)" snippet detail="jsonb_agg(expr) -> jsonb"
+ 3. "jsonb_set" [Function] insert="jsonb_set($1)" snippet detail="jsonb_set(jsonb, path, value) -> jsonb"
+ 4. "jsonb_each" [Function] insert="jsonb_each($1)" snippet detail="jsonb_each(jsonb) -> setof record"
+ 5. "jsonb_build_array" [Function] insert="jsonb_build_array($1)" snippet detail="jsonb_build_array(...) -> jsonb"
+ 6. "jsonb_build_object" [Function] insert="jsonb_build_object($1)" snippet detail="jsonb_build_object(k, v, ...) -> jsonb"
+ 7. "jsonb_extract_path" [Function] insert="jsonb_extract_path($1)" snippet detail="jsonb_extract_path(jsonb, path, ...) -> jsonb"
+ 8. "jsonb_array_elements" [Function] insert="jsonb_array_elements($1)" snippet detail="jsonb_array_elements(jsonb) -> setof jsonb"
+
+== mysql ==
+context: Expression, replace: 7..11 "json", items: 7
+ 1. "json_array" [Function] insert="json_array($1)" snippet detail="json_array(...) -> json"
+ 2. "json_object" [Function] insert="json_object($1)" snippet detail="json_object(k, v, ...) -> json"
+ 3. "json_extract" [Function] insert="json_extract($1)" snippet detail="json_extract(doc, path, ...) -> json"
+ 4. "json_unquote" [Function] insert="json_unquote($1)" snippet detail="json_unquote(json) -> text"
+ 5. "json_arrayagg" [Function] insert="json_arrayagg($1)" snippet detail="json_arrayagg(expr) -> json"
+ 6. "json_contains" [Function] insert="json_contains($1)" snippet detail="json_contains(doc, val [, path]) -> boolean"
+ 7. "json_objectagg" [Function] insert="json_objectagg($1)" snippet detail="json_objectagg(k, v) -> json"
+
+== sqlite ==
+context: Expression, replace: 7..11 "json", items: 9
+ 1. "json" [Function] insert="json($1)" snippet detail="json(text) -> text"
+ 2. "json_set" [Function] insert="json_set($1)" snippet detail="json_set(json, path, value, ...) -> text"
+ 3. "json_each" [Function] insert="json_each($1)" snippet detail="json_each(json [, path]) -> table"
+ 4. "json_array" [Function] insert="json_array($1)" snippet detail="json_array(...) -> text"
+ 5. "json_object" [Function] insert="json_object($1)" snippet detail="json_object(k, v, ...) -> text"
+ 6. "json_extract" [Function] insert="json_extract($1)" snippet detail="json_extract(json, path, ...) -> value"
+ 7. "json_group_array" [Function] insert="json_group_array($1)" snippet detail="json_group_array(expr) -> text"
+ 8. "json_array_length" [Function] insert="json_array_length($1)" snippet detail="json_array_length(json [, path]) -> integer"

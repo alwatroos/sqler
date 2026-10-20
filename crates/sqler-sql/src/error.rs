@@ -51,3 +51,15 @@ pub enum DdlError {
         kind: ObjectKind,
     },
 }
+
+/// Why text could not be formatted.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum FormatError {
+    /// A string, quoted identifier or comment is not closed.
+    #[error("unterminated string, quoted identifier or comment at byte {offset}")]
+    Unterminated {
+        /// The byte offset where the unterminated token starts.
+        offset: usize,
+    },
+}

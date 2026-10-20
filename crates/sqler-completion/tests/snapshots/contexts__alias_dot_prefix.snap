@@ -1,0 +1,17 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT u.em| FROM users u\", 6)"
+---
+sql: SELECT u.em| FROM users u
+
+== postgres ==
+context: Qualified, replace: 9..11 "em", items: 1
+ 1. "email" [Column] insert="email" detail="u · text"
+
+== mysql ==
+context: Qualified, replace: 9..11 "em", items: 1
+ 1. "email" [Column] insert="email" detail="u · text"
+
+== sqlite ==
+context: Qualified, replace: 9..11 "em", items: 1
+ 1. "email" [Column] insert="email" detail="u · text"
