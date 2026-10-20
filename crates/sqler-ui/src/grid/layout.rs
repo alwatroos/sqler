@@ -50,6 +50,9 @@ fn clamp(px: f32) -> f32 {
 pub struct ColumnLayout {
     /// Model column at each display position.
     order: Vec<usize>,
+    /// Display position of each model column: the inverse of `order`, rebuilt by `reindex` on
+    /// every order change, so `display_column` is O(1).
+    positions: Vec<usize>,
     /// Width by model column.
     widths: Vec<f32>,
     /// Default width by model column.
@@ -65,9 +68,18 @@ impl ColumnLayout {
         let defaults: Vec<f32> = default_widths.into_iter().map(clamp).collect();
         Self {
             order: (0..defaults.len()).collect(),
+            positions: (0..defaults.len()).collect(),
             widths: defaults.clone(),
             defaults,
             pinned: 0,
+        }
+    }
+
+    /// Rebuilds the inverse of `order`; call after every change of `order`.
+    fn reindex(&mut self) {
+        self.positions.resize(self.order.len(), 0);
+        for (display, &model) in self.order.iter().enumerate() {
+            self.positions[model] = display;
         }
     }
 
@@ -92,7 +104,7 @@ impl ColumnLayout {
     /// The display position of this model column.
     #[must_use]
     pub fn display_column(&self, model: usize) -> Option<usize> {
-        self.order.iter().position(|&m| m == model)
+        self.positions.get(model).copied()
     }
 
     /// The width of a model column, in pixels (the minimum for an unknown column).
@@ -142,6 +154,7 @@ impl ColumnLayout {
                 self.order.remove(d);
                 self.order.insert(self.pinned, model);
                 self.pinned += 1;
+                self.reindex();
                 true
             }
             _ => false,
@@ -156,6 +169,7 @@ impl ColumnLayout {
                 self.order.remove(d);
                 self.pinned -= 1;
                 self.order.insert(self.pinned, model);
+                self.reindex();
                 true
             }
             _ => false,
@@ -182,6 +196,7 @@ impl ColumnLayout {
         }
         let model = self.order.remove(from);
         self.order.insert(to, model);
+        self.reindex();
         true
     }
 
@@ -204,6 +219,7 @@ impl ColumnLayout {
     /// Identity order, default widths, nothing pinned.
     pub fn reset(&mut self) {
         self.order = (0..self.defaults.len()).collect();
+        self.reindex();
         self.widths.clone_from(&self.defaults);
         self.pinned = 0;
     }
@@ -218,6 +234,11 @@ mod tests {
     }
 
     fn order(l: &ColumnLayout) -> Vec<usize> {
+        // `display_column` is the inverse of `model_column` after every operation.
+        for d in 0..l.len() {
+            assert_eq!(l.model_column(d).and_then(|m| l.display_column(m)), Some(d));
+        }
+        assert_eq!(l.display_column(l.len()), None);
         (0..l.len()).filter_map(|d| l.model_column(d)).collect()
     }
 

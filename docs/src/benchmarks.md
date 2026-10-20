@@ -77,7 +77,7 @@ Bounded, compact model (T1, `3e5ead6` plus this PR, macOS 27.0.1 arm64, Apple M4
 
 Run from the repository root on the commit being recorded:
 
-1. `cargo bench -p sqler-ui --bench grid_viewport` (release profile). Flags: `--rows` (1000000), `--columns` (6), `--batch` (1024), `--viewport` (50), `--samples` (100000), `--reps` (3), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--slack-ns` (100), `--cells-slack-ns` (500), `--budget-p95-ns` (1000000).
+1. `cargo bench -p sqler-ui --bench grid_viewport` (release profile). Flags: `--rows` (1000000), `--columns` (6), `--batch` (1024), `--viewport` (50), `--samples` (100000), `--reps` (3), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--slack-ns` (100), `--cells-slack-ns` (500), `--budget-p95-ns` (1000000), `--layout-rows` (100000), `--layout-columns` (50). The bench also prints `layout_p50_ns` and `layout_p95_ns`: the time to fetch a viewport and visit every cell through a reversed, partly pinned column layout and a 10x5 selection. They are reported, not gated.
 2. The bench ingests the rows through `spawn_ingest(SyntheticSource)` while the main thread polls, then draws 100,000 viewport positions from a fixed-seed xorshift64 generator and times each fetch with `Instant`. p50 and p95 are nearest-rank percentiles.
 3. Memory: `heap_bytes` is the model's own estimate (capacity of the cell vectors, text and binary arenas and side tables of the chunks; MB = bytes / 1048576). On Linux the bench also prints `rss_delta_bytes` (`VmRSS` after ingestion minus before). On macOS, record the peak RSS with `/usr/bin/time -l <bench binary>`. A counting allocator would need `unsafe`, which the workspace forbids.
 4. Each sample includes about 30 ns of `Instant` overhead.

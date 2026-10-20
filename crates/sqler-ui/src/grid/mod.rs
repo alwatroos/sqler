@@ -30,7 +30,7 @@ mod tab;
 pub(crate) mod view;
 mod viewport;
 
-pub use action::{GridAction, register_commands};
+pub use action::{GridAction, grid_key_action, register_commands};
 pub use cell::{ColumnHeader, MAX_CELL_CHARS, cell_text, group_thousands, type_label};
 pub use control::{Applied, GridControls};
 pub use ingest::{IngestSummary, ingest, spawn_ingest};

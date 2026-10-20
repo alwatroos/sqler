@@ -3,8 +3,34 @@
 
 //! `GridAction`: grid-local user actions, each mapped to a command ID.
 
-use super::selection::Motion;
+use sqler_config::Platform;
+
+use super::selection::{Motion, key_command};
 use crate::command::{Command, CommandError, CommandId, CommandRegistry};
+use crate::keymap::KeyInput;
+
+/// The grid action a key press runs, deciding the routing of grid keys against the global
+/// chord router.
+///
+/// `table_focused` is whether the data table (or something in it) has the keyboard focus. Only
+/// then does the grid claim a key, so Ctrl+Space is "select column" in the grid and
+/// `editor:trigger-completion` everywhere else. A key the grid does not claim gives `None` and
+/// goes on to the chord router, where the user's bindings apply. `overlay_open` is whether the
+/// palette, a dialog or a prompt is open: the grid then claims nothing.
+#[must_use]
+pub fn grid_key_action(
+    input: &KeyInput,
+    platform: Platform,
+    table_focused: bool,
+    overlay_open: bool,
+) -> Option<GridAction> {
+    if !table_focused || overlay_open {
+        return None;
+    }
+    key_command(input, platform)
+        .and_then(|id| CommandId::new(id).ok())
+        .and_then(|id| GridAction::from_command_id(&id))
+}
 
 /// A user action on a results grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -317,6 +343,50 @@ mod tests {
                     assert!(GridAction::from_command_id(&id).is_some(), "{id}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn ctrl_space_belongs_to_the_grid_only_while_the_table_has_focus() {
+        let ctrl_space = KeyInput {
+            ctrl: true,
+            key: "space".into(),
+            ..KeyInput::default()
+        };
+        for p in [Platform::MacOs, Platform::Other] {
+            assert_eq!(
+                grid_key_action(&ctrl_space, p, true, false),
+                Some(GridAction::SelectColumn)
+            );
+            // Editor (or anything else) focused: the chord router resolves the completion.
+            assert_eq!(grid_key_action(&ctrl_space, p, false, false), None);
+            // Palette or dialog open: the grid claims nothing.
+            assert_eq!(grid_key_action(&ctrl_space, p, true, true), None);
+        }
+    }
+
+    #[test]
+    fn keys_the_grid_does_not_claim_go_to_the_router() {
+        let input = |ctrl: bool, key: &str| KeyInput {
+            ctrl,
+            key: key.into(),
+            ..KeyInput::default()
+        };
+        let down = grid_key_action(&input(false, "down"), Platform::Other, true, false);
+        assert!(matches!(down, Some(GridAction::Move { .. })));
+        // Global chords of the defaults are not grid keys.
+        for (ctrl, key) in [
+            (true, "w"),
+            (true, "tab"),
+            (true, "n"),
+            (true, "q"),
+            (true, "."),
+        ] {
+            assert_eq!(
+                grid_key_action(&input(ctrl, key), Platform::Other, true, false),
+                None,
+                "{key}"
+            );
         }
     }
 }

@@ -291,6 +291,30 @@ mod tests {
     }
 
     #[test]
+    fn down_scrolls_by_one_only_past_the_last_visible_row() {
+        let mut c = controls(2);
+        c.click_cell(8, 0, 100, false);
+        // Row 9 is the last visible one: no scroll.
+        let a = c.apply(mv(Motion::Down), 100, 0..10);
+        assert_eq!(c.selection().active(), Some(CellPos { row: 9, col: 0 }));
+        assert_eq!(a.scroll_row, None);
+        // Row 10 is just below the view: the first row moves by one.
+        let a = c.apply(mv(Motion::Down), 100, 0..10);
+        assert_eq!(c.selection().active(), Some(CellPos { row: 10, col: 0 }));
+        assert_eq!(a.scroll_row, Some(1));
+        // Extending down behaves the same.
+        let a = c.apply(
+            GridAction::Move {
+                to: Motion::Down,
+                extend: true,
+            },
+            100,
+            1..11,
+        );
+        assert_eq!(a.scroll_row, Some(2));
+    }
+
+    #[test]
     fn move_scrolls_to_a_new_unpinned_column_only() {
         let mut c = controls(4);
         c.click_cell(0, 0, 10, false);

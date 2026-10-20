@@ -346,6 +346,12 @@ pub fn key_command(input: &KeyInput, platform: Platform) -> Option<&'static str>
 
 /// The first row to scroll to so that `row` becomes visible; `None` when it already is. Scrolls
 /// with the row at the top (up) or at the bottom (down).
+///
+/// The result is the row to put at the **top** of the viewport and must be applied with a strict
+/// scroll (`scroll_to_item_strict(.., ScrollStrategy::Top)`): a lazy scroll ignores a target
+/// that is already on screen, which is the case for the row just below the view. `row` and
+/// `visible` are in the same space; the caller maps a model row through
+/// `RowOrder::display_row` once rows can be reordered (the sort, T6).
 #[must_use]
 pub fn scroll_row(row: usize, visible: Range<usize>) -> Option<usize> {
     if visible.is_empty() || row < visible.start {
@@ -754,5 +760,9 @@ mod tests {
         assert_eq!(scroll_row(100, 10..20), Some(91));
         assert_eq!(scroll_row(3, 0..0), Some(3));
         assert_eq!(scroll_row(0, 7..7), Some(0));
+        // One below the view: the view moves by exactly one row.
+        assert_eq!(scroll_row(20, 10..20), Some(11));
+        // Exactly the last visible row: no scroll.
+        assert_eq!(scroll_row(19, 10..20), None);
     }
 }

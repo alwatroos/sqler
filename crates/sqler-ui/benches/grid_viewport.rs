@@ -350,20 +350,10 @@ fn run() -> Result<ExitCode, (u8, String)> {
     let (layout_p50, layout_p95) = measure_layout(&a, &layout_model);
     let report = format!(
         "bench=grid_viewport\nos={}-{}\nrows={}\ncolumns={}\nviewport_rows={}\nsamples={}\nreps={}\n\
-         p50_ns={p50}
-p95_ns={p95}
-cells_p50_ns={cells_p50}
-cells_p95_ns={cells_p95}
-ingest_ms={}
-heap_bytes={}
-rss_delta_bytes={rss_delta}
-\
-         layout_rows={}
-layout_columns={}
-layout_pinned=2
-layout_p50_ns={layout_p50}
-layout_p95_ns={layout_p95}
-",
+         p50_ns={p50}\np95_ns={p95}\ncells_p50_ns={cells_p50}\ncells_p95_ns={cells_p95}\n\
+         ingest_ms={}\nheap_bytes={}\nrss_delta_bytes={rss_delta}\n\
+         layout_rows={}\nlayout_columns={}\nlayout_pinned=2\nlayout_p50_ns={layout_p50}\n\
+         layout_p95_ns={layout_p95}\n",
         std::env::consts::OS,
         std::env::consts::ARCH,
         a.rows,
