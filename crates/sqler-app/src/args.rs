@@ -8,12 +8,13 @@ use std::fmt;
 /// The usage text, printed for `--help` and after a usage error.
 pub(crate) const USAGE: &str = "\
 Usage:
-  sqler [--exit-after-first-frame]
+  sqler [--exit-after-first-frame | --open-sessions]
   sqler --help | -h
   sqler --version | -V
 
 Options:
   --exit-after-first-frame   Exit with code 0 once the first frame is presented
+  --open-sessions            Open every saved connection after startup, then idle (idle RSS measurement)
   -h, --help                 Print this help
   -V, --version              Print the version
 ";
@@ -25,6 +26,8 @@ pub(crate) enum Command {
     Run {
         /// Exit as soon as the first frame has been presented.
         exit_after_first_frame: bool,
+        /// Open every saved connection after startup, then idle (idle RSS measurement).
+        open_sessions: bool,
     },
     /// Print the usage.
     Help,
@@ -45,16 +48,24 @@ impl fmt::Display for UsageError {
 /// Parses the arguments (without `argv[0]`).
 pub(crate) fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, UsageError> {
     let mut exit_after_first_frame = false;
+    let mut open_sessions = false;
     for arg in args {
         match arg.as_str() {
             "--help" | "-h" => return Ok(Command::Help),
             "--version" | "-V" => return Ok(Command::Version),
             "--exit-after-first-frame" => exit_after_first_frame = true,
+            "--open-sessions" => open_sessions = true,
             other => return Err(UsageError(format!("unknown argument: {other}"))),
         }
     }
+    if exit_after_first_frame && open_sessions {
+        return Err(UsageError(
+            "--open-sessions cannot be combined with --exit-after-first-frame".into(),
+        ));
+    }
     Ok(Command::Run {
         exit_after_first_frame,
+        open_sessions,
     })
 }
 
@@ -71,7 +82,8 @@ mod tests {
         assert_eq!(
             parse_strs(&[]),
             Ok(Command::Run {
-                exit_after_first_frame: false
+                exit_after_first_frame: false,
+                open_sessions: false
             })
         );
     }
@@ -81,9 +93,41 @@ mod tests {
         assert_eq!(
             parse_strs(&["--exit-after-first-frame"]),
             Ok(Command::Run {
-                exit_after_first_frame: true
+                exit_after_first_frame: true,
+                open_sessions: false
             })
         );
+    }
+
+    #[test]
+    fn open_sessions() {
+        assert_eq!(
+            parse_strs(&["--open-sessions"]),
+            Ok(Command::Run {
+                exit_after_first_frame: false,
+                open_sessions: true
+            })
+        );
+    }
+
+    #[test]
+    fn open_sessions_with_exit_after_first_frame_is_a_usage_error() {
+        let expected = Err(UsageError(
+            "--open-sessions cannot be combined with --exit-after-first-frame".to_owned(),
+        ));
+        assert_eq!(
+            parse_strs(&["--open-sessions", "--exit-after-first-frame"]),
+            expected
+        );
+        assert_eq!(
+            parse_strs(&["--exit-after-first-frame", "--open-sessions"]),
+            expected
+        );
+    }
+
+    #[test]
+    fn usage_lists_open_sessions() {
+        assert!(USAGE.contains("--open-sessions"));
     }
 
     #[test]
