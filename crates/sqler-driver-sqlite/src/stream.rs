@@ -7,7 +7,7 @@ use std::future::poll_fn;
 use std::sync::Arc;
 
 use futures_core::stream::BoxStream;
-use sqler_driver_api::sqler_core::Column;
+use sqler_driver_api::sqler_core::{Column, DataType};
 use sqler_driver_api::{BoxFuture, DriverError, QueryEvent, QueryStream};
 use sqlx::sqlite::SqliteRow;
 
@@ -28,6 +28,7 @@ enum State {
 pub(crate) struct SqliteQueryStream<'s> {
     state: State,
     columns: Vec<Column>,
+    types: Vec<DataType>,
     rows: Option<BoxStream<'s, Result<SqliteRow, sqlx::Error>>>,
     rows_affected: Option<u64>,
     cancel: Arc<SqliteCanceller>,
@@ -42,6 +43,7 @@ impl<'s> SqliteQueryStream<'s> {
     ) -> Self {
         Self {
             state: State::Columns,
+            types: columns.iter().map(|c| c.data_type).collect(),
             columns,
             rows: Some(rows),
             rows_affected: None,
@@ -54,6 +56,7 @@ impl<'s> SqliteQueryStream<'s> {
         Self {
             state: State::Columns,
             columns: Vec::new(),
+            types: Vec::new(),
             rows: None,
             rows_affected: Some(rows_affected),
             cancel,
@@ -92,10 +95,11 @@ impl<'s> SqliteQueryStream<'s> {
             });
         };
         let mut batch = Vec::new();
+        let types = &self.types;
         let mut ended = false;
         while batch.len() < BATCH {
             match poll_fn(|cx| rows.as_mut().poll_next(cx)).await {
-                Some(Ok(row)) => match decode_row(&row) {
+                Some(Ok(row)) => match decode_row(&row, types) {
                     Ok(row) => batch.push(row),
                     Err(e) => return Err(self.fail(e)),
                 },

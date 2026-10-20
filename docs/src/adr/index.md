@@ -17,3 +17,4 @@ consequences. SQLer uses the MADR format.
 | [0005](0005-config-files-and-keybindings.md) | Config files and keybindings: TOML files, chord grammar, std-only directory lookup | accepted |
 | [0006](0006-grid-data-model-and-bench-harness.md) | Grid data model and bench harness | accepted |
 | [0007](0007-desktop-binary-and-ui-tokio-bridge.md) | Desktop binary and UI-thread/tokio bridge | accepted |
+| [0008](0008-object-model-lazy-introspection-value-types-tls.md) | Object model, lazy introspection, typed values and TLS options | accepted |

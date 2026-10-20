@@ -74,7 +74,10 @@ A summary goes to stderr only, so stdout can be piped:
 With `SQLite`, statements without result columns always report a count, so DDL such as
 `create table` prints `(0 rows affected)` and `(done)` does not appear.
 
-Dates and booleans have no separate storage class in `SQLite`, so they print as text and integers.
+Booleans have no separate storage class in `SQLite`, so they print as integers. Text in a column
+declared `DATE`, `TIME`, `DATETIME` or `TIMESTAMP` is decoded into a typed value and prints in
+normalised ISO form: `2024-01-02T03:04:05` prints as `2024-01-02 03:04:05`. Text that does not parse
+stays as it is. See [SQLite](databases/sqlite.md).
 
 ## Exit codes
 
