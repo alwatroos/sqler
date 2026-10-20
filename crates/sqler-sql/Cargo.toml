@@ -1,6 +1,6 @@
 [package]
 name = "sqler-sql"
-description = "SQL parsing (sqlparser), formatting, statement splitting and dialect handling."
+description = "SQL lexer, statement splitting, read/write classification, formatting and DDL generation per dialect."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

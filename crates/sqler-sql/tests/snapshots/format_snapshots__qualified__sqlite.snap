@@ -1,0 +1,8 @@
+---
+source: crates/sqler-sql/tests/format_snapshots.rs
+expression: out
+---
+SELECT t.order, t.Select, db.from.x
+FROM db.t
+WHERE t.limit = 1
+ORDER BY t.order

@@ -1,6 +1,6 @@
 # 0010 `MySQL` and `MariaDB` driver: sqlx, KILL QUERY cancel, no RSA exchange
 
-- Status: accepted
+- Status: accepted; the "no RSA exchange" decision is superseded by [ADR-0018](0018-rsa-alternatives.md)
 - Date: 2026-10-20
 
 ## Context and problem statement
@@ -37,7 +37,7 @@ Chosen: options 1 and 4.
 
 **TLS (ADR-0009).** `sqlx` features `mysql` and `tls-rustls-ring-native-roots` on the driver crate's own dependency line. `Some(TlsConfig)` overrides the URL: `Disable` to `Disabled`, `Prefer` to `Preferred`, `Require` to `Required`, `VerifyCa` to `VerifyCa`, `VerifyFull` to `VerifyIdentity`; the CA, client certificate and key paths map to `ssl_ca`, `ssl_client_cert` and `ssl_client_key`. With `tls: None` the URL parameters (`ssl-mode`, `ssl-ca`, `ssl-cert`, `ssl-key`) apply and the default is `PREFERRED`.
 
-**No `mysql-rsa`.** With the feature on, `sqlx-mysql` pulls the `rsa` crate, which has `RUSTSEC-2023-0071` (Marvin attack) and no fixed version. The feature is left off, so the tree has no `rsa` and `cargo deny` needs no ignore. The price: the RSA public-key password exchange (`sha256_password`, and `caching_sha2_password` when the server has no cached entry for the account) fails over an unencrypted connection with the sqlx error "RSA auth backend disabled". Over TLS the password travels inside the TLS channel and works; with the default `PREFERRED` mode servers that offer TLS (all `MySQL` 8 servers) are fine. Over a plaintext link a cached `caching_sha2_password` account and `mysql_native_password` work. If a user needs the plaintext exchange, enabling `mysql-rsa` with a reasoned ignore is a one-line change.
+**No `mysql-rsa`.** With the feature on, `sqlx-mysql` pulls the `rsa` crate, which has `RUSTSEC-2023-0071` (Marvin attack) and no fixed version. The feature is left off, so the tree has no `rsa` and `cargo deny` needs no ignore. The price: the RSA public-key password exchange (`sha256_password`, and `caching_sha2_password` when the server has no cached entry for the account) fails over an unencrypted connection with the sqlx error "RSA auth backend disabled". Over TLS the password travels inside the TLS channel and works; with the default `PREFERRED` mode servers that offer TLS (all `MySQL` 8 servers) are fine. Over a plaintext link a cached `caching_sha2_password` account and `mysql_native_password` work. **Superseded by [ADR-0018](0018-rsa-alternatives.md):** the plaintext exchange now works through a vendored `sqlx-mysql` patch that encrypts with `aws-lc-rs`; `mysql-rsa` and the `rsa` crate stay out of the tree, and the "RSA auth backend disabled" error no longer occurs.
 
 **Values.** Cells are decoded by the column type reported with the row, with no new crates. Temporal cells are read from the documented binary layout (a length byte of 0 to 12, then little-endian fields; microseconds become nanoseconds). Any other first byte is parsed as text. Mapping:
 

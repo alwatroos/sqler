@@ -11,8 +11,9 @@ host. Closing or dropping the `Tunnel` tears everything down; dropping the `open
 the open. An unknown or changed host key is a typed error (`TunnelError::UnknownHostKey`,
 `TunnelError::HostKeyChanged`); `trust_host_key` records a key after the user confirmed it.
 Secrets are passed in as `Secret` values and never appear in `Debug` output or error messages.
-RSA keys are unsupported until the owner decides on RUSTSEC-2023-0071 (the `rsa` crate): an RSA
-key file gives `TunnelError::UnsupportedKeyType`; use an ed25519 or ECDSA key.
+RSA user keys (2048, 3072 or 4096 bits; `rsa-sha2-256` and `rsa-sha2-512`; `OpenSSH`, PKCS#1 and
+PKCS#8 files) are signed with `ring`, without the `rsa` crate (ADR-0018). SHA-1 `ssh-rsa`,
+legacy-encrypted PEM files and other key sizes give a `TunnelError` that names the alternative.
 
 Layer: L1
 
