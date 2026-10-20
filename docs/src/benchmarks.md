@@ -34,11 +34,14 @@ Run from the repository root on the commit being recorded:
 Run from the repository root on the commit being recorded:
 
 1. `cargo build --release -p sqler-app --locked`
-2. Binary size: `stat -f %z target/release/sqler` (bytes), MB = bytes / 1048576 (30,928,816 bytes = 29.5 MB at `1f206e6`).
+2. Binary size: `stat -f %z target/release/sqler` (bytes), MB = bytes / 1048576 (30,928,816 bytes = 29.5 MB at `1f206e6`). Per OS in CI: the `Binary size` workflow (`size.yml`) prints the bytes for Linux, macOS and Windows next to the 60 MB budget (report only, not a gate).
 3. Isolate the config: on macOS set `HOME` to an empty directory that holds `Library/Application Support/SQLer/connections.toml` with three `sqlite` `:memory:` entries (on Linux set `XDG_CONFIG_HOME`).
 4. Cold start: `hyperfine -w 3 -r 20 'target/release/sqler --exit-after-first-frame'`. This is the whole process until the first frame is presented, so it needs a display. Without one, record "not measured: no interactive display".
 5. Idle RSS: start `target/release/sqler`, wait 6 s, read `ps -o rss= -p <pid>` (KiB), read again after 10 s, stop it. Repeat three times.
-6. Test count: `cargo nextest run --workspace --no-tests=pass`.
+6. Idle RSS, three sessions open: put three `sqlite` entries without keychain secrets (or reachable `PostgreSQL`/`MySQL` test containers) in the isolated config, start `target/release/sqler --open-sessions 2> open.log`, wait for the `sqler: open-sessions: 3 of 3 open, idling` line in `open.log`, then read `ps -o rss= -p <pid>` at 6 s and 10 s as in step 5. A `skipped` line means that connection is not open (keychain secret, unknown or changed SSH host key, connect failure); the figure only counts as "three open" when the summary says `3 of 3`. On Windows the release binary has no console, so stderr is visible only when redirected.
+7. Test count: `cargo nextest run --workspace --no-tests=pass`.
+
+The figures for these two methods (three sessions open, Linux and Windows sizes) are recorded by T13, not here.
 
 M2 note (ba24c9a): the binary grew from 29.5 to 38.3 MiB with the `PostgreSQL` and `MySQL` drivers, the tunnel and the keychain; the cold start rose from 140.6 to 155.1 ms and the idle RSS from 98.1 to 100.0 MiB. The three connections of the M2 row were a `SQLite` `:memory:`, a `PostgreSQL` and a `MySQL` entry, with both containers running. The app has no headless way to open a session (a session opens by double-click or from the connection manager, and `--exit-after-first-frame` exits before any), so the RSS with three sessions actually open was not measured. The figure that was measured is the idle app with three saved connections; the sessions, the tunnel and the catalog cache add to it.
 
