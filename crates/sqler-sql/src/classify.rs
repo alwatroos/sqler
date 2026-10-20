@@ -571,7 +571,7 @@ fn sequence_form(src: &str, sig: &[Token], i: usize) -> Option<StatementClass> {
 /// The unquoted text of a word or quoted name, lower-cased.
 fn bare_name(src: &str, tok: &Token) -> String {
     tok.text(src)
-        .trim_matches(['`', '"', '[', ']'])
+        .trim_matches(['`', '"', '\'', '[', ']'])
         .to_ascii_lowercase()
 }
 
@@ -579,6 +579,9 @@ fn bare_name(src: &str, tok: &Token) -> String {
 /// table-valued functions (`pragma_optimize` writes `sqlite_stat1`) and the writable
 /// `sqlite_dbpage`; `MariaDB` sequence members (`seq.nextval` in `sql_mode=ORACLE`, bare `nextval`).
 fn parenless_hazard(dialect: Dialect, src: &str, sig: &[Token], i: usize) -> bool {
+    if matches!(sig[i].kind, TokenKind::Str { .. }) && dialect != Dialect::Sqlite {
+        return false;
+    }
     let name = bare_name(src, &sig[i]);
     let qualified = i > 0 && is_punct(&sig[i - 1], src, ".");
     match dialect {
@@ -686,7 +689,8 @@ fn scan(
             // A stray character (NUL, backslash, a foreign quote) means the text is not plain SQL.
             TokenKind::Other => return StatementClass::Unknown,
             TokenKind::Op if tok.text(src) == ":=" => return StatementClass::Unknown,
-            TokenKind::Word | TokenKind::QuotedIdent { .. }
+            // `SQLite` also accepts a single-quoted string as a table name.
+            TokenKind::Word | TokenKind::QuotedIdent { .. } | TokenKind::Str { .. }
                 if parenless_hazard(dialect, src, sig, i) =>
             {
                 return StatementClass::Unknown;
