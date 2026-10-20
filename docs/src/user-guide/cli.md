@@ -130,8 +130,8 @@ The statement is classified before the CLI connects. Only a statement that `sqle
 a read (`select`, `with`, `values`, `table`, `show`) is exported. Anything else, including
 statements the classifier does not recognise, is refused with exit code 3 and nothing runs. Pass
 `--allow-write` to run it anyway; the CLI then prints
-`warning: --allow-write: running a statement of class <class>: <SQL>` on stderr first, with credentials in
-the SQL replaced. The class is `write`, `ddl`, `other` or `unknown`. The classifier cannot see what
+`warning: running a statement of class <class> (--allow-write)` on stderr first. The SQL itself is
+never printed, because a redactor cannot guarantee that every secret in it is hidden. The class is `write`, `ddl`, `other` or `unknown`. The classifier cannot see what
 a view or function does, and the CLI runs the statement without a read-only transaction. Exactly one
 statement is accepted. A statement without a result set (such as an `insert`) writes no file and
 prints `(<n> rows affected)`. The gate applies to `export` only; `run` runs any statement.

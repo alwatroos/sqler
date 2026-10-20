@@ -264,9 +264,10 @@ fn export_allow_write_runs_and_warns() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let err = stderr(&out);
     assert!(
-        err.contains("warning: --allow-write: running a statement of class write: delete from t"),
+        err.contains("warning: running a statement of class write (--allow-write)"),
         "{err}"
     );
+    assert!(!err.contains("delete from t"), "{err}");
     assert!(err.contains("(1 rows affected)"), "{err}");
     assert!(
         !path.exists(),
@@ -543,6 +544,31 @@ fn assert_no_leak(args: &[&str]) {
     let text = stderr(&out);
     for needle in ["s3cretpw", "leakuser", "db.leak.example", "leakdb"] {
         assert!(!text.contains(needle), "{args:?} leaked {needle}: {text}");
+    }
+}
+
+#[test]
+fn export_allow_write_warning_does_not_echo_the_sql() {
+    let db = seeded_db("export-allow-leak");
+    let db = db.to_str().unwrap();
+    let sql = format!("copy t from program 'curl {LEAK_URL}'");
+    let out = cli(&[
+        "export",
+        "--allow-write",
+        "--format",
+        "csv",
+        "--output",
+        "-",
+        db,
+        &sql,
+    ]);
+    let text = stderr(&out);
+    assert!(
+        text.contains("warning: running a statement of class"),
+        "{text}"
+    );
+    for needle in ["s3cretpw", "leakuser", "db.leak.example", "leakdb", "curl"] {
+        assert!(!text.contains(needle), "leaked {needle}: {text}");
     }
 }
 

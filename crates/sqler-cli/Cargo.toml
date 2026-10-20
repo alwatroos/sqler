@@ -26,8 +26,6 @@ driver-mysql = ["dep:sqler-driver-mysql"]
 sqler-driver-api.workspace = true
 sqler-export.workspace = true
 sqler-sql.workspace = true
-# Only for `redact_credentials` (echo of a write statement).
-sqler-config.workspace = true
 sqler-driver-sqlite = { workspace = true, optional = true }
 sqler-driver-postgres = { workspace = true, optional = true }
 sqler-driver-mysql = { workspace = true, optional = true }

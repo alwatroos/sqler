@@ -7053,7 +7053,6 @@ name = "sqler-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "sqler-config",
  "sqler-driver-api",
  "sqler-driver-mysql",
  "sqler-driver-postgres",

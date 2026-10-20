@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use anyhow::{Context, anyhow};
-use sqler_config::redact_credentials;
 use sqler_driver_api::sqler_core::Query;
 use sqler_driver_api::{DriverError, QueryEvent, QueryStream};
 use sqler_export::{
@@ -134,9 +133,8 @@ fn gate(args: &ExportArgs) -> Result<Option<String>, Failure> {
         )));
     }
     Ok(Some(format!(
-        "warning: --allow-write: running a statement of class {}: {}",
-        class.as_str(),
-        redact_credentials(&args.sql)
+        "warning: running a statement of class {} (--allow-write)",
+        class.as_str()
     )))
 }
 
@@ -572,17 +570,18 @@ mod tests {
     }
 
     #[test]
-    fn gate_allow_write_warns_and_redacts() {
+    fn gate_allow_write_warns_without_the_sql() {
         let mut a = args("sqlite", "insert into t values (1)");
         a.allow_write = true;
         let warning = gate(&a).unwrap().unwrap();
-        assert!(
-            warning.starts_with("warning: --allow-write: running a statement of class write: ")
+        assert_eq!(
+            warning,
+            "warning: running a statement of class write (--allow-write)"
         );
-        assert!(warning.contains("insert into t values (1)"));
         let mut a = args("sqlite", "create user u identified by 's3cret'");
         a.allow_write = true;
-        assert!(!gate(&a).unwrap().unwrap().contains("s3cret"));
+        let warning = gate(&a).unwrap().unwrap();
+        assert!(!warning.contains("s3cret") && !warning.contains("identified"));
     }
 
     #[test]
