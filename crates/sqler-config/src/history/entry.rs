@@ -116,6 +116,13 @@ impl HistoryEntry {
         &self.sql
     }
 
+    /// Whether the stored SQL had values hidden by the credential redactor. Such an entry must
+    /// not be run again: the placeholder would be executed as a value.
+    #[must_use]
+    pub fn redacted(&self) -> bool {
+        super::redact::contains_redaction(&self.sql)
+    }
+
     /// The connection it ran on.
     #[must_use]
     pub fn connection(&self) -> &ConnectionId {

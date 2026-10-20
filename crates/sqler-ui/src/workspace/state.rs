@@ -7,13 +7,16 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use sqler_catalog::{CacheKey, CatalogWorker, RefreshHandle};
-use sqler_config::{ConnectionId, ConnectionProfile, Secret, SecretRef};
+use sqler_config::{
+    ConnectionId, ConnectionProfile, NewHistoryEntry, SavedQueries, Secret, SecretRef,
+};
 use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId};
 use sqler_driver_api::{CancelFlag, CancelHandle, Session};
 use sqler_sql::Dialect;
 
 use super::action::WorkspaceAction;
 use super::browser::{BrowserJob, BrowserState, OpenDataJob};
+use super::history::HistoryWorkspace;
 use super::query::ActiveRun;
 use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
 use crate::connections::{
@@ -22,6 +25,7 @@ use crate::connections::{
 };
 use crate::editor::{EditorDocs, EditorKey, TextEdit};
 use crate::grid::{GridTab, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS};
+use crate::history::HistorySearch;
 use crate::query::{QueryJob, QueryTab, RunEvent};
 use crate::settings::SettingsModel;
 use crate::sidebar::SidebarModel;
@@ -182,9 +186,27 @@ pub enum Effect {
     },
     /// Ask the database to cancel the running statement.
     CancelQuery(CancelHandle),
+    /// Record this statement in the query history on a blocking thread, then report with
+    /// [`Workspace::history_recorded`].
+    RecordHistory(NewHistoryEntry),
+    /// Search the query history on a blocking thread, then report the entries with
+    /// [`Workspace::history_results`] (with the search's tab and request).
+    SearchHistory(HistorySearch),
+    /// Delete the whole query history on a blocking thread, then report with
+    /// [`Workspace::history_cleared`].
+    ClearHistory,
+    /// Write the saved queries to `queries.toml` on a blocking thread (`HistoryService::save_saved`
+    /// skips an older `generation`), then report with [`Workspace::saved_queries_written`].
+    SaveSavedQueries {
+        /// The number of the change this snapshot holds.
+        generation: u64,
+        /// The queries to write.
+        queries: SavedQueries,
+    },
 }
 
 impl std::fmt::Debug for Effect {
+    #[allow(clippy::too_many_lines)] // one arm per variant
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::None => f.write_str("None"),
@@ -269,6 +291,26 @@ impl std::fmt::Debug for Effect {
                 .field("grids", &grids.len())
                 .finish_non_exhaustive(),
             Self::CancelQuery(_) => f.write_str("CancelQuery(..)"),
+            // Never the SQL text.
+            Self::RecordHistory(entry) => f
+                .debug_struct("RecordHistory")
+                .field("connection", &entry.connection)
+                .field("outcome", &entry.outcome)
+                .finish_non_exhaustive(),
+            Self::SearchHistory(search) => f
+                .debug_struct("SearchHistory")
+                .field("tab", &search.tab)
+                .field("request", &search.request)
+                .finish_non_exhaustive(),
+            Self::ClearHistory => f.write_str("ClearHistory"),
+            Self::SaveSavedQueries {
+                generation,
+                queries,
+            } => f
+                .debug_struct("SaveSavedQueries")
+                .field("generation", generation)
+                .field("queries", &queries.queries().len())
+                .finish(),
         }
     }
 }
@@ -334,6 +376,8 @@ pub struct Workspace {
     pub(super) query_runs: HashMap<TabId, ActiveRun>,
     /// The last run id handed out.
     pub(super) next_run: u64,
+    /// The history tabs, saved queries and their dialogs.
+    pub(super) history: HistoryWorkspace,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -384,6 +428,7 @@ impl Workspace {
             queries: HashMap::new(),
             query_runs: HashMap::new(),
             next_run: 0,
+            history: HistoryWorkspace::new(),
         }
     }
 
@@ -698,6 +743,7 @@ impl Workspace {
         self.editors.remove(id);
         self.tab_conns.remove(&id);
         self.queries.remove(&id);
+        self.history.forget_tab(id);
         let cancel = self.cancel_query_run(id);
         if self.tabs.is_empty() && self.settings_tab == SettingsTab::Background {
             self.settings_tab = SettingsTab::Active;
@@ -722,6 +768,8 @@ impl Workspace {
         result: Result<Box<dyn Session>, ConnectFailure>,
     ) -> Effect {
         let seed = self.editor_seeds.remove(&request);
+        let pending = self.history.take_pending(request);
+        let before = self.tabs.active().map(crate::tabs::Tab::id);
         let Some(purpose) = self.requests.remove(&request) else {
             return match result {
                 Ok(session) => Effect::CloseSession(session),
@@ -729,7 +777,10 @@ impl Workspace {
             };
         };
         match purpose {
-            Purpose::Open(id) => self.open_finished(&id, result, seed),
+            Purpose::Open(id) => {
+                let effect = self.open_finished(&id, result, seed);
+                self.after_history_open(before, pending, effect)
+            }
             Purpose::Browse(id) => self.browse_finished(&id, result),
             Purpose::Test => self.test_finished(request, result),
         }

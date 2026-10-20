@@ -29,7 +29,7 @@ pub use error::ConfigError;
 pub use history::{
     DEFAULT_HISTORY_CAP, HISTORY_FORMAT_VERSION, HistoryEntry, HistoryIssue, HistoryIssueKind,
     HistoryOptions, HistoryOutcome, HistoryQuery, HistoryStore, MAX_HISTORY_SQL_BYTES,
-    NewHistoryEntry, redact_credentials,
+    NewHistoryEntry, contains_redaction, redact_credentials,
 };
 pub use keymap::{CommandId, Conflict, KeyChord, KeybindingOverrides, Keymap, Modifiers, Platform};
 pub use paths::ConfigDir;
