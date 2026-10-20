@@ -6,16 +6,58 @@
 //!
 //! Nothing here prompts or prints a secret. A profile with a keychain secret is skipped before
 //! the connector is called (reading the keychain can prompt), and `trust_host_key` is never
-//! called, so an unknown or changed SSH host key is a logged skip. Skip lines contain the connection
-//! name and, for SSH failures, the jump host and port from the connect failure text; never the
-//! database target, a credential or key material.
+//! called, so an unknown or changed SSH host key is a logged skip.
+//!
+//! Skip lines are safe by construction: the reason is a fixed string chosen per
+//! [`ConnectFailure`] variant (`skip_reason`), and no error `Display` text is ever interpolated
+//! (tunnel and driver errors can carry key paths or parts of the database target). A skip line
+//! holds the connection name and a fixed reason; only the unknown and changed host key reasons
+//! add the SSH jump `host:port`, which the user is asked to confirm in the GUI anyway.
 
 use std::sync::Arc;
 
 use sqler_config::ConnectionProfile;
 use sqler_driver_api::Session;
-use sqler_ui::connections::{ConnectRequest, Connector, SecretSource};
+use sqler_ui::connections::{ConnectFailure, ConnectRequest, Connector, SecretSource};
 use tokio::runtime::Handle;
+
+const REASON_KEYCHAIN: &str = "a secret is in the keychain (reading it may prompt)";
+const REASON_INVALID_REF: &str = "the connection id cannot be used as a keychain reference";
+
+/// The fixed reason a connect failure is logged with. Never interpolates error text; only the
+/// host key cases add the SSH `host:port`.
+fn skip_reason(failure: &ConnectFailure) -> String {
+    match failure {
+        ConnectFailure::UnknownHostKey(key) => format!(
+            "the SSH host key of {}:{} is not trusted yet",
+            key.host, key.port
+        ),
+        ConnectFailure::HostKeyChanged { key, .. } => {
+            format!("the SSH host key of {}:{} changed", key.host, key.port)
+        }
+        other => fixed_reason(other).to_owned(),
+    }
+}
+
+/// The fixed strings for every variant that carries no printable data.
+fn fixed_reason(failure: &ConnectFailure) -> &'static str {
+    match failure {
+        ConnectFailure::UnknownHostKey(_) | ConnectFailure::HostKeyChanged { .. } => {
+            "the SSH host key is not trusted"
+        }
+        ConnectFailure::MissingSecret { .. } => "no secret is stored for this connection",
+        ConnectFailure::Secret(_) => "the secret store failed",
+        ConnectFailure::Tunnel(_) => "the SSH tunnel could not be opened",
+        ConnectFailure::Target(_) => "the connection target is invalid",
+        ConnectFailure::TlsHostnameThroughTunnel { .. } => {
+            "verify-full TLS through an SSH tunnel is not supported"
+        }
+        ConnectFailure::Driver(_) => "the database connection failed",
+        ConnectFailure::Aborted => "the connection attempt was aborted",
+        // `ConnectFailure` is non-exhaustive: a new variant gets a generic reason until decided.
+        _ => "the connection could not be opened",
+    }
+}
 
 /// Opens every profile through `connector`, logging one line per profile and a summary.
 pub(crate) async fn open_all(
@@ -26,18 +68,18 @@ pub(crate) async fn open_all(
     let mut sessions: Vec<Box<dyn Session>> = Vec::new();
     for profile in profiles {
         let name = &profile.spec().name;
-        let request = match ConnectRequest::from_profile(profile) {
-            Ok(request) => request,
-            Err(err) => {
-                log(format!("sqler: open-sessions: skipped {name:?}: {err}"));
-                continue;
-            }
+        // Only `SecretError::InvalidRef` is possible; its text is not logged.
+        let Ok(request) = ConnectRequest::from_profile(profile) else {
+            log(format!(
+                "sqler: open-sessions: skipped {name:?}: {REASON_INVALID_REF}"
+            ));
+            continue;
         };
         if matches!(request.db_password, SecretSource::Keychain(_))
             || matches!(request.ssh_secret, SecretSource::Keychain(_))
         {
             log(format!(
-                "sqler: open-sessions: skipped {name:?}: a secret is in the keychain (reading it may prompt)"
+                "sqler: open-sessions: skipped {name:?}: {REASON_KEYCHAIN}"
             ));
             continue;
         }
@@ -46,7 +88,10 @@ pub(crate) async fn open_all(
                 sessions.push(session);
                 log(format!("sqler: open-sessions: opened {name:?}"));
             }
-            Err(failure) => log(format!("sqler: open-sessions: skipped {name:?}: {failure}")),
+            Err(failure) => log(format!(
+                "sqler: open-sessions: skipped {name:?}: {}",
+                skip_reason(&failure)
+            )),
         }
     }
     log(format!(
@@ -97,7 +142,7 @@ mod tests {
     use sqler_config::{ConnectionSpec, ConnectionStore, SshAuth, SshProfile};
     use sqler_driver_api::sqler_core::{DriverId, Query};
     use sqler_driver_api::{BoxFuture, CancelFlag, CancelHandle, DriverError, QueryStream};
-    use sqler_ui::connections::{ConnectFailure, HostKeyPrompt};
+    use sqler_ui::connections::HostKeyPrompt;
 
     use super::*;
 
@@ -123,7 +168,9 @@ mod tests {
     #[derive(Clone, Copy)]
     enum Fail {
         UnknownHostKey,
+        HostKeyChanged,
         Driver,
+        Tunnel,
     }
 
     #[derive(Default)]
@@ -163,9 +210,17 @@ mod tests {
                 match fail {
                     None => Ok(Box::new(FakeSession) as Box<dyn Session>),
                     Some(Fail::UnknownHostKey) => Err(ConnectFailure::UnknownHostKey(prompt())),
+                    Some(Fail::HostKeyChanged) => Err(ConnectFailure::HostKeyChanged {
+                        key: prompt(),
+                        line: 7,
+                    }),
                     Some(Fail::Driver) => Err(ConnectFailure::Driver(DriverError::Connection(
-                        "refused".into(),
+                        "invalid target postgres://u:hunter2@db.internal/d".into(),
                     ))),
+                    Some(Fail::Tunnel) => Err(ConnectFailure::Tunnel(
+                        "private key /home/me/.ssh/id_ed25519: permission denied; known_hosts /home/me/.ssh/known_hosts: bad"
+                            .into(),
+                    )),
                 }
             })
         }
@@ -260,7 +315,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lines_never_contain_the_target_or_a_secret() {
+    async fn host_key_changed_is_a_fixed_line_with_host_and_port_only() {
+        let connector = FakeConnector {
+            failing: vec![("t".into(), Fail::HostKeyChanged)],
+            ..FakeConnector::default()
+        };
+        let (_, lines) = run(&connector, &profiles(vec![plain("t")])).await;
+        assert_eq!(
+            lines[0],
+            "sqler: open-sessions: skipped \"t\": the SSH host key of bastion.example:22 changed"
+        );
+        assert_eq!(connector.trusted.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_tunnel_failure_does_not_leak_key_paths() {
+        let connector = FakeConnector {
+            failing: vec![("t".into(), Fail::Tunnel)],
+            ..FakeConnector::default()
+        };
+        let (_, lines) = run(&connector, &profiles(vec![plain("t")])).await;
+        assert_eq!(
+            lines[0],
+            "sqler: open-sessions: skipped \"t\": the SSH tunnel could not be opened"
+        );
+        for line in &lines {
+            assert!(!line.contains("id_ed25519"));
+            assert!(!line.contains("known_hosts"));
+            assert!(!line.contains("/home/me"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_driver_failure_does_not_leak_the_target_or_a_password() {
         let connector = FakeConnector {
             failing: vec![("p".into(), Fail::Driver)],
             ..FakeConnector::default()
@@ -269,13 +356,31 @@ mod tests {
         let (_, lines) = run(&connector, &profiles(vec![spec])).await;
         assert_eq!(
             lines[0],
-            "sqler: open-sessions: skipped \"p\": connection failed: refused"
+            "sqler: open-sessions: skipped \"p\": the database connection failed"
         );
         for line in &lines {
             assert!(!line.contains("hunter2"));
             assert!(!line.contains("db.internal"));
             assert!(!line.contains("postgres://"));
             assert!(!line.contains("AAAA"));
+        }
+    }
+
+    #[test]
+    fn every_reason_is_a_fixed_string() {
+        let failures = [
+            ConnectFailure::Tunnel("secret-path".into()),
+            ConnectFailure::Target("postgres://u:pw@h/d".into()),
+            ConnectFailure::Aborted,
+            ConnectFailure::TlsHostnameThroughTunnel {
+                host: "db.internal".into(),
+            },
+        ];
+        for failure in &failures {
+            let reason = skip_reason(failure);
+            assert!(!reason.contains("secret-path"));
+            assert!(!reason.contains("pw"));
+            assert!(!reason.contains("db.internal"));
         }
     }
 
