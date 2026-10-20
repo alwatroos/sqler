@@ -18,14 +18,25 @@
 //! built by [`ApplyPlan::confirm`] (a `prod` plan needs the user's consent, so the caller shows
 //! [`ApplyPlan::render_preview`] first; [`ApplyPlan::needs_confirmation`] is the question to ask)
 //! or by [`ApplyPlan::confirm_non_production`]. The latter is for connections that are not `prod`.
+//! The types make *forgetting* the step impossible; they cannot tell whether the booleans the
+//! caller passes are true, so the caller derives `production` from the connection and
+//! `user_confirmed` from a real user step. Both methods consume the plan, so one [`ApplyPlan`]
+//! yields at most one [`ConfirmedPlan`] and `apply` consumes that: a second apply (for example
+//! after `Committed`, which would repeat the `INSERT`s) needs a plan rebuilt from the staged
+//! edits.
 //!
 //! # Preconditions
 //!
 //! * `resolved_schema` (see [`EditRequest`]) must be what the server resolves the unqualified
 //!   `FROM` name *as written in the query* to, looked up per query on its session (not a
 //!   session-level constant): temporary tables shadow the loaded one.
-//! * [`apply()`] must run on a session with no open user transaction; the driver API cannot
-//!   report it, so the caller guarantees it.
+//! * **Required guard for the caller (T11):** [`apply()`] must run on a session with no open user
+//!   transaction. The driver API cannot report transaction state, so the caller must not apply
+//!   while the query tab or session has an open user transaction as far as the app knows (a state
+//!   flag in the workspace). Otherwise: `SQLite` fails `BEGIN` ("cannot start a transaction
+//!   within a transaction") and nothing is sent after it; `PostgreSQL` only warns on `BEGIN`, so
+//!   the plan's `COMMIT` commits (and a failed apply's `ROLLBACK` discards) the user's pending
+//!   work; `MySQL`'s `START TRANSACTION` implicitly commits it.
 //! * After [`ApplyOutcome::CommitUnknown`] the caller re-reads the data before any retry.
 
 mod apply;

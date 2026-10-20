@@ -51,38 +51,46 @@ pub struct ApplyPlan {
 #[error("applying to a production connection needs the user's confirmation")]
 pub struct ConfirmationRequired;
 
-/// An [`ApplyPlan`] that passed the production gate: [`apply`](super::apply()) accepts nothing
-/// else. Built only by [`ApplyPlan::confirm`] and [`ApplyPlan::confirm_non_production`], so a
-/// caller cannot reach `apply` on a `prod` connection without the confirmation step.
+/// An [`ApplyPlan`] that went through [`ApplyPlan::confirm`] or
+/// [`ApplyPlan::confirm_non_production`]: [`apply`](super::apply()) accepts nothing else, so a
+/// caller cannot forget the confirmation step.
 ///
-/// It is neither `Clone` nor `Copy`: `apply` takes it by value, so every apply (a retry after a
-/// failure included) needs a new `confirm`, and one confirmation cannot be replayed.
+/// What this does and does not enforce: `confirm` takes the caller's assertions (`production` and
+/// `user_confirmed`) as given; the types cannot check that they are true. The types make
+/// *forgetting* the step impossible, not *lying* to it, so the caller derives `production` from
+/// the connection's environment and `user_confirmed` from a real user step.
+///
+/// It owns the plan and the confirming methods take the plan by value, so one `ApplyPlan` yields
+/// at most one `ConfirmedPlan`, and `apply` consumes that. Applying again (a retry after a
+/// failure, or a second apply after `Committed`, which would repeat the `INSERT`s) means
+/// building a new plan from the staged edits and confirming it again.
 #[derive(Debug)]
-pub struct ConfirmedPlan<'p> {
-    plan: &'p ApplyPlan,
+pub struct ConfirmedPlan {
+    plan: ApplyPlan,
     production: bool,
     user_confirmed: bool,
 }
 
-impl<'p> ConfirmedPlan<'p> {
+impl ConfirmedPlan {
     /// The plan.
     #[must_use]
-    pub fn plan(&self) -> &'p ApplyPlan {
-        self.plan
+    pub fn plan(&self) -> &ApplyPlan {
+        &self.plan
     }
 
     /// The plan, consuming the confirmation (what `apply` uses).
-    pub(super) fn into_plan(self) -> &'p ApplyPlan {
+    pub(super) fn into_plan(self) -> ApplyPlan {
         self.plan
     }
 
-    /// Whether the connection was `prod` when the plan was confirmed.
+    /// Whether the caller asserted that the connection was `prod`.
     #[must_use]
     pub fn production(&self) -> bool {
         self.production
     }
 
-    /// Whether the user explicitly confirmed (always true for a non-empty `prod` plan).
+    /// Whether the caller asserted that the user confirmed (always true for a non-empty `prod`
+    /// plan).
     #[must_use]
     pub fn user_confirmed(&self) -> bool {
         self.user_confirmed
@@ -260,26 +268,30 @@ impl ApplyPlan {
     /// Pass whether the connection's environment is `prod` (ADR-0024). Every plan consists of
     /// writes, so this is `production` for a non-empty plan. Show [`Self::render_preview`] when it
     /// is true, then call [`Self::confirm`]: [`apply`](super::apply()) takes only a
-    /// [`ConfirmedPlan`], so there is no way to apply without passing the gate.
+    /// [`ConfirmedPlan`], so the confirmation step cannot be forgotten. The flag is the caller's
+    /// assertion; nothing here can verify it.
     #[must_use]
     pub fn needs_confirmation(&self, production: bool) -> bool {
         production && !self.statements.is_empty()
     }
 
-    /// The only way to get a [`ConfirmedPlan`] for a connection that may be `prod`.
+    /// The way to get a [`ConfirmedPlan`] for a connection that may be `prod`; it consumes the
+    /// plan.
     ///
-    /// `production` is whether the connection's environment is `prod`; `user_confirmed` is
-    /// whether the user saw [`Self::render_preview`] and agreed. A production plan is confirmed
-    /// only with `user_confirmed`.
+    /// `production` is whether the caller says the connection's environment is `prod`;
+    /// `user_confirmed` is whether the caller says the user saw [`Self::render_preview`] and
+    /// agreed. Both are taken as given. A production plan is confirmed only with
+    /// `user_confirmed`.
     ///
     /// # Errors
     ///
-    /// [`ConfirmationRequired`] when `production` is true and `user_confirmed` is false.
+    /// [`ConfirmationRequired`] when `production` is true and `user_confirmed` is false. The plan
+    /// is dropped then; build it again from the staged edits after the user agrees.
     pub fn confirm(
-        &self,
+        self,
         production: bool,
         user_confirmed: bool,
-    ) -> Result<ConfirmedPlan<'_>, ConfirmationRequired> {
+    ) -> Result<ConfirmedPlan, ConfirmationRequired> {
         if self.needs_confirmation(production) && !user_confirmed {
             return Err(ConfirmationRequired);
         }
@@ -290,13 +302,13 @@ impl ApplyPlan {
         })
     }
 
-    /// A [`ConfirmedPlan`] for a connection whose environment is not `prod`.
+    /// A [`ConfirmedPlan`] for a connection the caller says is not `prod`; it consumes the plan.
     ///
     /// Use it only when the connection's environment is known not to be `prod`; for any other
     /// connection call [`Self::confirm`] with the real flag. This is the same as
     /// `confirm(false, false)` and cannot fail.
     #[must_use]
-    pub fn confirm_non_production(&self) -> ConfirmedPlan<'_> {
+    pub fn confirm_non_production(self) -> ConfirmedPlan {
         ConfirmedPlan {
             plan: self,
             production: false,
@@ -526,18 +538,25 @@ mod tests {
 
     #[test]
     fn confirmed_plan_is_only_built_through_the_gate() {
-        let mut s = StagedEdits::new(target(false));
-        s.delete_row(ModelRow(0), &row(1, None)).unwrap();
-        let plan = s.plan().unwrap();
+        let build = || {
+            let mut s = StagedEdits::new(target(false));
+            s.delete_row(ModelRow(0), &row(1, None)).unwrap();
+            s.plan().unwrap()
+        };
         // Production without the user's consent: no token.
-        assert_eq!(plan.confirm(true, false).unwrap_err(), ConfirmationRequired);
+        assert_eq!(
+            build().confirm(true, false).unwrap_err(),
+            ConfirmationRequired
+        );
+        let plan = build();
+        let expected = plan.clone();
         let ok = plan.confirm(true, true).unwrap();
         assert!(ok.production() && ok.user_confirmed());
-        assert!(std::ptr::eq(ok.plan(), &raw const plan));
+        assert_eq!(ok.plan(), &expected);
         // Non-production needs no consent.
-        let ok = plan.confirm(false, false).unwrap();
+        let ok = build().confirm(false, false).unwrap();
         assert!(!ok.production() && !ok.user_confirmed());
-        let ok = plan.confirm_non_production();
+        let ok = build().confirm_non_production();
         assert!(!ok.production());
     }
 

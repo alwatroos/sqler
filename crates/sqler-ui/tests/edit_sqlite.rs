@@ -210,6 +210,44 @@ fn a_zero_row_update_rolls_back_everything_and_keeps_the_edits() {
 }
 
 #[test]
+fn a_failed_apply_inside_a_user_transaction_keeps_the_users_work() {
+    runtime().block_on(async {
+        let mut s = session().await;
+        setup_keyed(&mut *s).await;
+        let rows = fetch(&mut *s, "SELECT * FROM t ORDER BY id").await;
+        let mut edits = StagedEdits::new(target(&keyed_table(), "SELECT * FROM t", false));
+        edits
+            .set_cell(ModelRow(1), &rows[1], 1, text("staged"))
+            .unwrap();
+        // The user has an open transaction with a pending change.
+        exec(&mut *s, "BEGIN").await;
+        exec(&mut *s, "UPDATE t SET name = 'mine' WHERE id = 1").await;
+
+        let plan = edits.plan().unwrap();
+        let outcome = apply(&mut *s, plan.confirm_non_production(), &CancelFlag::new()).await;
+        match outcome {
+            ApplyOutcome::NotStarted { message } => {
+                assert!(message.contains("within a transaction"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(edits.change_count(), 1, "the staged edits are kept");
+        // The user's transaction is still open and its change is still pending: committing it
+        // succeeds (it would fail if a ROLLBACK had closed it) and the change is there.
+        exec(&mut *s, "COMMIT").await;
+        let names = fetch(&mut *s, "SELECT name FROM t ORDER BY id").await;
+        assert_eq!(
+            names,
+            vec![
+                Row(vec![text("mine")]),
+                Row(vec![text("two")]),
+                Row(vec![text("three")])
+            ]
+        );
+    });
+}
+
+#[test]
 fn a_failure_half_way_rolls_back_the_earlier_statements() {
     runtime().block_on(async {
         let mut s = session().await;

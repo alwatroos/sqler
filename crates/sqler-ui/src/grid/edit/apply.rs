@@ -36,9 +36,12 @@ pub enum ApplyOutcome {
         /// The number of data statements.
         applied: usize,
     },
-    /// `BEGIN` returned an error; no data statement ran. A `ROLLBACK` was sent anyway (and its
-    /// result ignored), because the server may have begun the transaction before the error
-    /// reached the client; without it the session could be left inside one.
+    /// `BEGIN` returned an error; no data statement ran. A `ROLLBACK` was sent (its result
+    /// ignored) only if the outcome of `BEGIN` was ambiguous (a cancel, a lost connection or any
+    /// other error that is not a statement error), because the server may have begun the
+    /// transaction. After a definite statement error ([`DriverError::Query`], for example
+    /// `SQLite`'s "cannot start a transaction within a transaction") nothing was sent: a
+    /// `ROLLBACK` there would discard the user's own open transaction.
     NotStarted {
         /// The driver's message.
         message: String,
@@ -76,6 +79,16 @@ async fn run(session: &mut (dyn Session + '_), query: &Query) -> Result<Option<u
     Ok(result.rows_affected())
 }
 
+/// Whether the outcome of a failed `BEGIN` is unknown. A statement error ([`DriverError::Query`]:
+/// the server answered "no", including "already in a transaction") and errors raised before
+/// anything was sent ([`DriverError::Unsupported`]) are definite: this `BEGIN` opened nothing.
+/// Everything else (a cancel, which the `MySQL` driver reports for a statement that completed,
+/// a lost connection, a protocol error, any passed-through backend error) may have followed a
+/// `BEGIN` that took effect.
+fn begin_outcome_is_ambiguous(error: &DriverError) -> bool {
+    !matches!(error, DriverError::Query(_) | DriverError::Unsupported(_))
+}
+
 fn failure_of(error: &DriverError) -> ApplyFailure {
     match error {
         DriverError::Cancelled => ApplyFailure::Cancelled,
@@ -88,36 +101,49 @@ fn failure_of(error: &DriverError) -> ApplyFailure {
 /// Each data statement must report exactly its expected number of rows affected. On a different
 /// count, a driver error or a cancel (checked before every data statement and before `COMMIT`)
 /// it runs `ROLLBACK` (which ignores `stop`) and reports [`ApplyOutcome::RolledBack`] with where
-/// and why. A failing `BEGIN` reports [`ApplyOutcome::NotStarted`] after a `ROLLBACK` whose result
-/// is ignored. An error or cancel returned
+/// and why. A failing `BEGIN` reports [`ApplyOutcome::NotStarted`]; a `ROLLBACK` (result ignored)
+/// is sent first only when the outcome of `BEGIN` is ambiguous (a cancel, a connection-level or
+/// unknown error), never after a definite statement error ([`DriverError::Query`]), because that
+/// `ROLLBACK` would undo the user's own open transaction. An error or cancel returned
 /// by `COMMIT` itself reports [`ApplyOutcome::CommitUnknown`], never `RolledBack`: whether the
 /// server committed cannot be told from the client. Only the plan's own queries are executed, and
 /// the staged edits are never touched, so after any failure the caller still has them.
 ///
 /// # Preconditions
 ///
-/// * The plan was confirmed: [`ConfirmedPlan`] is built only by [`ApplyPlan::confirm`] (which
-///   refuses a `prod` plan the user did not confirm) or by
-///   [`ApplyPlan::confirm_non_production`].
-/// * **The session must not be inside a user transaction.** The driver API has no transaction
-///   state, so this function cannot check it, and the caller guarantees it. Inside an open
-///   transaction `PostgreSQL` only warns on `BEGIN`, so the plan's `COMMIT` would commit, and a
-///   failed apply's `ROLLBACK` would discard, the user's pending work; `MySQL`'s
-///   `START TRANSACTION` implicitly commits it. Apply on a session with no open transaction
-///   (for example a fresh one, or one on which the query editor has not opened a transaction).
+/// * The plan went through [`ApplyPlan::confirm`] (which refuses a `prod` plan the caller does
+///   not assert the user confirmed) or [`ApplyPlan::confirm_non_production`]. The types make
+///   skipping the step impossible; they cannot check the caller's flags.
+/// * **The session must not be inside a user transaction. This is a REQUIRED guard for the
+///   caller (T11).** The driver API has no transaction state, so this function cannot check it:
+///   the caller must not apply while the query tab or session has an open user transaction as
+///   far as the app knows (a state flag in the workspace). What happens otherwise depends on
+///   the engine:
+///   * `SQLite`: `BEGIN` fails with "cannot start a transaction within a transaction", a
+///     definite error; nothing is sent after it and the user's transaction is untouched
+///     ([`ApplyOutcome::NotStarted`]).
+///   * `PostgreSQL`: `BEGIN` only warns, so the plan's data statements join the user's
+///     transaction and its `COMMIT` commits the user's pending work too; after a failure the
+///     plan's `ROLLBACK` discards it.
+///   * `MySQL`/`MariaDB`: `START TRANSACTION` implicitly commits the user's pending work before
+///     the apply starts.
 ///
 /// It never panics.
 pub fn apply<'a>(
     session: &'a mut (dyn Session + '_),
-    plan: ConfirmedPlan<'a>,
+    plan: ConfirmedPlan,
     stop: &'a CancelFlag,
 ) -> BoxFuture<'a, ApplyOutcome> {
     let plan = plan.into_plan();
     Box::pin(async move {
         if let Err(e) = run(&mut *session, plan.begin()).await {
-            // `BEGIN` may have run (a cancel is reported for a completed statement, and an error
-            // can arrive after the server began): close any open transaction, ignore the result.
-            let _ = run(&mut *session, plan.rollback()).await;
+            // A definite statement error means this BEGIN opened nothing, and a ROLLBACK would
+            // undo the user's own open transaction. Only when the outcome is unknown (a cancel is
+            // reported for a completed statement, a connection error can follow a BEGIN that took
+            // effect) close any transaction it may have opened; ignore the result.
+            if begin_outcome_is_ambiguous(&e) {
+                let _ = run(&mut *session, plan.rollback()).await;
+            }
             return ApplyOutcome::NotStarted {
                 message: e.to_string(),
             };
@@ -282,7 +308,11 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        let outcome = rt.block_on(apply(&mut session, plan.confirm_non_production(), stop));
+        let outcome = rt.block_on(apply(
+            &mut session,
+            plan.clone().confirm_non_production(),
+            stop,
+        ));
         let sql = log.lock().unwrap().clone();
         (outcome, sql)
     }
@@ -385,28 +415,53 @@ mod tests {
         assert_eq!(sql.last().map(String::as_str), Some("ROLLBACK"));
     }
 
-    #[test]
-    fn begin_failure_is_not_started_and_rolls_back() {
-        // The server may have begun the transaction before the error reached the client.
+    /// Runs the two-row plan with `begin` as the answer to BEGIN and `rollback` for any
+    /// ROLLBACK that follows.
+    fn begin_fails(begin: Answer, rollback: Answer) -> (ApplyOutcome, Vec<String>) {
         let plan = two_row_plan();
-        for rollback in [Answer::Affected(None), Answer::Fail("no transaction")] {
-            let answers = vec![Answer::Fail("no tx"), rollback];
-            let (outcome, sql) = run_with(&plan, answers, &CancelFlag::new(), None);
-            match outcome {
-                ApplyOutcome::NotStarted { message } => assert!(message.contains("no tx")),
-                other => panic!("{other:?}"),
+        run_with(&plan, vec![begin, rollback], &CancelFlag::new(), None)
+    }
+
+    #[test]
+    fn definite_begin_error_is_not_started_without_rollback() {
+        // `already in a transaction`: a ROLLBACK would undo the user's transaction.
+        let (outcome, sql) = begin_fails(
+            Answer::Fail("cannot start a transaction within a transaction"),
+            Answer::Affected(None),
+        );
+        match outcome {
+            ApplyOutcome::NotStarted { message } => {
+                assert!(message.contains("within a transaction"));
             }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(sql, ["BEGIN"]);
+    }
+
+    #[test]
+    fn unsupported_begin_is_definite() {
+        assert!(!begin_outcome_is_ambiguous(&DriverError::Unsupported(
+            "x".into()
+        )));
+    }
+
+    #[test]
+    fn ambiguous_begin_outcomes_roll_back() {
+        // A cancel (also reported for a completed statement) and connection-level errors.
+        assert!(begin_outcome_is_ambiguous(&DriverError::Connection(
+            "reset".into()
+        )));
+        assert!(begin_outcome_is_ambiguous(&DriverError::Protocol(
+            "x".into()
+        )));
+        assert!(begin_outcome_is_ambiguous(&DriverError::Backend(
+            "io".into()
+        )));
+        for rollback in [Answer::Affected(None), Answer::Fail("no transaction")] {
+            let (outcome, sql) = begin_fails(Answer::Cancelled, rollback);
+            assert!(matches!(outcome, ApplyOutcome::NotStarted { .. }));
             assert_eq!(sql, ["BEGIN", "ROLLBACK"]);
         }
-        // A cancel reported for a BEGIN that completed is handled the same way.
-        let (outcome, sql) = run_with(
-            &plan,
-            vec![Answer::Cancelled, Answer::Affected(None)],
-            &CancelFlag::new(),
-            None,
-        );
-        assert!(matches!(outcome, ApplyOutcome::NotStarted { .. }));
-        assert_eq!(sql, ["BEGIN", "ROLLBACK"]);
     }
 
     #[test]

@@ -384,10 +384,12 @@ pub fn unwritable_reason(dialect: Dialect, column: &ColumnInfo) -> Option<&'stat
         return Some("the one-byte type \"char\" keeps only the first byte of a longer value");
     }
     let lower = element.to_ascii_lowercase();
-    let fields = lower
-        .strip_prefix("interval")
-        .and_then(|rest| rest.trim_start().chars().next())
-        .is_some_and(|c| c.is_ascii_alphabetic());
+    // The same strict test as the cast code: an enum `intervalkind` or a domain `intervals` is
+    // not an interval.
+    let fields = is_interval(&lower)
+        && lower["interval".len()..]
+            .trim_start()
+            .starts_with(|c: char| c.is_ascii_alphabetic());
     fields.then_some(
         "an interval with fields reads a bare number differently when it is sent as text",
     )
@@ -1236,6 +1238,10 @@ mod tests {
             "interval",
             "interval(3)",
             "interval(3)[]",
+            "intervalkind",
+            "intervals",
+            "interval_x",
+            "intervalkind[]",
             "character(3)",
             "text",
             "d5",
