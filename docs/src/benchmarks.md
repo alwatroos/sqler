@@ -16,6 +16,7 @@ These are tracked numbers with dates and commit hashes, not aspirations.
 | ---- | ------ | -- | --------------- | ---------------------------- | ---------------- | ----- |
 | 2026-10-20 | 6fc6229 | macOS 27.0.1 arm64 | 2.4 | n/a until M1 | 3.0 | `sqler-cli` release, default features; cold start = `run :memory: "select 1"` mean of 20 runs via Python `perf_counter`; CLI peak RSS 3.6 MB |
 | 2026-10-20 | 1f206e6 | macOS 27.0.1 arm64, Apple M4 Pro | 140.6 | 98.1 (3 connections configured, none opened; see notes) | 29.5 | `sqler` desktop release, default features, `--locked`; cold start = hyperfine mean of 20 runs after 3 warm-ups of `--exit-after-first-frame` (σ 12.8, min 132.7, max 191.1); idle RSS = `ps` after 6 s and 10 s, three runs, 98.0 to 98.3 MiB |
+| 2026-10-20 | ba24c9a | macOS 27.0.1 arm64, Apple M4 Pro | 155.1 | 100.0 (3 connections configured: `SQLite`, `PostgreSQL`, `MySQL`; none opened; see notes) | 38.3 | `sqler` desktop release, default features (both server drivers), `--locked`; 40,168,784 bytes; cold start = hyperfine mean of 20 runs after 3 warm-ups of `--exit-after-first-frame` (σ 11.0, min 138.3, max 167.2); idle RSS = `ps` at 6 s and 10 s, three runs, 100.0 to 100.2 MiB; 814 tests run, 814 passed (with `PostgreSQL` 18, `MySQL` 8.4 in Docker; `MariaDB` 11.8 run for `sqler-driver-mysql`: 26 passed) |
 
 ## Method
 
@@ -37,6 +38,8 @@ Run from the repository root on the commit being recorded:
 4. Cold start: `hyperfine -w 3 -r 20 'target/release/sqler --exit-after-first-frame'`. This is the whole process until the first frame is presented, so it needs a display. Without one, record "not measured: no interactive display".
 5. Idle RSS: start `target/release/sqler`, wait 6 s, read `ps -o rss= -p <pid>` (KiB), read again after 10 s, stop it. Repeat three times.
 6. Test count: `cargo nextest run --workspace --no-tests=pass`.
+
+M2 note (ba24c9a): the binary grew from 29.5 to 38.3 MiB with the `PostgreSQL` and `MySQL` drivers, the tunnel and the keychain; the cold start rose from 140.6 to 155.1 ms and the idle RSS from 98.1 to 100.0 MiB. The three connections of the M2 row were a `SQLite` `:memory:`, a `PostgreSQL` and a `MySQL` entry, with both containers running. The app has no headless way to open a session (a session opens by double-click or from the connection manager, and `--exit-after-first-frame` exits before any), so the RSS with three sessions actually open was not measured. The figure that was measured is the idle app with three saved connections; the sessions, the tunnel and the catalog cache add to it.
 
 Caveat for idle RSS: an agent cannot double-click, so the three connections are listed in the sidebar but their sessions were not opened. Three `SQLite` `:memory:` sessions add little, but the figure is not the full "three connections open" metric until the maintainer repeats it with all three opened. The M1 rows are macOS only; Linux and Windows desktop numbers are not measured because `ci.yml` has no GUI runner. The spike table below has CI cold-start and idle RSS for those OSes on the spike build, not on `sqler`.
 
