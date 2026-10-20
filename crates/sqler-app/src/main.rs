@@ -11,7 +11,7 @@ mod args;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use sqler_config::ConfigDir;
+use sqler_config::{ConfigDir, Platform};
 use sqler_driver_api::{DriverError, DriverRegistry};
 use sqler_ui::settings::SettingsModel;
 use sqler_ui::workspace::{Startup, run};
@@ -63,12 +63,17 @@ fn start(exit_after_first_frame: bool) -> ExitCode {
         .as_ref()
         .map_err(ToString::to_string)
         .and_then(|dir| dir.load_connections().map_err(|err| err.to_string()));
+    let keybindings = dir.as_ref().map_err(ToString::to_string).and_then(|dir| {
+        dir.load_keybinding_overrides(Platform::current())
+            .map_err(|err| err.to_string())
+    });
     run(Startup {
         connections,
         registry: Arc::new(registry),
         runtime: runtime.handle().clone(),
         exit_after_first_frame,
         settings: SettingsModel::load(dir),
+        keybindings,
     });
     ExitCode::SUCCESS
 }

@@ -5,6 +5,7 @@
 - [User guide](user-guide/index.md)
   - [Command-line interface](user-guide/cli.md)
   - [Workspace](user-guide/workspace.md)
+  - [Keybindings](user-guide/keybindings.md)
   - [Settings](user-guide/settings.md)
 - [Architecture](architecture/index.md)
   - [Core and driver API](architecture/core-and-driver-api.md)
