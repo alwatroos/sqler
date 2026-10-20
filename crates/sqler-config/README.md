@@ -2,7 +2,7 @@
 
 Settings, keybindings, connection store and keychain access.
 
-Status: M2: settings, keybindings, connection store
+Status: M2: settings, keybindings, connection store, OS keychain secrets
 
 Layer: L1
 

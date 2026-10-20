@@ -9,7 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use sqler_config::{
-    ConfigDir, ConnectionSpec, ConnectionStore, GroupId, SecretKind, SshAuth, SshProfile,
+    ConfigDir, ConnectionSpec, ConnectionStore, GroupId, ProfileSecretKind, SshAuth, SshProfile,
     StoreError, TlsMode, TlsProfile,
 };
 use sqler_core::{DriverId, Environment};
@@ -262,10 +262,13 @@ fn secret_refs_are_derived_from_stable_ids() {
     assert_eq!(
         before,
         [
-            (SecretKind::DbPassword, "billing/db-password".to_owned()),
             (
-                SecretKind::SshPassphrase,
-                "billing/ssh-passphrase".to_owned()
+                ProfileSecretKind::DbPassword,
+                "billing:db-password".to_owned()
+            ),
+            (
+                ProfileSecretKind::SshPassphrase,
+                "billing:ssh-key-passphrase".to_owned()
             ),
         ]
     );

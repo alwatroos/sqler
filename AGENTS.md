@@ -201,6 +201,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0006](docs/src/adr/0006-grid-data-model-and-bench-harness.md) | Grid data model and bench harness | accepted |
 | [0007](docs/src/adr/0007-desktop-binary-and-ui-tokio-bridge.md) | Desktop binary and UI-thread/tokio bridge | accepted |
 | [0011](docs/src/adr/0011-connection-store-format.md) | Connection store format: versioned TOML, groups, derived secret references | accepted |
+| [0012](docs/src/adr/0012-keychain-secrets.md) | Keychain secrets: `keyring` 4.x, reference scheme, failure policy | accepted |
 
 ## 9. Roadmap status
 
@@ -242,3 +243,4 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build j
 - Never call `tokio::spawn` on the GPUI thread: there is no runtime context. Use `SessionBridge` (`Handle::spawn` plus a `oneshot` awaited with `cx.spawn`), see ADR-0007.
 - `sqler --exit-after-first-frame` exits with code 0 after the first frame (cold-start measurement). On quit, open sessions are dropped, not closed; M2 must close them.
 - Measuring the desktop app on macOS: the config directory is `$HOME/Library/Application Support/SQLer`, so run `sqler` with `HOME` pointed at a scratch directory to get a known `connections.toml` and leave the real config alone. `hyperfine` is at `/opt/homebrew/bin`, `mdbook` and `cargo-nextest` are in `~/.cargo/bin` and may be off `PATH`.
+- Secrets (T5, ADR-0012): headless Linux CI has no Secret Service, so tests use `MemoryStore`; `KeychainStore` is only checked by hand with `cargo test -p sqler-config -- --ignored keychain_round_trip` on a desktop session. `keyring` 4.x has no native-backend features of its own: enable `v1`, which turns on the Keychain, Credential Manager and `zbus` Secret Service (`crypto-rust`, `async-io`) stores per target. Never use keyutils, `vendored` `libdbus`, OpenSSL crypto, a `tokio` runtime feature or a mock store. `SecretStore` calls block; async callers use `spawn_blocking`.

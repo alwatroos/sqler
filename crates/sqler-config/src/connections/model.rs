@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use sqler_core::{ConnectionConfig, DriverId, Environment};
 
 use super::store::StoreError;
+use crate::secrets::{SecretError, SecretRef};
 
 /// Version of the `connections.toml` format this build writes and reads up to.
 pub const CONNECTIONS_FORMAT_VERSION: u32 = 1;
@@ -94,7 +95,7 @@ id_type!(
 /// Which secret of a connection a keychain entry holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
-pub enum SecretKind {
+pub enum ProfileSecretKind {
     /// The database password.
     DbPassword,
     /// The SSH account password.
@@ -103,14 +104,14 @@ pub enum SecretKind {
     SshPassphrase,
 }
 
-impl SecretKind {
+impl ProfileSecretKind {
     /// The identifier used in keychain account names.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::DbPassword => "db-password",
             Self::SshPassword => "ssh-password",
-            Self::SshPassphrase => "ssh-passphrase",
+            Self::SshPassphrase => "ssh-key-passphrase",
         }
     }
 }
@@ -121,11 +122,11 @@ impl SecretKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProfileSecret {
     connection: ConnectionId,
-    kind: SecretKind,
+    kind: ProfileSecretKind,
 }
 
 impl ProfileSecret {
-    pub(crate) fn new(connection: ConnectionId, kind: SecretKind) -> Self {
+    pub(crate) fn new(connection: ConnectionId, kind: ProfileSecretKind) -> Self {
         Self { connection, kind }
     }
 
@@ -137,14 +138,35 @@ impl ProfileSecret {
 
     /// Which secret of the connection this is.
     #[must_use]
-    pub fn kind(&self) -> SecretKind {
+    pub fn kind(&self) -> ProfileSecretKind {
         self.kind
     }
 
-    /// The keychain account name, `<connection id>/<kind>`.
+    /// The keychain account name, `<connection id>:<kind>`; the string form of
+    /// the matching [`SecretRef`].
     #[must_use]
     pub fn account(&self) -> String {
-        format!("{}/{}", self.connection, self.kind.as_str())
+        format!("{}:{}", self.connection, self.kind.as_str())
+    }
+}
+
+impl From<ProfileSecretKind> for crate::secrets::SecretKind {
+    fn from(kind: ProfileSecretKind) -> Self {
+        match kind {
+            ProfileSecretKind::DbPassword => Self::DatabasePassword,
+            ProfileSecretKind::SshPassword => Self::SshPassword,
+            ProfileSecretKind::SshPassphrase => Self::SshKeyPassphrase,
+        }
+    }
+}
+
+impl TryFrom<&ProfileSecret> for SecretRef {
+    type Error = SecretError;
+
+    /// Fails only if the connection id is longer than 64 characters or starts
+    /// with `-`, which the keychain reference grammar does not allow.
+    fn try_from(secret: &ProfileSecret) -> Result<Self, Self::Error> {
+        SecretRef::new(secret.connection.as_str(), secret.kind.into())
     }
 }
 
@@ -494,18 +516,18 @@ impl ConnectionProfile {
     pub fn password_ref(&self) -> Option<ProfileSecret> {
         self.spec
             .password_in_keychain
-            .then(|| ProfileSecret::new(self.id.clone(), SecretKind::DbPassword))
+            .then(|| ProfileSecret::new(self.id.clone(), ProfileSecretKind::DbPassword))
     }
 
     /// The keychain reference of the SSH password or key passphrase, when one is kept.
     #[must_use]
     pub fn ssh_secret_ref(&self) -> Option<ProfileSecret> {
         let kind = match &self.spec.ssh.as_ref()?.auth {
-            SshAuth::Password => SecretKind::SshPassword,
+            SshAuth::Password => ProfileSecretKind::SshPassword,
             SshAuth::KeyFile {
                 passphrase_in_keychain: true,
                 ..
-            } => SecretKind::SshPassphrase,
+            } => ProfileSecretKind::SshPassphrase,
             _ => return None,
         };
         Some(ProfileSecret::new(self.id.clone(), kind))
@@ -559,13 +581,39 @@ mod tests {
     fn secret_account_and_kinds() {
         let s = ProfileSecret::new(
             ConnectionId::from_valid("billing".into()),
-            SecretKind::SshPassphrase,
+            ProfileSecretKind::SshPassphrase,
         );
-        assert_eq!(s.account(), "billing/ssh-passphrase");
+        assert_eq!(s.account(), "billing:ssh-key-passphrase");
         assert_eq!(s.connection().as_str(), "billing");
-        assert_eq!(s.kind(), SecretKind::SshPassphrase);
-        assert_eq!(SecretKind::DbPassword.as_str(), "db-password");
-        assert_eq!(SecretKind::SshPassword.as_str(), "ssh-password");
+        assert_eq!(s.kind(), ProfileSecretKind::SshPassphrase);
+        assert_eq!(ProfileSecretKind::DbPassword.as_str(), "db-password");
+        assert_eq!(ProfileSecretKind::SshPassword.as_str(), "ssh-password");
+    }
+
+    #[test]
+    fn secret_converts_to_secret_ref_with_same_string() {
+        for kind in [
+            ProfileSecretKind::DbPassword,
+            ProfileSecretKind::SshPassword,
+            ProfileSecretKind::SshPassphrase,
+        ] {
+            let s = ProfileSecret::new(ConnectionId::from_valid("billing".into()), kind);
+            let r = SecretRef::try_from(&s).unwrap();
+            assert_eq!(r.to_string(), s.account());
+            assert_eq!(r.to_string().parse::<SecretRef>().unwrap(), r);
+            assert_eq!(r.connection_id(), "billing");
+        }
+        let r = SecretRef::try_from(&ProfileSecret::new(
+            ConnectionId::from_valid("billing".into()),
+            ProfileSecretKind::DbPassword,
+        ))
+        .unwrap();
+        assert_eq!(r.to_string(), "billing:db-password");
+        let bad = ProfileSecret::new(
+            ConnectionId::from_valid("-x".into()),
+            ProfileSecretKind::DbPassword,
+        );
+        assert!(SecretRef::try_from(&bad).is_err());
     }
 
     #[test]
@@ -641,7 +689,7 @@ mod tests {
             .with_ssh(SshProfile::new("h", "u", SshAuth::Password));
         let p = ConnectionProfile::new(id.clone(), None, spec);
         let accounts: Vec<_> = p.secret_refs().iter().map(ProfileSecret::account).collect();
-        assert_eq!(accounts, ["c/db-password", "c/ssh-password"]);
+        assert_eq!(accounts, ["c:db-password", "c:ssh-password"]);
         let key = SshAuth::KeyFile {
             path: "k".into(),
             passphrase_in_keychain: true,
@@ -650,7 +698,7 @@ mod tests {
         let p = ConnectionProfile::new(id, None, spec);
         assert_eq!(
             p.ssh_secret_ref().unwrap().kind(),
-            SecretKind::SshPassphrase
+            ProfileSecretKind::SshPassphrase
         );
         assert!(p.password_ref().is_none());
     }

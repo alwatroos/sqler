@@ -106,8 +106,8 @@ database user in the target as a parameter, for example `?user=app`.
 
 Passwords and passphrases are never written to `connections.toml`. The file holds only the flags
 `password_in_keychain` and `passphrase_in_keychain`. SQLer finds the secret in the system keychain
-under the account `<id>/<kind>`, where the kind is `db-password`, `ssh-password` or
-`ssh-passphrase`; for example `billing/db-password`. Because the account uses the `id` and not the
+under the account `<id>:<kind>`, where the kind is `db-password`, `ssh-password` or
+`ssh-key-passphrase`; for example `billing:db-password`. Because the account uses the `id` and not the
 name, renaming a connection keeps its secrets. If you change an `id` by hand, SQLer no longer finds
 the old entries.
 

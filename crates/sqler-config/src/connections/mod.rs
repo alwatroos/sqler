@@ -9,7 +9,7 @@ mod store;
 
 pub use model::{
     CONNECTIONS_FORMAT_VERSION, ConnectionId, ConnectionProfile, ConnectionSpec, Group, GroupId,
-    ProfileSecret, SecretKind, SshAuth, SshProfile, TlsMode, TlsProfile,
+    ProfileSecret, ProfileSecretKind, SshAuth, SshProfile, TlsMode, TlsProfile,
 };
 pub use store::{ConnectionStore, StoreError};
 

@@ -84,7 +84,7 @@ A file without `version` is the M1 format. It loads with IDs derived from the na
 ### Secret policy
 
 - The file holds only flags: `password_in_keychain` and, for the key-file SSH method, `passphrase_in_keychain`. There is no key that can carry a password, passphrase, secret or token.
-- A profile's keychain reference is derived: the connection ID plus a kind (`db-password`, `ssh-password`, `ssh-passphrase`). Its account name is `<connection id>/<kind>`, for example `billing/db-password`. The keychain service name belongs to the keychain module.
+- A profile's keychain reference is derived: the connection ID plus a kind (`db-password`, `ssh-password`, `ssh-key-passphrase`). Its account name is `<connection id>:<kind>`, for example `billing:db-password`, which is the string form of the keychain module's `SecretRef` ([ADR-0012](0012-keychain-secrets.md)). The keychain service name belongs to the keychain module.
 - Because the reference follows the ID, a rename keeps the keychain entries. Deleting a connection returns the deleted profile, and the caller removes the entries listed by `secret_refs()`.
 - A target that embeds a secret is still rejected (`TargetHasSecret`), and neither the error nor the `Debug` output of the spec repeats it. The database user stays in the target (`?user=`).
 
