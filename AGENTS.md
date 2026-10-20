@@ -90,7 +90,7 @@ cargo deny check
 mdbook build docs
 sh .github/scripts/check-spdx.sh
 cargo tree --workspace -i sqler-ui
-cargo run -p sqler-cli
+cargo run -p sqler-cli -- run :memory: "select 1"
 cargo run -p xtask
 ```
 
