@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sqler-driver-postgres`: `PostgreSQL` driver on sqlx (streaming, server-side cancel, TLS modes with CA and client certificate through rustls, typed values, introspection of all 13 object kinds); the `driver-postgres` feature (default) in `sqler-cli` and `sqler-app`.
 - CI `db` job: `PostgreSQL` in Docker with TLS, DB integration tests (`SQLER_TEST_<DB>_URL`, `SQLER_TEST_REQUIRE_DB`) and a CLI smoke test.
 - ADR-0009 (`PostgreSQL` driver, TLS backend, DB test convention) and the user guide page "PostgreSQL".
+- `sqler-catalog`: per-connection schema cache with lazy per-node loading through `Introspect`, one worker that serialises introspection calls, deduplicated concurrent loads, per-node errors, and background refresh of a node, subtree or the whole connection with progress events, cooperative cancel and atomic apply. ADR-0014, the architecture page "Schema catalog", a 5,000-table benchmark (`catalog_tree`, also run by `bench.yml`) and its results in `docs/src/benchmarks.md`.
 - `sqler-config` secrets API: `SecretStore` with `KeychainStore` (macOS Keychain, Windows Credential Manager, Linux Secret Service through `keyring` 4.2.0) and `MemoryStore`, `SecretRef`, `SecretKind`, a redacting `Secret` and a typed `SecretError`. ADR-0012 and the user guide page "Secrets".
 - Cargo workspace skeleton: 24 `crates/sqler-*` stubs plus `xtask`, with shared lints and metadata.
 - `AGENTS.md` v1 (project handbook) and `CLAUDE.md` pointer.

@@ -36,11 +36,12 @@ ossl req -newkey rsa:2048 -nodes -subj "/CN=localhost" \
 printf 'subjectAltName=DNS:localhost\nbasicConstraints=CA:FALSE\n' >"$out/server.ext"
 ossl x509 -req -in "$out/server.csr" -CA "$out/ca.crt" -CAkey "$out/ca.key" \
     -CAcreateserial -days 3 -extfile "$out/server.ext" -out "$out/server.crt"
-chmod 644 "$out/server.key" "$out/server.crt" "$out/ca.crt"
+chmod 600 "$out/server.key" "$out/ca.key"
+chmod 644 "$out/server.crt" "$out/ca.crt"
 
 docker rm -f "$name" >/dev/null 2>&1 || true
 
-# Postgres rejects a key it does not own, so the key is copied to /tmp inside the container and
+# The key stays mode 600 on the host (the container starts as root, which can read it). Postgres rejects a key it does not own, so it is copied to /tmp inside the container and
 # chowned there. The official entrypoint then runs as usual, with the extra server flags.
 docker run -d --name "$name" \
     -p "127.0.0.1:$port:5432" \
@@ -60,7 +61,7 @@ i=0
 until docker exec "$name" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; do
     i=$((i + 1))
     if [ "$i" -ge 60 ]; then
-        echo "PostgreSQL did not become ready in 60 s"
+        echo "PostgreSQL did not become ready in 60 s" >&2
         docker logs "$name" >&2 || true
         exit 1
     fi

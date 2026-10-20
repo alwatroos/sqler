@@ -6962,6 +6962,12 @@ dependencies = [
 [[package]]
 name = "sqler-catalog"
 version = "0.1.0"
+dependencies = [
+ "sqler-driver-api",
+ "sqler-driver-sqlite",
+ "thiserror 2.0.21",
+ "tokio",
+]
 
 [[package]]
 name = "sqler-cli"
