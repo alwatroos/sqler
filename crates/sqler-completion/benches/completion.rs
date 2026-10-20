@@ -4,17 +4,21 @@
 //! Benchmark of the completion engine on a synthetic schema with thousands of tables.
 //!
 //! Std-only (`harness = false`). Prints `key=value` lines, optionally saves them, and can compare
-//! `complete_p95_ns` against a saved baseline. The measurement loop runs `--reps` times (3) in
-//! process and the repetition with the lowest `complete_p95_ns` is reported and compared, so a
-//! noisy neighbour in one repetition does not fail the gate. Exit codes: 0 ok, 1 budget or regression failure,
-//! 2 bad arguments or unreadable baseline. See `docs/src/benchmarks.md` for the method and rule.
+//! `complete_p95_ns` (and `hover_p95_ns`, `diagnose_p95_ns` when the baseline has them) against a
+//! saved baseline. Eight scenarios time `complete`, two time `hover` and two time `diagnose`;
+//! `complete_p95_ns` aggregates the completion scenarios only, so older baselines stay comparable.
+//! The measurement loop runs `--reps` times (3) in process. `complete_p95_ns` is the minimum over
+//! the repetitions, and so are `hover_p95_ns` and `diagnose_p95_ns` (each metric takes its own
+//! best repetition); the per-scenario lines and `worst_p95_ns` come from the repetition with the
+//! lowest `complete_p95_ns`. A noisy neighbour in one repetition does not fail the gate. Exit codes: 0 ok, 1 budget or regression failure, 2 bad arguments or unreadable
+//! baseline. See `docs/src/benchmarks.md` for the method and rule.
 
 use std::fmt::Write as _;
 use std::hint::black_box;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use sqler_completion::{CompletionRequest, MemorySchema, complete};
+use sqler_completion::{CompletionRequest, HoverRequest, MemorySchema, complete, diagnose, hover};
 use sqler_core::{ColumnInfo, DataType, ObjectKind};
 use sqler_sql::Dialect;
 
@@ -117,28 +121,70 @@ fn build_schema(tables: usize, columns: usize) -> MemorySchema {
     s
 }
 
-/// A scenario: name, text and the cursor offset.
+/// What a scenario times.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Op {
+    Complete,
+    Hover,
+    Diagnose,
+}
+
+/// A scenario: name, operation, text and the cursor offset (unused by `Diagnose`).
 struct Scenario {
     name: &'static str,
+    op: Op,
     text: String,
     offset: usize,
 }
 
 /// Text with `|` marking the cursor.
-fn at_marker(name: &'static str, sql: &str) -> Scenario {
+fn at_marker(name: &'static str, op: Op, sql: &str) -> Scenario {
     let offset = sql.find('|').unwrap_or(sql.len());
     Scenario {
         name,
+        op,
         text: sql.replacen('|', "", 1),
         offset,
     }
 }
 
+/// Runs the operation once; `Err` when it returns nothing, which would make the timing void.
+fn run_op(sc: &Scenario, schema: &MemorySchema) -> Result<(), String> {
+    match sc.op {
+        Op::Complete => {
+            let req = CompletionRequest::new(&sc.text, sc.offset, Dialect::Postgres);
+            let done = complete(black_box(&req), schema);
+            if done.items.is_empty() {
+                return Err(format!("scenario {} returned no items", sc.name));
+            }
+            black_box(done);
+        }
+        Op::Hover => {
+            let req = HoverRequest::new(&sc.text, sc.offset, Dialect::Postgres);
+            let Some(h) = hover(black_box(&req), schema) else {
+                return Err(format!("scenario {} returned no hover", sc.name));
+            };
+            black_box(h);
+        }
+        Op::Diagnose => {
+            let found = diagnose(black_box(&sc.text), Dialect::Postgres, schema);
+            if found.is_empty() {
+                return Err(format!("scenario {} returned no diagnostics", sc.name));
+            }
+            black_box(found);
+        }
+    }
+    Ok(())
+}
+
 fn scenarios(tables: usize) -> Vec<Scenario> {
     let t = |i: usize| format!("table_{:05}", i % tables);
-    let join5 = (2..=5).fold(format!("SELECT | FROM {} a1", t(1)), |acc, i| {
-        format!("{acc} JOIN {} a{i} ON a{i}.col_0 = a{}.col_0", t(i), i - 1)
-    });
+    let join5_with = |select: &str| {
+        (2..=5).fold(format!("SELECT {select} FROM {} a1", t(1)), |acc, i| {
+            format!("{acc} JOIN {} a{i} ON a{i}.col_0 = a{}.col_0", t(i), i - 1)
+        })
+    };
+    let join5 = join5_with("|");
     let mut script = String::new();
     for i in 0..2000 {
         let _ = writeln!(script, "SELECT col_0 FROM {} WHERE col_1 = {i};", t(i));
@@ -147,35 +193,66 @@ fn scenarios(tables: usize) -> Vec<Scenario> {
         .match_indices('\n')
         .nth(1000)
         .map_or(script.len(), |(i, _)| i + 1);
+    // Hover on the table name of the middle statement; diagnose with one bad column added.
+    let mut hover_script = script.clone();
+    let name_at = mid + "SELECT col_0 FROM ".len() + 3;
+    hover_script.insert(name_at, '|');
+    let mut diag_script = script.clone();
+    diag_script.insert_str(
+        mid,
+        &format!("SELECT nope_col FROM {} t WHERE t.col_1 = 1;\n", t(500)),
+    );
     script.insert_str(
         mid,
         &format!("SELECT co| FROM {} t WHERE t.col_1 = 1;\n", t(500)),
     );
+    let misspelt = join5_with("a3.col_x");
     vec![
-        at_marker("from_empty", "SELECT * FROM |"),
-        at_marker("from_prefix", "SELECT * FROM table_00|"),
-        at_marker("from_fuzzy", "SELECT * FROM t_4|"),
-        at_marker("select_list_join5", &join5),
-        at_marker("alias_dot", &format!("SELECT a.| FROM {} a", t(1))),
+        at_marker("from_empty", Op::Complete, "SELECT * FROM |"),
+        at_marker("from_prefix", Op::Complete, "SELECT * FROM table_00|"),
+        at_marker("from_fuzzy", Op::Complete, "SELECT * FROM t_4|"),
+        at_marker("select_list_join5", Op::Complete, &join5),
+        at_marker(
+            "alias_dot",
+            Op::Complete,
+            &format!("SELECT a.| FROM {} a", t(1)),
+        ),
         at_marker(
             "where_prefix",
+            Op::Complete,
             &format!(
                 "SELECT * FROM {} a JOIN {} b ON a.col_0 = b.col_0 WHERE col_|",
                 t(1),
                 t(2)
             ),
         ),
-        at_marker("insert_columns", &format!("INSERT INTO {} (|", t(7))),
-        at_marker("big_script", &script),
+        at_marker(
+            "insert_columns",
+            Op::Complete,
+            &format!("INSERT INTO {} (|", t(7)),
+        ),
+        at_marker("big_script", Op::Complete, &script),
+        at_marker("hover_column", Op::Hover, &join5_with("a3.col_|0")),
+        at_marker("hover_big_script", Op::Hover, &hover_script),
+        at_marker("diagnose_join5", Op::Diagnose, &misspelt),
+        at_marker("diagnose_big_script", Op::Diagnose, &diag_script),
     ]
 }
 
-fn base_p95(path: &str) -> Result<u64, String> {
+/// The `key=value` lines of a saved baseline.
+fn read_baseline(path: &str) -> Result<String, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    if base_value(&text, "complete_p95_ns").is_none() {
+        return Err(format!("no complete_p95_ns in {path}"));
+    }
+    Ok(text)
+}
+
+fn base_value(text: &str, key: &str) -> Option<u64> {
+    let prefix = format!("{key}=");
     text.lines()
-        .find_map(|l| l.strip_prefix("complete_p95_ns="))
+        .find_map(|l| l.strip_prefix(prefix.as_str()))
         .and_then(|v| v.trim().parse().ok())
-        .ok_or_else(|| format!("no complete_p95_ns in {path}"))
 }
 
 /// The figures of one repetition of the measurement loop.
@@ -183,43 +260,49 @@ struct Measured {
     lines: String,
     p50: u64,
     p95: u64,
+    hover_p95: u64,
+    diagnose_p95: u64,
     worst: u64,
 }
 
 /// One repetition: warm-up and `samples` timed requests for every scenario.
 fn measure(a: &Args, schema: &MemorySchema, scs: &[Scenario]) -> Result<Measured, String> {
-    let mut all: Vec<u64> = Vec::new();
+    let mut complete_all: Vec<u64> = Vec::new();
+    let mut hover_all: Vec<u64> = Vec::new();
+    let mut diagnose_all: Vec<u64> = Vec::new();
     let mut lines = String::new();
     let mut worst = 0u64;
     for sc in scs {
         for _ in 0..20 {
-            let req = CompletionRequest::new(&sc.text, sc.offset, Dialect::Postgres);
-            let done = complete(black_box(&req), schema);
-            if done.items.is_empty() {
-                return Err(format!("scenario {} returned no items", sc.name));
-            }
-            black_box(done);
+            run_op(sc, schema)?;
         }
         let mut times = Vec::with_capacity(a.samples);
         for _ in 0..a.samples {
-            let req = CompletionRequest::new(&sc.text, sc.offset, Dialect::Postgres);
             let start = Instant::now();
-            let done = complete(black_box(&req), schema);
-            let ns = nanos(start.elapsed());
-            black_box(done);
-            times.push(ns);
+            run_op(sc, schema)?;
+            times.push(nanos(start.elapsed()));
         }
-        all.extend_from_slice(&times);
+        match sc.op {
+            Op::Complete => complete_all.extend_from_slice(&times),
+            Op::Hover => hover_all.extend_from_slice(&times),
+            Op::Diagnose => diagnose_all.extend_from_slice(&times),
+        }
         times.sort_unstable();
         let (p50, p95) = (percentile(&times, 50), percentile(&times, 95));
         worst = worst.max(p95);
         let _ = writeln!(lines, "{}_p50_ns={p50}\n{}_p95_ns={p95}", sc.name, sc.name);
     }
-    all.sort_unstable();
+    let p95_of = |v: &mut Vec<u64>| {
+        v.sort_unstable();
+        if v.is_empty() { 0 } else { percentile(v, 95) }
+    };
+    complete_all.sort_unstable();
     Ok(Measured {
         lines,
-        p50: percentile(&all, 50),
-        p95: percentile(&all, 95),
+        p50: percentile(&complete_all, 50),
+        p95: percentile(&complete_all, 95),
+        hover_p95: p95_of(&mut hover_all),
+        diagnose_p95: p95_of(&mut diagnose_all),
         worst,
     })
 }
@@ -228,15 +311,18 @@ fn run() -> Result<ExitCode, (u8, String)> {
     let a = parse_args().map_err(|e| (2, e))?;
     // The baseline is read first so a bad path fails before the long run.
     let baseline = match &a.compare {
-        Some(path) => Some(base_p95(path).map_err(|e| (2, e))?),
+        Some(path) => Some(read_baseline(path).map_err(|e| (2, e))?),
         None => None,
     };
 
     let schema = build_schema(a.tables, a.columns);
     let scs = scenarios(a.tables);
     let mut best: Option<Measured> = None;
+    let (mut min_hover, mut min_diagnose) = (u64::MAX, u64::MAX);
     for _ in 0..a.reps {
         let m = measure(&a, &schema, &scs).map_err(|e| (1, e))?;
+        min_hover = min_hover.min(m.hover_p95);
+        min_diagnose = min_diagnose.min(m.diagnose_p95);
         if best.as_ref().is_none_or(|b| m.p95 < b.p95) {
             best = Some(m);
         }
@@ -246,12 +332,14 @@ fn run() -> Result<ExitCode, (u8, String)> {
         p50,
         p95: complete_p95,
         worst,
+        ..
     }) = best
     else {
         return Err((2, "no repetition ran".to_owned()));
     };
+    let (hover_p95, diagnose_p95) = (min_hover, min_diagnose);
     let report = format!(
-        "bench=completion\nos={}-{}\ntables={}\ncolumns={}\nsamples={}\nreps={}\n{lines}complete_p50_ns={p50}\ncomplete_p95_ns={complete_p95}\nworst_p95_ns={worst}\n",
+        "bench=completion\nos={}-{}\ntables={}\ncolumns={}\nsamples={}\nreps={}\n{lines}complete_p50_ns={p50}\ncomplete_p95_ns={complete_p95}\nhover_p95_ns={hover_p95}\ndiagnose_p95_ns={diagnose_p95}\nworst_p95_ns={worst}\n",
         std::env::consts::OS,
         std::env::consts::ARCH,
         a.tables,
@@ -265,7 +353,13 @@ fn run() -> Result<ExitCode, (u8, String)> {
     }
 
     let mut ok = true;
-    for (name, v) in [("complete", complete_p95), ("worst scenario", worst)] {
+    let figures = [
+        ("complete", complete_p95),
+        ("hover", hover_p95),
+        ("diagnose", diagnose_p95),
+        ("worst scenario", worst),
+    ];
+    for (name, v) in figures {
         if v > a.budget_p95_ns {
             eprintln!(
                 "FAIL: {name} p95 {v} ns exceeds the budget of {} ns",
@@ -274,14 +368,24 @@ fn run() -> Result<ExitCode, (u8, String)> {
             ok = false;
         }
     }
-    if let Some(base) = baseline {
-        let limit =
-            u128::from(base) * (u128::from(a.threshold_pct) + 100) / 100 + u128::from(a.slack_ns);
-        if u128::from(complete_p95) > limit {
-            eprintln!(
-                "FAIL: complete p95 {complete_p95} ns regressed against baseline {base} ns (limit {limit} ns)"
-            );
-            ok = false;
+    if let Some(base_text) = baseline {
+        // `complete_p95_ns` is always there; the newer keys only if the baseline has them.
+        for (key, name, v) in [
+            ("complete_p95_ns", "complete", complete_p95),
+            ("hover_p95_ns", "hover", hover_p95),
+            ("diagnose_p95_ns", "diagnose", diagnose_p95),
+        ] {
+            let Some(base) = base_value(&base_text, key) else {
+                continue;
+            };
+            let limit = u128::from(base) * (u128::from(a.threshold_pct) + 100) / 100
+                + u128::from(a.slack_ns);
+            if u128::from(v) > limit {
+                eprintln!(
+                    "FAIL: {name} p95 {v} ns regressed against baseline {base} ns (limit {limit} ns)"
+                );
+                ok = false;
+            }
         }
     }
     Ok(if ok {

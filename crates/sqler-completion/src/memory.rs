@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use sqler_core::{ColumnInfo, ObjectKind};
+use sqler_core::{ColumnInfo, ForeignKey, ObjectKind};
 
 use crate::source::{Loadable, Relation, SchemaSource};
 
@@ -14,6 +14,7 @@ struct TableData {
     name: String,
     kind: ObjectKind,
     columns: Option<Vec<ColumnInfo>>,
+    foreign_keys: Vec<ForeignKey>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -82,12 +83,23 @@ impl MemorySchema {
             name: name.to_owned(),
             kind,
             columns,
+            foreign_keys: Vec::new(),
         };
         if let Some(&t) = data.index.get(name) {
             data.tables[t] = table;
         } else {
             data.index.insert(name.to_owned(), data.tables.len());
             data.tables.push(table);
+        }
+        self
+    }
+
+    /// Adds a foreign key to a table. Does nothing when the table does not exist.
+    pub fn add_foreign_key(&mut self, schema: &str, table: &str, fk: ForeignKey) -> &mut Self {
+        if let Some(&s) = self.index.get(schema)
+            && let Some(&t) = self.schemas[s].index.get(table)
+        {
+            self.schemas[s].tables[t].foreign_keys.push(fk);
         }
         self
     }
@@ -153,6 +165,20 @@ impl SchemaSource for MemorySchema {
             None => Loadable::NotLoaded,
         }
     }
+
+    fn foreign_keys(&self, schema: Option<&str>, relation: &str) -> Loadable<&[ForeignKey]> {
+        fn find<'s>(s: &'s SchemaData, relation: &str) -> Option<&'s TableData> {
+            s.index.get(relation).map(|&t| &s.tables[t])
+        }
+        let table = match schema {
+            Some(name) => self.schema(name).and_then(|s| find(s, relation)),
+            None => self.search_schemas().find_map(|s| find(s, relation)),
+        };
+        match table {
+            Some(t) => Loadable::Loaded(&t.foreign_keys),
+            None => Loadable::NotLoaded,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -210,5 +236,27 @@ mod tests {
         };
         let v: Vec<_> = rels.map(|r| (r.name, r.kind)).collect();
         assert_eq!(v, [("t", ObjectKind::View), ("u", ObjectKind::Table)]);
+    }
+
+    #[test]
+    fn foreign_keys_are_stored_per_table() {
+        let mut m = MemorySchema::new(["a"]);
+        m.add_table("a", "orders", ObjectKind::Table, Some(vec![col("user_id")]));
+        let fk = ForeignKey::new(vec!["user_id".to_owned()], "users", vec!["id".to_owned()]);
+        m.add_foreign_key("a", "orders", fk.clone());
+        m.add_foreign_key("a", "missing", fk.clone());
+        m.add_foreign_key("zz", "orders", fk.clone());
+        assert_eq!(
+            m.foreign_keys(Some("a"), "orders"),
+            Loadable::Loaded(&[fk][..])
+        );
+        assert!(matches!(m.foreign_keys(None, "orders"), Loadable::Loaded(f) if f.len() == 1));
+        assert_eq!(m.foreign_keys(Some("a"), "missing"), Loadable::NotLoaded);
+        assert_eq!(m.foreign_keys(Some("zz"), "orders"), Loadable::NotLoaded);
+        m.add_table("a", "plain", ObjectKind::Table, None);
+        assert_eq!(
+            m.foreign_keys(Some("a"), "plain"),
+            Loadable::Loaded(&[][..])
+        );
     }
 }
