@@ -75,16 +75,62 @@ pub fn classify_each(dialect: Dialect, text: &str) -> Vec<(Segment, StatementCla
         .collect()
 }
 
-const READ_LEADS: &[&str] = &[
-    "SELECT", "WITH", "VALUES", "TABLE", "SHOW", "EXPLAIN", "DESCRIBE", "DESC",
+/// Leads that read when the statement passes the scan.
+const READ_LEADS: &[&str] = &["SELECT", "WITH", "VALUES", "TABLE", "SHOW"];
+/// Leads that wrap another statement: `EXPLAIN [ANALYZE] <stmt>` is classified as `<stmt>`.
+const EXPLAIN_LEADS: &[&str] = &["EXPLAIN", "DESCRIBE", "DESC"];
+/// Words skipped between an `EXPLAIN` lead and the statement it wraps.
+const EXPLAIN_OPTIONS: &[&str] = &[
+    "ANALYZE",
+    "ANALYSE",
+    "VERBOSE",
+    "EXTENDED",
+    "PARTITIONS",
+    "QUERY",
+    "PLAN",
+    "FORMAT",
+    "JSON",
+    "TREE",
+    "TRADITIONAL",
+    "XML",
+    "YAML",
+    "TEXT",
+    "FOR",
+    "CONNECTION",
 ];
+/// Leads that change data, storage or server state. Every lead that can mutate belongs here or in
+/// [`DDL_LEADS`]; a lead in neither table (and not in [`OTHER_LEADS`]) is `Unknown`.
 const WRITE_LEADS: &[&str] = &[
-    "INSERT", "UPDATE", "DELETE", "MERGE", "REPLACE", "UPSERT", "COPY", "LOAD", "REFRESH",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "MERGE",
+    "REPLACE",
+    "UPSERT",
+    "COPY",
+    "LOAD",
+    "REFRESH",
+    "VACUUM",
+    "ANALYZE",
+    "CLUSTER",
+    "LOCK",
+    "FLUSH",
+    "KILL",
+    "ATTACH",
+    "DETACH",
+    "OPTIMIZE",
+    "REPAIR",
+    "CHECKPOINT",
+    "NOTIFY",
+    "INSTALL",
+    "UNINSTALL",
+    "PURGE",
 ];
 const DDL_LEADS: &[&str] = &[
     "CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME", "COMMENT", "GRANT", "REVOKE", "SECURITY",
     "IMPORT", "REINDEX",
 ];
+/// Session and transaction control. These run the same token scans as `Read`.
 const OTHER_LEADS: &[&str] = &[
     "BEGIN",
     "START",
@@ -101,24 +147,13 @@ const OTHER_LEADS: &[&str] = &[
     "DISCARD",
     "LISTEN",
     "UNLISTEN",
-    "NOTIFY",
-    "CHECKPOINT",
-    "VACUUM",
-    "ANALYZE",
-    "CLUSTER",
-    "LOCK",
     "UNLOCK",
-    "FLUSH",
-    "KILL",
-    "ATTACH",
-    "DETACH",
-    "OPTIMIZE",
-    "REPAIR",
     "HANDLER",
 ];
 /// Words that make a read candidate a write wherever they appear.
 const WRITE_WORDS: &[&str] = &[
     "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "INTO", "COPY", "LOAD", "LOCK", "SHARE",
+    "REFRESH",
 ];
 /// Words that make a read candidate unknown wherever they appear.
 const UNKNOWN_WORDS: &[&str] = &["CALL", "DO", "EXEC", "EXECUTE"];
@@ -341,10 +376,6 @@ fn classify_body(dialect: Dialect, body: &str) -> StatementClass {
         return StatementClass::Unknown;
     }
     let word = lead.text(body);
-    if in_list(word, READ_LEADS) {
-        // An unterminated token makes the statement's extent unreliable.
-        return read_candidate(dialect, body, &all, &sig);
-    }
     if word.eq_ignore_ascii_case("PRAGMA") {
         return if dialect == Dialect::Sqlite && all.iter().all(Token::is_terminated) {
             pragma_class(body, &sig[lead_idx + 1..])
@@ -352,20 +383,122 @@ fn classify_body(dialect: Dialect, body: &str) -> StatementClass {
             StatementClass::Unknown
         };
     }
-    if in_list(word, WRITE_LEADS) {
-        StatementClass::Write
-    } else if in_list(word, DDL_LEADS) {
-        StatementClass::Ddl
-    } else if in_list(word, OTHER_LEADS) {
-        if word.eq_ignore_ascii_case("BEGIN") && is_compound(dialect, body, &all) {
-            // `BEGIN NOT ATOMIC ... END` can hold anything.
-            StatementClass::Unknown
-        } else {
-            StatementClass::Other
-        }
-    } else {
-        StatementClass::Unknown
+    if in_list(word, READ_LEADS) {
+        return scan(dialect, body, &all, &sig, StatementClass::Read);
     }
+    if in_list(word, EXPLAIN_LEADS) {
+        return explain_class(dialect, body, &all, &sig, lead_idx);
+    }
+    if in_list(word, WRITE_LEADS) {
+        return StatementClass::Write;
+    }
+    if in_list(word, DDL_LEADS) {
+        return StatementClass::Ddl;
+    }
+    if !in_list(word, OTHER_LEADS) {
+        return StatementClass::Unknown;
+    }
+    let next = sig.get(lead_idx + 1);
+    let next_is = |w: &str| next.is_some_and(|t| t.is_keyword(body, w));
+    let base = if word.eq_ignore_ascii_case("BEGIN") && is_compound(dialect, body, &all) {
+        // `BEGIN NOT ATOMIC ... END` can hold anything.
+        return StatementClass::Unknown;
+    } else if word.eq_ignore_ascii_case("START") && !next_is("TRANSACTION") {
+        // `START REPLICA` and friends change server state.
+        return StatementClass::Unknown;
+    } else if word.eq_ignore_ascii_case("RESET") && dialect != Dialect::Postgres {
+        // `RESET MASTER` and `RESET REPLICA` destroy server state.
+        return StatementClass::Write;
+    } else if word.eq_ignore_ascii_case("SET")
+        && (["GLOBAL", "PERSIST", "PERSIST_ONLY", "PASSWORD"]
+            .iter()
+            .any(|w| next_is(w))
+            || sig.iter().any(|t| {
+                let text = t.text(body).to_ascii_lowercase();
+                text.starts_with("@@global") || text.starts_with("@@persist")
+            }))
+    {
+        StatementClass::Write
+    } else {
+        StatementClass::Other
+    };
+    scan(dialect, body, &all, &sig, base)
+}
+
+/// `t`, `s.t`, optionally followed by a column or pattern: nothing that looks like a statement.
+fn is_table_name(src: &str, rest: &[Token]) -> bool {
+    rest.len() <= 4
+        && rest.iter().all(|t| {
+            matches!(
+                t.kind,
+                TokenKind::Word
+                    | TokenKind::Number
+                    | TokenKind::QuotedIdent { .. }
+                    | TokenKind::Str { .. }
+            ) || is_punct(t, src, ".")
+        })
+}
+
+/// `EXPLAIN [ANALYZE] [(options)] <stmt>` is the class of `<stmt>`: `ANALYZE` executes it. When
+/// the wrapped statement is not a known lead the statement is `Unknown`, except that `MySQL`
+/// `EXPLAIN t` and `DESCRIBE t` describe a table.
+fn explain_class(
+    dialect: Dialect,
+    src: &str,
+    all: &[Token],
+    sig: &[Token],
+    lead_idx: usize,
+) -> StatementClass {
+    let describes_table = dialect == Dialect::MySql || !sig[lead_idx].is_keyword(src, "EXPLAIN");
+    let mut i = lead_idx + 1;
+    while let Some(t) = sig.get(i) {
+        if is_punct(t, src, "(") {
+            let mut depth = 0usize;
+            loop {
+                let Some(t) = sig.get(i) else {
+                    return StatementClass::Unknown;
+                };
+                if is_punct(t, src, "(") {
+                    depth += 1;
+                } else if is_punct(t, src, ")") {
+                    depth -= 1;
+                }
+                i += 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+        } else if (t.kind == TokenKind::Word && in_list(t.text(src), EXPLAIN_OPTIONS))
+            || (t.kind == TokenKind::Op && t.text(src) == "=")
+        {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    let inner = match sig.get(i) {
+        Some(t) if t.kind == TokenKind::Word => {
+            let w = t.text(src);
+            if in_list(w, READ_LEADS) {
+                StatementClass::Read
+            } else if in_list(w, WRITE_LEADS) {
+                StatementClass::Write
+            } else if in_list(w, DDL_LEADS) {
+                StatementClass::Ddl
+            } else if in_list(w, OTHER_LEADS) {
+                StatementClass::Other
+            } else if describes_table && !in_list(w, EXPLAIN_LEADS) && is_table_name(src, &sig[i..])
+            {
+                StatementClass::Read
+            } else {
+                StatementClass::Unknown
+            }
+        }
+        Some(_) if describes_table && is_table_name(src, &sig[i..]) => StatementClass::Read,
+        None if describes_table => StatementClass::Read,
+        _ => StatementClass::Unknown,
+    };
+    inner.max(scan(dialect, src, all, sig, StatementClass::Read))
 }
 
 /// `PRAGMA [schema.]name[(args)]` for a read-only pragma is `Read`; any other pragma is `Other`.
@@ -433,63 +566,80 @@ fn sequence_form(src: &str, sig: &[Token], i: usize) -> Option<StatementClass> {
     }
 }
 
-/// Words that cannot start a function call: the previous token puts the next one in expression
-/// position.
-const EXPR_PREV: &[&str] = &[
-    "SELECT", "DISTINCT", "ALL", "WHERE", "AND", "OR", "NOT", "ON", "WHEN", "THEN", "ELSE", "CASE",
-    "HAVING", "BY", "LIMIT", "OFFSET", "BETWEEN", "IN", "IS", "LIKE", "ILIKE", "SOME", "ANY",
-    "EXISTS", "AS", "USING",
-];
-/// Structural words that are also valid function names (unreserved or type/function keywords).
-const POSITIONAL: &[&str] = &[
-    "OVER",
-    "FILTER",
-    "BY",
-    "PARTITION",
-    "EXPLAIN",
-    "MATERIALIZED",
-    "RECURSIVE",
-    "JOIN",
-    "LIKE",
-    "ILIKE",
-    "IS",
-];
+/// Words after which a table, expression or operator may start, so a following structural word
+/// is a function name: they are never operands. Everything in [`STRUCTURAL`] counts as well.
+const OPENER_WORDS: &[&str] = &["ONLY", "ORDER", "WINDOW"];
+
+/// Whether `prev` can end an operand: a closing parenthesis, a literal, a quoted name, or a plain
+/// word that is neither structural nor an opener (a column, table, alias or `NULL`).
+fn ends_operand(src: &str, prev: Option<&Token>) -> bool {
+    prev.is_some_and(|t| match t.kind {
+        TokenKind::QuotedIdent { .. } | TokenKind::Number | TokenKind::Str { .. } => true,
+        TokenKind::Punct => t.text(src) == ")",
+        TokenKind::Word => !in_list(t.text(src), STRUCTURAL) && !in_list(t.text(src), OPENER_WORDS),
+        _ => false,
+    })
+}
+
+/// Whether a word of `kind` appears at depth one of the parentheses opened at `sig[open]`.
+fn has_word_at_depth_one(src: &str, sig: &[Token], open: usize, word: &str) -> bool {
+    let mut depth = 0usize;
+    for t in &sig[open..] {
+        if is_punct(t, src, "(") {
+            depth += 1;
+        } else if is_punct(t, src, ")") {
+            depth -= 1;
+            if depth == 0 {
+                return false;
+            }
+        } else if depth == 1 && t.is_keyword(src, word) {
+            return true;
+        }
+    }
+    false
+}
 
 /// Whether the word at `sig[i]`, followed by `(`, is syntax rather than a function call.
-/// Words that can double as function names count only in their real syntactic position.
+///
+/// A call is the default. A word is syntax only when it is in [`STRUCTURAL`], is not qualified
+/// (a name after `.` is always a function name) and, for words that the servers also accept as
+/// function names, sits where the grammar puts it: this match is the explicit table of allowed
+/// positions, keyed by the previous token.
 fn structural_here(src: &str, sig: &[Token], i: usize) -> bool {
     let text = sig[i].text(src);
-    if !in_list(text, STRUCTURAL) {
+    let prev = if i > 0 { sig.get(i - 1) } else { None };
+    if prev.is_some_and(|t| is_punct(t, src, ".")) || !in_list(text, STRUCTURAL) {
         return false;
     }
-    if !in_list(text, POSITIONAL) {
-        return true;
-    }
-    let prev = if i > 0 { sig.get(i - 1) } else { None };
-    let prev_is = |p: &str| prev.is_some_and(|t| is_punct(t, src, p));
     let prev_word =
         |w: &[&str]| prev.is_some_and(|t| t.kind == TokenKind::Word && in_list(t.text(src), w));
-    let upper = text.to_ascii_uppercase();
-    match upper.as_str() {
-        "OVER" | "FILTER" => prev_is(")"),
+    match text.to_ascii_uppercase().as_str() {
+        "OVER" | "FILTER" => prev.is_some_and(|t| is_punct(t, src, ")")),
         "BY" => prev_word(&["GROUP", "ORDER", "PARTITION"]),
         "EXPLAIN" => sig[..i].iter().all(|t| is_punct(t, src, "(")),
-        "MATERIALIZED" => prev_word(&["AS", "NOT"]),
-        "RECURSIVE" => prev_word(&["WITH"]),
-        _ => {
-            // PARTITION, JOIN, LIKE, ILIKE, IS: after an operand, not in expression position.
-            prev.is_some_and(|t| {
-                is_punct(t, src, ")")
-                    || matches!(t.kind, TokenKind::QuotedIdent { .. } | TokenKind::Number)
-                    || (t.kind == TokenKind::Word && !in_list(t.text(src), EXPR_PREV))
-            })
+        // `AS MATERIALIZED` or `AS NOT MATERIALIZED`.
+        "MATERIALIZED" => {
+            prev_word(&["AS"]) || (prev_word(&["NOT"]) && i > 1 && sig[i - 2].is_keyword(src, "AS"))
         }
+        "RECURSIVE" => prev_word(&["WITH"]),
+        "CAST" => has_word_at_depth_one(src, sig, i + 1, "AS"),
+        "EXTRACT" => has_word_at_depth_one(src, sig, i + 1, "FROM"),
+        // After an operand only: `FROM partition(1)` and `JOIN join(1)` are calls.
+        "PARTITION" | "JOIN" | "LIKE" | "ILIKE" | "IS" | "OFFSET" => ends_operand(src, prev),
+        _ => true,
     }
 }
 
-/// Starts from `Read` and returns the most severe violation found anywhere in the statement.
-fn read_candidate(dialect: Dialect, src: &str, all: &[Token], sig: &[Token]) -> StatementClass {
-    let mut class = StatementClass::Read;
+/// Starts from `base` (`Read` or `Other`) and returns the most severe violation found anywhere in
+/// the statement; any construct the classifier cannot trust gives `Unknown`.
+fn scan(
+    dialect: Dialect,
+    src: &str,
+    all: &[Token],
+    sig: &[Token],
+    base: StatementClass,
+) -> StatementClass {
+    let mut class = base;
     for tok in all {
         if !tok.is_terminated() {
             return StatementClass::Unknown;

@@ -135,6 +135,24 @@ const CORPUS: &[&str] = &[
     "select next value for s",
     "select filter(1)",
     "select partition(1)",
+    "select * from partition(1)",
+    "select * from t join join(1)",
+    "select * from like(1)",
+    "select * from t, lateral partition(1)",
+    "select main.cast(1)",
+    "select main.row(1)",
+    "select main.load_extension('x')",
+    "select cast(1)",
+    "select cast(1 as text), extract(1)",
+    "explain vacuum",
+    "explain query plan vacuum",
+    "explain query plan attach ':memory:' as o",
+    "explain analyze reindex",
+    "explain create table w (a)",
+    "set x = 1",
+    "commit /*! ; drop table t */",
+    "end",
+    "release s",
 ];
 
 #[test]
@@ -198,6 +216,13 @@ fn known_writers_are_not_read() {
         "pragma user_version = 5",
         "explain delete from t",
         "select filter(1)",
+        "select * from partition(1)",
+        "select * from t join join(1)",
+        "select * from like(1)",
+        "select main.cast(1)",
+        "select main.load_extension('x')",
+        "explain vacuum",
+        "explain query plan attach ':memory:' as o",
     ] {
         assert_ne!(classify(D, text), StatementClass::Read, "{text:?}");
     }

@@ -57,26 +57,25 @@ fn lead_words_every_dialect() {
         ("savepoint a", Other),
         ("release a", Other),
         ("set x = 1", Other),
-        ("reset all", Other),
         ("use db", Other),
         ("prepare p as select 1", Other),
         ("deallocate p", Other),
         ("discard all", Other),
         ("listen c", Other),
         ("unlisten c", Other),
-        ("notify c", Other),
-        ("checkpoint", Other),
-        ("vacuum", Other),
-        ("analyze t", Other),
-        ("cluster t", Other),
-        ("lock table t", Other),
+        ("notify c", Write),
+        ("checkpoint", Write),
+        ("vacuum", Write),
+        ("analyze t", Write),
+        ("cluster t", Write),
+        ("lock table t", Write),
         ("unlock tables", Other),
-        ("flush tables", Other),
-        ("kill 1", Other),
-        ("attach 'f' as x", Other),
-        ("detach x", Other),
-        ("optimize table t", Other),
-        ("repair table t", Other),
+        ("flush tables", Write),
+        ("kill 1", Write),
+        ("attach 'f' as x", Write),
+        ("detach x", Write),
+        ("optimize table t", Write),
+        ("repair table t", Write),
         ("handler t open", Other),
         ("call p()", Unknown),
         ("do 1", Unknown),
@@ -562,4 +561,281 @@ fn delimiter_line_tail_is_classified() {
             ("DELIMITER // # note\nselect 2//", Read),
         ],
     );
+}
+
+/// Round 2 (R1): `EXPLAIN` is the class of the statement it wraps; every lead that can mutate is
+/// a write, and an unknown lead is never read.
+#[test]
+fn explain_is_its_inner_statement() {
+    for d in Dialect::ALL {
+        check(
+            d,
+            &[
+                ("explain analyze refresh materialized view mv", Write),
+                ("explain (analyze) refresh materialized view mv", Write),
+                (
+                    "explain (analyze, verbose) refresh materialized view mv",
+                    Write,
+                ),
+                ("explain analyze verbose vacuum t", Write),
+                ("explain analyze reindex table t", Ddl),
+                ("explain analyze create table t as select 1", Ddl),
+                ("explain analyze cluster t", Write),
+                ("explain analyze lock table t", Write),
+                ("explain analyze copy t to stdin", Write),
+                ("explain analyze execute p", Unknown),
+                ("explain analyze call p()", Unknown),
+                ("explain analyze do 1", Unknown),
+                ("explain analyze declare c cursor for select 1", Unknown),
+                ("explain query plan refresh materialized view mv", Write),
+                ("explain format=json delete from t", Write),
+                ("explain analyze select 1", Read),
+                ("explain (analyze, format json) select 1", Read),
+                ("explain query plan select 1", Read),
+                ("explain (", Unknown),
+                ("desc analyze refresh materialized view mv", Write),
+                ("describe t", Read),
+            ],
+        );
+    }
+    check(
+        Dialect::MySql,
+        &[("explain t", Read), ("explain for connection 3", Read)],
+    );
+    check(Dialect::Postgres, &[("explain t", Unknown)]);
+    check(
+        Dialect::Postgres,
+        &[("explain analyze frobnicate", Unknown)],
+    );
+    check(Dialect::Sqlite, &[("explain analyze frobnicate", Unknown)]);
+    check(Dialect::Postgres, &[("reset all", Other)]);
+    check(Dialect::MySql, &[("reset master", Write)]);
+    check(
+        Dialect::MySql,
+        &[
+            ("start replica", Unknown),
+            ("set global x = 1", Write),
+            ("set persist x = 1", Write),
+            ("set @@global.x = 1", Write),
+            ("set password = 'x'", Write),
+            ("set @a = 1", Other),
+            ("start transaction", Other),
+        ],
+    );
+}
+
+/// Round 2 (R2): a name after `.` is always a function call, never structural syntax.
+#[test]
+fn qualified_structural_names_are_calls() {
+    let words = STRUCTURAL_WORDS;
+    for w in words {
+        for sql in [
+            format!("select public.{w}(1)"),
+            format!("select db.{w}(1)"),
+            format!("select `db`.{w}(1)"),
+            format!("select \"public\" . {w} (1)"),
+            format!("select 1 from t where a = s.{w}(1)"),
+            format!("select * from s.{w}(1)"),
+        ] {
+            for d in Dialect::ALL {
+                assert_eq!(classify(d, &sql), Unknown, "{d:?}: {sql}");
+            }
+        }
+    }
+}
+
+/// Round 2 (R3): a structural word where the grammar does not put it is a function call.
+#[test]
+fn structural_words_in_table_function_position_are_calls() {
+    for sql in [
+        "select * from partition(1)",
+        "select * from t join join(1) on true",
+        "select * from like(1)",
+        "select * from ilike(1)",
+        "select * from t, lateral partition(1)",
+        "select * from lateral like(1)",
+        "select * from t, join(1)",
+        "select * from t union select * from is(1)",
+        "select * from only like(1)",
+        "select * from t left join like(1) on true",
+        "select * from t natural join join(1)",
+        "select * from t limit 1 offset offset(1)",
+        "select * from t where not like(1)",
+        "select cast(1)",
+        "select extract(1)",
+    ] {
+        for d in Dialect::ALL {
+            assert_eq!(classify(d, sql), Unknown, "{d:?}: {sql}");
+        }
+    }
+    check(
+        Dialect::Postgres,
+        &[
+            ("select cast(1 as int), extract(year from now())", Read),
+            ("select * from t limit 1 offset (1)", Read),
+            ("select * from t left join (select 1) u on true", Read),
+        ],
+    );
+}
+
+/// Round 2 (R4): `Other` leads run the same fail-safe scans as `Read`.
+#[test]
+fn other_leads_fail_safe() {
+    let my = Dialect::MySql;
+    for sql in [
+        "set @a=1 /*! ; drop table t */",
+        "commit /*! ; delete from t */",
+        "commit /*M! ; delete from t */",
+        "set @a='\\'; drop table t; -- '",
+        "set @a = \"x\"",
+        "begin /*!50000 ; drop table t */",
+        "use db /*! ; drop table t */",
+        "show tables /*! ; drop table t */",
+        "set @a := 1",
+        "set @a = nextval('s')",
+        "set @a = (select f(1))",
+        "set @a = 'unterminated",
+        "set @a = 1 \\ ",
+        "set x = 1 /*! ",
+    ] {
+        assert_eq!(classify(my, sql), Unknown, "{sql}");
+    }
+    for d in Dialect::ALL {
+        for sql in [
+            "set x = (select f(1))",
+            "savepoint 'a",
+            "commit /* x ",
+            "prepare p as delete from t",
+            "set x = 1 returning into y",
+        ] {
+            assert!(!matches!(classify(d, sql), Read | Other), "{d:?}: {sql}");
+        }
+    }
+    // An executable comment is one statement, never split into a hidden second one.
+    let sql = "set @a=1 /*! ; drop table t */";
+    assert_eq!(classify_each(my, sql).len(), 1);
+    check(
+        my,
+        &[
+            ("set @a = 1; commit", Other),
+            ("set names utf8mb4", Other),
+            ("begin; commit", Other),
+        ],
+    );
+}
+
+const STRUCTURAL_WORDS: &[&str] = &[
+    "select",
+    "from",
+    "where",
+    "and",
+    "or",
+    "not",
+    "in",
+    "exists",
+    "any",
+    "all",
+    "some",
+    "as",
+    "on",
+    "using",
+    "join",
+    "lateral",
+    "values",
+    "when",
+    "then",
+    "else",
+    "case",
+    "by",
+    "having",
+    "over",
+    "filter",
+    "group",
+    "partition",
+    "union",
+    "intersect",
+    "except",
+    "limit",
+    "offset",
+    "distinct",
+    "is",
+    "like",
+    "ilike",
+    "between",
+    "cast",
+    "extract",
+    "row",
+    "array",
+    "explain",
+    "with",
+    "materialized",
+    "recursive",
+];
+
+/// Structural words that are also legal bare function names in some dialect.
+const CALLABLE_WORDS: &[&str] = &[
+    "over",
+    "filter",
+    "by",
+    "partition",
+    "explain",
+    "materialized",
+    "recursive",
+    "join",
+    "like",
+    "ilike",
+    "is",
+    "offset",
+    "cast",
+    "extract",
+];
+
+/// Round 2: for every structural word, a statement `<lead> ... word(...)` is never read, in
+/// bare, qualified and table-function positions.
+#[test]
+fn structural_word_calls_are_never_read() {
+    let prefixes = [
+        "select ",
+        "select a, ",
+        "select * from ",
+        "select * from t, ",
+        "select * from t join ",
+        "select * from t left join ",
+        "select * from lateral ",
+        "select * from t, lateral ",
+        "select * from t where ",
+        "select * from t where a = ",
+        "select * from t where a and ",
+        "select * from t where a is not ",
+        "select * from t order by ",
+        "select * from t limit 1 offset ",
+        "select (",
+        "with x as (select 1) select * from x, ",
+        "explain select ",
+        "explain analyze select * from ",
+        "values (",
+        "set @a = ",
+        "show tables where ",
+        "(select ",
+    ];
+    for w in STRUCTURAL_WORDS {
+        for prefix in prefixes {
+            let mut sqls = vec![
+                format!("{prefix}s.{w}(1)"),
+                format!("{prefix}`s`.{w}(1)"),
+                format!("{prefix}\"s\".{w}(1)"),
+            ];
+            // Bare: the words the servers also accept as function names. The rest are reserved
+            // and a bare call is a syntax error on the server.
+            if CALLABLE_WORDS.contains(w) {
+                sqls.push(format!("{prefix}{w}(1)"));
+            }
+            for sql in sqls {
+                for d in Dialect::ALL {
+                    let class = classify(d, &sql);
+                    assert!(!class.is_read_only(), "{d:?}: {sql} classified {class:?}");
+                }
+            }
+        }
+    }
 }
