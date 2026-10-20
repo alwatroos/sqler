@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - DDL and script generation for `PostgreSQL`, `MySQL`/`MariaDB` and `SQLite` (`sqler-sql`). ADR-0015 and the user guide page "DDL and scripts".
+- Connection manager in the desktop app: a form for new and edited connections (driver, target, colour, environment, group, TLS, SSH tunnel), passwords stored in the keychain, a cancellable "Test connection", nested groups with create, rename, delete and drag or command based move, a confirmed delete that also removes the keychain entries, and `prod` connections that stand out. One connect pipeline (secret, SSH tunnel, TLS, driver) in `sqler-app` behind the `Connector` trait of `sqler-ui`; a host-key trust dialog; open sessions and tunnels are closed on quit. `verify-full` TLS through an SSH tunnel is refused for now. ADR-0016 and the user guide section "In the app".
 - `sqler-driver-postgres`: `PostgreSQL` driver on sqlx (streaming, server-side cancel, TLS modes with CA and client certificate through rustls, typed values, introspection of all 13 object kinds); the `driver-postgres` feature (default) in `sqler-cli` and `sqler-app`.
 - CI `db` job: `PostgreSQL` in Docker with TLS, DB integration tests (`SQLER_TEST_<DB>_URL`, `SQLER_TEST_REQUIRE_DB`) and a CLI smoke test.
 - ADR-0009 (`PostgreSQL` driver, TLS backend, DB test convention) and the user guide page "PostgreSQL".

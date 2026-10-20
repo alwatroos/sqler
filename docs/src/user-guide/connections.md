@@ -111,6 +111,81 @@ under the account `<id>:<kind>`, where the kind is `db-password`, `ssh-password`
 name, renaming a connection keeps its secrets. If you change an `id` by hand, SQLer no longer finds
 the old entries.
 
+## In the app
+
+The sidebar lists your connections in their groups. Every action below is also a command in the
+command palette (`connection:new`, `connection:edit`, `connection:delete`, `connection:test`,
+`connection:cancel-test`, `connection:save`, `connection:cancel`, `connection:move-to-group`,
+`connection-group:new`, `connection-group:rename`, `connection-group:delete`).
+
+### Sidebar
+
+- Groups are folders that nest; click the chevron to expand or collapse one.
+- A row shows the connection colour and an environment badge. A `prod` connection also gets a red
+  edge and a tinted row, so it is hard to mistake for another one.
+- Select a connection to see Edit and Delete; select a group to see New subgroup, Rename and Delete.
+  The header has New connection and New group buttons.
+- To move a connection, drag it onto a group or onto the header (top level), or use the command
+  `connection:move-to-group`. It goes to the end of the target group.
+- A group can be deleted only when it is empty (no connections and no subgroups); otherwise SQLer shows an error and changes nothing.
+
+### The connection form
+
+New connection and Edit open the same form: name, driver, target, colour (presets or `#rrggbb`),
+environment (none, dev, staging, prod), group, TLS and SSH tunnel. The fields follow
+[the file format](#file-format). TLS "from target" leaves TLS to the connection string; the other
+modes set `mode`, the CA certificate and an optional client certificate with its key. The SSH part
+has host, port, user and the method (password, key file, agent).
+
+A name that is empty, a colour that is not `#rrggbb`, a port outside 1 to 65535, a missing key file
+path, or a client certificate without its key is reported next to the field, and Save stays blocked.
+
+### Target rule
+
+The target is a file path (for example `SQLite`) or a URL `scheme://host:port/db?user=name`. Put the
+database user in the `user` parameter. A target with a user part, `password=` or a similar parameter
+is rejected, and the message points to the password field. An SSH tunnel and a database password need
+a URL target.
+
+### Passwords
+
+The database password, the SSH password and the key passphrase have their own masked fields. They go
+to the system keychain when you save, never to `connections.toml`; the file only gets the
+`..._in_keychain` flags. When you edit a connection that has a stored secret, the field shows that
+one is kept; type to replace it, or choose to clear it to remove the stored value on save. Saving a form without a password does not
+touch the keychain. See [Secrets](secrets.md).
+
+### Test connection
+
+Test connects through the same path as opening a connection: it reads the passwords (the typed ones,
+or the keychain), opens the SSH tunnel if configured, and connects to the database. It runs in the
+background; the form shows a spinner and a Cancel button, then "Connected" or the error. The test
+session and its tunnel are closed at once. A test works on an unsaved form.
+
+### Delete
+
+Delete asks for confirmation, names the connection and says that its keychain entries are removed.
+Confirming removes the connection from `connections.toml` and its database password, SSH password and
+key passphrase from the keychain. Tabs that are already open keep their old title.
+
+### SSH host key
+
+SQLer never accepts an SSH host key silently. If the bastion is not in `~/.ssh/known_hosts`, a
+dialog shows the host, port, key type and `SHA256:` fingerprint. Compare it with the fingerprint you
+got from the server administrator, then choose Trust (the key is added to `known_hosts` and the
+action runs again) or Reject. A changed key is an error with the line number in `known_hosts`; fix
+the file yourself.
+
+### Limits
+
+- `verify-full` TLS through an SSH tunnel is refused with the message "verify-full TLS through an SSH
+  tunnel is not supported yet; use verify-ca or connect without the tunnel". The database sees the
+  tunnel's local address, so the host name cannot be checked. Lifting this needs a server-name option
+  in the TLS settings and in the drivers.
+- Quitting closes open sessions and tunnels, waiting at most a couple of seconds.
+
+See [ADR-0016](../adr/0016-connect-pipeline.md) for the connect pipeline.
+
 ## Older files
 
 A file without `version` is the format of the first release, a plain list of `[[connection]]` entries

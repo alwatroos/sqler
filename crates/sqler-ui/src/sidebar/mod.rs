@@ -7,4 +7,6 @@ mod model;
 #[cfg(feature = "gui")]
 pub(crate) mod view;
 
-pub use model::{ConnectionStatus, SidebarEntry, SidebarModel};
+pub use model::{
+    ConnectionStatus, GroupOption, RowKind, Selection, SidebarEntry, SidebarModel, SidebarRow,
+};

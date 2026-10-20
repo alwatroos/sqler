@@ -15,8 +15,8 @@ mod testing;
 mod view;
 
 pub use action::{WorkspaceAction, register_commands};
-pub use bridge::{ConnectError, PendingConnect, SessionBridge};
-pub use state::{Effect, RequestId, Workspace};
+pub use bridge::{PendingConnect, PendingTrust, SessionBridge};
+pub use state::{Effect, Purpose, RequestId, SecretOp, Workspace};
 #[cfg(feature = "gui")]
 pub(crate) use view::WorkspaceView;
 #[cfg(feature = "gui")]

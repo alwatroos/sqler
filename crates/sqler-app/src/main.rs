@@ -7,16 +7,18 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod args;
+mod connect;
 
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use sqler_config::{ConfigDir, Platform};
+use sqler_config::{ConfigDir, KeychainStore, Platform, SecretStore};
 use sqler_driver_api::{DriverError, DriverRegistry};
 use sqler_ui::settings::SettingsModel;
 use sqler_ui::workspace::{Startup, run};
 
 use crate::args::{Command, USAGE, UsageError};
+use crate::connect::{Pipeline, SshTunnels};
 
 fn main() -> ExitCode {
     match args::parse(std::env::args().skip(1)) {
@@ -62,14 +64,26 @@ fn start(exit_after_first_frame: bool) -> ExitCode {
     let connections = dir
         .as_ref()
         .map_err(ToString::to_string)
-        .and_then(|dir| dir.load_connections().map_err(|err| err.to_string()));
+        .and_then(|dir| dir.load_connection_store().map_err(|err| err.to_string()));
+    // Saving is only offered when the file loaded: a broken file is never overwritten.
+    let config_dir = dir.as_ref().ok().cloned().filter(|_| connections.is_ok());
     let keybindings = dir.as_ref().map_err(ToString::to_string).and_then(|dir| {
         dir.load_keybinding_overrides(Platform::current())
             .map_err(|err| err.to_string())
     });
+    let secrets: Arc<dyn SecretStore> = Arc::new(KeychainStore::new());
+    let connector = Arc::new(Pipeline::new(
+        Arc::new(registry),
+        Arc::clone(&secrets),
+        Arc::new(SshTunnels),
+        sqler_tunnel::default_known_hosts_path(),
+        runtime.handle().clone(),
+    ));
     run(Startup {
         connections,
-        registry: Arc::new(registry),
+        config_dir,
+        connector,
+        secrets,
         runtime: runtime.handle().clone(),
         exit_after_first_frame,
         settings: SettingsModel::load(dir),

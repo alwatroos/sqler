@@ -5,10 +5,15 @@
 
 use std::collections::HashMap;
 
-use sqler_driver_api::sqler_core::ConnectionConfig;
+use sqler_config::{ConnectionId, ConnectionProfile, Secret, SecretRef};
+use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId};
 use sqler_driver_api::{CancelFlag, Session};
 
 use super::action::WorkspaceAction;
+use crate::connections::{
+    ConnectFailure, ConnectRequest, ConnectionAction, ConnectionForm, Dialog, FieldError, FormMode,
+    GroupPurpose, HostKeyPrompt, SecretField, TestStatus, from_profile_secret,
+};
 use crate::grid::{GridTab, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS};
 use crate::settings::SettingsModel;
 use crate::sidebar::SidebarModel;
@@ -19,6 +24,24 @@ use crate::theme::{self, Appearance};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestId(u64);
 
+/// Why a connect attempt was started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Purpose {
+    /// Open a tab on this saved connection.
+    Open(ConnectionId),
+    /// "Test connection" from the form; the session is closed again.
+    Test,
+}
+
+/// A change to the secret store that follows a save or a delete.
+#[derive(Debug, Clone)]
+pub enum SecretOp {
+    /// Store this secret under the reference.
+    Set(SecretRef, Secret),
+    /// Delete the entry of the reference.
+    Delete(SecretRef),
+}
+
 /// What the view has to do after a dispatched action.
 #[non_exhaustive]
 pub enum Effect {
@@ -28,11 +51,28 @@ pub enum Effect {
     Connect {
         /// The request to report back with.
         request: RequestId,
-        /// The connection to open.
-        config: ConnectionConfig,
+        /// What to connect to.
+        connect: ConnectRequest,
+    },
+    /// Drop the connect attempt of this request (it was cancelled).
+    CancelConnect(RequestId),
+    /// The connections changed: call [`Workspace::save_connections`], then apply the secret
+    /// changes to the secret store.
+    SaveConnections {
+        /// Keychain changes to make after the file is written.
+        secrets: Vec<SecretOp>,
+    },
+    /// Add the host key to `known_hosts`, then report with [`Workspace::trust_finished`].
+    TrustHostKey {
+        /// The key the user confirmed.
+        key: HostKeyPrompt,
+        /// What to run again afterwards.
+        retry: Purpose,
     },
     /// Close this session (its tab is gone).
     CloseSession(Box<dyn Session>),
+    /// Close these sessions (the app is quitting), then quit.
+    CloseSessions(Vec<Box<dyn Session>>),
     /// Show this grid in the already opened grid tab (it is bound to the active connection).
     OpenGrid {
         /// The grid tab.
@@ -40,7 +80,7 @@ pub enum Effect {
         /// The tab state; the view owns it from now on.
         grid: GridTab,
     },
-    /// Quit the application.
+    /// Quit the application now (no session is open).
     Quit,
     /// The settings changed: save them and re-apply the theme and font size.
     ApplySettings,
@@ -50,12 +90,23 @@ impl std::fmt::Debug for Effect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::None => f.write_str("None"),
-            Self::Connect { request, config } => f
+            Self::Connect { request, connect } => f
                 .debug_struct("Connect")
                 .field("request", request)
-                .field("config", config)
+                .field("connect", connect)
+                .finish(),
+            Self::CancelConnect(request) => f.debug_tuple("CancelConnect").field(request).finish(),
+            Self::SaveConnections { secrets } => f
+                .debug_struct("SaveConnections")
+                .field("secrets", secrets)
+                .finish(),
+            Self::TrustHostKey { key, retry } => f
+                .debug_struct("TrustHostKey")
+                .field("key", key)
+                .field("retry", retry)
                 .finish(),
             Self::CloseSession(_) => f.write_str("CloseSession(..)"),
+            Self::CloseSessions(sessions) => write!(f, "CloseSessions({})", sessions.len()),
             Self::OpenGrid { tab, .. } => f.debug_struct("OpenGrid").field("tab", tab).finish(),
             Self::Quit => f.write_str("Quit"),
             Self::ApplySettings => f.write_str("ApplySettings"),
@@ -79,8 +130,18 @@ pub struct Workspace {
     sidebar: SidebarModel,
     tabs: TabStrip,
     sessions: HashMap<TabId, Box<dyn Session>>,
-    requests: HashMap<RequestId, usize>,
+    requests: HashMap<RequestId, Purpose>,
     next_request: u64,
+    /// The drivers offered by the connection form.
+    drivers: Vec<DriverId>,
+    /// The dialog on screen.
+    dialog: Option<Dialog>,
+    /// The form hidden behind a host-key prompt.
+    parked: Option<Dialog>,
+    /// Counts the dialogs opened, so a view can tell a new dialog from the same one.
+    dialog_generation: u64,
+    /// A message for the user that no dialog shows (a failed move, a delete of a full group).
+    notice: Option<String>,
     settings: SettingsModel,
     settings_tab: SettingsTab,
     system_appearance: Appearance,
@@ -97,6 +158,7 @@ impl std::fmt::Debug for Workspace {
             .field("tabs", &self.tabs)
             .field("sessions", &self.sessions.len())
             .field("requests", &self.requests)
+            .field("dialog", &self.dialog)
             .field("settings_tab", &self.settings_tab)
             .field("grids", &self.grid_cancels.len())
             .finish_non_exhaustive()
@@ -113,11 +175,89 @@ impl Workspace {
             sessions: HashMap::new(),
             requests: HashMap::new(),
             next_request: 0,
+            drivers: Vec::new(),
+            dialog: None,
+            parked: None,
+            dialog_generation: 0,
+            notice: None,
             settings: SettingsModel::default(),
             settings_tab: SettingsTab::Closed,
             system_appearance: Appearance::Light,
             grid_cancels: HashMap::new(),
             synthetic_rows: SYNTHETIC_ROWS,
+        }
+    }
+
+    /// Sets the drivers the connection form offers (the connector's `driver_ids`).
+    #[must_use]
+    pub fn with_drivers(mut self, drivers: Vec<DriverId>) -> Self {
+        self.drivers = drivers;
+        self
+    }
+
+    /// The drivers the connection form offers.
+    #[must_use]
+    pub fn drivers(&self) -> &[DriverId] {
+        &self.drivers
+    }
+
+    /// The dialog on screen, if any.
+    #[must_use]
+    pub fn dialog(&self) -> Option<&Dialog> {
+        self.dialog.as_ref()
+    }
+
+    /// How many dialogs have been opened so far; it changes whenever a dialog replaces another
+    /// (a form restored after a host-key prompt keeps its number).
+    #[must_use]
+    pub fn dialog_generation(&self) -> u64 {
+        self.dialog_generation
+    }
+
+    /// Takes the pending message for the user, if any.
+    pub fn take_notice(&mut self) -> Option<String> {
+        self.notice.take()
+    }
+
+    /// Whether the connect attempt of this request is still wanted.
+    #[must_use]
+    pub fn is_request_live(&self, request: RequestId) -> bool {
+        self.requests.contains_key(&request)
+    }
+
+    /// Saves the connection list (a no-op when it is not persistent).
+    ///
+    /// # Errors
+    /// The write error as text.
+    pub fn save_connections(&mut self) -> Result<(), String> {
+        self.sidebar.save()
+    }
+
+    /// Saves the connection list, then decides which keychain changes may run.
+    ///
+    /// The keychain is touched only after `connections.toml` was written; when the file was not
+    /// loaded (or there is no config directory) or the write failed, no change is applied, so an
+    /// entry of a connection that is still in the file is never deleted and no orphan is
+    /// created. Returns the operations to apply and the notices to show.
+    pub fn commit_connections(&mut self, secrets: Vec<SecretOp>) -> (Vec<SecretOp>, Vec<String>) {
+        if !self.sidebar.persistent() {
+            if secrets.is_empty() {
+                return (Vec::new(), Vec::new());
+            }
+            return (
+                Vec::new(),
+                vec!["Connections are not saved; the keychain was not changed".to_owned()],
+            );
+        }
+        match self.save_connections() {
+            Ok(()) => (secrets, Vec::new()),
+            Err(message) => {
+                let mut notices = vec![format!("Could not save connections: {message}")];
+                if !secrets.is_empty() {
+                    notices.push("The keychain was not changed".to_owned());
+                }
+                (Vec::new(), notices)
+            }
         }
     }
 
@@ -216,7 +356,14 @@ impl Workspace {
                 Effect::None
             }
             WorkspaceAction::OpenSyntheticGrid => self.open_synthetic_grid(),
-            WorkspaceAction::Quit => Effect::Quit,
+            WorkspaceAction::Quit => {
+                let sessions = self.take_all_sessions();
+                if sessions.is_empty() {
+                    Effect::Quit
+                } else {
+                    Effect::CloseSessions(sessions)
+                }
+            }
             WorkspaceAction::OpenSettings => {
                 self.settings_tab = SettingsTab::Active;
                 Effect::None
@@ -299,17 +446,31 @@ impl Workspace {
     }
 
     fn open_connection(&mut self, index: usize) -> Effect {
-        if !self.sidebar.begin_connect(index) {
+        let Some(id) = self.sidebar.entries().get(index).map(|e| e.id().clone()) else {
             return Effect::None;
-        }
+        };
+        let Some(profile) = self.sidebar.profile(&id) else {
+            return Effect::None;
+        };
+        let connect = match ConnectRequest::from_profile(profile) {
+            Ok(connect) => connect,
+            Err(err) => {
+                self.sidebar.begin_connect(index);
+                self.sidebar.finish_connect(index, Err(err.to_string()));
+                return Effect::None;
+            }
+        };
+        self.sidebar.begin_connect(index);
         self.sidebar.select(index);
+        let request = self.new_request(Purpose::Open(id));
+        Effect::Connect { request, connect }
+    }
+
+    fn new_request(&mut self, purpose: Purpose) -> RequestId {
         let request = RequestId(self.next_request);
         self.next_request += 1;
-        self.requests.insert(request, index);
-        Effect::Connect {
-            request,
-            config: self.sidebar.entries()[index].config().clone(),
-        }
+        self.requests.insert(request, purpose);
+        request
     }
 
     fn close_tab(&mut self, id: TabId) -> Effect {
@@ -330,29 +491,147 @@ impl Workspace {
 
     /// Reports the outcome of a connect attempt.
     ///
-    /// On success a query tab bound to the connection is opened, activated and returned; the
-    /// session is stored under it. On failure the sidebar entry shows the error. An unknown
-    /// request drops the session and returns `None`.
+    /// An opened connection gets a query tab, activated, with the session stored under it. A
+    /// test closes its session at once and shows the result in the form. A host key the user has
+    /// not trusted yet opens the trust dialog; any other failure is shown on the sidebar entry or
+    /// in the form. A result nobody waits for any more closes its session.
     pub fn connect_finished(
         &mut self,
         request: RequestId,
-        result: Result<Box<dyn Session>, String>,
-    ) -> Option<TabId> {
-        let index = self.requests.remove(&request)?;
+        result: Result<Box<dyn Session>, ConnectFailure>,
+    ) -> Effect {
+        let Some(purpose) = self.requests.remove(&request) else {
+            return match result {
+                Ok(session) => Effect::CloseSession(session),
+                Err(_) => Effect::None,
+            };
+        };
+        match purpose {
+            Purpose::Open(id) => self.open_finished(&id, result),
+            Purpose::Test => self.test_finished(request, result),
+        }
+    }
+
+    fn open_finished(
+        &mut self,
+        id: &ConnectionId,
+        result: Result<Box<dyn Session>, ConnectFailure>,
+    ) -> Effect {
+        let Some(index) = self.sidebar.index_of(id) else {
+            // The connection was deleted while connecting.
+            return match result {
+                Ok(session) => Effect::CloseSession(session),
+                Err(_) => Effect::None,
+            };
+        };
         match result {
             Ok(session) => {
                 self.sidebar.finish_connect(index, Ok(()));
                 let connection = tab_connection(self.sidebar.entries()[index].config());
-                let id = self.tabs.open(connection, TabKind::Query);
-                self.sessions.insert(id, session);
+                let tab = self.tabs.open(connection, TabKind::Query);
+                self.sessions.insert(tab, session);
                 if self.settings_tab == SettingsTab::Active {
                     self.settings_tab = SettingsTab::Background;
                 }
-                Some(id)
             }
-            Err(message) => {
-                self.sidebar.finish_connect(index, Err(message));
-                None
+            Err(failure) => {
+                self.sidebar.finish_connect(index, Err(failure.to_string()));
+                if let ConnectFailure::UnknownHostKey(key) = failure {
+                    self.ask_host_key(key, Purpose::Open(id.clone()));
+                }
+            }
+        }
+        Effect::None
+    }
+
+    fn test_finished(
+        &mut self,
+        request: RequestId,
+        result: Result<Box<dyn Session>, ConnectFailure>,
+    ) -> Effect {
+        let running = |dialog: &Option<Dialog>| {
+            matches!(
+                dialog,
+                Some(Dialog::Form(form)) if form.test == TestStatus::Running(request)
+            )
+        };
+        // The form may be on screen or parked behind the host-key prompt.
+        let on_screen = running(&self.dialog);
+        if !on_screen && !running(&self.parked) {
+            return match result {
+                Ok(session) => Effect::CloseSession(session),
+                Err(_) => Effect::None,
+            };
+        }
+        let slot = if on_screen {
+            &mut self.dialog
+        } else {
+            &mut self.parked
+        };
+        let Some(Dialog::Form(form)) = slot else {
+            return Effect::None;
+        };
+        match result {
+            Ok(session) => {
+                form.test = TestStatus::Ok;
+                Effect::CloseSession(session)
+            }
+            Err(ConnectFailure::UnknownHostKey(key)) => {
+                form.test = TestStatus::Idle;
+                if on_screen {
+                    self.ask_host_key(key, Purpose::Test);
+                } else {
+                    // Another prompt is already showing; the user can press Test again.
+                    self.notice = Some(
+                        "SSH host key needs confirmation; press Test again after the current prompt"
+                            .to_owned(),
+                    );
+                }
+                Effect::None
+            }
+            Err(failure) => {
+                form.test = TestStatus::Failed(failure.to_string());
+                Effect::None
+            }
+        }
+    }
+
+    /// Shows the trust dialog; a form on screen waits behind it. Any other dialog on screen
+    /// (a confirmation, a name or a move dialog) or an earlier prompt is kept: the new prompt is
+    /// not shown over it, and the user gets a notice to try again.
+    fn ask_host_key(&mut self, key: HostKeyPrompt, retry: Purpose) {
+        match &self.dialog {
+            None => {}
+            Some(Dialog::Form(_)) => self.parked = self.dialog.take(),
+            Some(_) => {
+                self.notice = Some(
+                    "SSH host key needs confirmation; close this dialog and connect again"
+                        .to_owned(),
+                );
+                return;
+            }
+        }
+        self.dialog = Some(Dialog::TrustHostKey { key, retry });
+    }
+
+    /// Reports whether the host key was added to `known_hosts`. On success the attempt that
+    /// found the key unknown runs again.
+    pub fn trust_finished(&mut self, retry: Purpose, result: Result<(), ConnectFailure>) -> Effect {
+        match (retry, result) {
+            (Purpose::Open(id), Ok(())) => match self.sidebar.index_of(&id) {
+                Some(index) => self.open_connection(index),
+                None => Effect::None,
+            },
+            (Purpose::Test, Ok(())) => self.dispatch_connection(ConnectionAction::Test),
+            (Purpose::Open(_), Err(failure)) => {
+                self.notice = Some(failure.to_string());
+                Effect::None
+            }
+            (Purpose::Test, Err(failure)) => {
+                if let Some(Dialog::Form(form)) = &mut self.dialog {
+                    form.test = TestStatus::Failed(failure.to_string());
+                }
+                Effect::None
             }
         }
     }
@@ -367,6 +646,373 @@ impl Workspace {
     pub fn take_session(&mut self, id: TabId) -> Option<Box<dyn Session>> {
         self.sessions.remove(&id)
     }
+
+    /// Takes every open session out (to close them on quit).
+    pub fn take_all_sessions(&mut self) -> Vec<Box<dyn Session>> {
+        self.sessions.drain().map(|(_, session)| session).collect()
+    }
+
+    // ---- connection manager ----
+
+    /// Applies a connection-manager action and returns what the view must do next.
+    pub fn dispatch_connection(&mut self, action: ConnectionAction) -> Effect {
+        use ConnectionAction as A;
+        match action {
+            A::New => {
+                let group = self.default_group();
+                let form = ConnectionForm::new_connection(self.drivers.first().cloned(), group);
+                self.open_dialog(Dialog::Form(form))
+            }
+            A::Edit(id) => match self.sidebar.profile(&id) {
+                Some(profile) => {
+                    let form = ConnectionForm::edit(profile);
+                    self.open_dialog(Dialog::Form(form))
+                }
+                None => Effect::None,
+            },
+            A::Delete(id) => {
+                let Some(name) = self.sidebar.profile(&id).map(|p| p.spec().name.clone()) else {
+                    return Effect::None;
+                };
+                self.open_dialog(Dialog::ConfirmDelete { id, name })
+            }
+            A::ConfirmDelete => self.confirm_delete(),
+            A::Test => self.start_test(),
+            A::CancelTest => self.cancel_test(),
+            A::Save => self.save_form(),
+            A::Cancel => self.cancel_dialog(),
+            A::SetText { field, text } => self.edit_form(|f| f.set_text(field, text)),
+            A::SetDriver(driver) => self.edit_form(|f| f.set_driver(driver)),
+            A::SetEnvironment(env) => self.edit_form(|f| f.set_environment(env)),
+            A::SetGroup(group) => self.edit_form(|f| f.set_group(group)),
+            A::SetTlsMode(mode) => self.edit_form(|f| f.set_tls_mode(mode)),
+            A::SetSshEnabled(on) => self.edit_form(|f| f.set_ssh_enabled(on)),
+            A::SetSshAuth(auth) => self.edit_form(|f| f.set_ssh_auth(auth)),
+            A::ClearSecret(slot) => self.edit_form(|f| f.clear_secret(slot)),
+            A::OpenMoveTo(id) => {
+                if self.sidebar.profile(&id).is_none() {
+                    return Effect::None;
+                }
+                self.open_dialog(Dialog::MoveTo { id })
+            }
+            A::MoveConnection { id, to, index } => self.move_connection(&id, to.as_ref(), index),
+            A::NewGroup { parent } => self.open_dialog(Dialog::GroupName {
+                purpose: GroupPurpose::New { parent },
+                text: String::new(),
+                error: None,
+            }),
+            A::RenameGroup(id) => {
+                let Some(name) = self.sidebar.store().group(&id).map(|g| g.name().to_owned())
+                else {
+                    return Effect::None;
+                };
+                self.open_dialog(Dialog::GroupName {
+                    purpose: GroupPurpose::Rename(id),
+                    text: name,
+                    error: None,
+                })
+            }
+            A::SetGroupName(typed) => {
+                if let Some(Dialog::GroupName { text, error, .. }) = &mut self.dialog {
+                    *text = typed;
+                    *error = None;
+                }
+                Effect::None
+            }
+            A::SubmitGroupName => self.submit_group_name(),
+            A::DeleteGroup(id) => match self.sidebar.delete_group(&id) {
+                Ok(_) => Effect::SaveConnections {
+                    secrets: Vec::new(),
+                },
+                Err(err) => {
+                    self.notice = Some(err.to_string());
+                    Effect::None
+                }
+            },
+            A::ToggleGroup(id) => {
+                self.sidebar.toggle_group(&id);
+                Effect::None
+            }
+            A::SelectGroup(id) => {
+                self.sidebar.select_group(&id);
+                Effect::None
+            }
+            A::TrustHostKey => self.trust_host_key(),
+            A::RejectHostKey => self.reject_host_key(),
+        }
+    }
+
+    /// The group a new connection or group starts in: the selected group, else the group of the
+    /// selected connection.
+    fn default_group(&self) -> Option<sqler_config::GroupId> {
+        if let Some(group) = self.sidebar.selected_group() {
+            return Some(group.clone());
+        }
+        let id = self.sidebar.selected_id()?;
+        self.sidebar.profile(id)?.group().cloned()
+    }
+
+    /// Cancels a running test of the form on screen.
+    fn stop_running_test(&mut self) -> Effect {
+        if let Some(Dialog::Form(form)) = &mut self.dialog
+            && let TestStatus::Running(request) = form.test
+        {
+            form.test = TestStatus::Idle;
+            self.requests.remove(&request);
+            return Effect::CancelConnect(request);
+        }
+        Effect::None
+    }
+
+    /// Shows a dialog in place of the current one.
+    fn open_dialog(&mut self, dialog: Dialog) -> Effect {
+        let effect = self.stop_running_test();
+        self.parked = None;
+        self.dialog_generation += 1;
+        self.dialog = Some(dialog);
+        effect
+    }
+
+    fn edit_form(&mut self, change: impl FnOnce(&mut ConnectionForm)) -> Effect {
+        if let Some(Dialog::Form(form)) = &mut self.dialog {
+            change(form);
+        }
+        Effect::None
+    }
+
+    fn cancel_dialog(&mut self) -> Effect {
+        if matches!(self.dialog, Some(Dialog::TrustHostKey { .. })) {
+            return self.reject_host_key();
+        }
+        let effect = self.stop_running_test();
+        self.dialog = None;
+        self.parked = None;
+        effect
+    }
+
+    fn start_test(&mut self) -> Effect {
+        if !matches!(self.dialog, Some(Dialog::Form(_))) {
+            let Some(id) = self.sidebar.selected_id().cloned() else {
+                return Effect::None;
+            };
+            let Some(profile) = self.sidebar.profile(&id) else {
+                return Effect::None;
+            };
+            let form = ConnectionForm::edit(profile);
+            self.open_dialog(Dialog::Form(form));
+        }
+        let Some(Dialog::Form(form)) = &mut self.dialog else {
+            return Effect::None;
+        };
+        if matches!(form.test, TestStatus::Running(_)) {
+            return Effect::None;
+        }
+        match form.connect_request() {
+            Err(errors) => {
+                form.set_errors(errors);
+                Effect::None
+            }
+            Ok(connect) => {
+                form.set_errors(Vec::new());
+                let request = RequestId(self.next_request);
+                self.next_request += 1;
+                form.test = TestStatus::Running(request);
+                self.requests.insert(request, Purpose::Test);
+                Effect::Connect { request, connect }
+            }
+        }
+    }
+
+    fn cancel_test(&mut self) -> Effect {
+        self.stop_running_test()
+    }
+
+    fn save_form(&mut self) -> Effect {
+        let Some(Dialog::Form(form)) = &mut self.dialog else {
+            return Effect::None;
+        };
+        let valid = match form.validate() {
+            Ok(valid) => valid,
+            Err(errors) => {
+                form.set_errors(errors);
+                return Effect::None;
+            }
+        };
+        let old = form.original().cloned();
+        let mode = form.mode().clone();
+        let saved = match &mode {
+            FormMode::New => self
+                .sidebar
+                .add_connection(valid.spec.clone(), valid.group.as_ref()),
+            FormMode::Edit(id) => self.update_existing(id, &valid, old.as_ref()),
+        };
+        let id = match saved {
+            Ok(id) => id,
+            Err(err) => {
+                if let Some(Dialog::Form(form)) = &mut self.dialog {
+                    form.set_errors(vec![FieldError::from_store(&err)]);
+                }
+                return Effect::None;
+            }
+        };
+        let secrets = match self.sidebar.profile(&id) {
+            Some(new) => secret_ops(old.as_ref(), new, &valid.db_password, &valid.ssh_secret),
+            None => Vec::new(),
+        };
+        self.sidebar.select_connection(&id);
+        let cancel = self.stop_running_test();
+        self.dialog = None;
+        self.parked = None;
+        drop(cancel);
+        Effect::SaveConnections { secrets }
+    }
+
+    fn update_existing(
+        &mut self,
+        id: &ConnectionId,
+        valid: &crate::connections::ValidForm,
+        old: Option<&ConnectionProfile>,
+    ) -> Result<ConnectionId, sqler_config::StoreError> {
+        self.sidebar.update_connection(id, valid.spec.clone())?;
+        let moved = old.is_none_or(|p| p.group() != valid.group.as_ref());
+        if moved {
+            self.sidebar
+                .move_connection(id, valid.group.as_ref(), usize::MAX)?;
+        }
+        Ok(id.clone())
+    }
+
+    fn confirm_delete(&mut self) -> Effect {
+        let Some(Dialog::ConfirmDelete { id, .. }) = &self.dialog else {
+            return Effect::None;
+        };
+        let id = id.clone();
+        self.dialog = None;
+        match self.sidebar.delete_connection(&id) {
+            Ok(profile) => {
+                let secrets = profile
+                    .secret_refs()
+                    .iter()
+                    .filter_map(|s| from_profile_secret(s).ok())
+                    .map(SecretOp::Delete)
+                    .collect();
+                Effect::SaveConnections { secrets }
+            }
+            Err(err) => {
+                self.notice = Some(err.to_string());
+                Effect::None
+            }
+        }
+    }
+
+    fn move_connection(
+        &mut self,
+        id: &ConnectionId,
+        to: Option<&sqler_config::GroupId>,
+        index: usize,
+    ) -> Effect {
+        if matches!(self.dialog, Some(Dialog::MoveTo { .. })) {
+            self.dialog = None;
+        }
+        match self.sidebar.move_connection(id, to, index) {
+            Ok(()) => Effect::SaveConnections {
+                secrets: Vec::new(),
+            },
+            Err(err) => {
+                self.notice = Some(err.to_string());
+                Effect::None
+            }
+        }
+    }
+
+    fn submit_group_name(&mut self) -> Effect {
+        let Some(Dialog::GroupName { purpose, text, .. }) = &self.dialog else {
+            return Effect::None;
+        };
+        let result = match purpose {
+            GroupPurpose::New { parent } => {
+                self.sidebar.add_group(text, parent.as_ref()).map(|_| ())
+            }
+            GroupPurpose::Rename(id) => self.sidebar.rename_group(id, text),
+        };
+        match result {
+            Ok(()) => {
+                self.dialog = None;
+                Effect::SaveConnections {
+                    secrets: Vec::new(),
+                }
+            }
+            Err(err) => {
+                if let Some(Dialog::GroupName { error, .. }) = &mut self.dialog {
+                    *error = Some(err.to_string());
+                }
+                Effect::None
+            }
+        }
+    }
+
+    fn trust_host_key(&mut self) -> Effect {
+        let Some(Dialog::TrustHostKey { .. }) = &self.dialog else {
+            return Effect::None;
+        };
+        let Some(Dialog::TrustHostKey { key, retry }) = self.dialog.take() else {
+            return Effect::None;
+        };
+        self.dialog = self.parked.take();
+        Effect::TrustHostKey { key, retry }
+    }
+
+    fn reject_host_key(&mut self) -> Effect {
+        let Some(Dialog::TrustHostKey { retry, .. }) = &self.dialog else {
+            return Effect::None;
+        };
+        let for_test = *retry == Purpose::Test;
+        self.dialog = self.parked.take();
+        // Only the test that asked is marked; a form with a test of its own (running, or already
+        // finished while parked) keeps that state.
+        if let Some(Dialog::Form(form)) = &mut self.dialog
+            && for_test
+            && form.test == TestStatus::Idle
+        {
+            form.test = TestStatus::Failed("the SSH host key was not trusted".to_owned());
+        }
+        Effect::None
+    }
+}
+
+/// The keychain changes that bring the store in line with a saved profile: entries of the old
+/// profile that the new one no longer references are deleted, typed values are stored.
+fn secret_ops(
+    old: Option<&ConnectionProfile>,
+    new: &ConnectionProfile,
+    db: &SecretField,
+    ssh: &SecretField,
+) -> Vec<SecretOp> {
+    let refs = |profile: &ConnectionProfile| -> Vec<SecretRef> {
+        profile
+            .secret_refs()
+            .iter()
+            .filter_map(|s| from_profile_secret(s).ok())
+            .collect()
+    };
+    let new_refs = refs(new);
+    let mut ops: Vec<SecretOp> = old
+        .map(refs)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| !new_refs.contains(r))
+        .map(SecretOp::Delete)
+        .collect();
+    let typed = |secret: Option<sqler_config::ProfileSecret>, plan: &SecretField| {
+        let reference = from_profile_secret(&secret?).ok()?;
+        match plan {
+            SecretField::Set(value) => Some(SecretOp::Set(reference, value.clone())),
+            _ => None,
+        }
+    };
+    ops.extend(typed(new.password_ref(), db));
+    ops.extend(typed(new.ssh_secret_ref(), ssh));
+    ops
 }
 
 /// The tab header data of a connection.
@@ -384,9 +1030,10 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use super::*;
+    use crate::connections::{FormField, SecretSource, SshAuthKind};
     use crate::sidebar::ConnectionStatus;
     use crate::workspace::testing::FakeSession;
-    use sqler_config::ThemePreference;
+    use sqler_config::{SecretKind, ThemePreference};
     use sqler_driver_api::sqler_core::{DriverId, Environment};
 
     fn ws() -> Workspace {
@@ -397,6 +1044,16 @@ mod tests {
                 .with_color("#00ff00"),
             ConnectionConfig::new("prod", driver, ":memory:").with_environment(Environment::Prod),
         ]))
+    }
+
+    /// Reports a successful connect and returns the tab it opened.
+    fn finish_ok(w: &mut Workspace, request: RequestId) -> TabId {
+        let (session, _) = FakeSession::boxed();
+        assert!(matches!(
+            w.connect_finished(request, Ok(session)),
+            Effect::None
+        ));
+        w.tabs().active().map(crate::tabs::Tab::id).unwrap()
     }
 
     fn connect(ws: &mut Workspace, index: usize) -> RequestId {
@@ -421,17 +1078,16 @@ mod tests {
     #[test]
     fn open_then_ok_opens_active_tab_with_session() {
         let mut w = ws();
-        let Effect::Connect { request, config } = w.dispatch(WorkspaceAction::OpenConnection(0))
+        let Effect::Connect { request, connect } = w.dispatch(WorkspaceAction::OpenConnection(0))
         else {
             panic!("expected Connect");
         };
-        assert_eq!(config.name, "dev");
+        assert_eq!(connect.spec.name, "dev");
         assert_eq!(
             *w.sidebar().entries()[0].status(),
             ConnectionStatus::Connecting
         );
-        let (session, _) = FakeSession::boxed();
-        let tab = w.connect_finished(request, Ok(session)).unwrap();
+        let tab = finish_ok(&mut w, request);
         assert_eq!(w.tabs().active().map(crate::tabs::Tab::id), Some(tab));
         assert!(w.has_session(tab));
         assert_eq!(*w.sidebar().entries()[0].status(), ConnectionStatus::Idle);
@@ -444,11 +1100,15 @@ mod tests {
     fn err_marks_failed_and_opens_no_tab() {
         let mut w = ws();
         let request = connect(&mut w, 1);
-        assert!(w.connect_finished(request, Err("nope".into())).is_none());
+        let failure = ConnectFailure::Tunnel("nope".into());
+        assert!(matches!(
+            w.connect_finished(request, Err(failure)),
+            Effect::None
+        ));
         assert!(w.tabs().is_empty());
         assert_eq!(
             *w.sidebar().entries()[1].status(),
-            ConnectionStatus::Failed("nope".into())
+            ConnectionStatus::Failed("SSH tunnel failed: nope".into())
         );
     }
 
@@ -456,11 +1116,13 @@ mod tests {
     fn unknown_request_drops_session() {
         let mut w = ws();
         let request = connect(&mut w, 0);
+        finish_ok(&mut w, request);
+        // The same request id again is unknown now: its session is closed, no tab opens.
         let (session, _) = FakeSession::boxed();
-        assert!(w.connect_finished(request, Ok(session)).is_some());
-        // The same request id again is unknown now.
-        let (session, _) = FakeSession::boxed();
-        assert!(w.connect_finished(request, Ok(session)).is_none());
+        assert!(matches!(
+            w.connect_finished(request, Ok(session)),
+            Effect::CloseSession(_)
+        ));
         assert_eq!(w.tabs().len(), 1);
     }
 
@@ -469,8 +1131,7 @@ mod tests {
         let mut w = ws();
         for _ in 0..2 {
             let request = connect(&mut w, 0);
-            let (session, _) = FakeSession::boxed();
-            w.connect_finished(request, Ok(session)).unwrap();
+            finish_ok(&mut w, request);
         }
         let titles: Vec<_> = w.tabs().iter().map(crate::tabs::Tab::title).collect();
         assert_eq!(titles, ["dev", "dev (2)"]);
@@ -481,7 +1142,11 @@ mod tests {
         let mut w = ws();
         let request = connect(&mut w, 0);
         let (session, closed) = FakeSession::boxed();
-        let tab = w.connect_finished(request, Ok(session)).unwrap();
+        assert!(matches!(
+            w.connect_finished(request, Ok(session)),
+            Effect::None
+        ));
+        let tab = w.tabs().active().map(crate::tabs::Tab::id).unwrap();
         let Effect::CloseSession(session) = w.dispatch(WorkspaceAction::CloseTab(tab)) else {
             panic!("expected CloseSession");
         };
@@ -501,8 +1166,7 @@ mod tests {
         let mut tabs = Vec::new();
         for i in [0, 1, 0] {
             let request = connect(&mut w, i);
-            let (session, _) = FakeSession::boxed();
-            tabs.push(w.connect_finished(request, Ok(session)).unwrap());
+            tabs.push(finish_ok(&mut w, request));
         }
         w.dispatch(WorkspaceAction::ActivateTab(tabs[0]));
         w.dispatch(WorkspaceAction::NextTab);
@@ -541,8 +1205,7 @@ mod tests {
         (0..n)
             .map(|_| {
                 let request = connect(w, 0);
-                let (session, _) = FakeSession::boxed();
-                w.connect_finished(request, Ok(session)).unwrap()
+                finish_ok(w, request)
             })
             .collect()
     }
@@ -596,8 +1259,7 @@ mod tests {
         assert!(w.settings_tab_open() && !w.settings_tab_active());
         w.dispatch(WorkspaceAction::OpenSettings);
         let request = connect(&mut w, 1);
-        let (session, _) = FakeSession::boxed();
-        let tab = w.connect_finished(request, Ok(session)).unwrap();
+        let tab = finish_ok(&mut w, request);
         assert!(w.settings_tab_open() && !w.settings_tab_active());
         assert_eq!(active(&w), Some(tab));
     }
@@ -744,10 +1406,10 @@ mod tests {
     #[test]
     fn quit_and_take_session() {
         let mut w = ws();
+        // No session open: quit right away.
         assert!(matches!(w.dispatch(WorkspaceAction::Quit), Effect::Quit));
         let request = connect(&mut w, 0);
-        let (session, _) = FakeSession::boxed();
-        let tab = w.connect_finished(request, Ok(session)).unwrap();
+        let tab = finish_ok(&mut w, request);
         assert!(w.take_session(tab).is_some());
         assert!(w.take_session(tab).is_none());
     }
@@ -774,8 +1436,7 @@ mod tests {
         let mut w = ws();
         w.set_synthetic_rows(1_000);
         let request = connect(&mut w, 1);
-        let (session, _) = FakeSession::boxed();
-        let query = w.connect_finished(request, Ok(session)).unwrap();
+        let query = finish_ok(&mut w, request);
         let (tab, mut grid) = open_grid(&mut w);
         assert_ne!(tab, query);
         assert_eq!(w.tabs().len(), 2);
@@ -838,8 +1499,7 @@ mod tests {
         let mut w = ws();
         w.set_synthetic_rows(1_000);
         let request = connect(&mut w, 0);
-        let (session, _) = FakeSession::boxed();
-        let query = w.connect_finished(request, Ok(session)).unwrap();
+        let query = finish_ok(&mut w, request);
         let (grid_tab, _grid) = open_grid(&mut w);
         let flag = w.grid_cancels.get(&grid_tab).unwrap().clone();
         assert!(matches!(
@@ -847,5 +1507,829 @@ mod tests {
             Effect::CloseSession(_)
         ));
         assert!(!flag.is_cancelled());
+    }
+
+    // ---- connection manager ----
+
+    use ConnectionAction as A;
+
+    fn manager() -> Workspace {
+        Workspace::new(SidebarModel::default())
+            .with_drivers(vec![DriverId::new("postgres").unwrap()])
+    }
+
+    fn text(field: FormField, value: &str) -> ConnectionAction {
+        A::SetText {
+            field,
+            text: value.to_owned(),
+        }
+    }
+
+    fn fill(w: &mut Workspace, name: &str) {
+        w.dispatch_connection(text(FormField::Name, name));
+        w.dispatch_connection(text(
+            FormField::Target,
+            "postgres://db.example:5432/app?user=me",
+        ));
+    }
+
+    fn form(w: &Workspace) -> &ConnectionForm {
+        match w.dialog() {
+            Some(Dialog::Form(form)) => form,
+            other => panic!("expected the form, got {other:?}"),
+        }
+    }
+
+    fn saved_secrets(effect: Effect) -> Vec<SecretOp> {
+        match effect {
+            Effect::SaveConnections { secrets } => secrets,
+            other => panic!("expected SaveConnections, got {other:?}"),
+        }
+    }
+
+    fn ref_text(op: &SecretOp) -> String {
+        match op {
+            SecretOp::Set(r, _) => format!("set {r}"),
+            SecretOp::Delete(r) => format!("delete {r}"),
+        }
+    }
+
+    fn describe(ops: &[SecretOp]) -> Vec<String> {
+        ops.iter().map(ref_text).collect()
+    }
+
+    fn id_of(w: &Workspace, name: &str) -> ConnectionId {
+        w.sidebar()
+            .entries()
+            .iter()
+            .find(|e| e.config().name == name)
+            .map(|e| e.id().clone())
+            .unwrap()
+    }
+
+    #[test]
+    fn with_drivers_feeds_the_new_form() {
+        let mut w = manager();
+        assert_eq!(w.drivers().len(), 1);
+        assert!(w.dialog().is_none());
+        assert!(matches!(w.dispatch_connection(A::New), Effect::None));
+        assert_eq!(form(&w).driver().map(DriverId::as_str), Some("postgres"));
+        assert!(matches!(form(&w).mode(), FormMode::New));
+    }
+
+    #[test]
+    fn new_connection_saves_and_selects_it() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        let secrets = saved_secrets(w.dispatch_connection(A::Save));
+        assert!(secrets.is_empty());
+        assert!(w.dialog().is_none());
+        assert_eq!(w.sidebar().entries().len(), 1);
+        assert_eq!(w.sidebar().selected(), Some(0));
+        assert_eq!(w.save_connections(), Ok(()));
+    }
+
+    #[test]
+    fn new_connection_with_password_writes_the_keychain_not_the_target() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        w.dispatch_connection(text(FormField::DbPassword, "hunter2"));
+        let secrets = saved_secrets(w.dispatch_connection(A::Save));
+        assert_eq!(describe(&secrets), ["set main:db-password"]);
+        let SecretOp::Set(_, secret) = &secrets[0] else {
+            panic!("expected a set");
+        };
+        assert_eq!(secret.expose(), "hunter2");
+        let profile = w.sidebar().profile(&id_of(&w, "Main")).unwrap();
+        assert!(profile.spec().password_in_keychain);
+        assert!(!profile.spec().target.contains("hunter2"));
+        assert!(!format!("{secrets:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn invalid_form_keeps_the_dialog_and_shows_errors() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        assert!(matches!(w.dispatch_connection(A::Save), Effect::None));
+        assert!(form(&w).error_for(FormField::Name).is_some());
+        assert!(w.sidebar().entries().is_empty());
+    }
+
+    #[test]
+    fn duplicate_name_is_reported_on_the_form() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        w.dispatch_connection(A::Save);
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        assert!(matches!(w.dispatch_connection(A::Save), Effect::None));
+        assert!(form(&w).error_for(FormField::Name).is_some());
+        assert_eq!(w.sidebar().entries().len(), 1);
+    }
+
+    fn saved_with_secrets(w: &mut Workspace) -> ConnectionId {
+        w.dispatch_connection(A::New);
+        fill(w, "Main");
+        w.dispatch_connection(text(FormField::DbPassword, "pw"));
+        w.dispatch_connection(A::SetSshEnabled(true));
+        w.dispatch_connection(text(FormField::SshHost, "bastion"));
+        w.dispatch_connection(text(FormField::SshUser, "me"));
+        w.dispatch_connection(text(FormField::SshSecret, "sshpw"));
+        let secrets = saved_secrets(w.dispatch_connection(A::Save));
+        assert_eq!(
+            describe(&secrets),
+            ["set main:db-password", "set main:ssh-password"]
+        );
+        id_of(w, "Main")
+    }
+
+    #[test]
+    fn edit_keeps_stored_secrets_untouched() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        w.dispatch_connection(A::Edit(id.clone()));
+        assert!(matches!(form(&w).mode(), FormMode::Edit(x) if *x == id));
+        w.dispatch_connection(text(FormField::Name, "Renamed"));
+        let secrets = saved_secrets(w.dispatch_connection(A::Save));
+        assert!(secrets.is_empty());
+        let profile = w.sidebar().profile(&id).unwrap();
+        assert_eq!(profile.spec().name, "Renamed");
+        assert_eq!(profile.secret_refs().len(), 2);
+    }
+
+    #[test]
+    fn edit_replaces_and_clears_secrets() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        w.dispatch_connection(A::Edit(id.clone()));
+        w.dispatch_connection(text(FormField::DbPassword, "new"));
+        w.dispatch_connection(A::ClearSecret(crate::connections::SecretSlot::Ssh));
+        w.dispatch_connection(A::SetSshAuth(SshAuthKind::Agent));
+        let secrets = saved_secrets(w.dispatch_connection(A::Save));
+        assert_eq!(
+            describe(&secrets),
+            ["delete main:ssh-password", "set main:db-password"]
+        );
+    }
+
+    #[test]
+    fn edit_clearing_the_tunnel_deletes_its_secret() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        w.dispatch_connection(A::Edit(id));
+        w.dispatch_connection(A::SetSshEnabled(false));
+        let secrets = saved_secrets(w.dispatch_connection(A::Save));
+        assert_eq!(describe(&secrets), ["delete main:ssh-password"]);
+    }
+
+    #[test]
+    fn edit_switching_to_a_key_replaces_the_password_by_a_passphrase() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        w.dispatch_connection(A::Edit(id));
+        w.dispatch_connection(A::SetSshAuth(SshAuthKind::KeyFile));
+        w.dispatch_connection(text(FormField::SshKeyPath, "/k"));
+        w.dispatch_connection(text(FormField::SshSecret, "phrase"));
+        let secrets = saved_secrets(w.dispatch_connection(A::Save));
+        assert_eq!(
+            describe(&secrets),
+            ["delete main:ssh-password", "set main:ssh-key-passphrase"]
+        );
+    }
+
+    #[test]
+    fn edit_can_change_the_group() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        w.dispatch_connection(A::NewGroup { parent: None });
+        w.dispatch_connection(A::SetGroupName("prod".into()));
+        w.dispatch_connection(A::SubmitGroupName);
+        let group = w.sidebar().group_options()[0].id.clone();
+        w.dispatch_connection(A::Edit(id.clone()));
+        w.dispatch_connection(A::SetGroup(Some(group.clone())));
+        saved_secrets(w.dispatch_connection(A::Save));
+        assert_eq!(w.sidebar().profile(&id).unwrap().group(), Some(&group));
+    }
+
+    #[test]
+    fn cancel_closes_the_dialog_without_saving() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        assert!(matches!(w.dispatch_connection(A::Cancel), Effect::None));
+        assert!(w.dialog().is_none());
+        assert!(w.sidebar().entries().is_empty());
+    }
+
+    #[test]
+    fn delete_asks_first_and_removes_every_keychain_entry() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        w.dispatch_connection(A::Delete(id.clone()));
+        let Some(Dialog::ConfirmDelete { name, .. }) = w.dialog() else {
+            panic!("expected the confirmation");
+        };
+        assert_eq!(name, "Main");
+        // Nothing is deleted before the confirmation.
+        assert_eq!(w.sidebar().entries().len(), 1);
+        let secrets = saved_secrets(w.dispatch_connection(A::ConfirmDelete));
+        assert_eq!(
+            describe(&secrets),
+            ["delete main:db-password", "delete main:ssh-password"]
+        );
+        assert!(w.sidebar().entries().is_empty());
+        assert!(w.dialog().is_none());
+    }
+
+    #[test]
+    fn declining_a_delete_changes_nothing() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        w.dispatch_connection(A::Delete(id));
+        assert!(matches!(w.dispatch_connection(A::Cancel), Effect::None));
+        assert_eq!(w.sidebar().entries().len(), 1);
+        // Confirming without a dialog does nothing either.
+        assert!(matches!(
+            w.dispatch_connection(A::ConfirmDelete),
+            Effect::None
+        ));
+        assert_eq!(w.sidebar().entries().len(), 1);
+    }
+
+    #[test]
+    fn group_create_rename_delete() {
+        let mut w = manager();
+        w.dispatch_connection(A::NewGroup { parent: None });
+        w.dispatch_connection(A::SetGroupName("  ".into()));
+        // An empty name is refused inside the dialog.
+        assert!(matches!(
+            w.dispatch_connection(A::SubmitGroupName),
+            Effect::None
+        ));
+        let Some(Dialog::GroupName { error, .. }) = w.dialog() else {
+            panic!("expected the group dialog");
+        };
+        assert!(error.is_some());
+        w.dispatch_connection(A::SetGroupName("Prod".into()));
+        saved_secrets(w.dispatch_connection(A::SubmitGroupName));
+        assert!(w.dialog().is_none());
+        let group = w.sidebar().group_options()[0].id.clone();
+        assert_eq!(w.sidebar().selected_group(), Some(&group));
+        w.dispatch_connection(A::RenameGroup(group.clone()));
+        let Some(Dialog::GroupName { text, .. }) = w.dialog() else {
+            panic!("expected the group dialog");
+        };
+        assert_eq!(text, "Prod");
+        w.dispatch_connection(A::SetGroupName("Production".into()));
+        saved_secrets(w.dispatch_connection(A::SubmitGroupName));
+        assert_eq!(w.sidebar().group_options()[0].path, "Production");
+        saved_secrets(w.dispatch_connection(A::DeleteGroup(group)));
+        assert_eq!(w.sidebar().group_options().len(), 0);
+    }
+
+    #[test]
+    fn nested_group_and_new_connection_start_in_the_selected_group() {
+        let mut w = manager();
+        w.dispatch_connection(A::NewGroup { parent: None });
+        w.dispatch_connection(A::SetGroupName("a".into()));
+        w.dispatch_connection(A::SubmitGroupName);
+        let a = w.sidebar().group_options()[0].id.clone();
+        w.dispatch_connection(A::NewGroup {
+            parent: Some(a.clone()),
+        });
+        w.dispatch_connection(A::SetGroupName("b".into()));
+        w.dispatch_connection(A::SubmitGroupName);
+        assert_eq!(w.sidebar().group_options()[1].path, "a / b");
+        w.dispatch_connection(A::New);
+        let b = w.sidebar().group_options()[1].id.clone();
+        assert_eq!(form(&w).group(), Some(&b));
+    }
+
+    #[test]
+    fn deleting_a_full_group_is_refused_with_a_notice() {
+        let mut w = manager();
+        w.dispatch_connection(A::NewGroup { parent: None });
+        w.dispatch_connection(A::SetGroupName("a".into()));
+        w.dispatch_connection(A::SubmitGroupName);
+        let a = w.sidebar().group_options()[0].id.clone();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        w.dispatch_connection(A::Save);
+        assert!(matches!(
+            w.dispatch_connection(A::DeleteGroup(a)),
+            Effect::None
+        ));
+        assert!(w.take_notice().unwrap().contains("not empty"));
+        assert!(w.take_notice().is_none());
+    }
+
+    #[test]
+    fn move_connection_by_dialog_and_by_drag() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        w.dispatch_connection(A::NewGroup { parent: None });
+        w.dispatch_connection(A::SetGroupName("g".into()));
+        w.dispatch_connection(A::SubmitGroupName);
+        let g = w.sidebar().group_options()[0].id.clone();
+        w.dispatch_connection(A::OpenMoveTo(id.clone()));
+        assert!(matches!(w.dialog(), Some(Dialog::MoveTo { .. })));
+        let effect = w.dispatch_connection(A::MoveConnection {
+            id: id.clone(),
+            to: Some(g.clone()),
+            index: usize::MAX,
+        });
+        assert!(saved_secrets(effect).is_empty());
+        assert!(w.dialog().is_none());
+        assert_eq!(w.sidebar().profile(&id).unwrap().group(), Some(&g));
+        // Back to the root, as a drag onto the header does.
+        w.dispatch_connection(A::MoveConnection {
+            id: id.clone(),
+            to: None,
+            index: usize::MAX,
+        });
+        assert_eq!(w.sidebar().profile(&id).unwrap().group(), None);
+    }
+
+    #[test]
+    fn moving_an_unknown_connection_gives_a_notice() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        w.dispatch_connection(A::Delete(id.clone()));
+        w.dispatch_connection(A::ConfirmDelete);
+        let effect = w.dispatch_connection(A::MoveConnection {
+            id,
+            to: None,
+            index: 0,
+        });
+        assert!(matches!(effect, Effect::None));
+        assert!(w.take_notice().is_some());
+    }
+
+    // ---- test connection ----
+
+    fn start_test(w: &mut Workspace) -> RequestId {
+        match w.dispatch_connection(A::Test) {
+            Effect::Connect { request, .. } => request,
+            other => panic!("expected Connect, got {other:?}"),
+        }
+    }
+
+    fn test_status(w: &Workspace) -> TestStatus {
+        form(w).test.clone()
+    }
+
+    #[test]
+    fn test_runs_the_form_as_typed() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        w.dispatch_connection(text(FormField::DbPassword, "pw"));
+        let Effect::Connect { request, connect } = w.dispatch_connection(A::Test) else {
+            panic!("expected Connect");
+        };
+        assert_eq!(test_status(&w), TestStatus::Running(request));
+        assert!(w.is_request_live(request));
+        assert!(matches!(connect.db_password, SecretSource::Value(_)));
+        // Nothing was saved by testing.
+        assert!(w.sidebar().entries().is_empty());
+        // A second click while running does nothing.
+        assert!(matches!(w.dispatch_connection(A::Test), Effect::None));
+    }
+
+    #[test]
+    fn test_with_an_invalid_form_shows_errors_and_starts_nothing() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        assert!(matches!(w.dispatch_connection(A::Test), Effect::None));
+        assert!(form(&w).error_for(FormField::Name).is_some());
+        assert_eq!(test_status(&w), TestStatus::Idle);
+    }
+
+    #[test]
+    fn test_success_closes_the_session_and_shows_ok() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        let request = start_test(&mut w);
+        let (session, _) = FakeSession::boxed();
+        assert!(matches!(
+            w.connect_finished(request, Ok(session)),
+            Effect::CloseSession(_)
+        ));
+        assert_eq!(test_status(&w), TestStatus::Ok);
+        assert!(w.tabs().is_empty());
+        assert!(!w.is_request_live(request));
+    }
+
+    #[test]
+    fn test_failure_shows_the_typed_error() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        let request = start_test(&mut w);
+        let failure = ConnectFailure::MissingSecret {
+            kind: SecretKind::DatabasePassword,
+        };
+        assert!(matches!(
+            w.connect_finished(request, Err(failure)),
+            Effect::None
+        ));
+        assert_eq!(
+            test_status(&w),
+            TestStatus::Failed(
+                "no db-password stored in the keychain for this connection; edit it to set one"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn cancelling_a_test_drops_the_attempt_and_a_late_session_is_closed() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        let request = start_test(&mut w);
+        let Effect::CancelConnect(cancelled) = w.dispatch_connection(A::CancelTest) else {
+            panic!("expected CancelConnect");
+        };
+        assert_eq!(cancelled, request);
+        assert_eq!(test_status(&w), TestStatus::Idle);
+        assert!(!w.is_request_live(request));
+        let (session, _) = FakeSession::boxed();
+        assert!(matches!(
+            w.connect_finished(request, Ok(session)),
+            Effect::CloseSession(_)
+        ));
+        assert_eq!(test_status(&w), TestStatus::Idle);
+        // Nothing to cancel any more.
+        assert!(matches!(w.dispatch_connection(A::CancelTest), Effect::None));
+    }
+
+    #[test]
+    fn closing_the_form_cancels_a_running_test() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        let request = start_test(&mut w);
+        assert!(matches!(
+            w.dispatch_connection(A::Cancel),
+            Effect::CancelConnect(r) if r == request
+        ));
+        assert!(w.dialog().is_none());
+        assert!(!w.is_request_live(request));
+    }
+
+    #[test]
+    fn test_of_the_selected_connection_opens_its_form() {
+        let mut w = manager();
+        saved_with_secrets(&mut w);
+        let Effect::Connect { connect, .. } = w.dispatch_connection(A::Test) else {
+            panic!("expected Connect");
+        };
+        // Stored secrets are referenced, not read by the UI.
+        assert!(matches!(connect.db_password, SecretSource::Keychain(_)));
+        assert!(matches!(connect.ssh_secret, SecretSource::Keychain(_)));
+        assert!(matches!(w.dialog(), Some(Dialog::Form(_))));
+    }
+
+    fn prompt() -> HostKeyPrompt {
+        HostKeyPrompt {
+            host: "bastion".into(),
+            port: 22,
+            algorithm: "ssh-ed25519".into(),
+            fingerprint: "SHA256:abc".into(),
+            public_key: "ssh-ed25519 AAAA".into(),
+        }
+    }
+
+    #[test]
+    fn unknown_host_key_in_a_test_asks_trusts_and_retries() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        let request = start_test(&mut w);
+        let failure = ConnectFailure::UnknownHostKey(prompt());
+        assert!(matches!(
+            w.connect_finished(request, Err(failure)),
+            Effect::None
+        ));
+        let Some(Dialog::TrustHostKey { key, retry }) = w.dialog() else {
+            panic!("expected the trust dialog");
+        };
+        assert_eq!(key, &prompt());
+        assert_eq!(retry, &Purpose::Test);
+        let Effect::TrustHostKey { key, retry } = w.dispatch_connection(A::TrustHostKey) else {
+            panic!("expected TrustHostKey");
+        };
+        assert_eq!(key, prompt());
+        // The form is back, as typed.
+        assert_eq!(form(&w).text(FormField::Name), "Main");
+        let Effect::Connect { .. } = w.trust_finished(retry, Ok(())) else {
+            panic!("expected the test to run again");
+        };
+        assert!(matches!(test_status(&w), TestStatus::Running(_)));
+    }
+
+    #[test]
+    fn rejecting_a_host_key_returns_to_the_form() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        let request = start_test(&mut w);
+        w.connect_finished(request, Err(ConnectFailure::UnknownHostKey(prompt())));
+        assert!(matches!(
+            w.dispatch_connection(A::RejectHostKey),
+            Effect::None
+        ));
+        assert_eq!(
+            test_status(&w),
+            TestStatus::Failed("the SSH host key was not trusted".into())
+        );
+        // Cancel does the same from the trust dialog.
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        let request = start_test(&mut w);
+        w.connect_finished(request, Err(ConnectFailure::UnknownHostKey(prompt())));
+        w.dispatch_connection(A::Cancel);
+        assert!(matches!(w.dialog(), Some(Dialog::Form(_))));
+    }
+
+    #[test]
+    fn a_failed_trust_is_shown_in_the_form() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        let request = start_test(&mut w);
+        w.connect_finished(request, Err(ConnectFailure::UnknownHostKey(prompt())));
+        let Effect::TrustHostKey { retry, .. } = w.dispatch_connection(A::TrustHostKey) else {
+            panic!("expected TrustHostKey");
+        };
+        w.trust_finished(retry, Err(ConnectFailure::Tunnel("read-only".into())));
+        assert_eq!(
+            test_status(&w),
+            TestStatus::Failed("SSH tunnel failed: read-only".into())
+        );
+    }
+
+    #[test]
+    fn unknown_host_key_when_opening_asks_and_retries_the_open() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        let index = w.sidebar().index_of(&id).unwrap();
+        let request = connect(&mut w, index);
+        w.connect_finished(request, Err(ConnectFailure::UnknownHostKey(prompt())));
+        assert!(matches!(
+            w.dialog(),
+            Some(Dialog::TrustHostKey {
+                retry: Purpose::Open(_),
+                ..
+            })
+        ));
+        assert!(matches!(
+            w.sidebar().entries()[index].status(),
+            ConnectionStatus::Failed(_)
+        ));
+        let Effect::TrustHostKey { retry, .. } = w.dispatch_connection(A::TrustHostKey) else {
+            panic!("expected TrustHostKey");
+        };
+        assert!(w.dialog().is_none());
+        assert!(matches!(
+            w.trust_finished(retry, Ok(())),
+            Effect::Connect { .. }
+        ));
+        assert_eq!(
+            *w.sidebar().entries()[index].status(),
+            ConnectionStatus::Connecting
+        );
+    }
+
+    #[test]
+    fn background_host_key_does_not_replace_a_confirmation_dialog() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        let request = connect(&mut w, 0);
+        w.dispatch_connection(A::Delete(id));
+        assert!(matches!(w.dialog(), Some(Dialog::ConfirmDelete { .. })));
+        w.connect_finished(request, Err(ConnectFailure::UnknownHostKey(prompt())));
+        assert!(matches!(w.dialog(), Some(Dialog::ConfirmDelete { .. })));
+        assert!(w.take_notice().unwrap().contains("host key"));
+    }
+
+    #[test]
+    fn background_host_key_does_not_replace_another_prompt() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        let request = connect(&mut w, 0);
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Other");
+        let test = start_test(&mut w);
+        w.connect_finished(test, Err(ConnectFailure::UnknownHostKey(prompt())));
+        assert!(matches!(
+            w.dialog(),
+            Some(Dialog::TrustHostKey {
+                retry: Purpose::Test,
+                ..
+            })
+        ));
+        w.connect_finished(request, Err(ConnectFailure::UnknownHostKey(prompt())));
+        assert!(matches!(
+            w.dialog(),
+            Some(Dialog::TrustHostKey {
+                retry: Purpose::Test,
+                ..
+            })
+        ));
+        assert!(w.take_notice().is_some());
+        let _ = id;
+    }
+
+    #[test]
+    fn test_result_reaches_a_form_parked_behind_a_background_prompt() {
+        let mut w = manager();
+        saved_with_secrets(&mut w);
+        let open = connect(&mut w, 0);
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Other");
+        let test = start_test(&mut w);
+        // A background open finds an unknown host key while the test runs.
+        w.connect_finished(open, Err(ConnectFailure::UnknownHostKey(prompt())));
+        assert!(matches!(w.dialog(), Some(Dialog::TrustHostKey { .. })));
+        // The test result arrives while the form is parked: it is not discarded.
+        w.connect_finished(test, Err(ConnectFailure::Aborted));
+        w.dispatch_connection(A::RejectHostKey);
+        assert_eq!(
+            test_status(&w),
+            TestStatus::Failed("connect aborted".into())
+        );
+    }
+
+    #[test]
+    fn successful_test_in_a_parked_form_stops_the_spinner() {
+        let mut w = manager();
+        saved_with_secrets(&mut w);
+        let open = connect(&mut w, 0);
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Other");
+        let test = start_test(&mut w);
+        w.connect_finished(open, Err(ConnectFailure::UnknownHostKey(prompt())));
+        let (session, _) = FakeSession::boxed();
+        assert!(matches!(
+            w.connect_finished(test, Ok(session)),
+            Effect::CloseSession(_)
+        ));
+        w.dispatch_connection(A::Cancel);
+        assert_eq!(test_status(&w), TestStatus::Ok);
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("sqler-ws-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn some_ops() -> Vec<SecretOp> {
+        let reference = SecretRef::new("main", SecretKind::DatabasePassword).unwrap();
+        vec![
+            SecretOp::Set(reference.clone(), Secret::new("pw")),
+            SecretOp::Delete(reference),
+        ]
+    }
+
+    #[test]
+    fn keychain_changes_follow_a_successful_save() {
+        let dir = temp_dir("ok");
+        let store = sqler_config::ConnectionStore::new();
+        let mut w = Workspace::new(SidebarModel::from_store(
+            store,
+            Some(sqler_config::ConfigDir::new(&dir)),
+        ));
+        let (ops, notices) = w.commit_connections(some_ops());
+        assert_eq!(ops.len(), 2);
+        assert_eq!(notices, Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keychain_is_untouched_when_the_save_fails() {
+        let dir = temp_dir("fail");
+        std::fs::write(&dir, b"not a directory").unwrap();
+        let mut w = Workspace::new(SidebarModel::from_store(
+            sqler_config::ConnectionStore::new(),
+            Some(sqler_config::ConfigDir::new(&dir)),
+        ));
+        let (ops, notices) = w.commit_connections(some_ops());
+        assert!(ops.is_empty());
+        assert!(notices[0].contains("Could not save"));
+        assert!(notices.iter().any(|n| n.contains("keychain")));
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    #[test]
+    fn keychain_is_untouched_when_the_file_was_not_loaded() {
+        let mut w = Workspace::new(SidebarModel::with_load_error("bad file".into()));
+        let (ops, notices) = w.commit_connections(some_ops());
+        assert!(ops.is_empty());
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("keychain"));
+        // Nothing to apply, nothing to say.
+        let (ops, notices) = w.commit_connections(Vec::new());
+        assert!(ops.is_empty());
+        assert_eq!(notices, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_connection_deleted_while_connecting_closes_its_late_session() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        let request = connect(&mut w, 0);
+        w.dispatch_connection(A::Delete(id));
+        w.dispatch_connection(A::ConfirmDelete);
+        let (session, _) = FakeSession::boxed();
+        assert!(matches!(
+            w.connect_finished(request, Ok(session)),
+            Effect::CloseSession(_)
+        ));
+        assert!(w.tabs().is_empty());
+    }
+
+    #[test]
+    fn open_failure_shows_a_typed_message_on_the_entry() {
+        let mut w = manager();
+        saved_with_secrets(&mut w);
+        let request = connect(&mut w, 0);
+        w.connect_finished(request, Err(ConnectFailure::Aborted));
+        assert_eq!(
+            *w.sidebar().entries()[0].status(),
+            ConnectionStatus::Failed("connect aborted".into())
+        );
+    }
+
+    #[test]
+    fn quit_with_open_sessions_returns_them_all() {
+        let mut w = manager();
+        saved_with_secrets(&mut w);
+        for _ in 0..2 {
+            let request = connect(&mut w, 0);
+            finish_ok(&mut w, request);
+        }
+        let Effect::CloseSessions(sessions) = w.dispatch(WorkspaceAction::Quit) else {
+            panic!("expected CloseSessions");
+        };
+        assert_eq!(sessions.len(), 2);
+        // They are gone from the workspace.
+        assert!(w.take_all_sessions().is_empty());
+    }
+
+    #[test]
+    fn open_connection_for_a_store_connection_builds_a_keychain_request() {
+        let mut w = manager();
+        saved_with_secrets(&mut w);
+        let Effect::Connect { connect, .. } = w.dispatch(WorkspaceAction::OpenConnection(0)) else {
+            panic!("expected Connect");
+        };
+        assert!(matches!(connect.db_password, SecretSource::Keychain(_)));
+    }
+
+    #[test]
+    fn toggle_and_select_group_actions() {
+        let mut w = manager();
+        w.dispatch_connection(A::NewGroup { parent: None });
+        w.dispatch_connection(A::SetGroupName("a".into()));
+        w.dispatch_connection(A::SubmitGroupName);
+        let a = w.sidebar().group_options()[0].id.clone();
+        w.dispatch_connection(A::ToggleGroup(a.clone()));
+        assert!(!w.sidebar().is_expanded(&a));
+        w.dispatch_connection(A::ToggleGroup(a.clone()));
+        assert!(w.sidebar().is_expanded(&a));
+        w.sidebar.clear_selection();
+        w.dispatch_connection(A::SelectGroup(a.clone()));
+        assert_eq!(w.sidebar().selected_group(), Some(&a));
+    }
+
+    #[test]
+    fn field_actions_without_a_form_do_nothing() {
+        let mut w = manager();
+        assert!(matches!(
+            w.dispatch_connection(text(FormField::Name, "x")),
+            Effect::None
+        ));
+        assert!(matches!(w.dispatch_connection(A::Save), Effect::None));
+        assert!(matches!(w.dispatch_connection(A::Test), Effect::None));
+        assert!(w.dialog().is_none());
+    }
+
+    #[test]
+    fn opening_another_dialog_replaces_the_current_one() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        w.dispatch_connection(A::Edit(id.clone()));
+        let request = start_test(&mut w);
+        let effect = w.dispatch_connection(A::Delete(id));
+        assert!(matches!(effect, Effect::CancelConnect(r) if r == request));
+        assert!(matches!(w.dialog(), Some(Dialog::ConfirmDelete { .. })));
     }
 }

@@ -24,3 +24,4 @@ consequences. SQLer uses the MADR format.
 | [0013](0013-ssh-tunnel-crate.md) | SSH tunnel crate: russh, strict known_hosts, loopback-only forward | accepted |
 | [0014](0014-catalog-cache-and-background-refresh.md) | Catalog cache, worker concurrency and background refresh | accepted |
 | [0015](0015-ddl-generation-dialects-and-quoting.md) | DDL generation: dialects and quoting | accepted |
+| [0016](0016-connect-pipeline.md) | Connect pipeline: `Connector` trait in `sqler-ui`, pipeline in `sqler-app` | accepted |
