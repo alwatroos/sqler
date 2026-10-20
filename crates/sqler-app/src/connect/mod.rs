@@ -92,6 +92,9 @@ impl Connector for Pipeline {
                     config.target = UrlTarget::parse(&spec.target)?
                         .with_password(password)?
                         .render();
+                } else if let Ok(target) = UrlTarget::parse(&spec.target) {
+                    // sqlx-mysql ignores `?user=`: the user must be in the userinfo.
+                    config.target = target.with_query_user().render();
                 }
                 return Ok(registry.connect(&config).await?);
             };
@@ -126,7 +129,7 @@ impl Connector for Pipeline {
             let rewritten = target.with_host_port("127.0.0.1", port);
             let rewritten = match &db_password {
                 Some(password) => rewritten.with_password(password),
-                None => Ok(rewritten),
+                None => Ok(rewritten.with_query_user()),
             };
             let rewritten = match rewritten {
                 Ok(target) => target,

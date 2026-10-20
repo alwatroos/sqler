@@ -193,11 +193,44 @@ async fn plain_target_goes_through_unchanged_with_config_mapping() {
     assert_eq!(rig.tunnels.opened(), 0);
     let configs = rig.configs.lock().unwrap();
     let config = &configs[0];
-    assert_eq!(config.target, "postgres://db/app?user=me&sslmode=require");
+    assert_eq!(config.target, "postgres://me@db/app?sslmode=require");
     assert_eq!(config.name, "Prod DB");
     assert_eq!(config.color.as_deref(), Some("#aabbcc"));
     assert_eq!(config.environment, Some(Environment::Prod));
     assert_eq!(config.tls.as_ref().map(|t| t.mode), Some(TlsMode::VerifyCa));
+}
+
+#[tokio::test]
+async fn passwordless_url_targets_get_the_query_user_in_the_userinfo() {
+    for (target, expected) in [
+        ("mysql://db/app?user=app", "mysql://app@db/app"),
+        (
+            "mariadb://db:3307/app?user=a%40b&x=1",
+            "mariadb://a%40b@db:3307/app?x=1",
+        ),
+        ("postgres://db/app?user=me", "postgres://me@db/app"),
+        ("mysql://db/app?x=1", "mysql://db/app?x=1"),
+        ("mysql://db/app", "mysql://db/app"),
+    ] {
+        let rig = Rig::ok();
+        connect(
+            &rig,
+            request(spec(target), SecretSource::None, SecretSource::None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(rig.targets(), [expected]);
+    }
+}
+
+#[tokio::test]
+async fn tunnelled_passwordless_target_rewrites_host_and_moves_the_user() {
+    let rig = Rig::ok();
+    let spec = spec("mysql://db.internal/app?user=app").with_ssh(ssh(SshAuth::Agent));
+    connect(&rig, request(spec, SecretSource::None, SecretSource::None))
+        .await
+        .unwrap();
+    assert_eq!(rig.targets(), ["mysql://app@127.0.0.1:40001/app"]);
 }
 
 #[tokio::test]
@@ -383,7 +416,7 @@ async fn tunnel_without_a_password_keeps_the_rest_of_the_target() {
         .unwrap();
     assert_eq!(
         rig.targets(),
-        ["postgres://127.0.0.1:40001/app?user=me&sslmode=require"]
+        ["postgres://me@127.0.0.1:40001/app?sslmode=require"]
     );
     let opened = rig.tunnels.opened.lock().unwrap();
     assert!(matches!(opened[0].1, TunnelAuth::Agent { socket: None }));

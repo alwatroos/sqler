@@ -130,6 +130,26 @@ impl UrlTarget {
         })
     }
 
+    /// The user from the `user` query parameter moved into the (percent-encoded) userinfo.
+    ///
+    /// sqlx-mysql ignores `?user=`, so every URL target gets this before a driver sees it. A user
+    /// already in the userinfo wins; a `user` parameter is dropped from the query either way. A
+    /// target that names no user is returned unchanged.
+    pub(crate) fn with_query_user(mut self) -> Self {
+        let from_query = query_pairs(&self.rest)
+            .find(|(key, _)| key.eq_ignore_ascii_case("user"))
+            .map(|(_, value)| value)
+            .filter(|value| !value.is_empty());
+        self.rest = remove_query_param(&self.rest, "user");
+        if self.user.is_none()
+            && let Some(user) = from_query
+        {
+            // A query value is raw text from the user.
+            self.user = Some(encode(&decode(&user)));
+        }
+        self
+    }
+
     /// The target with the password in the userinfo.
     ///
     /// The user comes from the userinfo or else from the `user` query parameter (which is moved
@@ -137,22 +157,14 @@ impl UrlTarget {
     ///
     /// # Errors
     /// [`ConnectFailure::Target`] when the target names no user.
-    pub(crate) fn with_password(mut self, password: &Secret) -> Result<Self, ConnectFailure> {
-        let user = match self.user.take() {
-            Some(user) => user,
-            None => query_pairs(&self.rest)
-                .find(|(key, _)| key.eq_ignore_ascii_case("user"))
-                .map(|(_, value)| value)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    target_error("a database password needs a user; add ?user=name to the target")
-                })?,
-        };
-        self.rest = remove_query_param(&self.rest, "user");
-        // The userinfo user is stored encoded; a query value is raw text from the user.
-        self.user = Some(encode(&decode(&user)));
-        self.password = Some(encode(password.expose()));
-        Ok(self)
+    pub(crate) fn with_password(self, password: &Secret) -> Result<Self, ConnectFailure> {
+        let mut moved = self.with_query_user();
+        let user = moved.user.take().ok_or_else(|| {
+            target_error("a database password needs a user; add ?user=name to the target")
+        })?;
+        moved.user = Some(encode(&decode(&user)));
+        moved.password = Some(encode(password.expose()));
+        Ok(moved)
     }
 
     /// The target text (contains the password when one was injected: keep it in memory only).
@@ -429,6 +441,41 @@ mod tests {
         ] {
             assert!(!parse(no).wants_verify_full(), "{no}");
         }
+    }
+
+    #[test]
+    fn query_user_moves_into_the_userinfo() {
+        let t = parse("mysql://db/app?user=app").with_query_user();
+        assert_eq!(t.render(), "mysql://app@db/app");
+        let t = parse("postgres://db:5433/x?a=1&user=a%40b&b=2#f").with_query_user();
+        assert_eq!(t.render(), "postgres://a%40b@db:5433/x?a=1&b=2#f");
+        let t = parse("mysql://db/app?user=app").with_query_user();
+        assert_eq!(
+            t.with_host_port("127.0.0.1", 9).render(),
+            "mysql://app@127.0.0.1:9/app"
+        );
+    }
+
+    #[test]
+    fn query_user_leaves_targets_without_a_user_alone() {
+        for target in [
+            "mysql://db/app",
+            "mysql://db/app?x=1",
+            "mysql://db/app?user=",
+        ] {
+            let t = parse(target).with_query_user();
+            assert!(!t.render().contains('@'), "{target}");
+        }
+        assert_eq!(
+            parse("mysql://db/app?x=1").with_query_user().render(),
+            "mysql://db/app?x=1"
+        );
+        assert_eq!(
+            parse("mysql://me@db/app?user=other")
+                .with_query_user()
+                .render(),
+            "mysql://me@db/app"
+        );
     }
 
     #[test]
