@@ -32,7 +32,7 @@ Source commands (all rows):
 | agent-client-protocol | `agent-client-protocol` | 3.4.0 | 2026-10-16 | Repository `agentclientprotocol/rust-sdk`. Source: API |
 | wasmtime | `wasmtime` | 49.0.4 | 2026-10-19 | `max_version` is the pre-release 50.0.0-rc.1, not used. Source: API (`max_stable_version`) |
 | cargo-component | `cargo-component` | 0.21.1 | 2025-03-18 | No release for over a year; check the project status before relying on it. Source: API |
-| keyring | `keyring` | 4.2.0 | 2026-08-29 | Source: API |
+| keyring | `keyring` | 4.2.0 | 2026-08-29 | `MIT OR Apache-2.0`; `rust-version` 1.88. Re-verified 2026-10-20 (`max_stable_version` 4.2.0). Feature `v1` (the default, enabled explicitly with `default-features = false`) pulls the native stores `apple-native-keyring-store` 1.0.2, `windows-native-keyring-store` 1.1.0 and `zbus-secret-service-keyring-store` 1.0.1 over `keyring-core` 1.0.1, each per target. Used by `sqler-config`. Source: API; `cargo info keyring@4.2.0`; `Cargo.lock` |
 | cargo-dist | `cargo-dist` | 0.32.0 | 2026-05-22 | The tool was renamed `dist`, but the `dist` crate on crates.io is an unrelated 2016 crate (0.0.0), so the crate is still `cargo-dist`. GitHub `axodotdev/cargo-dist` latest release is v0.33.0 (2026-09-10), newer than crates.io; verify the install channel in M7. Source: API for `cargo-dist` and `dist`; `cargo info cargo-dist`; GitHub releases API |
 | thiserror | `thiserror` | 2.0.21 | 2026-09-23 | Derive for typed library errors; `rust-version` 1.77. Used by `sqler-core`, `sqler-driver-api` and `sqler-ui`. Checked 2026-10-20. Source: API; `cargo info thiserror` |
 | tokio | `tokio` | 1.54.0 | 2026-10-19 | Async runtime for the CLI (`rt`), driver tests (`rt`), `sqler-ui` (`rt`, `sync`; dev: `rt-multi-thread`) and `sqler-app` (`rt-multi-thread`); sqlx `runtime-tokio` pulls it in. Checked 2026-10-20. Source: API |
@@ -105,6 +105,7 @@ Per-dependency rationale is added by the PR that introduces it.
 - `serde` 1.0.229 (`derive`) and `toml` 1.1.8: parse and write the `sqler-config` files
   (`settings.toml`, `keybindings.toml`, `connections.toml`) into private DTOs (ADR-0005).
   `sqler-core` does not depend on them. `toml` `rust-version` is 1.85, below the workspace's 1.99.
+- `keyring` 4.2.0 (feature `v1`): OS keychain access for `sqler-config` (ADR-0012). 4.x moved the backends into separate store crates that `v1` selects per target: macOS Keychain, Windows Credential Manager, and the Linux/FreeBSD Secret Service over pure-Rust `zbus` with RustCrypto (`crypto-rust`) and the `async-io` runtime. Linux CI needs no new apt packages. Not used: `dbus-secret-service` (needs `libdbus`), `linux-keyutils` (does not persist), OpenSSL crypto. The new store crates, `keyring-core`, `secret-service`, `aes`, `cbc`, `hkdf` and `sha2` are all `MIT OR Apache-2.0` (or similarly allowed); `cargo deny` needed no change.
 - `directories` 6.0.0: not used. Its dependency `option-ext` is `MPL-2.0`, which `deny.toml` does not
   allow, and `deny.toml` changes need an ADR. `sqler-config` resolves the three platform paths with
   `std` only (ADR-0005).

@@ -17,4 +17,5 @@ consequences. SQLer uses the MADR format.
 | [0005](0005-config-files-and-keybindings.md) | Config files and keybindings: TOML files, chord grammar, std-only directory lookup | accepted |
 | [0006](0006-grid-data-model-and-bench-harness.md) | Grid data model and bench harness | accepted |
 | [0007](0007-desktop-binary-and-ui-tokio-bridge.md) | Desktop binary and UI-thread/tokio bridge | accepted |
+| [0012](0012-keychain-secrets.md) | Keychain secrets: `keyring` 4.x, reference scheme, failure policy | accepted |
 | [0013](0013-ssh-tunnel-crate.md) | SSH tunnel crate: russh, strict known_hosts, loopback-only forward | accepted |
