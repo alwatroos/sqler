@@ -104,9 +104,10 @@ select * from invoices where paid = false
 
 - History holds the SQL as typed, and that can include literals such as names, e-mail addresses or an inline password. Saved queries hold the SQL the user stored.
 - Bound parameter values, passwords from the connection profile and error texts are never recorded; the API cannot take them.
-- Before a statement is stored it goes through a credential redactor, which is always on. A statement is sensitive when a bare word outside quotes and comments is `PASSWORD`, `IDENTIFIED`, `SECRET`, `SECRET_KEY`, `AWS_SECRET_ACCESS_KEY`, `API_KEY`, `TOKEN`, `AUTHORIZATION` or `BEARER` (any case), or when a literal contains `password=`, `pwd=`, `secret=`, `secret_key=`, `api_key=`, `token=` or similar, or a URL with a password (`://user:pw@`). In a sensitive statement, every `'...'`, `"..."` (a string in `MySQL`) and dollar-quoted literal, and every comment, becomes `'<redacted>'`. Other statements, including their comments, are stored unchanged.
-- The redactor fails safe on ambiguous syntax. It lexes the statement under all combinations of backslash escapes in quotes (`MySQL`, `E'..'`), nesting or non-nesting block comments and `#` comments (`MySQL`). The statement is sensitive if any reading says so, and the union of the literal and comment ranges of all readings is redacted. An unterminated quote therefore hides everything to the end of the statement.
-- The redactor is a heuristic. It can over-redact (any literal in a sensitive statement), and credentials it does not recognise stay in the file. It is not a guarantee.
+- Before a statement is stored it goes through a credential redactor, which is always on. It is fail-safe by construction and over-redacts by design. Whether a statement is sensitive is decided on the raw text with case-insensitive substring matching of a broad marker list (whitespace removed): `pass`, `pwd`, `secret`, `token`, `credential`, `apikey`, `api_key`, `auth`, `bearer`, `identified`, `private key`, `key=`, `key:`, `_key`, `ssl`, `salt`, `hash` and similar, or `://` together with `@` (a URL with user info). No lexing is involved, so a marker inside a comment, a backtick or double-quoted name or a literal counts.
+- In a sensitive statement, every `'...'`, `"..."` and dollar-quoted literal, every backtick identifier, and every comment (including `MySQL` `/*! ... */` executable comments) becomes `'<redacted>'`. Literals with JSON, YAML, `key=value` or URL credentials are covered because all literals are. Other statements, including their comments, are stored unchanged.
+- The statement is lexed under all combinations of backslash escapes in quotes (`MySQL`, `E'..'`), nesting or non-nesting block comments, `#` comments, `--` comments with or without a following space, and dollar quoting on or off. The union of the ranges of all readings is redacted. A quote, backtick, comment or dollar quote that any reading leaves unterminated hides everything to the end of the statement.
+- Not covered: a secret that is not inside a literal, comment or identifier quote, such as Oracle `IDENTIFIED BY pw` (unquoted) and `MSSQL` hashes written as bare hex. The redactor is still a heuristic, not a guarantee. A property test plants a secret in many literal and comment positions after a marker, among dangerous fragments, and checks that it never reaches the output.
 - The user can turn the history off (`enabled = false`) and delete it with `clear` (all) or `clear_connection`. The files are plain text with the permissions of the config directory.
 - Do not sync the config directory to a public place, for example in dotfiles, without excluding `history.jsonl` and `queries.toml`.
 
@@ -120,7 +121,7 @@ select * from invoices where paid = false
 - Good: bad lines and future-version lines survive until the user clears the history.
 - Good: saved queries are readable, diffable TOML in the same style as the other config files.
 - Bad: no fsync on append, so a crash can lose or tear the last line.
-- Bad: the redactor is heuristic and the history can hold literals.
+- Bad: the redactor is heuristic, over-redacts sensitive-looking statements, and the history can hold literals.
 - Bad: two app instances can lose lines during a compaction.
 - Neutral: history options are passed in by the caller; storing them in `settings.toml` and the UI are T11.
 

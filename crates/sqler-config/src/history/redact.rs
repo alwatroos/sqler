@@ -6,30 +6,44 @@
 use std::borrow::Cow;
 
 const PLACEHOLDER: &str = "'<redacted>'";
-/// Bare words that mark a statement as carrying a credential.
-const SENSITIVE_WORDS: [&str; 9] = [
-    "PASSWORD",
-    "IDENTIFIED",
-    "SECRET",
-    "SECRET_KEY",
-    "AWS_SECRET_ACCESS_KEY",
-    "API_KEY",
-    "TOKEN",
-    "AUTHORIZATION",
-    "BEARER",
-];
-/// Whitespace-free, lowercase fragments of a literal that mark a credential.
-const LITERAL_MARKERS: [&str; 10] = [
-    "password=",
-    "pwd=",
-    "secret=",
-    "secret_key=",
-    "aws_secret_access_key=",
-    "api_key=",
-    "apikey=",
-    "token=",
-    "authorization:",
+/// Lowercase fragments that mark a statement as sensitive. They are searched as
+/// substrings in the raw text with whitespace removed, so no lexing is needed
+/// and a marker inside a comment, a literal or an identifier counts too.
+/// The list is deliberately broad: over-redaction is harmless.
+const MARKERS: [&str; 33] = [
+    "pass",
+    "pwd",
+    "secret",
+    "token",
+    "credential",
+    "apikey",
+    "api_key",
+    "api-key",
+    "auth",
     "bearer",
+    "identified",
+    "privatekey",
+    "private_key",
+    "-----begin",
+    "key=",
+    "key:",
+    "key\"",
+    "key'",
+    "key`",
+    "_key",
+    "ssl",
+    "salt",
+    "hash",
+    "cookie",
+    "signature",
+    "jwt",
+    "sessionid",
+    "session_id",
+    "otp",
+    "access_key",
+    "accesskey",
+    "keyfile",
+    "cert",
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,8 +52,8 @@ enum Kind {
     Text,
     /// A `'...'`, `"..."` or dollar-quoted literal.
     Literal,
-    /// A backtick identifier.
-    Skipped,
+    /// A backtick identifier, closed or not.
+    Ident,
     /// A comment.
     Comment,
 }
@@ -47,6 +61,7 @@ enum Kind {
 /// One reading of the ambiguous parts of SQL syntax. The redactor lexes the
 /// statement under every combination and acts on the union.
 #[derive(Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)] // independent syntax switches, enumerated exhaustively
 struct Mode {
     /// `\` escapes the next character inside quotes (`MySQL`, `E'..'`).
     backslash: bool,
@@ -54,13 +69,19 @@ struct Mode {
     nesting: bool,
     /// `#` starts a line comment (`MySQL`).
     hash: bool,
+    /// `--` starts a line comment even without a following space.
+    dashes: bool,
+    /// `$tag$ ... $tag$` is a literal (`PostgreSQL`).
+    dollar: bool,
 }
 
 fn modes() -> impl Iterator<Item = Mode> {
-    (0..8_u8).map(|n| Mode {
+    (0..32_u8).map(|n| Mode {
         backslash: n & 1 != 0,
         nesting: n & 2 != 0,
         hash: n & 4 != 0,
+        dashes: n & 8 != 0,
+        dollar: n & 16 != 0,
     })
 }
 
@@ -74,14 +95,16 @@ fn lex(sql: &str, mode: Mode) -> Vec<(Kind, usize, usize)> {
     while i < b.len() {
         let c = b[i];
         let found = match c {
-            b'-' if b.get(i + 1) == Some(&b'-') => Some((Kind::Comment, line_end(sql, i))),
+            b'-' if mode.dashes && b.get(i + 1) == Some(&b'-') => {
+                Some((Kind::Comment, line_end(sql, i)))
+            }
             b'#' if mode.hash => Some((Kind::Comment, line_end(sql, i))),
             b'/' if b.get(i + 1) == Some(&b'*') => {
                 Some((Kind::Comment, block_comment_end(b, i, mode.nesting)))
             }
-            b'\'' | b'"' => Some((Kind::Literal, quoted_end(sql, i, c, mode.backslash))),
-            b'`' => Some((Kind::Skipped, quoted_end(sql, i, c, false))),
-            b'$' if !prev_word => dollar_end(sql, i).map(|end| (Kind::Literal, end)),
+            b'\'' | b'"' => Some((Kind::Literal, quoted_end(sql, i, c, mode.backslash).0)),
+            b'`' => Some((Kind::Ident, quoted_end(sql, i, c, false).0)),
+            b'$' if mode.dollar && !prev_word => dollar_end(sql, i).map(|end| (Kind::Literal, end)),
             _ => None,
         };
         if let Some((kind, end)) = found {
@@ -137,8 +160,9 @@ fn block_comment_end(b: &[u8], start: usize, nesting: bool) -> usize {
 
 /// End (exclusive) of a quoted run starting at `start`, with `q` doubled as an
 /// escape and, when `backslash` is set, `\` escaping the next character.
-/// An unterminated run ends at the end of the text.
-fn quoted_end(sql: &str, start: usize, q: u8, backslash: bool) -> usize {
+/// An unterminated run ends at the end of the text; the flag tells whether the
+/// run was closed.
+fn quoted_end(sql: &str, start: usize, q: u8, backslash: bool) -> (usize, bool) {
     let b = sql.as_bytes();
     let mut i = start + 1;
     while i < b.len() {
@@ -154,11 +178,11 @@ fn quoted_end(sql: &str, start: usize, q: u8, backslash: bool) -> usize {
                 i += 2;
                 continue;
             }
-            return i + 1;
+            return (i + 1, true);
         }
         i += 1;
     }
-    b.len()
+    (b.len(), false)
 }
 
 /// End (exclusive) of a `$tag$ ... $tag$` literal starting at `start`, or
@@ -187,76 +211,53 @@ fn dollar_end(sql: &str, start: usize) -> Option<usize> {
     )
 }
 
-fn has_sensitive_word(text: &str) -> bool {
-    text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
-        .any(|w| SENSITIVE_WORDS.iter().any(|s| w.eq_ignore_ascii_case(s)))
-}
-
-/// Whether the literal text looks like a connection string or URL with a credential.
-fn literal_has_credential(lit: &str) -> bool {
-    let squashed: String = lit
+/// Whether the raw text holds a credential marker anywhere.
+fn is_sensitive(sql: &str) -> bool {
+    let squashed: String = sql
         .chars()
         .filter(|c| !c.is_whitespace())
         .flat_map(char::to_lowercase)
         .collect();
-    if LITERAL_MARKERS.iter().any(|m| squashed.contains(m)) {
-        return true;
-    }
-    let mut rest = lit;
-    while let Some(n) = rest.find("://") {
-        rest = &rest[n + 3..];
-        let authority = rest
-            .split(|c: char| matches!(c, '/' | '?' | '#') || c.is_whitespace())
-            .next()
-            .unwrap_or("");
-        if let Some((userinfo, _)) = authority.rsplit_once('@')
-            && let Some((_, pw)) = userinfo.split_once(':')
-            && !pw.is_empty()
-        {
-            return true;
-        }
-    }
-    false
+    // A URL with user info (`scheme://user:pw@host`) needs no marker word.
+    (squashed.contains("://") && squashed.contains('@'))
+        || MARKERS.iter().any(|m| squashed.contains(m))
 }
 
-/// Removes literal values from a statement that appears to carry a credential.
+/// Removes literal values from a statement that may carry a credential.
 ///
-/// A statement is sensitive when a bare word outside quotes and comments is
-/// `PASSWORD`, `IDENTIFIED`, `SECRET`, `SECRET_KEY`, `AWS_SECRET_ACCESS_KEY`,
-/// `API_KEY`, `TOKEN`, `AUTHORIZATION` or `BEARER` (any case), or when a
-/// literal holds `password=`, `pwd=`, a similar key or a URL with a password.
-/// Then every `'...'`, `"..."` and dollar-quoted literal and every comment
-/// becomes `'<redacted>'`; the rest of the text is kept.
+/// Fail-safe by construction. A statement is sensitive when its raw text
+/// (whitespace removed, any case) contains one of a broad list of markers as a
+/// substring: `pass`, `pwd`, `secret`, `token`, `credential`, `apikey`,
+/// `api_key`, `auth`, `bearer`, `identified`, `key=`, `_key`, `ssl`, ...
+/// anywhere, including inside comments, identifiers and literals. No lexing is
+/// involved in that decision.
 ///
-/// The statement is lexed under every combination of the readings that differ
-/// between dialects (backslash escapes, nesting block comments, `#` comments).
-/// It is sensitive if any reading says so, and the union of the literal and
-/// comment ranges of all readings is redacted, so an ambiguous quote hides
-/// everything up to where any reading ends it (to the end of the statement
-/// when unterminated). Other statements are returned unchanged
+/// In a sensitive statement every `'...'`, `"..."` and dollar-quoted literal,
+/// every comment (including `MySQL` `/*! ... */` executable comments) and every
+/// backtick identifier that is never closed becomes `'<redacted>'`. The text is
+/// lexed under every combination of the readings that differ between dialects
+/// (backslash escapes, nesting block comments, `#` and bare `--` comments,
+/// dollar quoting) and the union of the ranges is redacted. An unterminated
+/// construct in any reading hides everything to the end of the statement.
+/// Literals holding JSON, YAML, `key=value` or URL credentials are redacted
+/// whole because all literals are. Other statements are returned unchanged
 /// (`Cow::Borrowed`).
 ///
-/// This is a heuristic: it can over-redact, and a credential it does not
-/// recognise stays in the text.
+/// It over-redacts by design. Not covered: an unquoted secret such as Oracle
+/// `IDENTIFIED BY pw`, and secrets that are not in a literal, comment or open
+/// identifier, such as hashes written as bare hex (`MSSQL` `0x...`).
 #[must_use]
 pub fn redact_credentials(sql: &str) -> Cow<'_, str> {
-    let mut sensitive = false;
+    if !is_sensitive(sql) {
+        return Cow::Borrowed(sql);
+    }
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     for mode in modes() {
         for (kind, s, e) in lex(sql, mode) {
-            match kind {
-                Kind::Text => sensitive |= has_sensitive_word(&sql[s..e]),
-                Kind::Literal => {
-                    sensitive |= literal_has_credential(&sql[s..e]);
-                    ranges.push((s, e));
-                }
-                Kind::Comment => ranges.push((s, e)),
-                Kind::Skipped => {}
+            if kind != Kind::Text {
+                ranges.push((s, e));
             }
         }
-    }
-    if !sensitive {
-        return Cow::Borrowed(sql);
     }
     ranges.sort_unstable();
     let mut out = String::with_capacity(sql.len());
@@ -329,10 +330,7 @@ mod tests {
             r("ATTACH 'postgres://u:pw@h/d' AS x"),
             "ATTACH '<redacted>' AS x"
         );
-        assert!(matches!(
-            redact_credentials("ATTACH 'postgres://u@h/d'"),
-            Cow::Borrowed(_)
-        ));
+        assert!(r("ATTACH 'postgres://u@h/d'").contains(PLACEHOLDER));
     }
 
     #[test]
@@ -345,13 +343,25 @@ mod tests {
     }
 
     #[test]
-    fn keyword_in_comment_or_literal_or_identifier_is_ignored() {
+    fn marker_anywhere_makes_the_statement_sensitive() {
         for s in [
             "select 1 -- password\n, 'a'",
             "select /* secret */ 'a'",
             "select 'password is secret'",
             "select \"password\", `secret` from t where a = 'x'",
-            "select passwords, secret1 from t",
+            "select passwords, secret1 from t where a = 'x'",
+            "select $$ password $$",
+        ] {
+            assert!(r(s).contains(PLACEHOLDER), "{s}");
+        }
+    }
+
+    #[test]
+    fn statements_without_a_marker_are_unchanged() {
+        for s in [
+            "select 1 -- note\n, 'a'",
+            "select /* c */ 'a' from `t`",
+            "select \"a\", `b` from t where c = 'x'",
         ] {
             assert!(matches!(redact_credentials(s), Cow::Borrowed(_)), "{s}");
         }
@@ -369,16 +379,8 @@ mod tests {
     fn dollar_quoted_literal() {
         assert_eq!(
             r("alter role a password $x$pw'$x$ ; select $$a$$, $1"),
-            "alter role a password '<redacted>' ; select '<redacted>', $1"
+            "alter role a password '<redacted>'"
         );
-    }
-
-    #[test]
-    fn keyword_inside_dollar_quote_is_not_a_word() {
-        assert!(matches!(
-            redact_credentials("select $$ password $$"),
-            Cow::Borrowed(_)
-        ));
     }
 
     #[test]
@@ -483,5 +485,185 @@ mod tests {
     fn backslash_before_multibyte_char_does_not_panic() {
         let out = r("alter user a password 'x\\é' ü 'hunter2'");
         assert!(!leaks(&out), "{out}");
+    }
+
+    #[test]
+    fn unterminated_backtick_hides_the_rest() {
+        let out = r("select ` ; ALTER USER u PASSWORD 'hunter2'");
+        assert!(!leaks(&out), "{out}");
+        let out = r("select `a``b ; ALTER USER u PASSWORD 'hunter2'");
+        assert!(!leaks(&out), "{out}");
+    }
+
+    #[test]
+    fn executable_comments_are_redacted() {
+        for s in [
+            "/*!50000 CREATE USER u IDENTIFIED BY 'hunter2' */",
+            "/*!CREATE USER u IDENTIFIED BY 'hunter2'*/ select 1",
+            "/*M!100100 ALTER USER u IDENTIFIED BY 'hunter2' */",
+        ] {
+            let out = r(s);
+            assert!(!leaks(&out), "{s} -> {out}");
+        }
+    }
+
+    #[test]
+    fn broad_credential_names_are_sensitive() {
+        for k in [
+            "access_token",
+            "apikey",
+            "AWS_SECRET_KEY",
+            "client_secret",
+            "passwd",
+            "sslkey",
+            "ssl_cert",
+            "refresh_token",
+            "x-api-key",
+            "private key",
+            "Credentials",
+        ] {
+            let out = r(&format!("SET {k} = 'hunter2'"));
+            assert!(!leaks(&out), "{k} -> {out}");
+        }
+    }
+
+    #[test]
+    fn structured_literals_are_redacted() {
+        for s in [
+            r#"SELECT '{"password":"hunter2"}'"#,
+            "SELECT 'password: hunter2'",
+            "SELECT 'db:\n  pwd: hunter2'",
+            "SELECT 'postgres://u:p/ss@h/d'",
+            "SELECT 'mysql://u:hunter2@h'",
+            r#"SELECT '{"a":{"api_key":"hunter2"}}'"#,
+        ] {
+            let out = r(s);
+            assert!(!leaks(&out), "{s} -> {out}");
+        }
+    }
+
+    #[test]
+    fn bare_dashes_and_missing_dollar_quotes_are_read_both_ways() {
+        for s in [
+            "alter user u password --'hunter2'\n",
+            "alter user u password --'\n'hunter2'",
+            "alter user u password $a$ x $b$ hunter2 $a$",
+            "alter user u password $a$ x' hunter2",
+        ] {
+            let out = r(s);
+            assert!(!leaks(&out), "{s} -> {out}");
+        }
+    }
+
+    const SECRET: &str = "S3cr3tXYZ";
+
+    /// Small deterministic generator (xorshift); no extra dependency.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn pick<'a>(&mut self, pool: &[&'a str]) -> &'a str {
+            pool[usize::try_from(self.next() % u64::try_from(pool.len()).unwrap()).unwrap()]
+        }
+    }
+
+    /// Complete, unambiguous constructs: they do not change how a later
+    /// secret is read.
+    const SAFE: [&str; 12] = [
+        " ",
+        "select ",
+        "alter user u ",
+        ";",
+        "'x'",
+        "\"x\"",
+        "`x`",
+        " /* x */ ",
+        " -- x\n",
+        " $$x$$ ",
+        "1, ",
+        "from t ",
+    ];
+    /// Anything, including the dangerous fragments.
+    const DANGER: [&str; 24] = [
+        "'", "\"", "`", "\\", "/*", "*/", "--", "#", "$$", "$t$", "\n", " ", "E'", "/*!50000", ";",
+        "''", "\\'", "/* /*", "'a\\'", "password", "$1", "é", "--'", "`a``",
+    ];
+    /// Places for the secret.
+    const WRAPS: [&str; 15] = [
+        "'S'",
+        "\"S\"",
+        "`S`",
+        "/*S*/",
+        "--S\n",
+        "#S\n",
+        "$$S$$",
+        "/*!50000 CREATE USER u IDENTIFIED BY 'S' */",
+        "E'\\'S'",
+        "'\\'S'",
+        "/* /* S */",
+        "'S",
+        "`S",
+        "'{\"password\":\"S\"}'",
+        "'u:p/ss@h S'",
+    ];
+    const SENSITIVE: [&str; 10] = [
+        "PASSWORD",
+        "identified by",
+        "Access_Token",
+        "apikey",
+        "client_secret",
+        "passwd",
+        "AWS_SECRET_KEY",
+        "/* pwd */",
+        "'bearer'",
+        "ssl_key",
+    ];
+
+    #[test]
+    fn random_statements_never_leak_the_planted_secret() {
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        for _ in 0..20_000 {
+            let mut sql = String::new();
+            for _ in 0..rng.next() % 4 {
+                sql.push_str(rng.pick(&SAFE));
+            }
+            sql.push(' ');
+            sql.push_str(rng.pick(&SENSITIVE));
+            sql.push(' ');
+            for _ in 0..rng.next() % 3 {
+                sql.push_str(rng.pick(&SAFE));
+            }
+            sql.push_str(&rng.pick(&WRAPS).replace('S', SECRET));
+            for _ in 0..rng.next() % 6 {
+                sql.push_str(rng.pick(&DANGER));
+            }
+            let out = redact_credentials(&sql);
+            assert!(!out.contains(SECRET), "{sql:?} -> {out:?}");
+        }
+    }
+
+    #[test]
+    fn random_statements_without_markers_are_unchanged() {
+        let mut rng = Rng(0x1234_5678_9ABC_DEF1);
+        for _ in 0..5_000 {
+            let mut sql = String::new();
+            for _ in 0..rng.next() % 8 {
+                let f = rng.pick(&DANGER);
+                if f != "password" {
+                    sql.push_str(f);
+                }
+                sql.push_str(rng.pick(&SAFE));
+            }
+            assert!(
+                matches!(redact_credentials(&sql), Cow::Borrowed(_)),
+                "{sql:?}"
+            );
+        }
     }
 }
