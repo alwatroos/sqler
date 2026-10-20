@@ -23,12 +23,22 @@ use crate::query::{BufferSnapshot, RunEvent, RunMode};
 use crate::tabs::{Tab, TabId, TabKind};
 
 /// What to do with the editor tab that a connect attempt opens.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) enum PendingOpen {
     /// Run this SQL once the tab is open.
     Run(String),
     /// The tab shows this saved query.
     Saved(SavedQueryId),
+}
+
+// Debug never prints the SQL.
+impl std::fmt::Debug for PendingOpen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Run(sql) => f.debug_struct("Run").field("sql_len", &sql.len()).finish(),
+            Self::Saved(id) => f.debug_tuple("Saved").field(id).finish(),
+        }
+    }
 }
 
 /// The history state of a workspace.
@@ -299,8 +309,16 @@ impl Workspace {
         let Some(entry) = self.history_entry_at(tab, index) else {
             return Effect::None;
         };
+        let redacted = entry.redacted();
         let (conn, sql) = (entry.connection().clone(), entry.sql().to_owned());
-        self.open_editor_on(&conn, Some(sql))
+        let effect = self.open_editor_on(&conn, Some(sql));
+        if redacted {
+            self.notice = Some(
+                "Sensitive values were redacted from this entry; enter them again before running it."
+                    .to_owned(),
+            );
+        }
+        effect
     }
 
     /// Opens entry `index` in a new editor tab and runs it there once the connection is up. The
@@ -312,6 +330,11 @@ impl Workspace {
         if entry.truncated() {
             return self.history_notice(
                 "This entry was cut when it was recorded; open it in an editor instead.",
+            );
+        }
+        if entry.redacted() {
+            return self.history_notice(
+                "Run again is not available: sensitive values were redacted from this entry.",
             );
         }
         let (conn, sql) = (entry.connection().clone(), entry.sql().to_owned());
@@ -1343,6 +1366,62 @@ mod tests {
             Some("select 1 from t")
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_redacted_entry_is_not_run_again_but_can_be_opened() {
+        let dir = temp_dir("redacted");
+        let svc = service(&dir);
+        let mut w = ws();
+        let tab = history_with(
+            &mut w,
+            &svc,
+            0,
+            &[
+                "UPDATE users SET api_token = 'hunter2' WHERE id = 1",
+                "select $$a$$ as password",
+                "select 1 from t",
+            ],
+        );
+        // Newest first: the plain entry, then the two redacted ones.
+        let rows = w.history_tab(tab).unwrap().results().len();
+        assert_eq!(rows, 3);
+        for (index, sql) in [(1, "select"), (2, "UPDATE")] {
+            let stored = w.history_tab(tab).unwrap().results()[index]
+                .sql()
+                .to_owned();
+            assert!(stored.starts_with(sql), "{stored}");
+            assert!(stored.contains("'<redacted>'"), "{stored}");
+            assert!(!stored.contains("hunter2"));
+            w.select_history_entry(tab, index);
+            let effect = w.dispatch_history(HistoryCommand::RunEntry, None);
+            assert!(matches!(effect, Effect::None), "{effect:?}");
+            assert_eq!(
+                w.take_notice(),
+                Some(
+                    "Run again is not available: sensitive values were redacted from this entry."
+                        .to_owned()
+                )
+            );
+            assert!(w.history.pending.is_empty());
+        }
+        // Opening is allowed, with a notice.
+        w.select_history_entry(tab, 2);
+        let effect = w.dispatch_history(HistoryCommand::OpenEntry, None);
+        assert!(matches!(effect, Effect::Connect { .. }), "{effect:?}");
+        assert!(w.take_notice().unwrap().contains("enter them again"));
+        // A plain entry still runs.
+        w.select_history_entry(tab, 0);
+        let effect = w.dispatch_history(HistoryCommand::RunEntry, None);
+        assert!(matches!(effect, Effect::Connect { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pending_open_debug_hides_the_sql() {
+        let shown = format!("{:?}", PendingOpen::Run("select 'topsecret'".to_owned()));
+        assert!(!shown.contains("topsecret"), "{shown}");
+        assert!(shown.contains("18"), "{shown}");
     }
 
     #[test]

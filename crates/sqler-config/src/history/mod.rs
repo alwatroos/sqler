@@ -21,7 +21,7 @@ pub use entry::{
     HistoryOptions, HistoryOutcome, HistoryQuery, MAX_HISTORY_SQL_BYTES, NewHistoryEntry,
 };
 pub(crate) use file::valid_connection_id;
-pub use redact::redact_credentials;
+pub use redact::{contains_redaction, redact_credentials};
 pub use store::HistoryStore;
 
 use crate::{ConfigDir, ConfigError};

@@ -27,8 +27,10 @@ New entries appear in an open History tab after the next search refresh; the tab
 
 ## Open or run again
 
-- **Open** (`history:open-entry`, "History: Open Entry in Editor") opens the selected entry in a new SQL editor tab for its connection. Nothing runs.
+- **Open** (`history:open-entry`, "History: Open Entry in Editor") opens the selected entry in a new SQL editor tab for its connection. Nothing runs. If SQLer hid sensitive values in the entry (they show as `'<redacted>'`), a notice says you must enter them again before running it.
 - **Run again** (`history:run-entry`, "History: Run Entry Again") opens a new editor tab, as above, and runs the whole entry once the connection is up. Every editor has its own session, so this always opens a new tab. If SQLer first asks you to trust an SSH host key, the editor only opens and nothing runs.
+
+**Run again is refused for an entry with redacted values**: it shows "Run again is not available: sensitive values were redacted from this entry." and runs nothing, because the placeholder would otherwise be sent to the database as a real value. Open the entry in an editor and type the values again instead.
 
 Run again goes through the normal [query execution](running-queries.md), so on a `prod` connection every statement that is not a plain read still needs your confirmation, and placeholders still open the parameter dialog.
 

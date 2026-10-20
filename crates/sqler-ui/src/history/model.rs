@@ -28,7 +28,7 @@ pub enum HistoryScope {
 }
 
 /// A search the view runs on the store (off the UI thread).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct HistorySearch {
     /// The history tab that asked.
     pub tab: TabId,
@@ -42,8 +42,21 @@ pub struct HistorySearch {
     pub limit: usize,
 }
 
+// Debug never prints the search text.
+impl std::fmt::Debug for HistorySearch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HistorySearch")
+            .field("tab", &self.tab)
+            .field("request", &self.request)
+            .field("text_len", &self.text.len())
+            .field("connection", &self.connection)
+            .field("limit", &self.limit)
+            .finish()
+    }
+}
+
 /// The state of one history tab.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HistoryTab {
     connection: ConnectionId,
     scope: HistoryScope,
@@ -52,6 +65,21 @@ pub struct HistoryTab {
     results: Vec<HistoryEntry>,
     selected: Option<usize>,
     searching: bool,
+}
+
+// Debug never prints the search text or the stored SQL.
+impl std::fmt::Debug for HistoryTab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HistoryTab")
+            .field("connection", &self.connection)
+            .field("scope", &self.scope)
+            .field("text_len", &self.text.len())
+            .field("request", &self.request)
+            .field("results", &self.results.len())
+            .field("selected", &self.selected)
+            .field("searching", &self.searching)
+            .finish()
+    }
 }
 
 impl HistoryTab {
@@ -171,7 +199,7 @@ impl HistoryTab {
 }
 
 /// One line of the history list, ready to draw.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct HistoryRow {
     /// How long ago it ran: `just now`, `N min ago`, `N h ago` or `N d ago`.
     pub when: String,
@@ -185,6 +213,20 @@ pub struct HistoryRow {
     pub sql: String,
     /// Whether the stored SQL was cut when it was recorded.
     pub truncated: bool,
+}
+
+// Debug never prints the SQL.
+impl std::fmt::Debug for HistoryRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HistoryRow")
+            .field("when", &self.when)
+            .field("connection", &self.connection)
+            .field("outcome", &self.outcome)
+            .field("detail", &self.detail)
+            .field("sql_len", &self.sql.len())
+            .field("truncated", &self.truncated)
+            .finish()
+    }
 }
 
 /// The display row of `entry`; `connection_label` names its connection, `now` is the clock.
@@ -461,6 +503,37 @@ impl SavedPicker {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn debug_output_never_shows_sql_or_search_text() {
+        use super::*;
+        let secret = "zzsecretzz";
+        let tab = HistoryTab::new(conn());
+        let mut tab = tab;
+        tab.set_text(secret.to_owned());
+        let search = HistorySearch {
+            tab: tab_id(),
+            request: 1,
+            text: secret.to_owned(),
+            connection: None,
+            limit: 1,
+        };
+        let row = HistoryRow {
+            when: String::new(),
+            connection: String::new(),
+            outcome: "OK",
+            detail: String::new(),
+            sql: secret.to_owned(),
+            truncated: false,
+        };
+        for shown in [
+            format!("{tab:?}"),
+            format!("{search:?}"),
+            format!("{row:?}"),
+        ] {
+            assert!(!shown.contains(secret), "{shown}");
+        }
+    }
+
     use sqler_config::{HistoryOptions, HistoryStore, NewHistoryEntry, SavedQueryDraft};
     use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId};
 
