@@ -237,6 +237,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0024](docs/src/adr/0024-query-execution.md) | Query execution: headless pipeline in `sqler-ui`, bound parameters, per-statement results, prod gate | accepted |
 | [0025](docs/src/adr/0025-sql-editor-component.md) | SQL editor component: `gpui-component` editor with headless logic | accepted |
 | [0026](docs/src/adr/0026-editor-intellisense.md) | Editor intellisense: completion, hover and diagnostics in the SQL editor | accepted |
+| [0030](docs/src/adr/0030-staged-edits-and-dml.md) | Staged edits and DML: bound statements, single-table editability, one-transaction apply | accepted |
 
 ## 9. Roadmap status
 

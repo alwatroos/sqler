@@ -17,12 +17,16 @@
 //! [`split()`] a script into statements with exact byte ranges, find the [`statement_at`] a
 //! cursor offset, find parameter [`placeholders`], [`classify()`] statements as read, write,
 //! DDL or unknown (anything not proven read-only is not read) and [`format()`] SQL.
+//!
+//! [`update()`], [`insert()`] and [`delete()`] generate bound DML for staged grid edits: every
+//! value is a parameter, never text in the SQL; [`single_table_source`] proves a `SELECT` reads one table.
 
 #![forbid(unsafe_code)]
 
 mod classify;
 mod ddl;
 mod dialect;
+mod dml;
 mod error;
 mod format;
 mod lexer;
@@ -35,6 +39,11 @@ pub use ddl::{
     select_star, supports,
 };
 pub use dialect::{Dialect, qualified_name, quote_identifier};
+pub use dml::{
+    BoundDml, ColumnValue, DmlError, SelectList, SourceTable, SqlIdent, TxStep, delete,
+    delete_bound, insert, insert_bound, param_marker, same_column, single_table_source,
+    transaction_sql, unwritable_reason, update, update_bound,
+};
 pub use error::{DdlError, FormatError};
 pub use format::{FormatOptions, format};
 pub use placeholder::{Placeholder, PlaceholderKind, placeholders};

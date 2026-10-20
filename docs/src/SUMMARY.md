@@ -54,6 +54,7 @@
   - [ADR-0024: Query execution](adr/0024-query-execution.md)
   - [ADR-0025: SQL editor component](adr/0025-sql-editor-component.md)
   - [ADR-0026: Editor intellisense](adr/0026-editor-intellisense.md)
+  - [ADR-0030: Staged edits and DML](adr/0030-staged-edits-and-dml.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
 - [Benchmarks](benchmarks.md)
