@@ -50,6 +50,26 @@ jobs:
       - name: Test
         run: cargo nextest run --workspace --no-tests=pass
 
+  db:
+    name: db
+    runs-on: ubuntu-latest
+    env:
+      SQLER_TEST_REQUIRE_DB: postgres
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Start PostgreSQL (TLS on)
+        run: sh crates/sqler-driver-postgres/tests/docker/start-postgres.sh "$RUNNER_TEMP/pg" >> "$GITHUB_ENV"
+      - name: Database tests
+        run: cargo nextest run -p sqler-driver-postgres --no-tests=fail
+      - name: CLI smoke test (PostgreSQL)
+        run: cargo run -p sqler-cli -- run --driver postgres "$SQLER_TEST_POSTGRES_URL" "select 1" | grep -qx 1
+
   deny:
     name: deny
     runs-on: ubuntu-latest

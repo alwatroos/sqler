@@ -3,7 +3,7 @@
 `sqler-cli` is the headless front end of SQLer. It connects to a database through a driver, runs one
 SQL statement and prints the result. It does not depend on the UI crates.
 
-Status: the `SQLite` driver is the only driver available.
+Status: the `SQLite` and `PostgreSQL` drivers are available.
 
 ## Install
 
@@ -20,8 +20,9 @@ cargo run -p sqler-cli -- run :memory: "select 1"
 ```
 
 The `SQLite` driver is compiled in by the default `driver-sqlite` feature. `SQLite` itself is bundled,
-so no system library is needed. With `--no-default-features` no driver is registered and `run`
-fails with `unknown driver`.
+so no system library is needed. The `PostgreSQL` driver is compiled in by the default
+`driver-postgres` feature. With `--no-default-features` no driver is registered and `run` fails with
+`unknown driver`.
 
 ## Usage
 
@@ -33,8 +34,8 @@ sqler-cli --version | -V
 
 - `--driver <ID>` (or `--driver=<ID>`) selects the driver and defaults to `sqlite`. The flag may also
   come after `<TARGET>` and `<SQL>`.
-- `<TARGET>` is `:memory:` for a private in-memory database, a `sqlite:` URL, or a file path.
-  A missing database file is created.
+- `<TARGET>` is `:memory:` for a private in-memory database, a `sqlite:` URL, or a file path
+  (`SQLite`; a missing database file is created), or a `postgres://` URL (`PostgreSQL`).
 - `<SQL>` is one statement.
 
 In-memory database:
@@ -55,6 +56,15 @@ sqler-cli run app.db "create table t (id integer, name text)"
 sqler-cli run app.db "insert into t values (1, 'a'), (2, 'b')"
 sqler-cli run app.db "select * from t"
 ```
+
+`PostgreSQL`:
+
+```sh
+sqler-cli run --driver postgres postgres://user@localhost/db "select 1"
+```
+
+TLS settings go in the URL, for example `?sslmode=verify-full`; see
+[PostgreSQL](databases/postgresql.md).
 
 Each invocation opens its own connection, so an `:memory:` database does not survive the command.
 
@@ -89,6 +99,7 @@ stays as it is. See [SQLite](databases/sqlite.md).
 
 ## Cancellation
 
-Drivers cancel cooperatively: a cancel request is checked between batches of rows. A single step
-that produces no rows for a long time, such as sorting a very large table before the first row, cannot
-be interrupted. The CLI has no Ctrl-C handler; the process exits on a signal.
+`PostgreSQL` cancels on the server: the running statement is stopped and the stream ends with a
+cancelled error. The `SQLite` driver cancels cooperatively: a cancel request is checked between
+batches of rows. A single step that produces no rows for a long time, such as sorting a very large
+table before the first row, cannot be interrupted. The CLI has no Ctrl-C handler; the process exits on a signal.
