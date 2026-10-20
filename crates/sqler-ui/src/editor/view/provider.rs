@@ -149,14 +149,15 @@ impl CompletionProvider for SqlProvider {
 /// The text is compared, not a revision counter: the edit that triggered the request has its
 /// `Change` event delivered after the provider is called, so a counter read at request time is
 /// always stale by the time the loads end.
-fn should_reopen(
-    same_text: bool,
-    same_cursor: bool,
-    focused: bool,
-    open: bool,
-    was_empty: bool,
-) -> bool {
-    same_text && same_cursor && focused && (open || was_empty)
+fn should_reopen(still: Still, focused: bool, open: bool, was_empty: bool) -> bool {
+    still.text && still.cursor && focused && (open || was_empty)
+}
+
+/// What did not move since the request.
+#[derive(Clone, Copy)]
+struct Still {
+    text: bool,
+    cursor: bool,
 }
 
 /// Asks for the popup again once the loads are done, when [`should_reopen`] says it still fits.
@@ -169,11 +170,12 @@ fn reopen(
 ) {
     editor
         .update_in(cx, |state, window, cx| {
-            let same_text = state.text().len() == request.len()
-                && state.text().to_string() == request.to_string();
+            let still = Still {
+                text: state.text().len() == request.len() && state.text() == request,
+                cursor: state.cursor() == offset,
+            };
             if !should_reopen(
-                same_text,
-                state.cursor() == offset,
+                still,
                 state.focus_handle(cx).is_focused(window),
                 state.completion_menu_state().open,
                 was_empty,
@@ -356,25 +358,46 @@ fn apply(
 
 #[cfg(test)]
 mod tests {
-    use super::should_reopen;
+    use super::{Still, should_reopen};
+
+    const STILL: Still = Still {
+        text: true,
+        cursor: true,
+    };
 
     /// The order of events for a typed `u.`: the request is made, the loads end, the popup is
     /// asked again. The editor text equals the request text then, whatever the revision did.
     #[test]
     fn typing_reopens_once_the_columns_loaded() {
-        assert!(should_reopen(true, true, true, false, true));
-        assert!(should_reopen(true, true, true, true, false));
+        assert!(should_reopen(STILL, true, false, true));
+        assert!(should_reopen(STILL, true, true, false));
     }
 
     #[test]
     fn a_moved_or_changed_editor_does_not_reopen() {
-        assert!(!should_reopen(false, true, true, true, true));
-        assert!(!should_reopen(true, false, true, true, true));
-        assert!(!should_reopen(true, true, false, true, true));
+        assert!(!should_reopen(
+            Still {
+                text: false,
+                ..STILL
+            },
+            true,
+            true,
+            true
+        ));
+        assert!(!should_reopen(
+            Still {
+                cursor: false,
+                ..STILL
+            },
+            true,
+            true,
+            true
+        ));
+        assert!(!should_reopen(STILL, false, true, true));
     }
 
     #[test]
     fn a_closed_menu_that_had_items_stays_closed() {
-        assert!(!should_reopen(true, true, true, false, false));
+        assert!(!should_reopen(STILL, true, false, false));
     }
 }

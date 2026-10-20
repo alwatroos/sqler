@@ -10,6 +10,16 @@ use std::borrow::Cow;
 
 const PLACEHOLDER: &str = "'<redacted>'";
 
+/// Whether `sql` holds the placeholder that [`redact_credentials`] writes in place of a literal,
+/// a comment or an identifier. Such a text has lost values and must not be executed as it is.
+/// The redactor writes this one form for every construct it hides (quoted, dollar-quoted,
+/// backtick, comment), so this finds all of them. A statement where the user typed the
+/// placeholder themselves counts too: refusing a run is the safe side.
+#[must_use]
+pub fn contains_redaction(sql: &str) -> bool {
+    sql.contains(PLACEHOLDER)
+}
+
 /// Lowercase fragments that mark a statement as sensitive. They are searched
 /// as substrings of the lowercased raw text, token by token as written
 /// (whitespace is not removed), so no lexing is needed and a marker inside a

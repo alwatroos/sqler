@@ -95,9 +95,6 @@ pub fn hover_markdown(
     Some((found.range, markdown))
 }
 
-/// The short name of a diagnostic code, for the `code` of the editor's diagnostic.
-///
-/// Codes added later read as `sql`.
 /// The name shown for a column type that has no native type name.
 #[must_use]
 pub fn data_type_name(data_type: DataType) -> &'static str {
@@ -116,6 +113,9 @@ pub fn data_type_name(data_type: DataType) -> &'static str {
     }
 }
 
+/// The short name of a diagnostic code, for the `code` of the editor's diagnostic.
+///
+/// Codes added later read as `sql`.
 #[must_use]
 pub fn code_name(code: DiagnosticCode) -> &'static str {
     match code {

@@ -102,6 +102,21 @@ impl SessionBridge {
         rx
     }
 
+    /// Runs a blocking closure on tokio's blocking pool and hands its output back on a oneshot.
+    /// Dropping the receiver does not stop the closure.
+    #[must_use]
+    pub fn blocking<T: Send + 'static>(
+        &self,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> oneshot::Receiver<T> {
+        let (tx, rx) = oneshot::channel();
+        self.handle.spawn_blocking(move || {
+            // A dropped receiver only means nobody needs the output.
+            let _ = tx.send(f());
+        });
+        rx
+    }
+
     /// Runs a future on tokio and hands its output back on a oneshot. Dropping the receiver does
     /// not stop the future.
     #[must_use]

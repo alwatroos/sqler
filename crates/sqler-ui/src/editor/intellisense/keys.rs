@@ -192,7 +192,7 @@ mod tests {
             };
             assert!(catalog.cached(&node).is_some(), "{node:?} was not loaded");
         }
-        assert!(tab.fresh(bootstrap_keys()).is_empty());
+        assert_eq!(tab.fresh(bootstrap_keys()).len(), 0);
     }
 
     #[test]

@@ -227,10 +227,18 @@ impl Workspace {
     }
 
     /// Applies one progress event of a run; events of an older run are ignored.
-    pub fn query_event(&mut self, tab: TabId, run: RunId, event: RunEvent) {
-        if let Some(query) = self.queries.get_mut(&tab) {
-            query.event(run, event);
+    ///
+    /// A statement that ended (finished, failed or cancelled) returns [`Effect::RecordHistory`]
+    /// for the query history; every other event returns [`Effect::None`].
+    #[allow(clippy::needless_pass_by_value)] // the view hands each event over
+    pub fn query_event(&mut self, tab: TabId, run: RunId, event: RunEvent) -> Effect {
+        let Some(query) = self.queries.get_mut(&tab) else {
+            return Effect::None;
+        };
+        if !query.event(run, event.clone()) {
+            return Effect::None;
         }
+        self.record_event(tab, &event)
     }
 
     /// The job ended and returned the session, which goes back to its tab (or is closed when the

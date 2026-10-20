@@ -291,6 +291,7 @@ pub(crate) fn sidebar(
         .border_color(border)
         .child(top)
         .child(div().flex_1().min_h_0().px_2().pb_2().child(rows))
+        .child(crate::history::view::saved_section(view, cx))
 }
 
 /// Builds the element of one line of the list.

@@ -14,6 +14,7 @@
   - [DDL and scripts](user-guide/ddl.md)
   - [Object browser](user-guide/object-browser.md)
   - [SQL editor](user-guide/sql-editor.md)
+  - [Query history and saved queries](user-guide/query-history.md)
   - [Databases](user-guide/databases/index.md)
     - [SQLite](user-guide/databases/sqlite.md)
     - [PostgreSQL](user-guide/databases/postgresql.md)
