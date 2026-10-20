@@ -9,7 +9,6 @@
 
 mod dialogs;
 mod results;
-mod stand_in;
 
 use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement as _, ParentElement as _,
@@ -19,15 +18,13 @@ use gpui_component::ActiveTheme as _;
 
 pub(crate) use dialogs::query_overlay;
 pub(crate) use results::{OverlayChange, QueryViews};
-pub(crate) use stand_in::editor_element;
 
 use crate::tabs::TabId;
 use crate::workspace::WorkspaceView;
 
 /// The body of a query tab: `editor` above the results of the last run.
 ///
-/// The editor is passed in so that the SQL editor (T9) can replace the plain stand-in input
-/// without touching the results area; [`editor_element`] makes the stand-in.
+/// The editor is the SQL editor element of the tab (`EditorViews::body`).
 pub(crate) fn query_tab_body(
     editor: AnyElement,
     tab: TabId,

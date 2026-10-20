@@ -498,6 +498,7 @@ impl Workspace {
                 Effect::None
             }
             BrowserAction::CopyTabText => self.copy_tab_text(),
+            BrowserAction::OpenTabInEditor => self.open_tab_in_editor(),
             BrowserAction::ShowMenu => Effect::ShowObjectMenu,
             other => match self.selected_node() {
                 Some((conn, node)) => self.run_action(conn, node, other),
@@ -538,7 +539,8 @@ impl Workspace {
             | BrowserAction::ShowMenu
             | BrowserAction::ConfirmDrop
             | BrowserAction::CancelDrop
-            | BrowserAction::CopyTabText => self.dispatch_browser(action),
+            | BrowserAction::CopyTabText
+            | BrowserAction::OpenTabInEditor => self.dispatch_browser(action),
         }
     }
 
@@ -595,6 +597,7 @@ impl Workspace {
         let index = self.sidebar.index_of(conn)?;
         let connection = tab_connection(self.sidebar.entries().get(index)?.config());
         let tab = self.tabs.open_object(connection, kind, name);
+        self.tab_conns.insert(tab, conn.clone());
         self.show_connection_tabs();
         Some(tab)
     }
@@ -617,6 +620,7 @@ impl Workspace {
         match (entry, kind) {
             (MenuEntry::Refresh, _) => self.start_refresh(conn, node),
             (MenuEntry::OpenData, TreeNodeKind::Object(obj)) => self.open_data_tab(conn, &obj),
+            (MenuEntry::OpenInEditor, TreeNodeKind::Object(obj)) => self.open_in_editor(conn, &obj),
             (MenuEntry::GenerateCreate, TreeNodeKind::Object(obj)) => {
                 self.script_tab(conn, obj, Script::Create)
             }
@@ -697,6 +701,25 @@ impl Workspace {
             tab,
             grid: GridTab::new(model),
             job: OpenDataJob { request, sql, sink },
+        }
+    }
+
+    /// Opens an editor on `conn` that starts with the `SELECT *` of the object.
+    fn open_in_editor(&mut self, conn: &ConnectionId, obj: &DbObject) -> Effect {
+        let Some(dialect) = self.browsers.get(conn).and_then(|b| b.dialect) else {
+            return Effect::None;
+        };
+        match select_star(dialect, obj, DEFAULT_ROW_LIMIT) {
+            Ok(sql) => self.open_editor_on(conn, Some(sql)),
+            Err(err) => self.notify(err.to_string()),
+        }
+    }
+
+    /// Opens the script of the DDL tab on screen in an editor.
+    fn open_tab_in_editor(&mut self) -> Effect {
+        match self.active_script_text() {
+            Some((conn, text)) => self.open_editor_on(&conn, Some(text)),
+            None => self.notify("This tab has no script to open."),
         }
     }
 
@@ -1465,6 +1488,51 @@ mod tests {
         h.apply(effect);
         assert_eq!(h.seen.copies.len(), 1);
         assert!(h.seen.copies[0].contains("CREATE TABLE"));
+    }
+
+    #[test]
+    fn open_in_editor_seeds_a_new_editor_with_select_star() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        h.open();
+        h.click("Schemas (1)", BrowserAction::Expand);
+        h.click("main", BrowserAction::Expand);
+        h.click("Tables (2)", BrowserAction::Expand);
+        let tabs_before = h.w.tabs().len();
+        h.click("users", BrowserAction::Entry(MenuEntry::OpenInEditor));
+        assert_eq!(h.w.tabs().len(), tabs_before + 1);
+        let tab = h.w.tabs().active().unwrap().id();
+        assert_eq!(h.w.tabs().get(tab).unwrap().kind(), TabKind::Query);
+        assert!(h.w.editor_doc(tab).is_some());
+        assert_eq!(
+            h.w.take_editor_seed(tab).as_deref(),
+            Some("SELECT *\nFROM \"main\".\"users\"\nLIMIT 1000;\n")
+        );
+        assert!(h.seen.grids.is_empty(), "no grid is opened");
+    }
+
+    #[test]
+    fn a_ddl_tab_opens_its_script_in_an_editor() {
+        let mut h = Harness::new(
+            Environment::Dev,
+            intro().with_definition(&users(), "unused"),
+        );
+        h.open();
+        h.click("Schemas (1)", BrowserAction::Expand);
+        h.click("main", BrowserAction::Expand);
+        h.click("Tables (2)", BrowserAction::Expand);
+        h.click("users", BrowserAction::Entry(MenuEntry::GenerateCreate));
+        // Still loading: nothing to open.
+        let effect = h.w.dispatch_browser(BrowserAction::OpenTabInEditor);
+        h.apply(effect);
+        assert!(h.w.take_notice().is_some());
+        h.run_job();
+        let ddl = h.w.tabs().active().unwrap().id();
+        let effect = h.w.dispatch_browser(BrowserAction::OpenTabInEditor);
+        h.apply(effect);
+        let editor = h.w.tabs().active().unwrap().id();
+        assert_ne!(editor, ddl);
+        let seed = h.w.take_editor_seed(editor).unwrap();
+        assert!(seed.contains("CREATE TABLE \"main\".\"users\""), "{seed}");
     }
 
     #[test]

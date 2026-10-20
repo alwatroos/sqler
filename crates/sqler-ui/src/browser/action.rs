@@ -33,11 +33,14 @@ pub enum BrowserAction {
     CancelDrop,
     /// Copy the text of the DDL or properties tab.
     CopyTabText,
+    /// Open the script of the DDL tab in a SQL editor.
+    OpenTabInEditor,
 }
 
 /// The commands: ID and title.
 pub const COMMANDS: &[(&str, &str)] = &[
     ("object:open-data", "Object: Open Data"),
+    ("object:open-in-editor", "Object: Open in SQL Editor"),
     ("object:generate-create", "Object: Generate CREATE"),
     ("object:generate-select", "Object: Generate SELECT"),
     ("object:generate-insert", "Object: Generate INSERT"),
@@ -56,6 +59,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("object:confirm-drop", "Object: Confirm Drop"),
     ("object:cancel-drop", "Object: Cancel Drop"),
     ("object:copy-tab-text", "Object: Copy Tab Text"),
+    (
+        "object:open-tab-in-editor",
+        "Object: Open Script in SQL Editor",
+    ),
 ];
 
 impl BrowserAction {
@@ -73,6 +80,7 @@ impl BrowserAction {
     fn id_str(self) -> &'static str {
         match self {
             Self::Entry(MenuEntry::OpenData) => "object:open-data",
+            Self::Entry(MenuEntry::OpenInEditor) => "object:open-in-editor",
             Self::Entry(MenuEntry::GenerateCreate) => "object:generate-create",
             Self::Entry(MenuEntry::GenerateSelect) => "object:generate-select",
             Self::Entry(MenuEntry::GenerateInsert) => "object:generate-insert",
@@ -91,6 +99,7 @@ impl BrowserAction {
             Self::ConfirmDrop => "object:confirm-drop",
             Self::CancelDrop => "object:cancel-drop",
             Self::CopyTabText => "object:copy-tab-text",
+            Self::OpenTabInEditor => "object:open-tab-in-editor",
         }
     }
 }
@@ -100,6 +109,7 @@ impl BrowserAction {
 pub fn action_for(id: &CommandId) -> Option<BrowserAction> {
     Some(match id.as_str() {
         "object:open-data" => BrowserAction::Entry(MenuEntry::OpenData),
+        "object:open-in-editor" => BrowserAction::Entry(MenuEntry::OpenInEditor),
         "object:generate-create" => BrowserAction::Entry(MenuEntry::GenerateCreate),
         "object:generate-select" => BrowserAction::Entry(MenuEntry::GenerateSelect),
         "object:generate-insert" => BrowserAction::Entry(MenuEntry::GenerateInsert),
@@ -118,6 +128,7 @@ pub fn action_for(id: &CommandId) -> Option<BrowserAction> {
         "object:confirm-drop" => BrowserAction::ConfirmDrop,
         "object:cancel-drop" => BrowserAction::CancelDrop,
         "object:copy-tab-text" => BrowserAction::CopyTabText,
+        "object:open-tab-in-editor" => BrowserAction::OpenTabInEditor,
         _ => return None,
     })
 }
@@ -140,8 +151,9 @@ mod tests {
 
     use super::*;
 
-    const ALL: [BrowserAction; 19] = [
+    const ALL: [BrowserAction; 21] = [
         BrowserAction::Entry(MenuEntry::OpenData),
+        BrowserAction::Entry(MenuEntry::OpenInEditor),
         BrowserAction::Entry(MenuEntry::GenerateCreate),
         BrowserAction::Entry(MenuEntry::GenerateSelect),
         BrowserAction::Entry(MenuEntry::GenerateInsert),
@@ -160,6 +172,7 @@ mod tests {
         BrowserAction::ConfirmDrop,
         BrowserAction::CancelDrop,
         BrowserAction::CopyTabText,
+        BrowserAction::OpenTabInEditor,
     ];
 
     #[test]
@@ -215,6 +228,16 @@ mod tests {
         assert_eq!(
             BrowserAction::CopyTabText.command_id().to_string(),
             "object:copy-tab-text"
+        );
+        assert_eq!(
+            BrowserAction::OpenTabInEditor.command_id().to_string(),
+            "object:open-tab-in-editor"
+        );
+        assert_eq!(
+            BrowserAction::Entry(MenuEntry::OpenInEditor)
+                .command_id()
+                .to_string(),
+            "object:open-in-editor"
         );
     }
 

@@ -25,7 +25,7 @@ From an editor buffer (text, selection, cursor) bound to a connection the user r
 
 Chosen: option 3. Nothing driver-specific is needed: the tab already owns a `sqler-driver-api` session (ADR-0017), so `sqler-app` stays unchanged and the layering rule holds. No new crate is added.
 
-**Placement.** `sqler_ui::query` is built without the `gui` feature, so `cargo test -p sqler-ui` covers it. It holds the buffer snapshot, the plan, the parameter form and binding, the run state machine (`QueryTab`), the `QueryJob` and the four commands. The views (results area, parameter dialog, confirmation dialog and a plain multi-line stand-in input until the editor T9 exists) live in `query/view/**` behind `gui`. T9 calls `Workspace::run_query(tab, mode, BufferSnapshot)` and passes its editor element to `query_tab_body`.
+**Placement.** `sqler_ui::query` is built without the `gui` feature, so `cargo test -p sqler-ui` covers it. It holds the buffer snapshot, the plan, the parameter form and binding, the run state machine (`QueryTab`), the `QueryJob` and the four commands. The views (results area, parameter dialog, confirmation dialog and the editor slot, filled by the SQL editor of ADR-0025) live in `query/view/**` behind `gui`. T9 calls `Workspace::run_query(tab, mode, BufferSnapshot)` and passes its editor element to `query_tab_body`.
 
 **Pipeline.** `BufferSnapshot { text, selection, cursor }` -> `plan` (T3 `split`, `statement_at`, `classify`, `placeholders`) -> parameter form -> prod confirmation -> `bind` -> `QueryJob`. All offsets are UTF-8 byte offsets on char boundaries.
 

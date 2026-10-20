@@ -54,7 +54,7 @@ On a connection marked `prod`, SQLer asks before any statement that is not class
 - "Read" means SQLer found no write syntax. A function or a view can still write to the database, and SQLer cannot see that, so do not treat the prod dialog as a read-only guarantee.
 - SQLer does not open a read-only transaction around your statements.
 - On `MySQL`, cancelling can race with the end of the statement and then has no effect.
-- The editor is a plain multi-line input for now; syntax highlighting and completion come with the SQL editor.
+- The editor is the [SQL editor](sql-editor.md) (highlighting, multi-cursor, bracket matching, format); completion comes later in M3.
 - Query history is not recorded yet.
 
 See also [Keybindings](keybindings.md) to change the shortcuts, and [Results grid](results-grid.md).

@@ -4,11 +4,13 @@
 //! `Workspace`: sidebar, tab strip and the sessions behind the tabs.
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use sqler_catalog::{CacheKey, CatalogWorker, RefreshHandle};
 use sqler_config::{ConnectionId, ConnectionProfile, Secret, SecretRef};
 use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId};
 use sqler_driver_api::{CancelFlag, CancelHandle, Session};
+use sqler_sql::Dialect;
 
 use super::action::WorkspaceAction;
 use super::browser::{BrowserJob, BrowserState, OpenDataJob};
@@ -18,6 +20,7 @@ use crate::connections::{
     ConnectFailure, ConnectRequest, ConnectionAction, ConnectionForm, Dialog, FieldError, FormMode,
     GroupPurpose, HostKeyPrompt, SecretField, TestStatus, from_profile_secret,
 };
+use crate::editor::{EditorDocs, EditorKey, TextEdit};
 use crate::grid::{GridTab, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS};
 use crate::query::{QueryJob, QueryTab, RunEvent};
 use crate::settings::SettingsModel;
@@ -139,6 +142,34 @@ pub enum Effect {
     Copy(String),
     /// Show the commands of the selected object (the context menu cannot open from a key).
     ShowObjectMenu,
+    /// Replace a range of the editor text as one undo step, then select `select_after`.
+    EditorEdit {
+        /// The editor tab.
+        tab: TabId,
+        /// The replacement.
+        edit: TextEdit,
+    },
+    /// Make this range the only selection of the editor.
+    EditorSelect {
+        /// The editor tab.
+        tab: TabId,
+        /// The range to select.
+        range: Range<usize>,
+    },
+    /// Add this range as one more selection of the editor.
+    EditorAddSelection {
+        /// The editor tab.
+        tab: TabId,
+        /// The range to add.
+        range: Range<usize>,
+    },
+    /// Forward a key the editor handles itself.
+    EditorKey {
+        /// The editor tab.
+        tab: TabId,
+        /// The key.
+        key: EditorKey,
+    },
     /// Run a query job on tokio, show its grids in the query tab and follow its events with
     /// [`Workspace::query_event`]; when the events end, report with [`Workspace::query_finished`].
     RunQuery {
@@ -212,6 +243,26 @@ impl std::fmt::Debug for Effect {
             Self::OpenData { tab, .. } => f.debug_struct("OpenData").field("tab", tab).finish(),
             Self::Copy(text) => write!(f, "Copy({} bytes)", text.len()),
             Self::ShowObjectMenu => f.write_str("ShowObjectMenu"),
+            Self::EditorEdit { tab, edit } => f
+                .debug_struct("EditorEdit")
+                .field("tab", tab)
+                .field("edit", edit)
+                .finish(),
+            Self::EditorSelect { tab, range } => f
+                .debug_struct("EditorSelect")
+                .field("tab", tab)
+                .field("range", range)
+                .finish(),
+            Self::EditorAddSelection { tab, range } => f
+                .debug_struct("EditorAddSelection")
+                .field("tab", tab)
+                .field("range", range)
+                .finish(),
+            Self::EditorKey { tab, key } => f
+                .debug_struct("EditorKey")
+                .field("tab", tab)
+                .field("key", key)
+                .finish(),
             Self::RunQuery { job, grids, .. } => f
                 .debug_struct("RunQuery")
                 .field("job", job)
@@ -269,6 +320,14 @@ pub struct Workspace {
     pub(super) drop_flow: Option<DropFlow>,
     /// The folder to refresh once the DROP has run, with the browser generation it belongs to.
     pub(super) drop_parent: Option<(u64, TreeNodeId)>,
+    /// The headless state of the SQL editor tabs.
+    pub(super) editors: EditorDocs,
+    /// The saved connection behind every editor and object tab.
+    pub(super) tab_conns: HashMap<TabId, ConnectionId>,
+    /// Start text for the editor that the connect attempt of this request opens.
+    pub(super) editor_seeds: HashMap<RequestId, String>,
+    /// Start text of an open that stopped at the host-key prompt, until the retry runs.
+    pub(super) retry_seeds: HashMap<ConnectionId, String>,
     /// The run state of every query tab.
     pub(super) queries: HashMap<TabId, QueryTab>,
     /// The query runs in progress; the session of such a tab is on loan to the job.
@@ -318,6 +377,10 @@ impl Workspace {
             drop_flow: None,
             drop_parent: None,
             next_refresh: 0,
+            editors: EditorDocs::new(),
+            tab_conns: HashMap::new(),
+            editor_seeds: HashMap::new(),
+            retry_seeds: HashMap::new(),
             queries: HashMap::new(),
             query_runs: HashMap::new(),
             next_run: 0,
@@ -589,7 +652,7 @@ impl Workspace {
         Effect::OpenGrid { tab, grid }
     }
 
-    fn open_connection(&mut self, index: usize) -> Effect {
+    pub(super) fn open_connection(&mut self, index: usize) -> Effect {
         let Some(id) = self.sidebar.entries().get(index).map(|e| e.id().clone()) else {
             return Effect::None;
         };
@@ -632,6 +695,8 @@ impl Workspace {
             cancel.cancel();
         }
         self.close_object_tab(id);
+        self.editors.remove(id);
+        self.tab_conns.remove(&id);
         self.queries.remove(&id);
         let cancel = self.cancel_query_run(id);
         if self.tabs.is_empty() && self.settings_tab == SettingsTab::Background {
@@ -656,6 +721,7 @@ impl Workspace {
         request: RequestId,
         result: Result<Box<dyn Session>, ConnectFailure>,
     ) -> Effect {
+        let seed = self.editor_seeds.remove(&request);
         let Some(purpose) = self.requests.remove(&request) else {
             return match result {
                 Ok(session) => Effect::CloseSession(session),
@@ -663,7 +729,7 @@ impl Workspace {
             };
         };
         match purpose {
-            Purpose::Open(id) => self.open_finished(&id, result),
+            Purpose::Open(id) => self.open_finished(&id, result, seed),
             Purpose::Browse(id) => self.browse_finished(&id, result),
             Purpose::Test => self.test_finished(request, result),
         }
@@ -673,6 +739,7 @@ impl Workspace {
         &mut self,
         id: &ConnectionId,
         result: Result<Box<dyn Session>, ConnectFailure>,
+        seed: Option<String>,
     ) -> Effect {
         let Some(index) = self.sidebar.index_of(id) else {
             // The connection was deleted while connecting.
@@ -685,8 +752,11 @@ impl Workspace {
             Ok(session) => {
                 self.sidebar.finish_connect(index, Ok(()));
                 let connection = tab_connection(self.sidebar.entries()[index].config());
+                let dialect = Dialect::from_driver_id(connection.driver.as_str());
                 let tab = self.tabs.open(connection, TabKind::Query);
                 self.sessions.insert(tab, session);
+                self.tab_conns.insert(tab, id.clone());
+                self.editors.open(tab, dialect, seed);
                 self.queries.insert(tab, QueryTab::new());
                 self.show_connection_tabs();
                 return self.ensure_browser(id);
@@ -694,6 +764,10 @@ impl Workspace {
             Err(failure) => {
                 self.sidebar.finish_connect(index, Err(failure.to_string()));
                 if let ConnectFailure::UnknownHostKey(key) = failure {
+                    match seed {
+                        Some(seed) => self.retry_seeds.insert(id.clone(), seed),
+                        None => self.retry_seeds.remove(id),
+                    };
                     self.ask_host_key(key, Purpose::Open(id.clone()));
                 }
             }
@@ -775,10 +849,19 @@ impl Workspace {
     /// found the key unknown runs again.
     pub fn trust_finished(&mut self, retry: Purpose, result: Result<(), ConnectFailure>) -> Effect {
         match (retry, result) {
-            (Purpose::Open(id), Ok(())) => match self.sidebar.index_of(&id) {
-                Some(index) => self.open_connection(index),
-                None => Effect::None,
-            },
+            (Purpose::Open(id), Ok(())) => {
+                let seed = self.retry_seeds.remove(&id);
+                match self.sidebar.index_of(&id) {
+                    Some(index) => {
+                        let effect = self.open_connection(index);
+                        if let (Effect::Connect { request, .. }, Some(seed)) = (&effect, seed) {
+                            self.editor_seeds.insert(*request, seed);
+                        }
+                        effect
+                    }
+                    None => Effect::None,
+                }
+            }
             (Purpose::Test, Ok(())) => self.dispatch_connection(ConnectionAction::Test),
             (Purpose::Browse(id), Ok(())) => {
                 // A host key is trusted before the first tab opens, so this is not expected;
@@ -1145,6 +1228,9 @@ impl Workspace {
             return Effect::None;
         };
         let for_test = *retry == Purpose::Test;
+        if let Purpose::Open(id) = retry {
+            self.retry_seeds.remove(id);
+        }
         self.dialog = self.parked.take();
         // Only the test that asked is marked; a form with a test of its own (running, or already
         // finished while parked) keeps that state.

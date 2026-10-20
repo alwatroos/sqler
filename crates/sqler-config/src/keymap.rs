@@ -237,6 +237,9 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("query:run-statement", &["mod+enter"]),
     ("query:run-all", &["mod+shift+enter"]),
     ("query:cancel", &["mod+."]),
+    ("editor:new", &["mod+n"]),
+    ("editor:format-sql", &["shift+alt+f"]),
+    ("editor:add-next-occurrence", &["mod+d"]),
 ];
 
 fn dedup(chords: Vec<KeyChord>) -> Vec<KeyChord> {

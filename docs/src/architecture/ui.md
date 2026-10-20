@@ -111,13 +111,24 @@ Benchmark: [Object browser tree](../benchmarks.md#object-browser-tree).
 [ADR-0024](../adr/0024-query-execution.md). `sqler_ui::query` is pure (no GPUI); `workspace/query.rs` wires it in and `query/view/**` only draws it.
 
 ```text
-query:run-* -> WorkspaceView::query_buffer (BufferSnapshot) -> Workspace::run_query
+query:run-* -> EditorViews::buffer (EditorBuffer) -> Workspace::run_editor -> QueryRunPort -> Workspace::run_query
   plan -> ParamForm (prompt) -> prod confirmation -> bind -> Effect::RunQuery
   bridge.spawn(QueryJob::run) -> RunEvent stream -> Workspace::query_event
   QueryJobDone -> Workspace::query_finished (the session goes back to the tab)
 ```
 
-`QueryTab` (one per query tab, in `Workspace::queries`) is the state machine: `Idle`, `Prompting`, `Confirming` and `Running`, plus the result entries (`Pending`, `Running`, `Done`, `Failed`, `Cancelled`, `NotRun`). Stale `RunId`s are ignored. While a run is active the tab session is on loan to the job; the workspace keeps its `CancelHandle`, the job's stop flag and the sink cancel flags, and `cancel_query` returns `Effect::CancelQuery`. If the tab closes during a run, `query_finished` closes the returned session. Effects added: `RunQuery` and `CancelQuery`. Each statement has its own `GridSink` and `GridTab` (the M1 grid, as for open data). The editor (T9) supplies a `BufferSnapshot` through `WorkspaceView::query_buffer` and its element through `query::view::query_tab_body`; until then a plain multi-line input stands in. User-facing description: [Running queries](../user-guide/running-queries.md).
+`QueryTab` (one per query tab, in `Workspace::queries`) is the state machine: `Idle`, `Prompting`, `Confirming` and `Running`, plus the result entries (`Pending`, `Running`, `Done`, `Failed`, `Cancelled`, `NotRun`). Stale `RunId`s are ignored. While a run is active the tab session is on loan to the job; the workspace keeps its `CancelHandle`, the job's stop flag and the sink cancel flags, and `cancel_query` returns `Effect::CancelQuery`. If the tab closes during a run, `query_finished` closes the returned session. Effects added: `RunQuery` and `CancelQuery`. Each statement has its own `GridSink` and `GridTab` (the M1 grid, as for open data). The SQL editor (ADR-0025) supplies the buffer: `editor::QueryRunPort` is the `RunPort` that turns an `EditorBuffer` into a `BufferSnapshot` and calls `run_query` or `cancel_query`, and the editor element is the top of `query::view::query_tab_body`. User-facing description: [Running queries](../user-guide/running-queries.md).
+## SQL editor
+
+The `TabKind::Query` tab is the SQL editor. Its text lives in a `gpui-component` `EditorState` (code editor, language `sql`, tree-sitter highlighting that follows `Theme::change`). The logic is headless in `sqler_ui::editor`; only `editor/view.rs` (`EditorViews`, one editor view per tab, like `GridViews`) uses GPUI.
+
+- `EditorBuffer` (text, selection, cursor; byte offsets) is a snapshot the view copies out of the `EditorState` when a command runs. The logic works on it and returns an `Effect` (`EditorEdit`, `EditorSelect`, `EditorAddSelection`, `EditorKey`) that the view applies. A format edit is applied with `EditorState::replace`, one undo step.
+- `EditorDocs` (owned by `Workspace`) keeps per-tab headless state: the dialect, a seed text for a new editor (from "Open in SQL Editor" or a DDL tab) and the chain of added occurrences.
+- Modules: `action` (command IDs, `action_for`), `format`, `brackets` (`BracketIndex`, built only when the text changed and the cursor touches a bracket), `occurrence`, `run` and `synthetic`. The workspace side is `Workspace::dispatch_editor`, `run_editor` and `cancel_editor_run`; user messages go through `notice`.
+- `RunPort` is the seam to query execution: `run(workspace, tab, RunMode, EditorBuffer)` and `cancel`. Tests use a fake. The real adapter is `QueryRunPort` (`editor/run_t8.rs`).
+- Benchmark: `cargo bench -p sqler-ui --bench editor_buffer` (10,000-line script; bracket build and format p95 under 16 ms).
+
+Decision and the gaps in `gpui-component` (no add-next-occurrence, no bracket matching): [ADR-0025](../adr/0025-sql-editor-component.md). User view: [SQL editor](../user-guide/sql-editor.md).
 
 ## Hook points
 

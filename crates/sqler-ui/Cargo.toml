@@ -38,3 +38,7 @@ harness = false
 [[bench]]
 name = "browser_tree"
 harness = false
+
+[[bench]]
+name = "editor_buffer"
+harness = false

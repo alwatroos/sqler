@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! The results area of a query tab, and the view state behind the query tabs (the stand-in
-//! inputs, the result tables and the inputs of the parameter prompt).
+//! The results area of a query tab, and the view state behind the query tabs (the result tables
+//! and the inputs of the parameter prompt).
 
 use std::collections::HashMap;
 
@@ -12,14 +12,13 @@ use gpui::{
     Styled as _, Window, div,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{InputState, TextareaState};
+use gpui_component::input::InputState;
 use gpui_component::table::{DataTable, TableState};
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
-use super::stand_in;
 use crate::grid::GridTab;
 use crate::grid::view::{GridDelegate, Table, start_polling};
-use crate::query::{BufferSnapshot, Phase, QueryTab, StatementStatus};
+use crate::query::{Phase, QueryTab, StatementStatus};
 use crate::tabs::{TabId, TabKind, TabStrip};
 use crate::workspace::{Workspace, WorkspaceView};
 
@@ -49,7 +48,6 @@ pub(crate) enum OverlayChange {
 /// The view state of every query tab.
 #[derive(Default)]
 pub(crate) struct QueryViews {
-    editors: HashMap<TabId, Entity<TextareaState>>,
     /// Grids of a new run, waiting for a window to make their tables.
     pending: Vec<(TabId, Vec<GridTab>)>,
     results: HashMap<TabId, Results>,
@@ -69,22 +67,11 @@ impl QueryViews {
     /// Drops the state of tabs that are gone. Dropping a table drops its model.
     pub(crate) fn retain(&mut self, tabs: &TabStrip) {
         let alive = |id: &TabId| tabs.get(*id).is_some();
-        self.editors.retain(|id, _| alive(id));
         self.pending.retain(|(id, _)| alive(id));
         self.results.retain(|id, _| alive(id));
         if self.params.as_ref().is_some_and(|p| !alive(&p.tab)) {
             self.params = None;
         }
-    }
-
-    /// The stand-in input of a query tab.
-    pub(crate) fn editor(&self, tab: TabId) -> Option<&Entity<TextareaState>> {
-        self.editors.get(&tab)
-    }
-
-    /// The text, selection and cursor of the stand-in input.
-    pub(crate) fn snapshot(&self, tab: TabId, cx: &App) -> Option<BufferSnapshot> {
-        self.editors.get(&tab).map(|e| stand_in::snapshot(e, cx))
     }
 
     /// The text the user typed for each parameter of the open prompt.
@@ -129,20 +116,14 @@ impl QueryViews {
         self.results.get(&tab)?.chosen
     }
 
-    /// Creates what the next frame needs: stand-in inputs, tables for new grids, the inputs of
-    /// the parameter prompt and the focus of the confirmation.
+    /// Creates what the next frame needs: tables for new grids, the inputs of the parameter
+    /// prompt and the focus of the confirmation.
     pub(crate) fn materialize(
         &mut self,
         ws: &Workspace,
         window: &mut Window,
         cx: &mut Context<WorkspaceView>,
     ) -> OverlayChange {
-        for tab in ws.tabs().iter().filter(|t| t.kind() == TabKind::Query) {
-            let id = tab.id();
-            self.editors
-                .entry(id)
-                .or_insert_with(|| stand_in::new_editor(window, cx));
-        }
         for (id, grids) in std::mem::take(&mut self.pending) {
             let tables = grids
                 .into_iter()
