@@ -193,6 +193,7 @@ mod tests {
             [
                 "app:quit",
                 "connection:open",
+                "dev:open-synthetic-grid",
                 "settings:open",
                 "tab:close",
                 "tab:next",

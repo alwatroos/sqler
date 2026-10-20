@@ -27,6 +27,8 @@ impl TabId {
 pub enum TabKind {
     /// A query tab (a placeholder body until the SQL editor arrives).
     Query,
+    /// A results grid.
+    Grid,
 }
 
 /// The connection data a tab needs to render its header.
@@ -80,13 +82,18 @@ impl Tab {
         self.kind
     }
 
-    /// The connection name, plus ` (n)` for the n-th tab opened for that name (n >= 2).
+    /// The connection name, plus ` (n)` for the n-th tab opened for that name (n >= 2). Grid tabs
+    /// are prefixed with `Results: `.
     #[must_use]
     pub fn title(&self) -> String {
-        if self.ordinal >= 2 {
+        let base = if self.ordinal >= 2 {
             format!("{} ({})", self.connection.name, self.ordinal)
         } else {
             self.connection.name.clone()
+        };
+        match self.kind {
+            TabKind::Grid => format!("Results: {base}"),
+            TabKind::Query => base,
         }
     }
 
@@ -342,5 +349,18 @@ mod tests {
         let id = s.open(c, TabKind::Query);
         assert_eq!(s.get(id).unwrap().header().accent, None);
         assert_eq!(s.get(id).unwrap().connection().name, "n");
+    }
+
+    #[test]
+    fn grid_tab_title_is_prefixed_and_keeps_the_ordinal() {
+        let mut s = TabStrip::default();
+        let q = s.open(conn("x"), TabKind::Query);
+        let g = s.open(conn("x"), TabKind::Grid);
+        assert_eq!(s.get(q).unwrap().title(), "x");
+        assert_eq!(s.get(g).unwrap().title(), "Results: x (2)");
+        assert_eq!(s.get(g).unwrap().kind(), TabKind::Grid);
+        assert_eq!(s.get(g).unwrap().header().title, "Results: x (2)");
+        let first = s.open(conn("y"), TabKind::Grid);
+        assert_eq!(s.get(first).unwrap().title(), "Results: y");
     }
 }

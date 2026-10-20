@@ -75,6 +75,7 @@ pub fn action_for(id: &CommandId, ws: &Workspace) -> Option<WorkspaceAction> {
         "settings:open" => Some(WorkspaceAction::OpenSettings),
         "theme:toggle-mode" => Some(WorkspaceAction::ToggleThemeMode),
         "connection:open" => ws.sidebar().selected().map(WorkspaceAction::OpenConnection),
+        "dev:open-synthetic-grid" => Some(WorkspaceAction::OpenSyntheticGrid),
         _ => None,
     }
 }
@@ -229,6 +230,10 @@ mod tests {
         assert_eq!(act("connection:select", &w), None);
         assert_eq!(act("tab:activate", &w), None);
         assert_eq!(act("query:run", &w), None);
+        assert_eq!(
+            act("dev:open-synthetic-grid", &w),
+            Some(WorkspaceAction::OpenSyntheticGrid)
+        );
     }
 
     #[test]

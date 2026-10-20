@@ -7,6 +7,7 @@
   - [Workspace](user-guide/workspace.md)
   - [Keybindings](user-guide/keybindings.md)
   - [Settings](user-guide/settings.md)
+  - [Results grid](user-guide/results-grid.md)
 - [Architecture](architecture/index.md)
   - [Core and driver API](architecture/core-and-driver-api.md)
   - [UI workspace](architecture/ui.md)

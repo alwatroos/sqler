@@ -23,6 +23,7 @@ use super::action::WorkspaceAction;
 use super::bridge::SessionBridge;
 use super::state::{Effect, Workspace};
 use crate::command::{CommandId, CommandRegistry};
+use crate::grid::view::{GridProbe, GridViews, action_for_command as grid_action_for};
 use crate::keymap::input::key_input;
 use crate::keymap::{KeyDispatcher, KeyOutcome, action_for, chord_from_input, route_key};
 use crate::palette::{self, OPEN_PALETTE, PaletteState};
@@ -109,6 +110,8 @@ pub(crate) struct WorkspaceView {
     palette: PaletteState,
     palette_input: Entity<InputState>,
     focus: FocusHandle,
+    /// The table of every open results-grid tab.
+    pub(crate) grids: GridViews,
     /// Keeps the OS appearance observer alive.
     _appearance: Subscription,
 }
@@ -147,6 +150,9 @@ impl WorkspaceView {
         if let Err(err) = palette::register_commands(&mut commands) {
             eprintln!("sqler: could not register the palette command: {err}");
         }
+        if let Err(err) = crate::grid::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the grid commands: {err}");
+        }
         let keys = KeyDispatcher::new(Platform::current(), startup.keybindings, &commands);
         for notice in keys.notices() {
             eprintln!("sqler: {notice}");
@@ -171,7 +177,7 @@ impl WorkspaceView {
         .detach();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        Self {
+        let view = Self {
             ws,
             bridge: SessionBridge::new(startup.registry, startup.runtime),
             commands,
@@ -179,8 +185,20 @@ impl WorkspaceView {
             palette: PaletteState::default(),
             palette_input,
             focus,
+            grids: GridViews::default(),
             _appearance: appearance,
-        }
+        };
+        GridProbe::start_if_requested(window, cx);
+        view
+    }
+
+    /// The active tab, if it is a results grid.
+    pub(crate) fn ws_active_grid(&self) -> Option<crate::tabs::TabId> {
+        self.ws
+            .tabs()
+            .active()
+            .filter(|t| t.kind() == crate::tabs::TabKind::Grid)
+            .map(crate::tabs::Tab::id)
     }
 
     /// Routes a key press before the focused element sees it.
@@ -243,6 +261,16 @@ impl WorkspaceView {
         } else if let Some(action) = action_for(id, &self.ws) {
             self.palette.close();
             self.dispatch(action, cx);
+        } else if let Some(grid_action) = grid_action_for(id) {
+            self.palette.close();
+            match self.ws_active_grid() {
+                Some(tab) => self.grids.run_action(tab, grid_action, cx),
+                None => window.push_notification("Open a results grid first.", cx),
+            }
+        } else if id.as_str() == "connection:open" {
+            // `action_for` found no selected connection to open.
+            self.palette.close();
+            window.push_notification("Select a connection in the sidebar first.", cx);
         } else {
             self.palette.close();
             eprintln!("sqler: no handler for command {id}");
@@ -255,6 +283,7 @@ impl WorkspaceView {
     pub(crate) fn dispatch(&mut self, action: WorkspaceAction, cx: &mut Context<Self>) {
         let effect = self.ws.dispatch(action);
         self.apply(effect, cx);
+        self.grids.retain(self.ws.tabs());
         cx.notify();
     }
 
@@ -275,6 +304,7 @@ impl WorkspaceView {
                 })
                 .detach();
             }
+            Effect::OpenGrid { tab, grid } => self.grids.insert(tab, grid),
             Effect::CloseSession(session) => self.bridge.close(session),
             Effect::Quit => cx.quit(),
             Effect::ApplySettings => {
@@ -290,7 +320,8 @@ impl WorkspaceView {
 }
 
 impl Render for WorkspaceView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.grids.materialize(window, cx);
         let theme = cx.theme();
         let (bg, fg) = (theme.background, theme.foreground);
         let sidebar = sidebar::view::sidebar(self.ws.sidebar(), cx);
@@ -299,6 +330,8 @@ impl Render for WorkspaceView {
         let strip_end = settings::view::strip_end(&self.ws, cx);
         let body = if settings_active {
             settings::view::page(&self.ws, cx).into_any_element()
+        } else if let Some(grid) = self.ws_active_grid() {
+            self.grids.body(grid, cx).into_any_element()
         } else {
             tabs::view::tab_body(self.ws.tabs(), cx).into_any_element()
         };

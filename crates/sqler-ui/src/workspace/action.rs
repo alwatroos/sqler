@@ -24,6 +24,8 @@ pub enum WorkspaceAction {
     NextTab,
     /// Activate the previous tab.
     PreviousTab,
+    /// Open a results-grid tab with a synthetic 1M-row result.
+    OpenSyntheticGrid,
     /// Quit the application.
     Quit,
     /// Open the settings tab (or switch to it).
@@ -52,6 +54,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("theme:toggle-mode", "Toggle Light/Dark Theme"),
     ("settings:set-theme", "Set Theme"),
     ("settings:set-ui-font-size", "Set UI Font Size"),
+    ("dev:open-synthetic-grid", "Open Synthetic 1M-Row Grid"),
 ];
 
 impl WorkspaceAction {
@@ -75,6 +78,7 @@ impl WorkspaceAction {
             Self::ToggleThemeMode => "theme:toggle-mode",
             Self::SetTheme(_) => "settings:set-theme",
             Self::SetUiFontSize(_) => "settings:set-ui-font-size",
+            Self::OpenSyntheticGrid => "dev:open-synthetic-grid",
         };
         CommandId::new(id).expect("constant command ID is valid")
     }
@@ -126,6 +130,7 @@ mod tests {
             WorkspaceAction::ToggleThemeMode,
             WorkspaceAction::SetTheme(ThemePreference::Dark),
             WorkspaceAction::SetUiFontSize(14),
+            WorkspaceAction::OpenSyntheticGrid,
         ]
     }
 
