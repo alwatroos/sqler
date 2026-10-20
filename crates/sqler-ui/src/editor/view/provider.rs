@@ -43,6 +43,104 @@ pub(super) struct Context {
 pub(super) struct IntelState {
     pub(super) intel: TabIntel,
     pub(super) ctx: Option<Context>,
+    /// The latest completion request, whatever load it waits for.
+    request: Option<Request>,
+}
+
+/// A completion request: the text and cursor it was made for, and whether it answered nothing.
+struct Request {
+    seq: u64,
+    text: Rope,
+    offset: usize,
+    empty: bool,
+}
+
+impl IntelState {
+    /// Records a completion request as the latest one. Gives back its sequence number.
+    fn note_request(&mut self, text: Rope, offset: usize) -> u64 {
+        let seq = self.request.as_ref().map_or(1, |r| r.seq + 1);
+        self.request = Some(Request {
+            seq,
+            text,
+            offset,
+            empty: false,
+        });
+        seq
+    }
+
+    /// Notes that request `seq` was answered with no items, unless a newer one took over.
+    fn note_empty(&mut self, seq: u64, empty: bool) {
+        if let Some(r) = self.request.as_mut().filter(|r| r.seq == seq) {
+            r.empty = empty;
+        }
+    }
+}
+
+/// Keeps the keys of a load marked asked only while the load can still finish.
+///
+/// Dropped before [`LoadGuard::done`] (the future was cancelled, or its task went away), it takes
+/// the keys out of the asked set so a later pass requests them again. A load that ran to its end
+/// stays asked, so a key that fails does not loop.
+struct LoadGuard {
+    handle: IntelHandle,
+    keys: Vec<CacheKey>,
+    complete: bool,
+}
+
+impl LoadGuard {
+    fn done(&mut self) {
+        self.complete = true;
+    }
+}
+
+impl Drop for LoadGuard {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.handle.borrow_mut().intel.unask(&self.keys);
+        }
+    }
+}
+
+/// Runs `loading` for `keys` that were just marked asked, with the guard on them.
+///
+/// The guard exists from this call on, not from the first poll: a future dropped unstarted gives
+/// its keys back too.
+fn guarded<F: std::future::Future<Output = ()>>(
+    handle: IntelHandle,
+    keys: Vec<CacheKey>,
+    loading: F,
+) -> impl std::future::Future<Output = ()> {
+    let mut guard = LoadGuard {
+        handle,
+        keys,
+        complete: false,
+    };
+    async move {
+        loading.await;
+        guard.done();
+    }
+}
+
+/// Loads `keys` (just marked asked by `fresh`) in a task of its own that no edit and no replaced
+/// diagnose pass cancels, then runs `then`. Every load goes through here: a key is asked only
+/// while a task that survives edits owns its load, and [`LoadGuard`] gives it back if even that
+/// task is dropped.
+fn spawn_owned_load(
+    handle: &IntelHandle,
+    catalog: &Catalog,
+    keys: Vec<CacheKey>,
+    window: &Window,
+    cx: &App,
+    then: impl FnOnce(&mut AsyncWindowContext) + 'static,
+) {
+    let loading = load(catalog, keys.clone());
+    let handle = handle.clone();
+    window
+        .spawn(cx, async move |cx| {
+            guarded(handle, keys, loading).await;
+            then(cx);
+        })
+        .detach();
 }
 
 /// The shared state; it lives on the foreground thread only.
@@ -91,7 +189,7 @@ impl CompletionProvider for SqlProvider {
         let rope = text.clone();
         let snapshot = ctx.catalog.snapshot();
         let dialect = ctx.dialect;
-        let request_rope = rope.clone();
+        let seq = self.handle.borrow_mut().note_request(rope.clone(), offset);
         let compute = cx.background_executor().spawn(async move {
             let source = rope.to_string();
             let schema = CatalogSchema::new(snapshot, dialect);
@@ -106,7 +204,7 @@ impl CompletionProvider for SqlProvider {
         let editor = self.editor.clone();
         window.spawn(cx, async move |cx| {
             let (popup, range) = compute.await;
-            let empty = popup.items.is_empty();
+            handle.borrow_mut().note_empty(seq, popup.items.is_empty());
             let items: Vec<CompletionItem> = popup
                 .items
                 .into_iter()
@@ -123,15 +221,16 @@ impl CompletionProvider for SqlProvider {
                 .collect();
             let loads = handle.borrow_mut().intel.fresh(popup.loads);
             if !loads.is_empty() {
-                let ask_again = cx.update(|window, cx| {
-                    window.spawn(cx, async move |cx| {
-                        load(&ctx.catalog, loads).await;
-                        reopen(&editor, &request_rope, offset, empty, cx);
-                    })
-                });
-                if let Ok(task) = ask_again {
-                    task.detach();
-                }
+                // The reopen looks at the latest request, not this one: a key typed during the
+                // load makes its own request, whose loads `fresh` swallowed, and it is that
+                // popup that has to be asked for again.
+                let owner = handle.clone();
+                cx.update(|window, cx| {
+                    spawn_owned_load(&owner, &ctx.catalog, loads, window, cx, move |cx| {
+                        reopen(&editor, &handle, cx);
+                    });
+                })
+                .ok();
             }
             Ok(CompletionResponse::Array(items))
         })
@@ -161,13 +260,15 @@ struct Still {
 }
 
 /// Asks for the popup again once the loads are done, when [`should_reopen`] says it still fits.
-fn reopen(
-    editor: &WeakEntity<EditorState>,
-    request: &Rope,
-    offset: usize,
-    was_empty: bool,
-    cx: &mut AsyncWindowContext,
-) {
+fn reopen(editor: &WeakEntity<EditorState>, handle: &IntelHandle, cx: &mut AsyncWindowContext) {
+    let (request, offset, was_empty) = {
+        let state = handle.borrow();
+        let Some(r) = state.request.as_ref() else {
+            return;
+        };
+        (r.text.clone(), r.offset, r.empty)
+    };
+    let request = &request;
     editor
         .update_in(cx, |state, window, cx| {
             let still = Still {
@@ -243,10 +344,15 @@ struct Finding {
     message: String,
 }
 
-/// Loads `keys` in a task of its own that nothing cancels.
-pub(super) fn preload(catalog: &Catalog, keys: Vec<CacheKey>, window: &Window, cx: &App) {
-    let loading = load(catalog, keys);
-    window.spawn(cx, async move |_| loading.await).detach();
+/// Loads the bootstrap `keys` (just marked asked) in a task nothing cancels.
+pub(super) fn preload(
+    handle: &IntelHandle,
+    catalog: &Catalog,
+    keys: Vec<CacheKey>,
+    window: &Window,
+    cx: &App,
+) {
+    spawn_owned_load(handle, catalog, keys, window, cx, |_| {});
 }
 
 /// Diagnoses the text of `state` after `delay`, underlines the findings, and loads the columns of
@@ -266,12 +372,18 @@ pub(super) fn diagnose_task(
         if !delay.is_zero() {
             cx.background_executor().timer(delay).await;
         }
-        // Each round that loads something runs once more; `fresh` stops a key from being asked
-        // twice, so the rounds end.
-        while let Some(more) = diagnose_once(&editor, &handle, cx).await {
+        // The loads this pass asks for run in tasks of their own: replacing this task (the next
+        // edit) must not lose them. Their tables bump the snapshot generation, which makes
+        // `sync_intellisense` diagnose again, so this task does not wait for them.
+        if let Some(more) = diagnose_once(&editor, &handle, cx).await {
             let catalog = handle.borrow().ctx.as_ref().map(|c| c.catalog.clone());
-            let Some(catalog) = catalog else { break };
-            load(&catalog, more).await;
+            if let Some(catalog) = catalog {
+                let owner = handle.clone();
+                cx.update(|window, cx| {
+                    spawn_owned_load(&owner, &catalog, more, window, cx, |_| {});
+                })
+                .ok();
+            }
         }
     })
 }
@@ -358,7 +470,85 @@ fn apply(
 
 #[cfg(test)]
 mod tests {
-    use super::{Still, should_reopen};
+    use std::cell::RefCell;
+    use std::future::{Future, pending, ready};
+    use std::pin::pin;
+    use std::rc::Rc;
+    use std::task::{Context, Poll, Waker};
+
+    use gpui_component::input::Rope;
+    use sqler_catalog::{CacheKey, NodeKey};
+    use sqler_driver_api::sqler_core::{ObjectKind, ObjectPath};
+
+    use super::{IntelHandle, IntelState, Still, guarded, should_reopen};
+
+    fn keys() -> Vec<CacheKey> {
+        [ObjectKind::Table, ObjectKind::View]
+            .into_iter()
+            .map(|k| CacheKey::Children(NodeKey::new(ObjectPath::root(), k)))
+            .collect()
+    }
+
+    fn handle() -> IntelHandle {
+        let h: IntelHandle = Rc::new(RefCell::new(IntelState::default()));
+        h.borrow_mut().intel.bind(Some(1));
+        h
+    }
+
+    /// Polls `fut` once, the way an executor starts a task.
+    fn poll_once<F: Future<Output = ()>>(fut: F) -> bool {
+        let mut cx = Context::from_waker(Waker::noop());
+        matches!(pin!(fut).poll(&mut cx), Poll::Ready(()))
+    }
+
+    /// A load cancelled midway (the task dropped) gives its keys back; a later pass asks again.
+    #[test]
+    fn a_cancelled_load_is_requested_again() {
+        let h = handle();
+        let asked = h.borrow_mut().intel.fresh(keys());
+        assert_eq!(asked, keys());
+        // Started, never finished, then dropped: what an edit does to a diagnose task.
+        let mut fut = Box::pin(guarded(h.clone(), asked, pending()));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        // Still in flight: nobody asks twice.
+        assert_eq!(h.borrow_mut().intel.fresh(keys()).len(), 0);
+        drop(fut);
+        assert_eq!(h.borrow_mut().intel.fresh(keys()), keys());
+    }
+
+    /// A load that was never polled and is dropped gives its keys back as well.
+    #[test]
+    fn an_unstarted_load_is_requested_again() {
+        let h = handle();
+        let asked = h.borrow_mut().intel.fresh(keys());
+        drop(guarded(h.clone(), asked, ready(())));
+        assert_eq!(h.borrow_mut().intel.fresh(keys()), keys());
+    }
+
+    /// No loop: a load that ran to its end keeps its keys asked, so they are not requested again.
+    #[test]
+    fn a_completed_load_is_not_requested_again() {
+        let h = handle();
+        let asked = h.borrow_mut().intel.fresh(keys());
+        assert!(poll_once(guarded(h.clone(), asked, ready(()))));
+        assert_eq!(h.borrow_mut().intel.fresh(keys()).len(), 0);
+    }
+
+    /// The reopen compares against the latest request: a key typed during the load replaces it.
+    #[test]
+    fn the_latest_request_is_the_one_kept() {
+        let mut s = IntelState::default();
+        let first = s.note_request(Rope::from("SELECT u. FROM users u"), 10);
+        let second = s.note_request(Rope::from("SELECT u.i FROM users u"), 11);
+        assert!(second > first);
+        s.note_empty(first, true);
+        let r = s.request.as_ref().expect("a request");
+        assert_eq!((r.seq, r.offset, r.empty), (second, 11, false));
+        assert_eq!(r.text, Rope::from("SELECT u.i FROM users u"));
+        s.note_empty(second, true);
+        assert!(s.request.as_ref().is_some_and(|r| r.empty));
+    }
 
     const STILL: Still = Still {
         text: true,

@@ -40,6 +40,16 @@ impl TabIntel {
             .collect()
     }
 
+    /// Takes `keys` back out of the asked set, so a later [`TabIntel::fresh`] returns them again.
+    ///
+    /// For loads that never completed (their task was dropped). A load that completed, with an
+    /// error too, stays asked; that is what keeps a failing key from being requested in a loop.
+    pub fn unask(&mut self, keys: &[CacheKey]) {
+        for key in keys {
+            self.asked.remove(key);
+        }
+    }
+
     /// Whether `generation` of the catalog snapshot is new; true once per generation.
     pub fn snapshot_changed(&mut self, generation: u64) -> bool {
         if self.seen == Some(generation) {
@@ -97,6 +107,17 @@ mod tests {
         assert_eq!(t.fresh(vec![a.clone()]).len(), 0);
         t.bind(Some(2));
         assert_eq!(t.fresh(vec![a.clone()]), vec![a]);
+    }
+
+    #[test]
+    fn unask_makes_keys_fresh_again() {
+        let mut t = TabIntel::default();
+        t.bind(Some(1));
+        let a = key(ObjectKind::Table);
+        let b = key(ObjectKind::View);
+        t.fresh(vec![a.clone(), b.clone()]);
+        t.unask(std::slice::from_ref(&a));
+        assert_eq!(t.fresh(vec![a.clone(), b]), vec![a]);
     }
 
     #[test]

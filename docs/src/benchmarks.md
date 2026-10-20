@@ -203,9 +203,9 @@ The worst completion p95 is about 0.5 to 1.0 ms against the 16 ms budget (one fr
 
 | Date | Commit | OS | Worst p95 (ns) | Notes |
 | ---- | ------ | -- | -------------- | ----- |
-| 2026-10-20 | 66f541f plus this PR | macOS arm64, Apple M4 Pro | 279,334 (`from_prefix`) | 2,000 samples per scenario; budget p95 16 ms; about 57 times under it |
+| 2026-10-20 | 66f541f plus this PR | macOS arm64, Apple M4 Pro | 274,375 (`from_prefix`) | 2,000 samples per scenario; budget p95 16 ms; about 58 times under it |
 
-p50 / p95 per scenario (ns): `statement_start` (empty statement) 7,875 / 11,375; `from_prefix` (`SELECT * FROM t_04|`) 239,458 / 279,334; `qualified_column` (`SELECT u.| FROM t_00010 u`) 4,875 / 5,042; `alias_join` (column behind the alias of a join) 5,541 / 5,792; `hover` (column with a foreign key) 4,166 / 4,250; `diagnose` (five statements, one unknown column) 125,750 / 131,083.
+p50 / p95 per scenario (ns): `statement_start` (empty statement) 8,084 / 10,709; `from_prefix` (`SELECT * FROM t_04|`) 231,708 / 274,375; `qualified_column` (`SELECT u.| FROM t_00010 u`) 4,875 / 5,042; `alias_join` (column behind the alias of a join) 5,583 / 5,708; `hover` (column with a foreign key) 4,166 / 4,209; `diagnose` (five statements, one unknown column) 125,625 / 128,375.
 
 The popup the editor shows most often (a column behind an alias) takes microseconds; the slowest case is a table-name prefix, which scans and ranks the 5,000 relation names. Building the `CatalogSchema` per request is cheap: it holds `Arc`s of the cached listings and fills the per-table state only for the tables the engine looks at.
 
