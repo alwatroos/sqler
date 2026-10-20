@@ -62,7 +62,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libx11-xcb-dev libxcb1-dev libvulkan1 mesa-vulkan-drivers vulkan-tools \
-            fonts-dejavu-core xvfb xauth weston pkg-config
+            fonts-dejavu-core xvfb xauth cage pkg-config
 
       # macOS 26 images may ship Xcode without the separately downloaded Metal toolchain.
       - name: Metal toolchain
@@ -93,33 +93,24 @@ jobs:
           xvfb-run -a -s "-screen 0 1920x1080x24" \
             sh scripts/measure.sh "$PWD/target/release/spike-gpui"
 
-      - name: Measure (Wayland, headless weston)
+      - name: Measure (Wayland, headless cage)
         if: matrix.display == 'wayland'
         run: |
-          weston --help | head -n 40 || true
+          # weston --backend=headless advertises no wl_seat (no input devices) and GPUI
+          # panics on that; cage (wlroots) always creates a seat.
           export XDG_RUNTIME_DIR="$(mktemp -d)"
           chmod 700 "$XDG_RUNTIME_DIR"
-          start_weston() {
-            weston --backend=headless --socket=wayland-spike --idle-time=0 "$@" \
-              >"$RUNNER_TEMP/weston.log" 2>&1 &
-            for _ in $(seq 1 20); do
-              [ -S "$XDG_RUNTIME_DIR/wayland-spike" ] && return 0
-              sleep 0.5
-            done
-            return 1
-          }
-          # Flag sets differ between weston versions; try them in order, log what failed.
-          started=no
-          for extra in "--width=1920 --height=1080" "--width=1920 --height=1080 --renderer=pixman" ""; do
-            echo "starting weston with: ${extra:-<no extra flags>}"
-            # shellcheck disable=SC2086
-            if start_weston $extra; then started=yes; break; fi
-            cat "$RUNNER_TEMP/weston.log"
-            pkill weston || true
-          done
-          [ "$started" = yes ]
-          export WAYLAND_DISPLAY=wayland-spike
+          export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+          export WLR_HEADLESS_OUTPUTS=1
           unset DISPLAY
+          cage -- sleep 1800 >"$RUNNER_TEMP/cage.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break
+            sleep 0.5
+          done
+          cat "$RUNNER_TEMP/cage.log" || true
+          [ -S "$XDG_RUNTIME_DIR/wayland-0" ]
+          export WAYLAND_DISPLAY=wayland-0
           sh scripts/measure.sh "$PWD/target/release/spike-gpui"
 
       - name: Measure (macOS)

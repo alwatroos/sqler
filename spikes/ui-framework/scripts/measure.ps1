@@ -33,7 +33,8 @@ Add-Content $out "BINARY_BYTES=$bytes"
 Add-Content $out ("BINARY_MB={0:N1}" -f ($bytes / 1MB))
 
 $cold = Join-Path $dir 'cold.json'
-hyperfine --warmup 3 --runs 20 --export-json $cold "$Bin --exit-after-first-frame" | Out-Null
+hyperfine -N --warmup 3 --runs 20 --export-json $cold "`"$Bin`" --exit-after-first-frame" *>&1 |
+    Tee-Object -FilePath (Join-Path $dir 'hyperfine.out') | Out-Host
 if ($LASTEXITCODE -eq 0) {
     # hyperfine 2.x: results[0].summary.time_wall_clock.mean; 1.x: results[0].mean
     $r = (Get-Content $cold -Raw | ConvertFrom-Json).results[0]
