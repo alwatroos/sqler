@@ -71,7 +71,7 @@ passphrase_in_keychain = true
 ```
 
 - The order of the `[[group]]` entries and of the `[[connection]]` entries is the order of the store. The order of siblings is their order in the array, filtered by parent.
-- `id` is a stable key of the form `[a-z0-9-]+`. It is made from the name once, at creation (lowercase ASCII letters and digits kept, any other run becomes one `-`, uniquified with `-2`, `-3`) and never changes, not even on rename.
+- `id` is a stable key of the form `[a-z0-9-]+`, 1 to 64 characters, starting with a letter or digit (the keychain connection-id grammar of ADR-0012, enforced on load too). It is made from the name once, at creation (lowercase ASCII letters and digits kept, any other run becomes one `-`, cut to 64 characters, uniquified with `-2`, `-3` with the base shortened so the suffix still fits) and never changes, not even on rename.
 - Connection names are unique in the whole store (as in ADR-0005). Group names are unique among siblings.
 - Unknown keys are errors. Errors are `ConfigError::Parse` (TOML syntax and types, no echo of values) or `ConfigError::Invalid`, which names the file and the entry, for example `connection[2] "Billing": ...`.
 - Load checks duplicate IDs, a `group` or `parent` that does not exist, and parent cycles.

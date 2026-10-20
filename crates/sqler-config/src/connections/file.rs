@@ -12,7 +12,7 @@ use sqler_core::{DriverId, Environment};
 
 use super::model::{
     CONNECTIONS_FORMAT_VERSION, ConnectionId, ConnectionProfile, ConnectionSpec, Group, GroupId,
-    SshAuth, SshProfile, TlsMode, TlsProfile, is_valid_id, unique_slug, validate_spec,
+    SshAuth, SshProfile, TlsMode, TlsProfile, id_problem, unique_slug, validate_spec,
 };
 use super::parse_message;
 use super::store::ConnectionStore;
@@ -223,12 +223,11 @@ fn migrate_v0(path: &Path, file: &V0File) -> Result<ConnectionStore, ConfigError
 }
 
 fn check_id(id: &str) -> Result<(), String> {
-    if is_valid_id(id) {
-        Ok(())
-    } else {
-        Err(format!(
-            "id {id:?} must be non-empty lowercase letters, digits and `-`"
-        ))
+    match id_problem(id) {
+        None => Ok(()),
+        Some(why) => Err(format!(
+            "invalid id {id:?}: {why} (1 to 64 characters of lowercase letters, digits and `-`, starting with a letter or digit)"
+        )),
     }
 }
 
@@ -776,5 +775,25 @@ target = "app.db"
             "version = 1\n[[connection]]\nid = \"c\"\ntarget = \"postgres://u:hunter2@h/d\" oops\n",
         );
         assert!(!m.contains("hunter2") && m.contains("line 4"), "{m}");
+    }
+
+    #[test]
+    fn ids_outside_keychain_grammar_are_rejected_on_load() {
+        for bad in ["-x".to_owned(), "a".repeat(65)] {
+            let e = store_msg(&format!(
+                "version = 1\n[[connection]]\nid = \"{bad}\"\nname = \"Hand\"\ndriver = \"sqlite\"\ntarget = \"t\"\n"
+            ));
+            assert!(
+                e.contains("connection[0] \"Hand\"") && e.contains("invalid id"),
+                "{e}"
+            );
+        }
+        let ok = "a".repeat(64);
+        assert!(
+            load_store(&format!(
+                "version = 1\n[[connection]]\nid = \"{ok}\"\nname = \"Hand\"\ndriver = \"sqlite\"\ntarget = \"t\"\n"
+            ))
+            .is_ok()
+        );
     }
 }

@@ -21,7 +21,7 @@ pub use memory::MemoryStore;
 /// The keychain service name every `SQLer` entry is stored under. Changing it orphans stored secrets.
 pub const KEYCHAIN_SERVICE: &str = "SQLer";
 
-const MAX_ID_LEN: usize = 64;
+pub(crate) const MAX_ID_LEN: usize = 64;
 
 /// What a secret is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -68,7 +68,7 @@ pub struct SecretRef {
     kind: SecretKind,
 }
 
-fn validate_id(id: &str) -> Result<(), &'static str> {
+pub(crate) fn validate_id(id: &str) -> Result<(), &'static str> {
     if id.is_empty() {
         return Err("connection id is empty");
     }

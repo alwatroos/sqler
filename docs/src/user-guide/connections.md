@@ -54,7 +54,7 @@ The order of the `[[group]]` entries and of the `[[connection]]` entries is the 
 
 | Key | Required | Rule |
 | --- | -------- | ---- |
-| `id` | yes | lowercase letters, digits and `-`; unique among groups; never changes |
+| `id` | yes | 1 to 64 lowercase letters, digits and `-`, starting with a letter or digit; unique among groups; never changes |
 | `name` | yes | not empty; unique among the groups with the same parent |
 | `parent` | no | the `id` of another group; leave it out for a top-level group |
 
@@ -64,7 +64,7 @@ Groups can nest as deep as you like. A group cannot be its own ancestor.
 
 | Key | Required | Rule |
 | --- | -------- | ---- |
-| `id` | yes | lowercase letters, digits and `-`; unique among connections; never changes |
+| `id` | yes | 1 to 64 lowercase letters, digits and `-`, starting with a letter or digit; unique among connections; never changes |
 | `name` | yes | not empty; unique among all connections |
 | `group` | no | the `id` of a group; leave it out for a top-level connection |
 | `driver` | yes | a driver ID such as `sqlite` or `postgres` |

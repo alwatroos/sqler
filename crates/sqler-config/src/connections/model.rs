@@ -9,16 +9,35 @@ use std::path::PathBuf;
 use sqler_core::{ConnectionConfig, DriverId, Environment};
 
 use super::store::StoreError;
-use crate::secrets::{SecretError, SecretRef};
+use crate::secrets::{MAX_ID_LEN, SecretError, SecretRef};
 
 /// Version of the `connections.toml` format this build writes and reads up to.
 pub const CONNECTIONS_FORMAT_VERSION: u32 = 1;
 
-/// Whether `s` is a valid id: non-empty, `[a-z0-9-]` only.
+/// Whether `s` is a valid id: lowercase letters, digits and `-` only, and
+/// within the keychain connection-id grammar (1 to 64 characters, leading
+/// letter or digit), so every id can name a keychain entry.
 pub(crate) fn is_valid_id(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    id_problem(s).is_none()
+}
+
+/// Why `s` is not a valid id, `None` when it is valid.
+pub(crate) fn id_problem(s: &str) -> Option<String> {
+    if let Err(reason) = crate::secrets::validate_id(s) {
+        return Some(reason.to_owned());
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Some("id may only contain lowercase letters, digits and '-'".to_owned());
+    }
+    None
+}
+
+/// `slug` cut to at most `max` bytes (it is ASCII), without a trailing `-`.
+fn cap(slug: &str, max: usize) -> &str {
+    slug[..slug.len().min(max)].trim_end_matches('-')
 }
 
 /// Lowercases `name` into a slug, collapsing runs of other characters into one
@@ -40,12 +59,14 @@ pub(crate) fn unique_slug(name: &str, fallback: &str, taken: impl Fn(&str) -> bo
     if slug.is_empty() {
         fallback.clone_into(&mut slug);
     }
+    let slug = cap(&slug, MAX_ID_LEN).to_owned();
     if !taken(&slug) {
         return slug;
     }
     let mut n = 2_u64;
     loop {
-        let candidate = format!("{slug}-{n}");
+        let suffix = format!("-{n}");
+        let candidate = format!("{}{suffix}", cap(&slug, MAX_ID_LEN - suffix.len()));
         if !taken(&candidate) {
             return candidate;
         }
@@ -578,6 +599,48 @@ mod tests {
     }
 
     #[test]
+    fn long_names_yield_keychain_safe_ids() {
+        let name = "x".repeat(70);
+        let id = unique_slug(&name, "connection", |_| false);
+        assert_eq!(id.len(), 64);
+        assert!(is_valid_id(&id));
+        let profile = ProfileSecret::new(
+            ConnectionId::from_valid(id.clone()),
+            ProfileSecretKind::DbPassword,
+        );
+        assert!(SecretRef::try_from(&profile).is_ok());
+
+        let mut taken = std::collections::HashSet::new();
+        for _ in 0..12 {
+            let next = unique_slug(&name, "connection", |s| taken.contains(s));
+            assert!(next.len() <= 64 && is_valid_id(&next), "{next}");
+            assert!(taken.insert(next));
+        }
+        // A cut that lands on a '-' does not leave a trailing dash.
+        let dashed = format!("{}-{}", "a".repeat(63), "b");
+        let id = unique_slug(&dashed, "connection", |_| false);
+        assert!(!id.ends_with('-') && is_valid_id(&id), "{id}");
+    }
+
+    #[test]
+    fn id_validity_matches_keychain_grammar() {
+        let cases: Vec<String> = ["a", "-x", "x-", "", "a.b", "A"]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(["a".repeat(64), "a".repeat(65)])
+            .collect();
+        for id in &cases {
+            let keychain_ok =
+                SecretRef::new(id, crate::secrets::SecretKind::DatabasePassword).is_ok();
+            if is_valid_id(id) {
+                assert!(keychain_ok, "{id:?} valid but not a keychain id");
+            }
+        }
+        assert!(!is_valid_id("-x") && !is_valid_id(&"a".repeat(65)) && !is_valid_id(""));
+        assert!(is_valid_id(&"a".repeat(64)));
+    }
+
+    #[test]
     fn secret_account_and_kinds() {
         let s = ProfileSecret::new(
             ConnectionId::from_valid("billing".into()),
@@ -609,10 +672,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(r.to_string(), "billing:db-password");
-        let bad = ProfileSecret::new(
-            ConnectionId::from_valid("-x".into()),
-            ProfileSecretKind::DbPassword,
-        );
+        let bad = ProfileSecret::new(ConnectionId("-x".into()), ProfileSecretKind::DbPassword);
         assert!(SecretRef::try_from(&bad).is_err());
     }
 
