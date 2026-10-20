@@ -244,6 +244,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0026](docs/src/adr/0026-editor-intellisense.md) | Editor intellisense: completion, hover and diagnostics in the SQL editor | accepted |
 | [0027](docs/src/adr/0027-bounded-result-model.md) | Bounded result model: credit gate, fetch more and compact rows | accepted |
 | [0028](docs/src/adr/0028-export-writer-api.md) | Export writer API: push-style row writers, a format registry and SQL literals | accepted |
+| [0030](docs/src/adr/0030-staged-edits-and-dml.md) | Staged edits and DML: bound statements, single-table editability, one-transaction apply | accepted |
 
 ## 9. Roadmap status
 
