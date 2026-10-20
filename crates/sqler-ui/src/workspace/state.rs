@@ -5,10 +5,11 @@
 
 use std::collections::HashMap;
 
-use sqler_driver_api::Session;
 use sqler_driver_api::sqler_core::ConnectionConfig;
+use sqler_driver_api::{CancelFlag, Session};
 
 use super::action::WorkspaceAction;
+use crate::grid::{GridTab, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS};
 use crate::settings::SettingsModel;
 use crate::sidebar::SidebarModel;
 use crate::tabs::{TabConnection, TabId, TabKind, TabStrip};
@@ -32,6 +33,13 @@ pub enum Effect {
     },
     /// Close this session (its tab is gone).
     CloseSession(Box<dyn Session>),
+    /// Show this grid in the already opened grid tab (it is bound to the active connection).
+    OpenGrid {
+        /// The grid tab.
+        tab: TabId,
+        /// The tab state; the view owns it from now on.
+        grid: GridTab,
+    },
     /// Quit the application.
     Quit,
     /// The settings changed: save them and re-apply the theme and font size.
@@ -48,6 +56,7 @@ impl std::fmt::Debug for Effect {
                 .field("config", config)
                 .finish(),
             Self::CloseSession(_) => f.write_str("CloseSession(..)"),
+            Self::OpenGrid { tab, .. } => f.debug_struct("OpenGrid").field("tab", tab).finish(),
             Self::Quit => f.write_str("Quit"),
             Self::ApplySettings => f.write_str("ApplySettings"),
         }
@@ -75,6 +84,10 @@ pub struct Workspace {
     settings: SettingsModel,
     settings_tab: SettingsTab,
     system_appearance: Appearance,
+    /// Cancel flags of the grid tabs' ingestion threads.
+    grid_cancels: HashMap<TabId, CancelFlag>,
+    /// Rows of the synthetic grid; a field so tests can use a small result.
+    synthetic_rows: usize,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -85,6 +98,7 @@ impl std::fmt::Debug for Workspace {
             .field("sessions", &self.sessions.len())
             .field("requests", &self.requests)
             .field("settings_tab", &self.settings_tab)
+            .field("grids", &self.grid_cancels.len())
             .finish_non_exhaustive()
     }
 }
@@ -102,6 +116,8 @@ impl Workspace {
             settings: SettingsModel::default(),
             settings_tab: SettingsTab::Closed,
             system_appearance: Appearance::Light,
+            grid_cancels: HashMap::new(),
+            synthetic_rows: SYNTHETIC_ROWS,
         }
     }
 
@@ -146,6 +162,12 @@ impl Workspace {
     #[must_use]
     pub fn settings_tab_active(&self) -> bool {
         self.settings_tab == SettingsTab::Active
+    }
+
+    /// Uses a smaller synthetic result in tests.
+    #[cfg(test)]
+    pub(crate) fn set_synthetic_rows(&mut self, rows: usize) {
+        self.synthetic_rows = rows;
     }
 
     /// The sidebar state.
@@ -193,6 +215,7 @@ impl Workspace {
                 self.step_tab(false);
                 Effect::None
             }
+            WorkspaceAction::OpenSyntheticGrid => self.open_synthetic_grid(),
             WorkspaceAction::Quit => Effect::Quit,
             WorkspaceAction::OpenSettings => {
                 self.settings_tab = SettingsTab::Active;
@@ -255,6 +278,26 @@ impl Workspace {
         }
     }
 
+    /// Opens a grid tab on the active tab's connection, else the selected sidebar entry's.
+    fn open_synthetic_grid(&mut self) -> Effect {
+        let connection = match self.tabs.active() {
+            Some(tab) => tab.connection().clone(),
+            None => match self
+                .sidebar
+                .selected()
+                .and_then(|i| self.sidebar.entries().get(i))
+            {
+                Some(entry) => tab_connection(entry.config()),
+                None => return Effect::None,
+            },
+        };
+        let tab = self.tabs.open(connection, TabKind::Grid);
+        let (grid, cancel) =
+            GridTab::spawn_synthetic(self.synthetic_rows, SYNTHETIC_COLUMNS, SYNTHETIC_BATCH);
+        self.grid_cancels.insert(tab, cancel);
+        Effect::OpenGrid { tab, grid }
+    }
+
     fn open_connection(&mut self, index: usize) -> Effect {
         if !self.sidebar.begin_connect(index) {
             return Effect::None;
@@ -272,6 +315,9 @@ impl Workspace {
     fn close_tab(&mut self, id: TabId) -> Effect {
         if !self.tabs.close(id) {
             return Effect::None;
+        }
+        if let Some(cancel) = self.grid_cancels.remove(&id) {
+            cancel.cancel();
         }
         if self.tabs.is_empty() && self.settings_tab == SettingsTab::Background {
             self.settings_tab = SettingsTab::Active;
@@ -296,16 +342,8 @@ impl Workspace {
         match result {
             Ok(session) => {
                 self.sidebar.finish_connect(index, Ok(()));
-                let config = self.sidebar.entries()[index].config();
-                let id = self.tabs.open(
-                    TabConnection {
-                        name: config.name.clone(),
-                        driver: config.driver.clone(),
-                        color: config.color.clone(),
-                        environment: config.environment,
-                    },
-                    TabKind::Query,
-                );
+                let connection = tab_connection(self.sidebar.entries()[index].config());
+                let id = self.tabs.open(connection, TabKind::Query);
                 self.sessions.insert(id, session);
                 if self.settings_tab == SettingsTab::Active {
                     self.settings_tab = SettingsTab::Background;
@@ -328,6 +366,16 @@ impl Workspace {
     /// Takes the tab's session out (for example to close it on quit).
     pub fn take_session(&mut self, id: TabId) -> Option<Box<dyn Session>> {
         self.sessions.remove(&id)
+    }
+}
+
+/// The tab header data of a connection.
+fn tab_connection(config: &ConnectionConfig) -> TabConnection {
+    TabConnection {
+        name: config.name.clone(),
+        driver: config.driver.clone(),
+        color: config.color.clone(),
+        environment: config.environment,
     }
 }
 
@@ -702,5 +750,102 @@ mod tests {
         let tab = w.connect_finished(request, Ok(session)).unwrap();
         assert!(w.take_session(tab).is_some());
         assert!(w.take_session(tab).is_none());
+    }
+
+    fn open_grid(w: &mut Workspace) -> (TabId, GridTab) {
+        match w.dispatch(WorkspaceAction::OpenSyntheticGrid) {
+            Effect::OpenGrid { tab, grid } => (tab, grid),
+            other => panic!("expected OpenGrid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn synthetic_grid_without_tab_or_selection_is_noop() {
+        let mut w = ws();
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::OpenSyntheticGrid),
+            Effect::None
+        ));
+        assert!(w.tabs().is_empty());
+    }
+
+    #[test]
+    fn synthetic_grid_binds_to_the_active_tab_connection() {
+        let mut w = ws();
+        w.set_synthetic_rows(1_000);
+        let request = connect(&mut w, 1);
+        let (session, _) = FakeSession::boxed();
+        let query = w.connect_finished(request, Ok(session)).unwrap();
+        let (tab, mut grid) = open_grid(&mut w);
+        assert_ne!(tab, query);
+        assert_eq!(w.tabs().len(), 2);
+        let opened = w.tabs().get(tab).unwrap();
+        assert_eq!(opened.kind(), TabKind::Grid);
+        assert_eq!(
+            opened.connection(),
+            w.tabs().get(query).unwrap().connection()
+        );
+        assert_eq!(opened.title(), "Results: prod (2)");
+        assert_eq!(w.tabs().active().map(crate::tabs::Tab::id), Some(tab));
+        assert!(!w.has_session(tab));
+        while !grid.poll(usize::MAX).terminal {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(grid.row_count(), 1_000);
+    }
+
+    #[test]
+    fn synthetic_grid_falls_back_to_the_selected_entry() {
+        let mut w = ws();
+        w.set_synthetic_rows(10);
+        w.dispatch(WorkspaceAction::SelectConnection(0));
+        let (tab, _grid) = open_grid(&mut w);
+        let opened = w.tabs().get(tab).unwrap();
+        assert_eq!(opened.connection().name, "dev");
+        assert_eq!(opened.connection().color.as_deref(), Some("#00ff00"));
+        assert_eq!(opened.connection().environment, Some(Environment::Dev));
+        assert_eq!(opened.title(), "Results: dev");
+    }
+
+    #[test]
+    fn closing_a_grid_tab_cancels_its_ingestion_only() {
+        let mut w = ws();
+        w.set_synthetic_rows(1_000);
+        w.dispatch(WorkspaceAction::SelectConnection(0));
+        let (first, _g1) = open_grid(&mut w);
+        let (second, _g2) = open_grid(&mut w);
+        let flag_first = w.grid_cancels.get(&first).unwrap().clone();
+        let flag_second = w.grid_cancels.get(&second).unwrap().clone();
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::CloseTab(first)),
+            Effect::None
+        ));
+        assert!(flag_first.is_cancelled());
+        assert!(!flag_second.is_cancelled());
+        assert!(!w.grid_cancels.contains_key(&first));
+        assert_eq!(w.tabs().len(), 1);
+        // Closing the active grid tab through the action works the same way.
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::CloseActiveTab),
+            Effect::None
+        ));
+        assert!(flag_second.is_cancelled());
+        assert!(w.grid_cancels.is_empty());
+    }
+
+    #[test]
+    fn closing_a_query_tab_leaves_grids_running() {
+        let mut w = ws();
+        w.set_synthetic_rows(1_000);
+        let request = connect(&mut w, 0);
+        let (session, _) = FakeSession::boxed();
+        let query = w.connect_finished(request, Ok(session)).unwrap();
+        let (grid_tab, _grid) = open_grid(&mut w);
+        let flag = w.grid_cancels.get(&grid_tab).unwrap().clone();
+        assert!(matches!(
+            w.dispatch(WorkspaceAction::CloseTab(query)),
+            Effect::CloseSession(_)
+        ));
+        assert!(!flag.is_cancelled());
     }
 }
