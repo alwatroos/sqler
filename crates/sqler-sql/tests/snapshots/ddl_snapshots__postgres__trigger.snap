@@ -1,0 +1,11 @@
+---
+source: crates/sqler-sql/tests/ddl_snapshots.rs
+expression: out
+---
+-- create
+CREATE TRIGGER tr BEFORE INSERT ON t EXECUTE FUNCTION f();
+
+-- drop
+DROP TRIGGER "trigger_name" ON "My Schema"."order""s";
+
+-- copy name: "My Schema"."trigger_name"

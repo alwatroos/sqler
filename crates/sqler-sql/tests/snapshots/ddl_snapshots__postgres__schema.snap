@@ -1,0 +1,11 @@
+---
+source: crates/sqler-sql/tests/ddl_snapshots.rs
+expression: out
+---
+-- create
+CREATE SCHEMA "Some Name";
+
+-- drop
+DROP SCHEMA "Some Name";
+
+-- copy name: "Some Name"

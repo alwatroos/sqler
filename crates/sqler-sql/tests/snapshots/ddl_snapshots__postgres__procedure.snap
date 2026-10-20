@@ -1,0 +1,11 @@
+---
+source: crates/sqler-sql/tests/ddl_snapshots.rs
+expression: out
+---
+-- create
+CREATE PROCEDURE p() BEGIN SELECT 1; END;
+
+-- drop
+DROP PROCEDURE "My Schema"."Some Name";
+
+-- copy name: "My Schema"."Some Name"

@@ -1,0 +1,17 @@
+---
+source: crates/sqler-sql/tests/ddl_snapshots.rs
+expression: out
+---
+-- create
+CREATE MATERIALIZED VIEW "My Schema"."Some Name" AS
+SELECT "id" FROM "order""s";
+
+-- select-star
+SELECT *
+FROM "My Schema"."Some Name"
+LIMIT 1000;
+
+-- drop
+DROP MATERIALIZED VIEW "My Schema"."Some Name";
+
+-- copy name: "My Schema"."Some Name"

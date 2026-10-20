@@ -1,0 +1,11 @@
+---
+source: crates/sqler-sql/tests/ddl_snapshots.rs
+expression: out
+---
+-- create
+CREATE DATABASE `Some Name`;
+
+-- drop
+DROP DATABASE `Some Name`;
+
+-- copy name: `Some Name`

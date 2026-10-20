@@ -43,6 +43,8 @@ Source commands (all rows):
 | serde | `serde` | 1.0.229 | 2026-07-18 | `derive` feature; config file DTOs in `sqler-config`. `MIT OR Apache-2.0`. Checked 2026-10-20. Source: API; `cargo info serde` |
 | toml | `toml` | 1.1.8 | 2026-10-09 | crates.io reports `1.1.8+spec-1.1.0`; Cargo ignores the build metadata. Default features. `MIT OR Apache-2.0`. Used by `sqler-config`. Checked 2026-10-20. Source: API; `cargo info toml` |
 | directories | `directories` | 6.0.0 | 2025-01-12 | Evaluated, not used: it pulls `dirs-sys` 0.5.0 (`MIT OR Apache-2.0`), which pulls `option-ext` 0.2.0 (2023-01-11), licensed `MPL-2.0`, not on the `deny.toml` allow-list. See ADR-0005. Checked 2026-10-20. Source: API for `directories`, `dirs-sys`, `option-ext` |
+| insta | `insta` | 1.49.0 | 2026-10-03 | Snapshot tests for generated DDL (AGENTS.md, prompt §6). `Apache-2.0`; `rust-version` 1.66. `default-features = false`. Dev-only, `sqler-sql`. Checked 2026-10-20. Source: API (`max_stable_version`) |
+| proptest | `proptest` | 1.12.0 | 2026-10-10 | Property tests for identifier quoting. `MIT OR Apache-2.0`; `rust-version` 1.88. `default-features = false`, feature `std`. Dev-only, `sqler-sql`. Checked 2026-10-20. Source: API (`max_stable_version`) |
 
 ## CI tools and actions
 
