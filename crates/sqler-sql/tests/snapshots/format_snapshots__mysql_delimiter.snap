@@ -1,0 +1,21 @@
+---
+source: crates/sqler-sql/tests/format_snapshots.rs
+expression: "run(Dialect::MySql, sql)"
+---
+delimiter //
+
+create procedure p(in x int)
+begin
+  declare y int;
+  if x > 1 then set y = 1; end if;
+  select   y;
+end//
+
+delimiter ;
+
+SELECT 1, 2;
+
+# comment
+SELECT `a`
+FROM `b`
+WHERE c = "s;t"

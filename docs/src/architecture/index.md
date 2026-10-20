@@ -18,6 +18,7 @@ Pages:
 
 - [Core and driver API](core-and-driver-api.md): domain types, the `Driver` and `Introspect` traits
 - [Catalog](catalog.md): the lazy schema cache and its background refresh
+- [SQL text services](sql.md): splitting, cursor lookup, placeholders, classification and formatting on one lexer
 - [UI](ui.md): workspace state, the tokio bridge, the connect pipeline and the object browser
 
 Planned topics:

@@ -1,0 +1,10 @@
+---
+source: crates/sqler-sql/tests/format_snapshots.rs
+expression: out
+---
+select a
+from t
+where (
+    select 1
+) = 1
+    and b = 2

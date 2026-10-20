@@ -1,0 +1,14 @@
+---
+source: crates/sqler-sql/tests/format_snapshots.rs
+expression: "run(Dialect::Postgres, sql)"
+---
+create function f(a int) returns int language plpgsql as $fn$
+begin
+  if a > 1 then return a; end if;
+  return 0;
+end;
+$fn$;
+
+SELECT f(1);
+
+SELECT $$ a;  b $$
