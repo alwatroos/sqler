@@ -108,15 +108,16 @@ pub(crate) fn tab_strip(
     strip
 }
 
-/// Renders the body of the active tab (a placeholder until the SQL editor arrives).
+/// Renders the placeholder shown when no query or results tab has a body of its own.
 pub(crate) fn tab_body(
     tabs: &TabStrip,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement + use<> {
     let muted = cx.theme().muted_foreground;
     let text = match tabs.active() {
+        // Query tabs get their own body (`query::view::query_tab_body`); this is a fallback.
         Some(tab) => format!(
-            "Connected to {} ({}). The SQL editor arrives in M3.",
+            "Connected to {} ({}).",
             tab.connection().name,
             tab.connection().driver
         ),

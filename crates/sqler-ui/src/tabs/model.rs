@@ -25,7 +25,7 @@ impl TabId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TabKind {
-    /// A query tab (a placeholder body until the SQL editor arrives).
+    /// A query tab (a plain multi-line input and the results of the last run until the SQL editor arrives).
     Query,
     /// A results grid.
     Grid,

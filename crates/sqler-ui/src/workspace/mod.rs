@@ -11,6 +11,7 @@ mod bridge;
 mod browser;
 #[cfg(feature = "gui")]
 mod drop_dialog;
+mod query;
 mod state;
 #[cfg(test)]
 mod testing;

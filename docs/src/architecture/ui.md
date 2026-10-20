@@ -106,6 +106,19 @@ Effects added: `StartCatalog`, `LoadCatalog`, `WatchRefresh`, `RunJob` (DDL, pro
 
 Benchmark: [Object browser tree](../benchmarks.md#object-browser-tree).
 
+## Query execution
+
+[ADR-0024](../adr/0024-query-execution.md). `sqler_ui::query` is pure (no GPUI); `workspace/query.rs` wires it in and `query/view/**` only draws it.
+
+```text
+query:run-* -> WorkspaceView::query_buffer (BufferSnapshot) -> Workspace::run_query
+  plan -> ParamForm (prompt) -> prod confirmation -> bind -> Effect::RunQuery
+  bridge.spawn(QueryJob::run) -> RunEvent stream -> Workspace::query_event
+  QueryJobDone -> Workspace::query_finished (the session goes back to the tab)
+```
+
+`QueryTab` (one per query tab, in `Workspace::queries`) is the state machine: `Idle`, `Prompting`, `Confirming` and `Running`, plus the result entries (`Pending`, `Running`, `Done`, `Failed`, `Cancelled`, `NotRun`). Stale `RunId`s are ignored. While a run is active the tab session is on loan to the job; the workspace keeps its `CancelHandle`, the job's stop flag and the sink cancel flags, and `cancel_query` returns `Effect::CancelQuery`. If the tab closes during a run, `query_finished` closes the returned session. Effects added: `RunQuery` and `CancelQuery`. Each statement has its own `GridSink` and `GridTab` (the M1 grid, as for open data). The editor (T9) supplies a `BufferSnapshot` through `WorkspaceView::query_buffer` and its element through `query::view::query_tab_body`; until then a plain multi-line input stands in. User-facing description: [Running queries](../user-guide/running-queries.md).
+
 ## Hook points
 
 - Themes (T7): the shell paints only with `gpui_component` theme tokens (`cx.theme()`), with no second palette. `theme::apply` (gui only) calls `Theme::change` and sets `Theme::font_size`. `workspace::run` applies the startup settings, `WorkspaceView::new` observes the OS appearance, and `Effect::ApplySettings` saves and re-applies. The prod tint uses the theme's `danger` token.
