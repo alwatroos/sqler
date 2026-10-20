@@ -119,14 +119,18 @@ Proven:
 
 - A column-stored 1M-row source behind the gpui-component `DataTable` renders only the visible rows
   (at most 26 per frame) and can be scrolled to the last row, on all four targets.
-- The gpui-component editor in SQL mode highlights through the component's own tree-sitter
-  highlighter, with no fork and no external grammar crate.
+- The gpui-component tree-sitter `SyntaxHighlighter` in SQL mode produces highlight kinds for the
+  sample text, with no fork and no external grammar crate. The kinds come from a separate
+  `SyntaxHighlighter` run over the sample text, not from a query of the live editor state.
 - The same binary builds with `--locked` and starts on Linux (X11, Wayland), macOS and Windows.
 - Build, cold start and binary size on all targets: cold start 158 to 206 ms and binary 26 to 58 MB,
   both inside the targets in Benchmarks. On the macOS manual run first frame was about 192 ms.
 
 Not proven:
 
+- An unexplained macOS stall: one manual run took 84 s and one hit the 120 s watchdog. About ten
+  later runs were fast. The macOS console was found screen-locked on a later run, which is the
+  probable cause, but this is unconfirmed.
 - The interactive macOS check (2 minutes: trackpad scroll from top to bottom, typing and editing SQL,
   resizing the split) has NOT been done. An agent cannot do it. It is open and is a follow-up for the
   first UI PR. The pass on macOS rests on the scripted smoke test, not on a person looking at pixels.

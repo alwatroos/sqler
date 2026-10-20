@@ -79,9 +79,10 @@ impl HighlightStyleResolver for Recorder {
     }
 }
 
-/// Distinct highlight names on `text`. The editor wraps the very same
-/// `SyntaxHighlighter` (see `highlighter/input_adapter.rs` in gpui-component), so
-/// this is what the painted editor resolves, not a separate parse.
+/// Distinct highlight names on `text`. The editor wraps the same
+/// `SyntaxHighlighter` type (see `highlighter/input_adapter.rs` in gpui-component),
+/// but this runs a separate instance over `text`; it does not query the live
+/// editor state.
 #[must_use]
 pub fn highlight_kinds(text: &str) -> BTreeSet<String> {
     let rope = Rope::from_str(text);
