@@ -203,7 +203,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 
 ## 9. Roadmap status
 
-Current: **M1 done** (UI foundation), with maintainer verification pending. Next: **M2** (connections and drivers). See `docs/reports/iteration-002.md`.
+Current: **M1 code complete; Definition of Done pending maintainer verification (see list); M2 next** (connections and drivers). See `docs/reports/iteration-002.md`.
 
 M1 delivered the command registry, config files, GPUI (ADR-0001 accepted), the desktop shell, settings and themes, the command palette and keybindings, and the 1M-row results grid with benchmarks. Not yet met, by explicit list: the interactive macOS checks of the shell, settings and themes, palette and keybindings, and grid scrolling (listed in the iteration-002 report), and idle RSS with three sessions actually opened (98 MiB measured with three connections configured but not opened). Record the maintainer results in `docs/reports/` before M2 is called complete.
 

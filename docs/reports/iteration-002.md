@@ -19,7 +19,7 @@ M1 (UI foundation), items in dependency order:
 Measured on 2026-10-20, macOS 27.0.1 arm64 (Apple M4 Pro), commit `1f206e6`, `target/release/sqler` (default features, `--locked`). Tracked in [benchmarks](../src/benchmarks.md).
 - Cold start: 140.6 ms mean (σ 12.8, min 132.7, max 191.1), `hyperfine` 20 runs after 3 warm-ups of `sqler --exit-after-first-frame`. Target < 500 ms: met on macOS.
 - Idle RSS: 98.0 to 98.3 MiB (three runs, `ps` at 6 s and 10 s) with three `SQLite` `:memory:` connections in the sidebar. The three sessions were not opened, because an agent cannot double-click; the full "three connections open" figure is pending the maintainer. Target < 150 MB.
-- Binary size: 29.5 MB (30,928,816 bytes) for the `sqler` release binary. Target < 60 MB: met. For reference the CI spike build was 57.7 MB on Linux, unstripped; the Linux `sqler` binary is not measured.
+- Binary size: 29.5 MiB (30,928,816 bytes, 30.9 MB decimal) for the `sqler` release binary. Target < 60 MB: met on either unit. For reference the CI spike build was 57.7 MB on Linux, unstripped; the Linux `sqler` binary is not measured.
 - Results grid, 1M rows (cited from `benchmarks.md`, run at `1dfec02` and `23a3f72`): viewport fetch p50 208 ns, p95 334 ns; frame data cost p50 9.4 µs, p95 9.8 µs; in-app probe 601 frames, frame interval p95 8.3 to 8.9 ms (120 Hz display), last row drawn; RSS 346.5 MB with the grid open (about 235 MB is result data), above the idle target by design and not gated.
 - Completion p95: n/a until M3.
 - Test count: 299 tests run, 299 passed (`cargo nextest run --workspace --no-tests=pass`), up from 71 at the end of M0.
@@ -45,5 +45,11 @@ M2 (connections and drivers), after the maintainer verification above is recorde
 - Close sessions on quit; feed the grid from real query streams; measure idle RSS with three real connections.
 - Add Linux and Windows desktop measurements.
 ### AGENTS.md changes
-- Section 9: roadmap status now "M1 done in code, interactive checks pending", M2 next, pointer to this report.
+- Section 9: roadmap status now reads "Current: **M1 code complete; Definition of Done pending maintainer verification (see list); M2 next** (connections and drivers)." followed by a pointer to this report and an explicit list of the unmet checks.
 - Section 10 (Gotchas): macOS config isolation for measurements via `HOME`.
+### Raw measurements
+Commands run at `1f206e6` on macOS 27.0.1 arm64 (Apple M4 Pro), from the repository root. The per-run `ps` lines were not saved; only the summary below was recorded.
+- Binary size: `stat -f %z target/release/sqler` printed `30928816` (30928816 / 1048576 = 29.5 MiB).
+- Cold start: `hyperfine -w 3 -r 20 'target/release/sqler --exit-after-first-frame'` reported mean 140.6 ms, σ 12.8 ms, min 132.7 ms, max 191.1 ms (20 runs).
+- Idle RSS: start `target/release/sqler` with a `connections.toml` of three `SQLite` `:memory:` entries (isolated via `HOME`), then `ps -o rss= -p <pid>` (KiB) after 6 s and after 10 s, three runs. All readings fell between 98.0 and 98.3 MiB.
+- Test count: `cargo nextest run --workspace --no-tests=pass` finished with 299 tests run, 299 passed.
