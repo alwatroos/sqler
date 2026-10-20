@@ -6,16 +6,16 @@
 // Helpers outside `#[test]` fns also unwrap; clippy.toml only exempts the test fns themselves.
 #![allow(clippy::unwrap_used)]
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId, Query, Value};
-use sqler_driver_api::{CancelFlag, DriverRegistry, Session, collect};
+use sqler_driver_api::{DriverRegistry, Session, collect};
 use sqler_driver_sqlite::{DRIVER_ID, SqliteDriver};
 use sqler_sql::Dialect;
-use sqler_ui::grid::{GridModel, IngestState, grid_channel};
+use sqler_ui::grid::{GridCancel, GridLimits, GridModel, GridSink, IngestState, grid_channel_with};
 use sqler_ui::query::{
     BufferSnapshot, ParamInput, ParamKey, ParamKind, QueryJob, QueryJobDone, RunEvent, RunId,
-    RunMode, bind, plan,
+    RunMode, RunStop, bind, plan,
 };
 use sqler_ui::tabs::{TabConnection, TabId, TabKind, TabStrip};
 use tokio::runtime::{Builder, Runtime};
@@ -49,20 +49,34 @@ async fn session() -> Box<dyn Session> {
 }
 
 struct Started {
-    stop: CancelFlag,
+    stop: RunStop,
     grids: Vec<GridModel>,
+    cancels: Vec<GridCancel>,
     events: UnboundedReceiver<RunEvent>,
     handle: tokio::task::JoinHandle<QueryJobDone>,
 }
 
 /// Plans `text` in run-all mode, binds `inputs` and spawns the job on `session`.
 fn start(rt: &Runtime, session: Box<dyn Session>, text: &str, inputs: &[ParamInput]) -> Started {
+    start_with(rt, session, text, inputs, GridLimits::default())
+}
+
+/// Like [`start`], with the page limits of every grid.
+fn start_with(
+    rt: &Runtime,
+    session: Box<dyn Session>,
+    text: &str,
+    inputs: &[ParamInput],
+    limits: GridLimits,
+) -> Started {
     let buf = BufferSnapshot::at_cursor(text, 0);
     let plan = plan(D, &buf, RunMode::All).unwrap();
     let statements = bind(D, &plan, inputs).unwrap();
-    let (grids, sinks): (Vec<_>, Vec<_>) = statements.iter().map(|_| grid_channel()).unzip();
+    let (grids, sinks): (Vec<_>, Vec<_>) =
+        statements.iter().map(|_| grid_channel_with(limits)).unzip();
+    let cancels = sinks.iter().map(GridSink::canceller).collect();
     let (tx, events) = tokio::sync::mpsc::unbounded_channel();
-    let stop = CancelFlag::new();
+    let stop = RunStop::new(&sinks);
     let job = QueryJob {
         tab: tab_id(),
         run: RunId::new(1),
@@ -76,6 +90,7 @@ fn start(rt: &Runtime, session: Box<dyn Session>, text: &str, inputs: &[ParamInp
     Started {
         stop,
         grids,
+        cancels,
         events,
         handle,
     }
@@ -142,9 +157,18 @@ fn run_all_streams_each_statement_into_its_grid() {
     let grid = &run.grids[2];
     assert_eq!(grid.row_count(), 2);
     assert_eq!(grid.columns().len(), 2);
-    assert_eq!(grid.row(0).unwrap().0[0], Value::Int(2));
-    assert_eq!(grid.row(1).unwrap().0[0], Value::Int(5));
-    assert_eq!(grid.row(1).unwrap().0[1], Value::Text("x".to_owned()));
+    assert_eq!(
+        grid.row(0).unwrap().get(0).unwrap().to_value(),
+        Value::Int(2)
+    );
+    assert_eq!(
+        grid.row(1).unwrap().get(0).unwrap().to_value(),
+        Value::Int(5)
+    );
+    assert_eq!(
+        grid.row(1).unwrap().get(1).unwrap().to_value(),
+        Value::Text("x".to_owned())
+    );
 }
 
 #[test]
@@ -200,9 +224,13 @@ fn cancel_during_a_long_query_ends_the_run_and_keeps_the_session() {
         let first = run.events.recv().await.unwrap();
         assert!(matches!(first, RunEvent::Started { index: 0 }));
         tokio::time::sleep(Duration::from_millis(100)).await;
+        // `stop` wakes the statement even if 100k rows arrived first and it is paused.
         run.stop.cancel();
         handle.cancel().await.unwrap();
-        (&mut run.handle).await.unwrap()
+        tokio::time::timeout(Duration::from_secs(20), &mut run.handle)
+            .await
+            .unwrap_or_else(|_| panic!("the cancelled job did not finish"))
+            .unwrap()
     });
 
     let events = drain(&mut run.events);
@@ -226,9 +254,12 @@ fn a_stop_flag_set_before_the_next_statement_cancels_it() {
     let buf = BufferSnapshot::at_cursor("select 1; select 2", 0);
     let plan = plan(D, &buf, RunMode::All).unwrap();
     let statements = bind(D, &plan, &[]).unwrap();
-    let (_grids, sinks): (Vec<_>, Vec<_>) = statements.iter().map(|_| grid_channel()).unzip();
+    let (_grids, sinks): (Vec<_>, Vec<_>) = statements
+        .iter()
+        .map(|_| grid_channel_with(GridLimits::default()))
+        .unzip();
     let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
-    let stop = CancelFlag::new();
+    let stop = RunStop::new(&sinks);
     stop.cancel();
     let job = QueryJob {
         tab: tab_id(),
@@ -272,7 +303,7 @@ fn parameters_are_bound_not_spliced() {
     rt.block_on(&mut run.handle).unwrap();
     settle(&mut run.grids[0]);
     assert!(matches!(run.grids[0].state(), IngestState::Done { .. }));
-    let row = &run.grids[0].row(0).unwrap().0;
+    let row = run.grids[0].row(0).unwrap().to_row().0;
     assert_eq!(row[0], Value::Int(7));
     assert_eq!(row[1], Value::Text(evil.to_owned()));
     assert_eq!(row[2], Value::Text(evil.to_owned()));
@@ -299,8 +330,169 @@ fn named_and_anonymous_parameters_in_a_script() {
     let mut run = start(&rt, s, "select :id, ?, :id", &inputs);
     rt.block_on(&mut run.handle).unwrap();
     settle(&mut run.grids[0]);
-    let row = &run.grids[0].row(0).unwrap().0;
+    let row = run.grids[0].row(0).unwrap().to_row().0;
     assert_eq!(row[0], Value::Int(10));
     assert_eq!(row[1], Value::Text("twelve".to_owned()));
     assert_eq!(row[2], Value::Int(10));
+}
+
+/// 5,000 rows, then a second statement.
+const PAGED: &str = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 5000) \
+                     SELECT x FROM c; select 2";
+
+/// Polls `grid` until `want`, with a deadline.
+fn wait_for(grid: &mut GridModel, want: &IngestState) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while grid.state() != want {
+        assert!(
+            Instant::now() < deadline,
+            "stuck in {:?}, wanted {want:?}",
+            grid.state()
+        );
+        grid.poll(usize::MAX);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// The job result, within a deadline.
+fn finish(rt: &Runtime, run: &mut Started) -> QueryJobDone {
+    rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(20), &mut run.handle)
+            .await
+            .unwrap_or_else(|_| panic!("the job did not finish"))
+            .unwrap()
+    })
+}
+
+fn select_one(rt: &Runtime, done: &mut QueryJobDone) {
+    let rows = rt.block_on(async {
+        let query = Query::new("select 1");
+        let mut stream = done.session.execute(&query).await.unwrap();
+        collect(&mut *stream).await.unwrap()
+    });
+    assert_eq!(rows.rows().len(), 1);
+}
+
+#[test]
+fn the_page_bound_pauses_the_statement_and_holds_the_run() {
+    let rt = runtime();
+    let s = rt.block_on(session());
+    let mut run = start_with(&rt, s, PAGED, &[], GridLimits::rows(1_000));
+    wait_for(&mut run.grids[0], &IngestState::Paused);
+    assert_eq!(run.grids[0].row_count(), 1_000);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(!run.handle.is_finished());
+    let events = drain(&mut run.events);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(matches!(events[0], RunEvent::Started { index: 0 }));
+    // Release the session: closing the grids ends the run.
+    run.grids.clear();
+    finish(&rt, &mut run);
+}
+
+#[test]
+fn fetch_more_continues_until_the_statement_finishes() {
+    let rt = runtime();
+    let s = rt.block_on(session());
+    let mut run = start_with(&rt, s, PAGED, &[], GridLimits::rows(1_000));
+    let mut pages = 1;
+    loop {
+        wait_for(&mut run.grids[0], &IngestState::Paused);
+        assert_eq!(run.grids[0].row_count(), pages * 1_000);
+        assert!(run.grids[0].fetch_more());
+        pages += 1;
+        if pages == 5 {
+            break;
+        }
+    }
+    // The fifth page ends exactly at the result: `Done`, not `Paused`.
+    wait_for(
+        &mut run.grids[0],
+        &IngestState::Done {
+            rows_affected: None,
+        },
+    );
+    assert_eq!(run.grids[0].row_count(), 5_000);
+    let mut done = finish(&rt, &mut run);
+    let events = drain(&mut run.events);
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            RunEvent::Finished {
+                index: 0,
+                rows: 5_000,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(RunEvent::Finished { index: 1, .. })
+    ));
+    select_one(&rt, &mut done);
+}
+
+/// Cancelling only `stop` (no sink canceller, no driver handle) must wake a paused statement.
+#[test]
+fn stop_alone_wakes_a_paused_job() {
+    let rt = runtime();
+    let s = rt.block_on(session());
+    let mut run = start_with(&rt, s, PAGED, &[], GridLimits::rows(1_000));
+    wait_for(&mut run.grids[0], &IngestState::Paused);
+    run.stop.cancel();
+    let mut done = finish(&rt, &mut run);
+    let events = drain(&mut run.events);
+    assert!(
+        matches!(events.last(), Some(RunEvent::Cancelled { index: 0 })),
+        "{events:?}"
+    );
+    settle(&mut run.grids[0]);
+    assert_eq!(run.grids[0].state(), &IngestState::Cancelled);
+    select_one(&rt, &mut done);
+}
+
+#[test]
+fn cancel_while_paused_ends_the_run_and_keeps_the_session() {
+    let rt = runtime();
+    let s = rt.block_on(session());
+    let mut run = start_with(&rt, s, PAGED, &[], GridLimits::rows(1_000));
+    wait_for(&mut run.grids[0], &IngestState::Paused);
+    run.stop.cancel();
+    for cancel in &run.cancels {
+        cancel.cancel();
+    }
+    let mut done = finish(&rt, &mut run);
+    let events = drain(&mut run.events);
+    assert!(
+        matches!(events.last(), Some(RunEvent::Cancelled { index: 0 })),
+        "{events:?}"
+    );
+    settle(&mut run.grids[0]);
+    assert_eq!(run.grids[0].state(), &IngestState::Cancelled);
+    select_one(&rt, &mut done);
+}
+
+#[test]
+fn close_while_paused_returns_the_session_and_skips_later_statements() {
+    let rt = runtime();
+    let s = rt.block_on(session());
+    let mut run = start_with(&rt, s, PAGED, &[], GridLimits::rows(1_000));
+    wait_for(&mut run.grids[0], &IngestState::Paused);
+    // Closing the tab drops the grids: the rows are freed and the paused statement wakes.
+    run.grids.clear();
+    let mut done = finish(&rt, &mut run);
+    let events = drain(&mut run.events);
+    assert!(
+        events.iter().all(|e| !matches!(
+            e,
+            RunEvent::Started { index: 1 } | RunEvent::Finished { .. }
+        )),
+        "{events:?}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(RunEvent::Cancelled { index: 0 })
+    ));
+    select_one(&rt, &mut done);
 }

@@ -18,6 +18,8 @@
 //! cursor offset, find parameter [`placeholders`], [`classify()`] statements as read, write,
 //! DDL or unknown (anything not proven read-only is not read) and [`format()`] SQL.
 //!
+//! [`sql_literal`] renders a `sqler-core` value as a SQL literal that cannot end its string, and
+//! the lexer is public ([`tokenize`], [`Token`], [`TokenKind`]) so callers can re-lex generated SQL.
 //! [`update()`], [`insert()`] and [`delete()`] generate bound DML for staged grid edits: every
 //! value is a parameter, never text in the SQL; [`single_table_source`] proves a `SELECT` reads one table.
 
@@ -38,7 +40,9 @@ pub use ddl::{
     DEFAULT_ROW_LIMIT, Script, create_script, create_table, drop_script, insert_template,
     select_star, supports,
 };
-pub use dialect::{Dialect, qualified_name, quote_identifier};
+pub use dialect::{
+    Dialect, push_literal, qualified_name, quote_identifier, sql_literal, string_literal,
+};
 pub use dml::{
     BoundDml, ColumnValue, DmlError, SelectList, SourceTable, SqlIdent, TxStep, delete,
     delete_bound, insert, insert_bound, param_marker, same_column, single_table_source,
@@ -46,5 +50,6 @@ pub use dml::{
 };
 pub use error::{DdlError, FormatError};
 pub use format::{FormatOptions, format};
+pub use lexer::{Token, TokenKind, tokenize};
 pub use placeholder::{Placeholder, PlaceholderKind, placeholders};
 pub use split::{Segment, SegmentKind, split, statement_at};

@@ -8,12 +8,14 @@
 
 mod args;
 mod connect;
+mod open_sessions;
 
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use sqler_config::{ConfigDir, KeychainStore, Platform, SecretStore};
 use sqler_driver_api::{DriverError, DriverRegistry};
+use sqler_ui::connections::Connector;
 use sqler_ui::settings::SettingsModel;
 use sqler_ui::workspace::{Startup, run};
 
@@ -32,7 +34,8 @@ fn main() -> ExitCode {
         }
         Ok(Command::Run {
             exit_after_first_frame,
-        }) => start(exit_after_first_frame),
+            open_sessions,
+        }) => start(exit_after_first_frame, open_sessions),
         Err(UsageError(msg)) => {
             eprintln!("error: {msg}\n\n{USAGE}");
             ExitCode::from(2)
@@ -40,7 +43,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn start(exit_after_first_frame: bool) -> ExitCode {
+fn start(exit_after_first_frame: bool, open_sessions: bool) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .thread_name("sqler-db")
@@ -73,13 +76,21 @@ fn start(exit_after_first_frame: bool) -> ExitCode {
             .map_err(|err| err.to_string())
     });
     let secrets: Arc<dyn SecretStore> = Arc::new(KeychainStore::new());
-    let connector = Arc::new(Pipeline::new(
+    let connector: Arc<dyn Connector> = Arc::new(Pipeline::new(
         Arc::new(registry),
         Arc::clone(&secrets),
         Arc::new(SshTunnels),
         sqler_tunnel::default_known_hosts_path(),
         runtime.handle().clone(),
     ));
+    if open_sessions {
+        // Copied before `Startup` takes the store; the error text is dropped on purpose.
+        let profiles = connections
+            .as_ref()
+            .map(|store| store.connections().to_vec())
+            .map_err(|_| ());
+        open_sessions::spawn(runtime.handle(), Arc::clone(&connector), profiles);
+    }
     run(Startup {
         connections,
         config_dir,

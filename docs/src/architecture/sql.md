@@ -16,7 +16,8 @@ text --> lexer (per dialect, never fails, tokens tile the input)
             `--> format       token-preserving layout, idempotent
 ```
 
-The lexer is crate-private. Unterminated strings, quoted identifiers and comments run to the end of
+The lexer is public (`tokenize`, `Token` and `TokenKind`; the two types are `#[non_exhaustive]`; ADR-0028 amends
+ADR-0020) so callers can re-lex generated SQL. Unterminated strings, quoted identifiers and comments run to the end of
 the input and carry a flag, so a half-typed script still lexes. All functions are a single pass
 over the tokens: linear time, no recursion.
 
@@ -50,6 +51,15 @@ statement in a read-only transaction.
 clauses and joins, subquery indentation) without adding, removing or reordering any, so comments
 survive and formatting twice gives the same text. Input with an unterminated token gives
 `FormatError::Unterminated`.
+
+## SQL literals
+
+`sql_literal(dialect, &Value)`, `push_literal` and `string_literal` render a `sqler-core` value as a
+SQL literal. They are pure, never fail and never leave a string open: `'` is doubled, and text with
+a backslash or NUL uses `E'..'` (`PostgreSQL`), a hex string with `_utf8mb4` (`MySQL`) or a hex
+`CAST` (`SQLite`, NUL only). `NaN` and the infinities have a form per dialect. The table is in
+[ADR-0028](../adr/0028-export-writer-api.md); `sqler-export` uses them for `INSERT` files, and
+its `proptest` re-lexes the output with the public lexer.
 
 ## DML generation
 

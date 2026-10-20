@@ -21,21 +21,37 @@ pub(crate) const MAX_DELIMITER_LEN: usize = 16;
 
 /// What a token is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TokenKind {
+#[non_exhaustive]
+pub enum TokenKind {
     /// ASCII whitespace only: servers read non-ASCII whitespace as identifier characters.
     Whitespace,
     /// `-- ...` (and `# ...` on `MySQL`), up to before the line break.
     LineComment,
     /// `/* ... */`.
-    BlockComment { terminated: bool },
+    BlockComment {
+        /// `false` if the input ended before the closing delimiter.
+        terminated: bool,
+    },
     /// `MySQL` executable comment `/*! ... */`.
-    ExecComment { terminated: bool },
+    ExecComment {
+        /// `false` if the input ended before the closing delimiter.
+        terminated: bool,
+    },
     /// A string literal, with its prefix (`E'..'`, `N'..'`, `_utf8'..'`).
-    Str { terminated: bool },
+    Str {
+        /// `false` if the input ended before the closing delimiter.
+        terminated: bool,
+    },
     /// A `PostgreSQL` dollar-quoted string.
-    DollarStr { terminated: bool },
+    DollarStr {
+        /// `false` if the input ended before the closing delimiter.
+        terminated: bool,
+    },
     /// A quoted identifier.
-    QuotedIdent { terminated: bool },
+    QuotedIdent {
+        /// `false` if the input ended before the closing delimiter.
+        terminated: bool,
+    },
     /// A keyword, identifier or `MySQL` variable.
     Word,
     /// A numeric literal.
@@ -46,7 +62,8 @@ pub(crate) enum TokenKind {
     Op,
     /// `(`, `)`, `[`, `]`, `,`, `;` or `.`.
     Punct,
-    /// The active custom delimiter (only when [`Lexer::set_delimiter`] was called).
+    /// The active custom delimiter. Only the crate's own statement splitter produces it;
+    /// [`tokenize`] never does.
     Delimiter,
     /// Any other single char (NUL, `\`, symbols).
     Other,
@@ -54,7 +71,8 @@ pub(crate) enum TokenKind {
 
 /// A token: a kind and a byte range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Token {
+#[non_exhaustive]
+pub struct Token {
     /// The kind.
     pub kind: TokenKind,
     /// Start byte.
@@ -65,7 +83,8 @@ pub(crate) struct Token {
 
 impl Token {
     /// The token's text.
-    pub(crate) fn text<'a>(&self, src: &'a str) -> &'a str {
+    #[must_use]
+    pub fn text<'a>(&self, src: &'a str) -> &'a str {
         src.get(self.start..self.end).unwrap_or("")
     }
 
@@ -78,7 +97,8 @@ impl Token {
     }
 
     /// `false` for an unterminated string, identifier or comment.
-    pub(crate) fn is_terminated(&self) -> bool {
+    #[must_use]
+    pub fn is_terminated(&self) -> bool {
         match self.kind {
             TokenKind::BlockComment { terminated }
             | TokenKind::ExecComment { terminated }
@@ -96,7 +116,8 @@ impl Token {
 }
 
 /// Lexes the whole text. Never emits [`TokenKind::Delimiter`].
-pub(crate) fn tokenize(dialect: Dialect, text: &str) -> Vec<Token> {
+#[must_use]
+pub fn tokenize(dialect: Dialect, text: &str) -> Vec<Token> {
     Lexer::new(dialect, text).collect()
 }
 
