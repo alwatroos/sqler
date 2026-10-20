@@ -35,6 +35,13 @@
 //! overrides them: `Disable` is `DISABLED`, `Prefer` `PREFERRED`, `Require` `REQUIRED`, `VerifyCa`
 //! `VERIFY_CA` and `VerifyFull` `VERIFY_IDENTITY`.
 //!
+//! With `ConnectionConfig::tls.server_name` set (the pipeline sets it to the original host when it
+//! connects through an SSH tunnel), `VerifyFull` checks the certificate and sends SNI for that
+//! name while the driver dials the target address (the tunnel). `sqlx` has no separate server
+//! name, so on Unix the driver starts a private local bridge (a Unix socket in a `0700` directory,
+//! removed on drop) that forwards to the target; verification stays `sqlx`'s own. Other modes
+//! ignore the name. On other platforms this combination returns `Unsupported`.
+//!
 //! The RSA password exchange (`caching_sha2_password` on a cold server cache, and
 //! `sha256_password`) works over an unencrypted connection through the vendored `sqlx-mysql`
 //! patch, which encrypts with `aws-lc-rs` (no `rsa` crate), but only for an explicit
@@ -60,6 +67,8 @@ mod convert;
 mod introspect;
 mod session;
 mod stream;
+#[cfg(unix)]
+mod tls_bridge;
 
 use sqler_driver_api::sqler_core::ConnectionConfig;
 use sqler_driver_api::{BoxFuture, Driver, DriverError, Session};

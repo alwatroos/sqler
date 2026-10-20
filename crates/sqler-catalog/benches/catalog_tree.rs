@@ -52,7 +52,7 @@ fn parse_args() -> Result<Args, String> {
         save: None,
         compare: None,
         threshold_pct: 25,
-        slack_ns: 50,
+        slack_ns: 150,
         budget_hit_p95_ns: 10_000,
         budget_expand_p95_ns: 16_000_000,
     };

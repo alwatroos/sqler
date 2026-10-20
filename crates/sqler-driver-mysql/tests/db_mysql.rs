@@ -491,12 +491,8 @@ async fn rsa_exchange_over_plaintext_cold_cache(server: &Server) {
     // Empties the authentication cache, so the first login must use the full exchange.
     sql(&mut *admin, "flush privileges").await;
 
-    let url = server.url_for("sqler_rsa", "rsa-pass", "ssl-mode=disabled");
-    let mut s = connect(&config(&url)).await;
-    assert!(cipher(&mut *s).await.is_empty(), "the link must be plain");
-    assert_eq!(sql(&mut *s, "select 1 as one").await.len(), 1);
-    s.close().await.unwrap();
-
+    // The refusals come first: any successful login fills the server cache, and a cached
+    // account never reaches the RSA exchange.
     // Downgrade protection: an attacker who strips the server's TLS offer must not obtain the
     // password through the in-band RSA key. `prefer` (the default) refuses the plaintext
     // exchange; only an explicit disable accepts it.
@@ -545,6 +541,15 @@ async fn rsa_exchange_over_plaintext_cold_cache(server: &Server) {
         &strip,
     );
     let mut s = connect(&config(&url)).await;
+    assert_eq!(sql(&mut *s, "select 1 as one").await.len(), 1);
+    s.close().await.unwrap();
+
+    // A successful login fills the server cache; empty it so the next one needs the exchange.
+    sql(&mut *admin, "flush privileges").await;
+
+    let url = server.url_for("sqler_rsa", "rsa-pass", "ssl-mode=disabled");
+    let mut s = connect(&config(&url)).await;
+    assert!(cipher(&mut *s).await.is_empty(), "the link must be plain");
     assert_eq!(sql(&mut *s, "select 1 as one").await.len(), 1);
     s.close().await.unwrap();
 

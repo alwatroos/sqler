@@ -40,6 +40,12 @@ of them is a connection error.
 The standard `libpq` environment variables `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT` and `PGSSLKEY`
 still apply to a setting that neither the connection's TLS options nor the URL sets.
 
+### TLS through an SSH tunnel
+
+With an SSH tunnel, `verify-full` checks the certificate against the connection's original host
+instead of `127.0.0.1` (macOS and Linux; Windows refuses it). See
+[SSH tunnels](../ssh-tunnels.md#tls-through-a-tunnel).
+
 ## Cancel
 
 Cancel stops the statement on the server: the driver opens a second short connection with the same

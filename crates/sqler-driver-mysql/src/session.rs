@@ -17,6 +17,14 @@ use sqlx::{AssertSqlSafe, Connection as _, Executor as _, Row as _, Statement as
 
 use crate::convert::{ER_QUERY_INTERRUPTED, bind_params, column, mysql_code, query_error, sql_str};
 use crate::stream::MySqlQueryStream;
+#[cfg(unix)]
+use crate::tls_bridge::TlsBridge;
+
+/// Keeps the TLS bridge alive; it only exists on Unix.
+#[cfg(unix)]
+type Bridge = TlsBridge;
+#[cfg(not(unix))]
+type Bridge = ();
 
 /// `ER_UNSUPPORTED_PS`: the statement cannot be prepared.
 const ER_UNSUPPORTED_PS: u16 = 1295;
@@ -62,6 +70,50 @@ pub(crate) fn options(config: &ConnectionConfig) -> Result<MySqlConnectOptions, 
     Ok(opts)
 }
 
+/// The name to verify the certificate against when it differs from the dial host.
+///
+/// `Some` only when the effective mode is `VerifyIdentity`, the target is TCP and the configured
+/// server name differs from `opts.get_host()` (ASCII case-insensitive, `[]` trimmed). In every
+/// other case the name is ignored.
+pub(crate) fn server_name_override(
+    config: &ConnectionConfig,
+    opts: &MySqlConnectOptions,
+) -> Option<String> {
+    let name = config.tls.as_ref()?.server_name.as_deref()?;
+    if !matches!(opts.get_ssl_mode(), MySqlSslMode::VerifyIdentity) || opts.get_socket().is_some() {
+        return None;
+    }
+    let trim = |s: &str| s.trim_matches(['[', ']']).to_owned();
+    let (name, host) = (trim(name), trim(opts.get_host()));
+    if name.is_empty() || name.eq_ignore_ascii_case(&host) {
+        return None;
+    }
+    Some(name)
+}
+
+/// Points the options at a local bridge so the certificate is verified against `name`.
+#[cfg(unix)]
+fn bridged(
+    opts: MySqlConnectOptions,
+    name: &str,
+) -> Result<(MySqlConnectOptions, Option<Bridge>), DriverError> {
+    let bridge = TlsBridge::open(opts.get_host(), opts.get_port(), "mysql.sock")?;
+    let opts = opts.host(name).socket(bridge.socket_path());
+    Ok((opts, Some(bridge)))
+}
+
+#[cfg(not(unix))]
+fn bridged(
+    _opts: MySqlConnectOptions,
+    _name: &str,
+) -> Result<(MySqlConnectOptions, Option<Bridge>), DriverError> {
+    Err(DriverError::Unsupported(
+        "verify-full with a server name other than the dial host needs Unix domain sockets, \
+         which this platform's TLS backend cannot use"
+            .to_owned(),
+    ))
+}
+
 /// Cancels the running statement: sets a flag, then runs `KILL QUERY` from a side connection.
 ///
 /// It holds the connect options (and so the password), which is why it has no `Debug`.
@@ -70,15 +122,18 @@ pub(crate) struct MySqlCanceller {
     active: AtomicBool,
     opts: MySqlConnectOptions,
     id: u64,
+    /// The TLS bridge the options point at; it lives as long as the session or a cancel handle.
+    _bridge: Option<Bridge>,
 }
 
 impl MySqlCanceller {
-    fn new(opts: MySqlConnectOptions, id: u64) -> Self {
+    fn new(opts: MySqlConnectOptions, id: u64, bridge: Option<Bridge>) -> Self {
         Self {
             flag: AtomicBool::new(false),
             active: AtomicBool::new(false),
             opts,
             id,
+            _bridge: bridge,
         }
     }
 
@@ -150,7 +205,11 @@ pub(crate) struct MySqlSession {
 
 impl MySqlSession {
     pub(crate) async fn connect(config: &ConnectionConfig) -> Result<Self, DriverError> {
-        let opts = options(config)?;
+        let mut opts = options(config)?;
+        let mut bridge = None;
+        if let Some(name) = server_name_override(config, &opts) {
+            (opts, bridge) = bridged(opts, &name)?;
+        }
         let mut conn = MySqlConnection::connect_with(&opts)
             .await
             .map_err(|e| DriverError::Connection(e.to_string()))?;
@@ -161,7 +220,7 @@ impl MySqlSession {
         let id: u64 = row.try_get(0).map_err(query_error)?;
         Ok(Self {
             conn,
-            cancel: Arc::new(MySqlCanceller::new(opts, id)),
+            cancel: Arc::new(MySqlCanceller::new(opts, id, bridge)),
         })
     }
 }
@@ -236,7 +295,7 @@ mod tests {
 
     fn canceller() -> MySqlCanceller {
         let opts = MySqlConnectOptions::from_str("mysql://u:s3cret@127.0.0.1:1/x").unwrap();
-        MySqlCanceller::new(opts, 42)
+        MySqlCanceller::new(opts, 42, None)
     }
 
     #[test]
@@ -308,6 +367,81 @@ mod tests {
             .with_tls(TlsConfig::new(TlsMode::VerifyFull).with_ca_cert("ca.pem"));
         let opts = options(&cfg).unwrap();
         assert!(matches!(opts.get_ssl_mode(), MySqlSslMode::VerifyIdentity));
+    }
+
+    fn named(url: &str, mode: TlsMode, name: &str) -> (ConnectionConfig, MySqlConnectOptions) {
+        let cfg = config(url).with_tls(TlsConfig::new(mode).with_server_name(name));
+        let opts = options(&cfg).unwrap();
+        (cfg, opts)
+    }
+
+    #[test]
+    fn server_name_applies_to_verify_full_with_a_different_name() {
+        let (cfg, opts) = named("mysql://u@127.0.0.1/d", TlsMode::VerifyFull, "db.internal");
+        assert_eq!(
+            server_name_override(&cfg, &opts).as_deref(),
+            Some("db.internal")
+        );
+    }
+
+    #[test]
+    fn server_name_is_ignored_when_it_matches_the_host() {
+        for name in ["127.0.0.1", "[127.0.0.1]"] {
+            let (cfg, opts) = named("mysql://u@127.0.0.1/d", TlsMode::VerifyFull, name);
+            assert_eq!(server_name_override(&cfg, &opts), None, "{name}");
+        }
+        let (cfg, opts) = named(
+            "mysql://u@DB.Internal/d",
+            TlsMode::VerifyFull,
+            "db.internal",
+        );
+        assert_eq!(server_name_override(&cfg, &opts), None);
+    }
+
+    #[test]
+    fn server_name_is_ignored_in_other_modes_or_without_a_name() {
+        for mode in [
+            TlsMode::Disable,
+            TlsMode::Prefer,
+            TlsMode::Require,
+            TlsMode::VerifyCa,
+        ] {
+            let (cfg, opts) = named("mysql://u@127.0.0.1/d", mode, "db.internal");
+            assert_eq!(server_name_override(&cfg, &opts), None, "{mode:?}");
+        }
+        let cfg = config("mysql://u@127.0.0.1/d").with_tls(TlsConfig::new(TlsMode::VerifyFull));
+        let opts = options(&cfg).unwrap();
+        assert_eq!(server_name_override(&cfg, &opts), None);
+        let cfg = config("mysql://u@127.0.0.1/d");
+        let opts = options(&cfg).unwrap();
+        assert_eq!(server_name_override(&cfg, &opts), None);
+    }
+
+    #[test]
+    fn server_name_is_ignored_for_a_socket_target() {
+        let (cfg, opts) = named(
+            "mysql://u@127.0.0.1/d?socket=/tmp/x.sock",
+            TlsMode::VerifyFull,
+            "db.internal",
+        );
+        assert!(opts.get_socket().is_some());
+        assert_eq!(server_name_override(&cfg, &opts), None);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn server_name_without_unix_sockets_is_unsupported() {
+        let (cfg, _) = named(
+            "mysql://u@127.0.0.1:1/d",
+            TlsMode::VerifyFull,
+            "db.internal",
+        );
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt.block_on(MySqlSession::connect(&cfg)).err().unwrap();
+        assert!(matches!(err, DriverError::Unsupported(_)), "{err:?}");
     }
 
     #[test]

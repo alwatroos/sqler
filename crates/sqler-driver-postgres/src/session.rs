@@ -7,13 +7,50 @@ use std::sync::Arc;
 
 use sqler_driver_api::sqler_core::{ConnectionConfig, Query};
 use sqler_driver_api::{BoxFuture, CancelHandle, DriverError, Introspect, QueryStream, Session};
-use sqlx::postgres::PgConnection;
+use sqlx::postgres::{PgConnectOptions, PgConnection};
 use sqlx::{Connection as _, Executor as _, Statement as _};
 
 use crate::cancel::PgCanceller;
 use crate::convert::{bind_params, column, query_error, sql_str};
-use crate::options::connect_options;
+use crate::options::{connect_options, server_name_override};
 use crate::stream::PgQueryStream;
+
+/// The local TLS bridge kept alive by the session and its cancel handles.
+#[cfg(unix)]
+pub(crate) type Bridge = crate::tls_bridge::TlsBridge;
+/// No bridge exists on this platform.
+#[cfg(not(unix))]
+pub(crate) type Bridge = std::convert::Infallible;
+
+/// Redirects the connection through a local bridge when the certificate name differs from the
+/// dial host. Returns the (possibly rewritten) options and the bridge that must outlive them.
+fn apply_server_name(
+    config: &ConnectionConfig,
+    opts: PgConnectOptions,
+) -> Result<(PgConnectOptions, Option<Bridge>), DriverError> {
+    let Some(name) = server_name_override(config, &opts) else {
+        return Ok((opts, None));
+    };
+    #[cfg(unix)]
+    {
+        let bridge = Bridge::open(
+            opts.get_host(),
+            opts.get_port(),
+            &format!(".s.PGSQL.{}", opts.get_port()),
+        )?;
+        let opts = opts.host(&name).socket(bridge.dir());
+        Ok((opts, Some(bridge)))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (name, opts);
+        Err(DriverError::Unsupported(
+            "verify-full with a server name other than the dial host needs Unix domain sockets, \
+             which this platform's TLS backend cannot use"
+                .to_owned(),
+        ))
+    }
+}
 
 /// One open `PostgreSQL` connection.
 pub(crate) struct PgSession {
@@ -23,7 +60,7 @@ pub(crate) struct PgSession {
 
 impl PgSession {
     pub(crate) async fn connect(config: &ConnectionConfig) -> Result<Self, DriverError> {
-        let opts = connect_options(config)?;
+        let (opts, bridge) = apply_server_name(config, connect_options(config)?)?;
         let mut conn = PgConnection::connect_with(&opts)
             .await
             .map_err(|e| DriverError::Connection(e.to_string()))?;
@@ -33,7 +70,7 @@ impl PgSession {
             .map_err(|e| DriverError::Connection(e.to_string()))?;
         Ok(Self {
             conn,
-            cancel: Arc::new(PgCanceller::new(opts, pid)),
+            cancel: Arc::new(PgCanceller::new(opts, pid, bridge)),
         })
     }
 
@@ -83,5 +120,27 @@ impl Session for PgSession {
 
     fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), DriverError>> {
         Box::pin(async move { self.conn.close().await.map_err(|e| query_error(e, false)) })
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod tests {
+    use sqler_driver_api::sqler_core::{DriverId, TlsConfig, TlsMode};
+
+    use super::*;
+
+    #[test]
+    fn server_name_is_unsupported_without_unix_sockets() {
+        let cfg = ConnectionConfig::new(
+            "t",
+            DriverId::new("postgres").unwrap(),
+            "postgres://u:p@127.0.0.1:1/x",
+        )
+        .with_tls(TlsConfig::new(TlsMode::VerifyFull).with_server_name("db.internal"));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let err = rt.block_on(PgSession::connect(&cfg)).err().unwrap();
+        assert!(matches!(err, DriverError::Unsupported(_)), "{err:?}");
     }
 }

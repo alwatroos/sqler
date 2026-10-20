@@ -34,6 +34,12 @@ When a connection has TLS options (a TLS mode, a CA file, a client certificate a
 the `ssl-*` parameters of the URL, which are then ignored. A connection without TLS options uses the
 URL parameters.
 
+### TLS through an SSH tunnel
+
+With an SSH tunnel, `verify-full` checks the certificate against the connection's original host
+instead of `127.0.0.1` (macOS and Linux; Windows refuses it). See
+[SSH tunnels](../ssh-tunnels.md#tls-through-a-tunnel).
+
 ## Passwords without TLS
 
 Over TLS the password is sent inside the encrypted channel and every authentication plugin works.

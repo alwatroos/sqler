@@ -62,10 +62,19 @@ silently.
   your administrator, then remove the old line by hand.
 - **Unreadable `known_hosts`**: reported as an error with the file path.
 
+## TLS through a tunnel
+
+The database sees the tunnel's local address, but a TLS certificate names the real host. SQLer
+therefore verifies the certificate against the original host of the connection, not `127.0.0.1`.
+This works for `verify-full` on macOS and Linux: the driver bridges its connection through a
+private local socket so the TLS library checks the chain and the host name against the original
+host (see [ADR-0019](../adr/0019-tls-server-name-through-tunnel.md)). A certificate for another
+name still fails the connection. On Windows the TLS library cannot do this, so `verify-full`
+through a tunnel is refused; use `verify-ca` or connect without the tunnel.
+
 ## Limits
 
 - Not available from the connect dialog yet.
-- A TLS connection through the tunnel must verify the database's real host name, not `127.0.0.1`.
-  This is handled when the tunnel is wired into the connect flow.
+- On Windows, `verify-full` TLS through the tunnel is still refused (see [TLS through a tunnel](#tls-through-a-tunnel)).
 - If the SSH session drops while the tunnel is open, new forwards fail; the tunnel does not yet
   report the dead session.

@@ -19,10 +19,10 @@ sqlx = { workspace = true, features = ["mysql", "tls-rustls-ring-native-roots"] 
 # patch (root `[patch.crates-io]`); the upstream `rsa` crate stays banned in deny.toml.
 sqlx-mysql.workspace = true
 futures-core.workspace = true
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["time", "net", "io-util", "rt"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "time", "net", "io-util"] }
+tokio = { workspace = true, features = ["rt", "time", "net", "io-util", "macros"] }
 
 # aws-lc-sys on x86_64 Windows needs NASM; the prebuilt objects avoid a tool-install step in CI.
 [target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]

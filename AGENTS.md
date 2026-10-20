@@ -101,6 +101,7 @@ cargo tree --workspace -i gpui-pre
 cargo run -p xtask
 cargo bench -p sqler-ui --bench grid_viewport
 cargo bench -p sqler-catalog --bench catalog_tree
+cargo bench -p sqler-catalog --bench catalog_index
 cargo bench -p sqler-ui --bench browser_tree
 ```
 
@@ -110,10 +111,11 @@ cargo bench -p sqler-ui --bench browser_tree
 - SPDX check (`sh .github/scripts/check-spdx.sh`) prints the offending paths and exits 1 when a tracked `*.rs` file lacks the header on line 1; it prints nothing otherwise. It skips `vendor/` (third-party code that keeps its upstream licence files, ADR-0018).
 - `vendor/` holds third-party source copied in for a `[patch.crates-io]` entry, today only `vendor/sqlx-mysql` (sqlx-mysql 0.9.0 plus an `aws-lc-rs` backend, ADR-0018). It is not a workspace member, so fmt and clippy skip it, and it gets no SPDX headers. Its README states the maintenance procedure; no other change belongs there.
 - CI tools (pinned, see `docs/src/dependencies.md`): `cargo install --locked cargo-nextest@0.9.148 cargo-deny@0.20.2 mdbook@0.5.4`.
-- `.github/workflows/bench.yml` runs the grid viewport and catalog tree benchmarks on Linux for pull requests (base vs PR in one job).
+- `.github/workflows/bench.yml` runs the grid viewport, catalog tree and catalog index benchmarks on Linux for pull requests (base vs PR in one job).
 - `.github/workflows/pages.yml` publishes the book (`target/book/`) to GitHub Pages on push to `main`.
 - Bench: `cargo bench -p sqler-ui --bench grid_viewport -- [--rows N --columns N --batch N --viewport N --samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-p95-ns B]`. Rule: p95 more than 25 % + 50 ns above the base branch, or p95 above 1 ms, fails `bench.yml`. Method and results: `docs/src/benchmarks.md`. The release CLI is still measured by hand as described there.
 - Catalog bench: `cargo bench -p sqler-catalog --bench catalog_tree -- [--tables N --columns N --samples N --hit-samples N --source fake|sqlite --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-hit-p95-ns B --budget-expand-p95-ns B]`. Defaults: 5000 tables, 8 columns, `fake`. Budgets (`fake` only): cached-read p95 10 us, cold expand of 5,000 tables p95 16 ms. `--compare` checks `hit_p95_ns` (25 % + 50 ns). Exit 0 pass, 1 regression or budget, 2 usage error. Wired into `bench.yml`.
+- Catalog index bench: `cargo bench -p sqler-catalog --bench catalog_index -- [--tables N --columns N --loaded N --samples N --lookup-samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-snapshot-p95-ns B --budget-prefix-p95-ns B --budget-fuzzy-p95-ns B --budget-index-bytes B]`. Defaults: 5000 tables (plus N/10 views and functions), 8 columns, 50 loaded tables. Budgets: snapshot p95 10 us, prefix lookup p95 1 ms, fuzzy lookup p95 5 ms, index 4 MiB. `--compare` checks `prefix_p95_ns` (25 % + 50 ns). Exit 0 pass, 1 regression or budget, 2 usage error. Wired into `bench.yml`.
 - Browser tree bench: `cargo bench -p sqler-ui --bench browser_tree -- [--tables N --samples N --select-samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-expand-p95-ns B --budget-select-p95-ns B]`. Defaults: 5000 tables. Budgets: expand of a 5,000-table schema p95 16 ms (`expand_p95_ns`), selection change p95 1 ms (`select_p95_ns`). `--compare` checks `expand_p95_ns` (25 % + 50 ns). Exit 0 pass, 1 regression or budget, 2 usage error. Wired into `bench.yml`.
 
 ## 4. Coding standards
@@ -221,6 +223,8 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0016](docs/src/adr/0016-connect-pipeline.md) | Connect pipeline: `Connector` trait in `sqler-ui`, pipeline in `sqler-app` | accepted |
 | [0017](docs/src/adr/0017-object-browser-sessions-and-drop-confirmation.md) | Object browser: browser session per connection, short-lived action sessions, DROP confirmation | accepted |
 | [0018](docs/src/adr/0018-rsa-alternatives.md) | RSA without the `rsa` crate: a `ring` SSH signer and a vendored `sqlx-mysql` patch on `aws-lc-rs` | accepted |
+| [0019](docs/src/adr/0019-tls-server-name-through-tunnel.md) | TLS server name through a tunnel: `TlsConfig::server_name`, local Unix-socket bridge | accepted |
+| [0022](docs/src/adr/0022-catalog-snapshot-name-index.md) | Catalog snapshot, name index and on-demand column loading | accepted |
 
 ## 9. Roadmap status
 
