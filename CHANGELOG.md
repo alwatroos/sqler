@@ -41,3 +41,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sqler --exit-after-first-frame` to measure cold start.
 - ADR-0007 (desktop binary and UI-thread/tokio bridge), the Workspace user guide page and the UI architecture page.
 - `gpui-component` 0.8.0, `gpui-pre` =0.3.9 and `gpui-pre-platform` =0.3.9 as root workspace dependencies (feature `gui`); `deny.toml` gains three per-crate `MPL-2.0` exceptions and eight advisory ignores for the GPUI tree. CI installs the GPUI build packages on Linux and guards the Metal toolchain on macOS.
+- Settings tab (`settings:open`) with theme (light, dark, follow system) and UI font size, saved through `sqler-config`; `theme:toggle-mode` command; user guide section "Settings tab and themes".

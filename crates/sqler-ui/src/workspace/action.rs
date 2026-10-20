@@ -5,6 +5,7 @@
 
 use crate::command::{Command, CommandError, CommandId, CommandRegistry};
 use crate::tabs::TabId;
+use sqler_config::ThemePreference;
 
 /// A user action on the workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,16 @@ pub enum WorkspaceAction {
     PreviousTab,
     /// Quit the application.
     Quit,
+    /// Open the settings tab (or switch to it).
+    OpenSettings,
+    /// Close the settings tab.
+    CloseSettings,
+    /// Switch between the light and the dark theme.
+    ToggleThemeMode,
+    /// Choose the theme preference.
+    SetTheme(ThemePreference),
+    /// Set the UI font size in points.
+    SetUiFontSize(u16),
 }
 
 /// The commands: ID and title. IDs of `tab:close`, `tab:next`, `tab:previous` and `app:quit`
@@ -37,6 +48,10 @@ const COMMANDS: &[(&str, &str)] = &[
     ("tab:next", "Next Tab"),
     ("tab:previous", "Previous Tab"),
     ("app:quit", "Quit"),
+    ("settings:open", "Open Settings"),
+    ("theme:toggle-mode", "Toggle Light/Dark Theme"),
+    ("settings:set-theme", "Set Theme"),
+    ("settings:set-ui-font-size", "Set UI Font Size"),
 ];
 
 impl WorkspaceAction {
@@ -52,10 +67,14 @@ impl WorkspaceAction {
             Self::SelectConnection(_) => "connection:select",
             Self::OpenConnection(_) => "connection:open",
             Self::ActivateTab(_) => "tab:activate",
-            Self::CloseTab(_) | Self::CloseActiveTab => "tab:close",
+            Self::CloseTab(_) | Self::CloseActiveTab | Self::CloseSettings => "tab:close",
             Self::NextTab => "tab:next",
             Self::PreviousTab => "tab:previous",
             Self::Quit => "app:quit",
+            Self::OpenSettings => "settings:open",
+            Self::ToggleThemeMode => "theme:toggle-mode",
+            Self::SetTheme(_) => "settings:set-theme",
+            Self::SetUiFontSize(_) => "settings:set-ui-font-size",
         };
         CommandId::new(id).expect("constant command ID is valid")
     }
@@ -102,6 +121,11 @@ mod tests {
             WorkspaceAction::NextTab,
             WorkspaceAction::PreviousTab,
             WorkspaceAction::Quit,
+            WorkspaceAction::OpenSettings,
+            WorkspaceAction::CloseSettings,
+            WorkspaceAction::ToggleThemeMode,
+            WorkspaceAction::SetTheme(ThemePreference::Dark),
+            WorkspaceAction::SetUiFontSize(14),
         ]
     }
 
@@ -125,19 +149,25 @@ mod tests {
     #[test]
     fn command_ids_are_unique_per_kind() {
         let ids: Vec<String> = all().iter().map(|a| a.command_id().to_string()).collect();
-        // CloseTab and CloseActiveTab intentionally share `tab:close`.
+        // CloseTab, CloseActiveTab and CloseSettings intentionally share `tab:close`.
         let mut unique = ids.clone();
         unique.sort();
         unique.dedup();
         assert_eq!(unique.len(), COMMANDS.len());
-        assert_eq!(ids.len(), COMMANDS.len() + 1);
+        assert_eq!(ids.len(), COMMANDS.len() + 2);
     }
 
     #[test]
     fn keymap_defaults_are_present() {
         let mut r = CommandRegistry::new();
         register_commands(&mut r).unwrap();
-        for id in ["tab:close", "tab:next", "tab:previous", "app:quit"] {
+        for id in [
+            "tab:close",
+            "tab:next",
+            "tab:previous",
+            "app:quit",
+            "settings:open",
+        ] {
             assert!(r.get(&CommandId::new(id).unwrap()).is_some(), "{id}");
         }
     }

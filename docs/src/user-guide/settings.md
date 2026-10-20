@@ -91,3 +91,50 @@ user names and passwords are not stored in config files, and the system keychain
 settings arrive in M2.
 
 See [ADR-0005](../adr/0005-config-files-and-keybindings.md) for the design.
+
+## Settings tab and themes
+
+SQLer has a Settings tab, so you do not need to edit `settings.toml` by hand.
+
+### Opening it
+
+- Click the **Settings** button at the right end of the tab strip.
+- Run the command `settings:open` ("Open Settings").
+- Press `mod+,` once keybindings are available.
+
+The Settings tab is one tab. While it is open, it replaces the tab body, and the Settings header in
+the tab strip has a **×** button that closes it (the command `tab:close` closes it as well). Your
+connection tabs stay open behind it.
+
+### Theme
+
+The tab offers three choices:
+
+| Choice | Effect |
+| ------ | ------ |
+| Light | Always the light theme. |
+| Dark | Always the dark theme. |
+| Follow system | Light or dark, as the OS appearance says. |
+
+"Follow system" also follows OS changes while SQLer is running. On Linux this depends on the desktop
+portal. Without it, SQLer cannot read the OS appearance and uses the light theme.
+
+The **Dark** / **Light** button at the right end of the tab strip switches to the other mode. It runs
+the command `theme:toggle-mode` ("Toggle Light/Dark Theme"). The command stores an explicit `light`
+or `dark`, the opposite of what you see now, so it leaves "Follow system". Choose "Follow system" in
+the Settings tab to go back.
+
+### UI font size
+
+Use the **−** and **+** buttons to change the size of the interface text. The size is in whole
+points, from 8 to 48 (default 14).
+
+### Saving
+
+A change applies at once, without a restart, and is saved to `settings.toml` at once. There is no
+Save button. The next start restores the theme and font size.
+
+If `settings.toml` cannot be read (for example, it has a wrong key) or SQLer finds no config
+directory, SQLer uses the defaults and does not write the file, so your hand-edited file is not
+overwritten. The Settings tab then shows the problem and the line "Changes apply to this session
+only." If a save fails, the tab shows the error. A later successful save clears it.

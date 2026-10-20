@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use gpui::{
     App, AppContext as _, Bounds, Context, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Window, WindowBounds, WindowOptions, div, px, size,
+    ParentElement as _, Render, Styled as _, Subscription, Window, WindowBounds, WindowOptions,
+    div, px, size,
 };
 use gpui_component::{ActiveTheme as _, Root};
 use sqler_driver_api::DriverRegistry;
@@ -18,8 +19,11 @@ use sqler_driver_api::sqler_core::ConnectionConfig;
 use super::action::WorkspaceAction;
 use super::bridge::SessionBridge;
 use super::state::{Effect, Workspace};
+use crate::settings::{self, SettingsModel};
 use crate::sidebar::{self, SidebarModel};
 use crate::tabs;
+use crate::theme::apply::{appearance_of, apply};
+use crate::theme::resolve;
 
 /// Everything `run` needs from the binary.
 pub struct Startup {
@@ -31,6 +35,8 @@ pub struct Startup {
     pub runtime: tokio::runtime::Handle,
     /// Exit with code 0 once the first frame is presented (cold-start measurement).
     pub exit_after_first_frame: bool,
+    /// The user settings, loaded by the binary.
+    pub settings: SettingsModel,
 }
 
 impl std::fmt::Debug for Startup {
@@ -39,11 +45,12 @@ impl std::fmt::Debug for Startup {
             .field("connections", &self.connections)
             .field("registry", &self.registry)
             .field("exit_after_first_frame", &self.exit_after_first_frame)
+            .field("settings", &self.settings)
             .finish_non_exhaustive()
     }
 }
 
-/// Initialises the component library. Later tasks hook the theme in here.
+/// Initialises the component library. The theme is applied afterwards, from the settings.
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
 }
@@ -54,6 +61,9 @@ pub fn init(cx: &mut App) {
 pub fn run(startup: Startup) {
     gpui_platform::application().run(move |cx: &mut App| {
         init(cx);
+        let system = appearance_of(cx.window_appearance());
+        let settings = startup.settings.settings();
+        apply(resolve(settings.theme, system), settings.ui_font_size, cx);
         cx.activate(true);
         // Closing the main window quits the app on every OS.
         cx.on_window_closed(|cx, _| {
@@ -69,7 +79,7 @@ pub fn run(startup: Startup) {
                 ..Default::default()
             },
             |window, cx| {
-                let view = cx.new(|_| WorkspaceView::new(startup, window));
+                let view = cx.new(|cx| WorkspaceView::new(startup, window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             },
         );
@@ -84,10 +94,12 @@ pub fn run(startup: Startup) {
 pub(crate) struct WorkspaceView {
     ws: Workspace,
     bridge: SessionBridge,
+    /// Keeps the OS appearance observer alive.
+    _appearance: Subscription,
 }
 
 impl WorkspaceView {
-    fn new(startup: Startup, window: &Window) -> Self {
+    fn new(startup: Startup, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = match startup.connections {
             Ok(connections) => SidebarModel::from_connections(connections),
             Err(message) => SidebarModel::with_load_error(message),
@@ -95,9 +107,28 @@ impl WorkspaceView {
         if startup.exit_after_first_frame {
             window.on_next_frame(|_, _| std::process::exit(0));
         }
+        let mut ws = Workspace::new(sidebar).with_settings(startup.settings);
+        ws.set_system_appearance(appearance_of(window.appearance()));
+        apply(ws.appearance(), ws.settings().settings().ui_font_size, cx);
+        // Follow the OS while the preference is "follow system". Nothing changes in the
+        // settings, so nothing is saved.
+        let appearance = cx.observe_window_appearance(window, |view, window, cx| {
+            if view
+                .ws
+                .set_system_appearance(appearance_of(window.appearance()))
+            {
+                apply(
+                    view.ws.appearance(),
+                    view.ws.settings().settings().ui_font_size,
+                    cx,
+                );
+                cx.notify();
+            }
+        });
         Self {
-            ws: Workspace::new(sidebar),
+            ws,
             bridge: SessionBridge::new(startup.registry, startup.runtime),
+            _appearance: appearance,
         }
     }
 
@@ -127,6 +158,14 @@ impl WorkspaceView {
             }
             Effect::CloseSession(session) => self.bridge.close(session),
             Effect::Quit => cx.quit(),
+            Effect::ApplySettings => {
+                self.ws.save_settings();
+                apply(
+                    self.ws.appearance(),
+                    self.ws.settings().settings().ui_font_size,
+                    cx,
+                );
+            }
         }
     }
 }
@@ -136,8 +175,14 @@ impl Render for WorkspaceView {
         let theme = cx.theme();
         let (bg, fg) = (theme.background, theme.foreground);
         let sidebar = sidebar::view::sidebar(self.ws.sidebar(), cx);
-        let strip = tabs::view::tab_strip(self.ws.tabs(), cx);
-        let body = tabs::view::tab_body(self.ws.tabs(), cx);
+        let settings_active = self.ws.settings_tab_active();
+        let strip = tabs::view::tab_strip(self.ws.tabs(), !settings_active, cx);
+        let strip_end = settings::view::strip_end(&self.ws, cx);
+        let body = if settings_active {
+            settings::view::page(&self.ws, cx).into_any_element()
+        } else {
+            tabs::view::tab_body(self.ws.tabs(), cx).into_any_element()
+        };
         div()
             .id("workspace")
             .size_full()
@@ -153,7 +198,14 @@ impl Render for WorkspaceView {
                     .h_full()
                     .flex()
                     .flex_col()
-                    .child(strip)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .w_full()
+                            .child(div().flex_1().min_w_0().child(strip))
+                            .child(strip_end),
+                    )
                     .child(body),
             )
     }

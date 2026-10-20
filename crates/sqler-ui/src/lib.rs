@@ -10,6 +10,8 @@
 
 pub mod command;
 pub mod grid;
+pub mod settings;
 pub mod sidebar;
 pub mod tabs;
+pub mod theme;
 pub mod workspace;

@@ -6119,6 +6119,7 @@ dependencies = [
  "gpui-component",
  "gpui-pre",
  "gpui-pre-platform",
+ "sqler-config",
  "sqler-driver-api",
  "sqler-driver-sqlite",
  "thiserror 2.0.21",

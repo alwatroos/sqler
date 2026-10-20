@@ -10,6 +10,8 @@ State is plain Rust and has no GPUI types:
 | ------ | ----- | ---- |
 | `sidebar` | `SidebarModel`, `SidebarEntry`, `ConnectionStatus` | saved connections in file order, selection, `Idle`/`Connecting`/`Failed` status, load error |
 | `tabs` | `TabStrip`, `Tab`, `TabId`, `TabKind`, `TabConnection`, `TabHeader`, `Rgb` | tabs bound to one connection each; titles `name`, `name (2)`; header data (title, accent, badge, prod flag) |
+| `theme` | `Appearance`, `resolve`, `toggled` | turns `ThemePreference` and the OS appearance into light or dark; `toggled` gives the explicit opposite |
+| `settings` | `SettingsModel` | the `Settings` of `sqler-config`: checked changes (theme, font size 8 to 48), saved only through `ConfigDir::save_settings`; defaults and no writes when loading failed |
 | `workspace` | `Workspace`, `WorkspaceAction`, `Effect`, `RequestId`, `SessionBridge` | owns sidebar, tabs and sessions; dispatches actions |
 
 `cargo test -p sqler-ui` runs these on default features without GPUI. The views (`sidebar/view.rs`, `tabs/view.rs`, `workspace/view.rs`) exist only with the `gui` feature, which `sqler-app` enables. They only render state; CI builds them but no test opens a window.
@@ -29,8 +31,15 @@ click / key -> WorkspaceAction -> CommandId (T4) -> Workspace::dispatch -> Effec
 | `NextTab` | `tab:next` |
 | `PreviousTab` | `tab:previous` |
 | `Quit` | `app:quit` |
+| `OpenSettings` | `settings:open` |
+| `CloseSettings` | `tab:close` |
+| `ToggleThemeMode` | `theme:toggle-mode` |
+| `SetTheme` | `settings:set-theme` |
+| `SetUiFontSize` | `settings:set-ui-font-size` |
 
-`register_commands` adds these to the `CommandRegistry`. `tab:close`, `tab:next`, `tab:previous` and `app:quit` match the default keymap of `sqler-config`. `dispatch` changes state and returns an `Effect`: `None`, `Connect { request, config }`, `CloseSession(session)` or `Quit`.
+`register_commands` adds these to the `CommandRegistry`. `tab:close`, `tab:next`, `tab:previous` and `app:quit` match the default keymap of `sqler-config`. `dispatch` changes state and returns an `Effect`: `None`, `Connect { request, config }`, `CloseSession(session)`, `ApplySettings` or `Quit`. `ApplySettings` makes the view save the settings and re-apply the theme and font size.
+
+The Settings tab is a single tab owned by `Workspace` (it is not a `TabStrip` entry) and sits after the last connection tab. It is drawn at the right end of the tab strip and replaces the tab body while active.
 
 ## Bridge to tokio
 
@@ -53,7 +62,8 @@ Dropping a `PendingConnect` aborts the task and closes a session that was alread
 ## Hook points for later tasks
 
 - Keymap (T6): map chords to the command IDs above; the views use no GPUI `actions!` yet.
-- Themes (T7): `init(cx)` in `workspace/view.rs` calls `gpui_component::init`; apply the theme there. The prod tint uses the theme's `danger` token.
+- Themes (T7): the shell paints only with `gpui_component` theme tokens (`cx.theme()`), with no second palette. `theme::apply` (gui only) calls `Theme::change` and sets `Theme::font_size`. `workspace::run` applies the startup settings, `WorkspaceView::new` observes the OS appearance, and `Effect::ApplySettings` saves and re-applies. The prod tint uses the theme's `danger` token.
+- Settings tab (T7): `settings::view::{strip_end, page}` are drawn by the `workspace/view.rs` render (strip row and body switch). `tabs::view::tab_strip` takes `highlight_active`, which is false while the Settings tab is active. `Startup.settings` carries the `SettingsModel`.
 - Grid (T8): add a `TabKind` variant (it is `#[non_exhaustive]`) and render it in the tab body.
 
 ## Startup
