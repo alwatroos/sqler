@@ -1,0 +1,31 @@
+---
+source: crates/sqler-sql/tests/format_snapshots.rs
+expression: out
+---
+WITH recent AS (
+  SELECT id, total
+  FROM orders
+  WHERE created > '2024-01-01'
+), big AS (
+  SELECT *
+  FROM recent
+  WHERE total BETWEEN 10 AND 20
+    AND total <> 15
+)
+SELECT o.id, c.name, count(*) AS n
+FROM orders o
+INNER JOIN customers c ON c.id = o.customer_id
+LEFT OUTER JOIN big b ON b.id = o.id
+CROSS JOIN t
+WHERE o.id IN (
+  SELECT id
+  FROM recent
+  WHERE total > 5
+)
+  AND (c.active OR c.vip)
+GROUP BY o.id, c.name
+HAVING count(*) > 1
+ORDER BY n desc
+LIMIT 10
+UNION ALL
+SELECT 1, 'x', 2

@@ -1,0 +1,11 @@
+---
+source: crates/sqler-sql/tests/format_snapshots.rs
+expression: "run(Dialect::Sqlite, sql)"
+---
+create trigger trg after insert on t begin
+  update u set n = n + 1 where id = new.id;
+  insert into log values (case when new.a > 1 then 'big' else 'small' end);
+end;
+
+SELECT [a b], "c"
+FROM t

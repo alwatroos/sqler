@@ -29,7 +29,8 @@ Source commands (all rows):
 | mysql, mariadb (Docker images) | `mysql:8.4`, `mariadb:11.8` | 8.4, 11.8 | 2026-10-20 | Servers for the `MySQL` DB tests (`tests/docker/start-mysql.sh`): `MySQL` 8.4 LTS and `MariaDB` 11.8 LTS. Tags checked on Docker Hub 2026-10-20. Source: Docker Hub API |
 | tiberius | `tiberius` | 0.13.0 | 2026-09-25 | TDS (MSSQL) driver. Source: API |
 | duckdb | `duckdb` | 1.10506.1 | 2026-10-16 | `duckdb-rs`; version number follows the bundled DuckDB release. Source: API |
-| sqlparser | `sqlparser` | 0.63.0 | 2026-09-13 | Apache DataFusion `sqlparser-rs`. Source: API |
+| sqlparser | `sqlparser` | 0.63.0 | 2026-09-13 | Apache DataFusion `sqlparser-rs`. Not a dependency: `sqler-sql` uses its own lexer for splitting, placeholders, classification and formatting (ADR-0020); kept as the candidate for later AST needs. Re-verified 2026-10-20 (`max_stable_version` 0.63.0). Source: API |
+| sqlformat | `sqlformat` | 0.5.0 | 2025-10-09 | SQL formatter crate. Not chosen (ADR-0020): no dollar quotes, MySQL `#` or `-- ` rule, no idempotency or comment-safety guarantee. Verified 2026-10-20 (`max_stable_version` 0.5.0). Source: API |
 | tree-sitter | `tree-sitter` | 0.27.1 | 2026-10-08 | Rust bindings. `gpui-component` 0.8.0 requires `^0.26.13`, so the root `Cargo.lock` resolves 0.26.13 (through `sqler-ui/gui`). Source: API; `Cargo.lock` |
 | tree-sitter-sequel | `tree-sitter-sequel` | 0.3.11 | 2025-10-01 | SQL grammar pulled in by the `gpui-component` feature `tree-sitter-sql`; now in the root `Cargo.lock` (0.3.11) through `sqler-ui/gui`. Verified 2026-10-20. Source: API; `Cargo.lock` |
 | memory-stats | `memory-stats` | 1.2.0 | 2024-06-26 | Reads process RSS for the `SPIKE rss_mb` value. Spike only, not in the root workspace. Verified 2026-10-20. Source: API |

@@ -32,7 +32,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-core` | L0 | Domain types: Connection, Catalog, Query, ResultSet, Value, DataType; no I/O |
 | `sqler-driver-api` | L1 | `Driver` trait, streaming result protocol, cancellation, introspection trait |
 | `sqler-ai-api` | L1 | `AiProvider` trait, message and tool types, streaming, token accounting |
-| `sqler-sql` | L1 | Parsing (`sqlparser`), formatting, statement splitting, dialect handling |
+| `sqler-sql` | L1 | SQL text services on an own lexer (statement splitting, cursor lookup, placeholders, fail-safe classification, formatting), dialect handling, DDL generation; `sqlparser` only for later AST needs (ADR-0020) |
 | `sqler-plugin-api` | L1 | WIT definitions and host bindings (wasmtime component model) |
 | `sqler-config` | L1 | Settings, keybindings, connection store, keychain |
 | `sqler-tunnel` | L1 | SSH session and local port forward (russh); drivers connect to a local address |
@@ -224,6 +224,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0016](docs/src/adr/0016-connect-pipeline.md) | Connect pipeline: `Connector` trait in `sqler-ui`, pipeline in `sqler-app` | accepted |
 | [0017](docs/src/adr/0017-object-browser-sessions-and-drop-confirmation.md) | Object browser: browser session per connection, short-lived action sessions, DROP confirmation | accepted |
 | [0019](docs/src/adr/0019-tls-server-name-through-tunnel.md) | TLS server name through a tunnel: `TlsConfig::server_name`, local Unix-socket bridge | accepted |
+| [0020](docs/src/adr/0020-sql-text-services.md) | SQL text services: own lexer, fail-safe classification | accepted |
 | [0021](docs/src/adr/0021-query-history-and-saved-queries.md) | Query history and saved queries: JSON Lines history, versioned TOML saved queries | accepted |
 | [0022](docs/src/adr/0022-catalog-snapshot-name-index.md) | Catalog snapshot, name index and on-demand column loading | accepted |
 | [0023](docs/src/adr/0023-completion-engine.md) | Completion engine: own lexer, schema source trait, ranking | accepted |
