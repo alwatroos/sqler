@@ -15,7 +15,7 @@ mod result;
 mod value;
 
 pub use catalog::{Catalog, Schema, Table, TableKind};
-pub use connection::{ConnectionConfig, DriverId};
+pub use connection::{ConnectionConfig, DriverId, Environment};
 pub use error::CoreError;
 pub use query::Query;
 pub use result::{Column, ResultSet, Row};

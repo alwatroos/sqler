@@ -4,6 +4,7 @@
 
 - [User guide](user-guide/index.md)
   - [Command-line interface](user-guide/cli.md)
+  - [Settings](user-guide/settings.md)
 - [Architecture](architecture/index.md)
   - [Core and driver API](architecture/core-and-driver-api.md)
 - [Architecture decisions](adr/index.md)
@@ -12,6 +13,7 @@
   - [ADR-0002: Plugin ABI: WASM Component Model](adr/0002-plugin-abi-wasm-component-model.md)
   - [ADR-0003: AI tool contract](adr/0003-ai-tool-contract.md)
   - [ADR-0004: Driver API](adr/0004-driver-api.md)
+  - [ADR-0005: Config files and keybindings](adr/0005-config-files-and-keybindings.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
 - [Benchmarks](benchmarks.md)

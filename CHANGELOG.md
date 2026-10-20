@@ -28,3 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sqlx` 0.9.0, `tokio` 1.54.0, `futures-core` 0.3.34 and `anyhow` 1.0.104 dependencies, with rationale in `docs/src/dependencies.md`.
 - Iteration 001 report (`docs/reports/iteration-001.md`) and the first benchmark numbers for `sqler-cli`.
 - `sqler-ui` command registry: validated `category:action` command IDs, `CommandRegistry` with lookup, and a fuzzy palette query ranking commands by title and ID.
+- `sqler-config`: settings (theme, UI font size), rebindable keybindings with per-platform defaults and conflict detection, and a read-only saved connection list, all from TOML files in the platform config directory.
+- `sqler-core`: optional `environment` (dev, staging, prod) and `color` fields on `ConnectionConfig`.
+- ADR-0005 (config files and keybindings) and the Settings user guide page.
+- `serde` 1.0.229 and `toml` 1.1.8 dependencies; `directories` evaluated and rejected (MPL-2.0 transitive license), see `docs/src/dependencies.md`.
