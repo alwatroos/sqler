@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - DDL and script generation for `PostgreSQL`, `MySQL`/`MariaDB` and `SQLite` (`sqler-sql`). ADR-0015 and the user guide page "DDL and scripts".
 - `sqler-driver-postgres`: `PostgreSQL` driver on sqlx (streaming, server-side cancel, TLS modes with CA and client certificate through rustls, typed values, introspection of all 13 object kinds); the `driver-postgres` feature (default) in `sqler-cli` and `sqler-app`.
+- `sqler-driver-mysql`: `MySQL` and `MariaDB` driver on sqlx (streaming, cancel with `KILL QUERY` on a side connection, TLS modes through rustls, typed values, introspection of schemas, tables, views, functions, procedures, triggers, indexes and roles); the `driver-mysql` feature (default) in `sqler-cli` and `sqler-app`. `sqlx` is built without `mysql-rsa`, so the `rsa` crate (RUSTSEC-2023-0071) is not in the tree and the RSA password exchange needs TLS.
+- CI `db` job: `MySQL` 8.4 and `MariaDB` 11.8 in Docker with TLS (`start-mysql.sh`), their DB tests and a CLI smoke test.
+- ADR-0010 (`MySQL` and `MariaDB` driver) and the user guide page "MySQL and MariaDB".
 - CI `db` job: `PostgreSQL` in Docker with TLS, DB integration tests (`SQLER_TEST_<DB>_URL`, `SQLER_TEST_REQUIRE_DB`) and a CLI smoke test.
 - ADR-0009 (`PostgreSQL` driver, TLS backend, DB test convention) and the user guide page "PostgreSQL".
 - `sqler-catalog`: per-connection schema cache with lazy per-node loading through `Introspect`, one worker that serialises introspection calls, deduplicated concurrent loads, per-node errors, and background refresh of a node, subtree or the whole connection with progress events, cooperative cancel and atomic apply. ADR-0014, the architecture page "Schema catalog", a 5,000-table benchmark (`catalog_tree`, also run by `bench.yml`) and its results in `docs/src/benchmarks.md`.

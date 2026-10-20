@@ -11,3 +11,12 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-driver-api.workspace = true
+sqlx = { workspace = true, features = ["mysql", "tls-rustls-ring-native-roots"] }
+futures-core.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "time"] }

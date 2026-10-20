@@ -56,7 +56,11 @@ fn run(driver: &str, target: &str, sql: &str) -> Result<()> {
 
 // Without any driver feature nothing can fail or be registered.
 #[cfg_attr(
-    not(any(feature = "driver-sqlite", feature = "driver-postgres")),
+    not(any(
+        feature = "driver-sqlite",
+        feature = "driver-postgres",
+        feature = "driver-mysql"
+    )),
     allow(clippy::unnecessary_wraps)
 )]
 fn registry() -> Result<DriverRegistry> {
@@ -66,6 +70,8 @@ fn registry() -> Result<DriverRegistry> {
     registry.register(Box::new(sqler_driver_sqlite::SqliteDriver::new()))?;
     #[cfg(feature = "driver-postgres")]
     registry.register(Box::new(sqler_driver_postgres::PostgresDriver::new()))?;
+    #[cfg(feature = "driver-mysql")]
+    registry.register(Box::new(sqler_driver_mysql::MySqlDriver::new()))?;
     Ok(registry)
 }
 

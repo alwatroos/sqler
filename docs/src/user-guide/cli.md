@@ -21,7 +21,8 @@ cargo run -p sqler-cli -- run :memory: "select 1"
 
 The `SQLite` driver is compiled in by the default `driver-sqlite` feature. `SQLite` itself is bundled,
 so no system library is needed. The `PostgreSQL` driver is compiled in by the default
-`driver-postgres` feature. With `--no-default-features` no driver is registered and `run` fails with
+`driver-postgres` feature, and the `MySQL` and `MariaDB` driver by the default `driver-mysql`
+feature. With `--no-default-features` no driver is registered and `run` fails with
 `unknown driver`.
 
 ## Usage
@@ -35,7 +36,7 @@ sqler-cli --version | -V
 - `--driver <ID>` (or `--driver=<ID>`) selects the driver and defaults to `sqlite`. The flag may also
   come after `<TARGET>` and `<SQL>`.
 - `<TARGET>` is `:memory:` for a private in-memory database, a `sqlite:` URL, or a file path
-  (`SQLite`; a missing database file is created), or a `postgres://` URL (`PostgreSQL`).
+  (`SQLite`; a missing database file is created), a `postgres://` URL (`PostgreSQL`), or a `mysql://` or `mariadb://` URL (`MySQL`, `MariaDB`).
 - `<SQL>` is one statement.
 
 In-memory database:
@@ -65,6 +66,15 @@ sqler-cli run --driver postgres postgres://user@localhost/db "select 1"
 
 TLS settings go in the URL, for example `?sslmode=verify-full`; see
 [PostgreSQL](databases/postgresql.md).
+
+`MySQL` and `MariaDB`:
+
+```sh
+sqler-cli run --driver mysql "mysql://user@localhost:3306/db" "select 1"
+```
+
+TLS settings go in the URL, for example `?ssl-mode=verify_identity`; see
+[MySQL and MariaDB](databases/mysql.md).
 
 Each invocation opens its own connection, so an `:memory:` database does not survive the command.
 
