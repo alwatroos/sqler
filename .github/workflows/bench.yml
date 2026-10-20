@@ -54,10 +54,29 @@ jobs:
           else
             cargo bench -p sqler-ui --bench grid_viewport -- --save "$GITHUB_WORKSPACE/target/bench-pr.txt"
           fi
+      - name: Baseline catalog bench on the base commit
+        if: github.event_name == 'pull_request'
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/target"
+          if [ -f ../base/crates/sqler-catalog/benches/catalog_tree.rs ]; then
+            cd ../base
+            # Exit 1 means the base itself broke a budget; the file is saved first.
+            cargo bench -p sqler-catalog --bench catalog_tree -- --save "$GITHUB_WORKSPACE/target/catalog-base.txt" || [ $? -eq 1 ]
+          else
+            echo "::notice::no catalog baseline bench on base"
+          fi
+      - name: Bench the catalog on the PR (or branch) commit
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/target"
+          if [ -f "$GITHUB_WORKSPACE/target/catalog-base.txt" ]; then
+            cargo bench -p sqler-catalog --bench catalog_tree -- --save "$GITHUB_WORKSPACE/target/catalog-pr.txt" --compare "$GITHUB_WORKSPACE/target/catalog-base.txt"
+          else
+            cargo bench -p sqler-catalog --bench catalog_tree -- --save "$GITHUB_WORKSPACE/target/catalog-pr.txt"
+          fi
       - name: Summary
         if: always()
         run: |
-          for f in "$GITHUB_WORKSPACE/target/bench-base.txt" "$GITHUB_WORKSPACE/target/bench-pr.txt"; do
+          for f in "$GITHUB_WORKSPACE/target/bench-base.txt" "$GITHUB_WORKSPACE/target/bench-pr.txt" "$GITHUB_WORKSPACE/target/catalog-base.txt" "$GITHUB_WORKSPACE/target/catalog-pr.txt"; do
             if [ -f "$f" ]; then
               echo "### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
