@@ -24,3 +24,7 @@ tokio = { workspace = true, features = ["rt"] }
 [[bench]]
 name = "catalog_tree"
 harness = false
+
+[[bench]]
+name = "catalog_index"
+harness = false

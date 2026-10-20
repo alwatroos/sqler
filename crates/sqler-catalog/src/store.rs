@@ -3,46 +3,99 @@
 
 //! The shared cache: lists, table details and per-node errors.
 //!
-//! Pure data and synchronous. The lock around it is held only for short sections and never
-//! across an `.await`.
+//! The store is copy-on-write. [`Shared`] holds an `Arc<Store>`; readers clone that `Arc` under a
+//! short read lock and keep a consistent snapshot, and the worker (the only writer) builds the
+//! next store outside the lock and swaps it in. The lock is held only for a pointer clone or
+//! swap and never across an `.await`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use sqler_driver_api::sqler_core::{DbObject, Listing, ObjectKind, ObjectPath, Table};
 
 use crate::error::CatalogError;
+use crate::index::NameIndex;
 use crate::key::{CacheKey, NodeKey, path_depth, path_within};
+use crate::shard::ShardedMap;
 
 /// The store as shared between the worker and the catalog handles.
-pub(crate) type Shared = Arc<RwLock<Store>>;
+pub(crate) type Shared = Arc<RwLock<Arc<Store>>>;
+
+/// Creates an empty shared store.
+pub(crate) fn new_shared() -> Shared {
+    Arc::new(RwLock::new(Arc::new(Store::default())))
+}
 
 /// Locks for reading; a poisoned lock is recovered.
-pub(crate) fn read(shared: &RwLock<Store>) -> RwLockReadGuard<'_, Store> {
+pub(crate) fn read(shared: &RwLock<Arc<Store>>) -> RwLockReadGuard<'_, Arc<Store>> {
     shared.read().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Locks for writing; a poisoned lock is recovered.
-pub(crate) fn write(shared: &RwLock<Store>) -> RwLockWriteGuard<'_, Store> {
+pub(crate) fn write(shared: &RwLock<Arc<Store>>) -> RwLockWriteGuard<'_, Arc<Store>> {
     shared.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The current store: one read lock and one `Arc` clone.
+pub(crate) fn current(shared: &RwLock<Arc<Store>>) -> Arc<Store> {
+    Arc::clone(&read(shared))
+}
+
+/// A cached listing with the index over its names.
+#[derive(Debug)]
+pub(crate) struct ListEntry {
+    pub(crate) listing: Arc<Listing>,
+    /// Names of the listed objects; a slot is the position in the listing.
+    pub(crate) names: NameIndex,
+}
+
+impl ListEntry {
+    /// Wraps `listing` and indexes its names.
+    pub(crate) fn new(listing: Arc<Listing>) -> Self {
+        let names = match &*listing {
+            Listing::Objects(objects) => NameIndex::build(objects.iter().map(|o| o.name.as_str())),
+            Listing::Unsupported => NameIndex::default(),
+        };
+        Self { listing, names }
+    }
+}
+
+/// Cached table details with the index over its column names.
+#[derive(Debug)]
+pub(crate) struct TableEntry {
+    pub(crate) table: Arc<Table>,
+    /// Column names; a slot is the position in `table.columns`.
+    pub(crate) columns: NameIndex,
+}
+
+impl TableEntry {
+    /// Wraps `table` and indexes its column names.
+    pub(crate) fn new(table: Arc<Table>) -> Self {
+        let columns = NameIndex::build(table.columns.iter().map(|c| c.name.as_str()));
+        Self { table, columns }
+    }
 }
 
 /// Results waiting to be applied in one step.
 #[derive(Debug, Default)]
 pub(crate) struct Staged {
-    pub(crate) lists: Vec<(NodeKey, Arc<Listing>)>,
-    pub(crate) tables: Vec<(DbObject, Arc<Table>)>,
+    pub(crate) lists: Vec<(NodeKey, Arc<ListEntry>)>,
+    pub(crate) tables: Vec<(DbObject, Arc<TableEntry>)>,
     /// Tables a refresh found to be gone.
     pub(crate) gone: Vec<DbObject>,
     pub(crate) failures: Vec<(CacheKey, CatalogError)>,
+    /// Entries re-fetched with an equal value: their data stays as it is, only the error clears.
+    pub(crate) unchanged: Vec<CacheKey>,
 }
 
-/// The cached data.
-#[derive(Debug, Default)]
+/// The cached data. Cloning shares everything; a mutation copies only the touched shards.
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Store {
-    pub(crate) lists: HashMap<NodeKey, Arc<Listing>>,
-    pub(crate) tables: HashMap<DbObject, Arc<Table>>,
-    pub(crate) errors: HashMap<CacheKey, CatalogError>,
+    pub(crate) lists: ShardedMap<NodeKey, Arc<ListEntry>>,
+    pub(crate) tables: ShardedMap<DbObject, Arc<TableEntry>>,
+    pub(crate) errors: ShardedMap<CacheKey, CatalogError>,
+    /// Grows by one with every change, so equal generations mean an equal store.
+    pub(crate) generation: u64,
 }
 
 /// Kinds whose objects contain other cached nodes.
@@ -72,6 +125,17 @@ impl Store {
         }
     }
 
+    /// Heap bytes of every name index.
+    pub(crate) fn index_bytes(&self) -> usize {
+        let lists: usize = self.lists.iter().map(|(_, e)| e.names.heap_bytes()).sum();
+        let tables: usize = self
+            .tables
+            .iter()
+            .map(|(_, e)| e.columns.heap_bytes())
+            .sum();
+        lists + tables
+    }
+
     /// The cached keys within `path`, parents before children.
     pub(crate) fn keys_within(&self, path: &ObjectPath) -> Vec<CacheKey> {
         let lists = self.lists.keys().map(|k| CacheKey::Children(k.clone()));
@@ -84,6 +148,7 @@ impl Store {
     /// Removes the error of `key`, if any.
     pub(crate) fn clear_error(&mut self, key: &CacheKey) {
         self.errors.remove(key);
+        self.generation += 1;
     }
 
     /// Applies staged results.
@@ -92,17 +157,20 @@ impl Store {
     /// Objects of a container kind that a re-fetched listing no longer contains are evicted
     /// together with everything under them.
     pub(crate) fn apply(&mut self, staged: Staged) {
+        self.generation += 1;
         let mut evict: Vec<ObjectPath> = Vec::new();
-        for (key, listing) in staged.lists {
-            if let Some(old) = self.lists.get(&key) {
-                evict.extend(dropped_paths(old, &listing));
-            }
+        for (key, entry) in staged.lists {
             self.errors.remove(&CacheKey::Children(key.clone()));
-            self.lists.insert(key, listing);
+            if let Some(old) = self.lists.insert(key, Arc::clone(&entry)) {
+                evict.extend(dropped_paths(&old.listing, &entry.listing));
+            }
         }
-        for (obj, table) in staged.tables {
+        for (obj, entry) in staged.tables {
             self.errors.remove(&CacheKey::Table(obj.clone()));
-            self.tables.insert(obj, table);
+            self.tables.insert(obj, entry);
+        }
+        for key in &staged.unchanged {
+            self.errors.remove(key);
         }
         for obj in staged.gone {
             self.errors.remove(&CacheKey::Table(obj.clone()));
@@ -170,10 +238,14 @@ mod tests {
         DbObject::new(ObjectKind::Table, main(), name)
     }
 
-    fn list(objs: &[&DbObject]) -> Arc<Listing> {
-        Arc::new(Listing::Objects(
+    fn list(objs: &[&DbObject]) -> Arc<ListEntry> {
+        Arc::new(ListEntry::new(Arc::new(Listing::Objects(
             objs.iter().map(|o| (*o).clone()).collect(),
-        ))
+        ))))
+    }
+
+    fn entry(obj: &DbObject) -> Arc<TableEntry> {
+        Arc::new(TableEntry::new(Arc::new(Table::new(obj.clone()))))
     }
 
     fn tables_key() -> NodeKey {
@@ -193,10 +265,7 @@ mod tests {
                 (index_key("a"), list(&[])),
                 (index_key("b"), list(&[])),
             ],
-            tables: vec![
-                (a.clone(), Arc::new(Table::new(a))),
-                (b.clone(), Arc::new(Table::new(b))),
-            ],
+            tables: vec![(a.clone(), entry(&a)), (b.clone(), entry(&b))],
             ..Staged::default()
         });
         s
@@ -300,7 +369,10 @@ mod tests {
     fn unsupported_listings_never_prune() {
         let mut s = seeded();
         s.apply(Staged {
-            lists: vec![(tables_key(), Arc::new(Listing::Unsupported))],
+            lists: vec![(
+                tables_key(),
+                Arc::new(ListEntry::new(Arc::new(Listing::Unsupported))),
+            )],
             ..Staged::default()
         });
         assert_eq!(s.len(), 5);
@@ -318,8 +390,63 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_clears_the_error_and_keeps_the_entry() {
+        let mut s = seeded();
+        let key = CacheKey::Children(tables_key());
+        s.apply(Staged {
+            failures: vec![(key.clone(), CatalogError::Driver("boom".into()))],
+            ..Staged::default()
+        });
+        let kept = Arc::clone(s.lists.get(&tables_key()).unwrap());
+        s.apply(Staged {
+            unchanged: vec![key],
+            ..Staged::default()
+        });
+        assert!(s.errors.is_empty());
+        assert!(Arc::ptr_eq(&kept, s.lists.get(&tables_key()).unwrap()));
+    }
+
+    #[test]
+    fn generation_grows_and_clones_are_independent() {
+        let mut s = seeded();
+        let g = s.generation;
+        let before = s.clone();
+        s.clear_error(&CacheKey::Children(tables_key()));
+        assert_eq!(s.generation, g + 1);
+        s.apply(Staged {
+            gone: vec![tbl("a")],
+            ..Staged::default()
+        });
+        assert_eq!(s.generation, g + 2);
+        assert_eq!(before.generation, g);
+        assert_eq!(before.len(), 5);
+        assert_eq!(s.len(), 4);
+        // Entries the apply did not touch are shared with the older store.
+        let (old, new) = (
+            before.lists.get(&tables_key()).unwrap(),
+            s.lists.get(&tables_key()).unwrap(),
+        );
+        assert!(Arc::ptr_eq(old, new));
+    }
+
+    #[test]
+    fn entries_index_their_names() {
+        let list = list(&[&tbl("Users"), &tbl("orders")]);
+        assert_eq!(list.names.exact("users").count(), 1);
+        let unsupported = ListEntry::new(Arc::new(Listing::Unsupported));
+        assert_eq!(unsupported.names.heap_bytes(), 0);
+        let t =
+            Table::new(tbl("t")).with_columns(vec![sqler_driver_api::sqler_core::ColumnInfo::new(
+                "Id",
+                sqler_driver_api::sqler_core::DataType::Integer,
+            )]);
+        let entry = TableEntry::new(Arc::new(t));
+        assert_eq!(entry.columns.exact("id").count(), 1);
+    }
+
+    #[test]
     fn poisoned_lock_is_recovered() {
-        let shared: Shared = Arc::new(RwLock::new(seeded()));
+        let shared: Shared = Arc::new(RwLock::new(Arc::new(seeded())));
         let clone = Arc::clone(&shared);
         let _ = std::thread::spawn(move || {
             let _guard = clone.write().unwrap();
@@ -328,6 +455,7 @@ mod tests {
         .join();
         assert!(shared.is_poisoned());
         assert_eq!(read(&shared).len(), 5);
-        write(&shared).clear_error(&CacheKey::Children(tables_key()));
+        Arc::make_mut(&mut write(&shared)).clear_error(&CacheKey::Children(tables_key()));
+        assert_eq!(current(&shared).len(), 5);
     }
 }

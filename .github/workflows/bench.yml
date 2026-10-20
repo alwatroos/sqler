@@ -74,6 +74,26 @@ jobs:
           else
             cargo bench -p sqler-catalog --bench catalog_tree -- --save "$GITHUB_WORKSPACE/target/catalog-pr.txt"
           fi
+      - name: Baseline catalog index bench on the base commit
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/target"
+          if [ -f ../base/crates/sqler-catalog/benches/catalog_index.rs ]; then
+            cd ../base
+            # Exit 1 means the base itself broke a budget; the file is saved first.
+            cargo bench -p sqler-catalog --bench catalog_index -- --save "$GITHUB_WORKSPACE/target/catalog-index-base.txt" || [ $? -eq 1 ]
+          else
+            echo "::notice::no catalog index baseline bench on base"
+          fi
+      - name: Bench the catalog index on the PR (or branch) commit
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/target"
+          if [ -f "$GITHUB_WORKSPACE/target/catalog-index-base.txt" ]; then
+            cargo bench -p sqler-catalog --bench catalog_index -- --save "$GITHUB_WORKSPACE/target/catalog-index-pr.txt" --compare "$GITHUB_WORKSPACE/target/catalog-index-base.txt"
+          else
+            cargo bench -p sqler-catalog --bench catalog_index -- --save "$GITHUB_WORKSPACE/target/catalog-index-pr.txt"
+          fi
       - name: Baseline browser tree bench on the base commit
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
@@ -117,7 +137,7 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          for f in "$GITHUB_WORKSPACE/target/bench-base.txt" "$GITHUB_WORKSPACE/target/bench-pr.txt" "$GITHUB_WORKSPACE/target/catalog-base.txt" "$GITHUB_WORKSPACE/target/catalog-pr.txt" "$GITHUB_WORKSPACE/target/browser-base.txt" "$GITHUB_WORKSPACE/target/browser-pr.txt" "$GITHUB_WORKSPACE/target/completion-base.txt" "$GITHUB_WORKSPACE/target/completion-pr.txt"; do
+          for f in "$GITHUB_WORKSPACE/target/bench-base.txt" "$GITHUB_WORKSPACE/target/bench-pr.txt" "$GITHUB_WORKSPACE/target/catalog-base.txt" "$GITHUB_WORKSPACE/target/catalog-pr.txt" "$GITHUB_WORKSPACE/target/catalog-index-base.txt" "$GITHUB_WORKSPACE/target/catalog-index-pr.txt" "$GITHUB_WORKSPACE/target/browser-base.txt" "$GITHUB_WORKSPACE/target/browser-pr.txt" "$GITHUB_WORKSPACE/target/completion-base.txt" "$GITHUB_WORKSPACE/target/completion-pr.txt"; do
             if [ -f "$f" ]; then
               echo "### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
