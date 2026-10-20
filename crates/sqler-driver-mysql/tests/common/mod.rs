@@ -71,6 +71,18 @@ impl Server {
     pub fn config(&self) -> ConnectionConfig {
         config(&self.url())
     }
+
+    /// The `host:port` of the server (the URL's authority).
+    pub fn addr(&self) -> String {
+        let (_, rest) = self.url.split_once("://").unwrap();
+        let (_, host) = rest.split_once('@').unwrap();
+        let authority = host.split(['/', '?']).next().unwrap();
+        if authority.contains(':') {
+            authority.to_owned()
+        } else {
+            format!("{authority}:3306")
+        }
+    }
 }
 
 pub fn config(url: &str) -> ConnectionConfig {

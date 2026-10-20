@@ -61,15 +61,6 @@ pub enum TunnelError {
         /// What went wrong.
         message: String,
     },
-    /// The private key is an RSA key, which this build does not support (RUSTSEC-2023-0071).
-    #[error(
-        "private key {} is an RSA key, which is not supported; use an ed25519 or ECDSA key",
-        .path.display()
-    )]
-    UnsupportedKeyType {
-        /// The file.
-        path: PathBuf,
-    },
     /// The private key is encrypted and no passphrase was given.
     #[error("private key {} is encrypted and needs a passphrase", .path.display())]
     KeyPassphraseRequired {
@@ -92,6 +83,12 @@ pub enum TunnelError {
 
 impl From<russh::Error> for TunnelError {
     fn from(e: russh::Error) -> Self {
+        Self::Ssh(e.to_string())
+    }
+}
+
+impl From<russh::SendError> for TunnelError {
+    fn from(e: russh::SendError) -> Self {
         Self::Ssh(e.to_string())
     }
 }
@@ -138,13 +135,6 @@ mod tests {
             }
             .to_string(),
             "private key id is encrypted and needs a passphrase"
-        );
-        assert_eq!(
-            TunnelError::UnsupportedKeyType {
-                path: PathBuf::from("id")
-            }
-            .to_string(),
-            "private key id is an RSA key, which is not supported; use an ed25519 or ECDSA key"
         );
         assert_eq!(
             TunnelError::AgentUnavailable("no socket".into()).to_string(),
