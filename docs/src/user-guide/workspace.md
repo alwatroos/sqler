@@ -6,7 +6,7 @@
 cargo run -p sqler-app
 ```
 
-Options: `-h`/`--help`, `-V`/`--version`, and `--exit-after-first-frame` (exits with code 0 once the first frame is shown; used to measure cold start).
+Options: `-h`/`--help`, `-V`/`--version`, `--exit-after-first-frame` (exits with code 0 once the first frame is shown; used to measure cold start), and `--open-sessions` (opens every saved connection after startup, then idles, for the idle memory measurement; connections that need a keychain or host-key prompt are skipped with a line on stderr (the connection name and, for SSH failures, the jump host and port; never the database target or a credential); cannot be combined with `--exit-after-first-frame`).
 
 ## Saved connections
 
