@@ -6,7 +6,9 @@
 //! The key is loaded into a `ring` key pair, which signs (PKCS#1 v1.5, blinded) for
 //! `rsa-sha2-256` and `rsa-sha2-512`. `ring` needs the CRT exponents `dP` and `dQ`, which an
 //! `OpenSSH` key file does not hold; they are computed with the constant-time big-integer
-//! arithmetic of `crypto-bigint`. Every buffer that holds secret key material is zeroized.
+//! arithmetic of `crypto-bigint`. Every buffer this module owns that holds secret key material is
+//! zeroized. The `ring` `RsaKeyPair` that `RsaSigner` keeps for the session is `ring` state: `ring`
+//! does not zeroize it, so it is not wiped on drop.
 //!
 //! Limits: no SHA-1 `ssh-rsa`, and only the modulus sizes `ring` signs with (2048, 3072, 4096).
 

@@ -73,6 +73,6 @@ dbg_macro = "deny"
 todo = "deny"
 
 # ADR-0018: sqlx-mysql 0.9.0 with an aws-lc-rs backend for the MySQL RSA password exchange
-# (the upstream `rsa` backend is banned, RUSTSEC-2023-0071). 32-line diff, see vendor/sqlx-mysql/README.md.
+# (the upstream `rsa` backend is banned, RUSTSEC-2023-0071). 56-line diff in 4 files, see vendor/sqlx-mysql/README.md.
 [patch.crates-io]
 sqlx-mysql = { path = "vendor/sqlx-mysql" }
