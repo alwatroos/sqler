@@ -47,7 +47,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-ai-mistral` | L2 | Mistral provider |
 | `sqler-catalog` | L2 | Schema cache, incremental refresh, search index, dependency graph |
 | `sqler-completion` | L2 | Intellisense engine: scope analysis, alias resolution, ranking; pure functions, heavily tested |
-| `sqler-export` | L2 | CSV, JSON, SQL, Parquet and XLSX writers |
+| `sqler-export` | L2 | CSV, JSON, SQL `INSERT` and Markdown writers behind a push-style `RowWriter` API and a format registry (ADR-0028); Parquet and XLSX follow |
 | `sqler-ai-tools` | L3 | Tool set exposed to models: list_schemas, describe_table, run_query (guarded), search_data, explain |
 | `sqler-plugin-host` | L3 | Plugin loading, sandboxing, capability grants, lifecycle |
 | `sqler-mcp` | L4 | MCP server (rmcp) exposing `sqler-ai-tools` to external agents |
@@ -108,6 +108,7 @@ cargo bench -p sqler-ui --bench browser_tree
 cargo bench -p sqler-completion --bench completion
 cargo bench -p sqler-ui --bench editor_buffer
 cargo bench -p sqler-ui --bench editor_intellisense
+cargo bench -p sqler-export --bench export_throughput
 ```
 
 - CI (`.github/workflows/ci.yml`) runs this subset of the commands above: fmt, clippy, nextest on Linux/macOS/Windows; deny, docs (`cargo doc` and `mdbook build docs`), spdx on Linux. Since T5 the Linux `check` and `docs` jobs install the GPUI build packages with apt, and the macOS `check` job guards the Metal toolchain; the `deny` job also runs the "Dependency rules" step.
@@ -126,6 +127,7 @@ cargo bench -p sqler-ui --bench editor_intellisense
 - Editor bench: `cargo bench -p sqler-ui --bench editor_buffer -- [--lines N --samples N --budget-p95-ns B]`. Defaults: 10000 lines, budget 16 ms. Prints `bracket_build_p95_ns`, `bracket_lookup_p95_ns`, `format_p95_ns`, `occurrence_p95_ns`. Exit 0 pass, 1 when the bracket build or format p95 exceeds the budget, 2 usage error. Not in `bench.yml`; put the numbers in the PR body.
 - Intellisense bench: `cargo bench -p sqler-ui --bench editor_intellisense -- [--tables N --columns N --samples N --budget-p95-ns B]`. Defaults: 5000 tables, 8 columns, 2000 samples, budget 16 ms. Prints `statement_start_p95_ns`, `from_prefix_p95_ns`, `qualified_column_p95_ns`, `alias_join_p95_ns`, `hover_p95_ns`, `diagnose_p95_ns`, `worst_p95_ns` (headless, from a fresh snapshot to items ready). Exit 0 pass, 1 when `worst_p95_ns` exceeds the budget, 2 usage error. Not in `bench.yml`; put the numbers in the PR body.
 - Browser tree bench: `cargo bench -p sqler-ui --bench browser_tree -- [--tables N --samples N --select-samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-expand-p95-ns B --budget-select-p95-ns B]`. Defaults: 5000 tables. Budgets: expand of a 5,000-table schema p95 16 ms (`expand_p95_ns`), selection change p95 1 ms (`select_p95_ns`). `--compare` checks `expand_p95_ns` (25 % + 50 ns). Exit 0 pass, 1 regression or budget, 2 usage error. Wired into `bench.yml`.
+- Export bench: `cargo bench -p sqler-export --bench export_throughput -- [--rows N --batch N]`. Defaults: 1,000,000 rows of five columns, batches of 1,000. Prints `<id>_rows_per_sec=` and `<id>_mib_per_sec=` for `csv`, `json`, `sql` and `markdown`; a `--bench` argument is ignored. Exit 0 ok, 1 writer error, 2 usage error. Not in `bench.yml`; put the numbers in the PR body.
 
 ## 4. Coding standards
 
@@ -240,6 +242,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0024](docs/src/adr/0024-query-execution.md) | Query execution: headless pipeline in `sqler-ui`, bound parameters, per-statement results, prod gate | accepted |
 | [0025](docs/src/adr/0025-sql-editor-component.md) | SQL editor component: `gpui-component` editor with headless logic | accepted |
 | [0026](docs/src/adr/0026-editor-intellisense.md) | Editor intellisense: completion, hover and diagnostics in the SQL editor | accepted |
+| [0028](docs/src/adr/0028-export-writer-api.md) | Export writer API: push-style row writers, a format registry and SQL literals | accepted |
 
 ## 9. Roadmap status
 

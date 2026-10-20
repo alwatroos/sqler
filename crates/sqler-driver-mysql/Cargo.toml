@@ -22,6 +22,7 @@ futures-core.workspace = true
 tokio = { workspace = true, features = ["time", "net", "io-util", "rt"] }
 
 [dev-dependencies]
+sqler-sql.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "net", "io-util", "macros"] }
 
 # aws-lc-sys on x86_64 Windows needs NASM; the prebuilt objects avoid a tool-install step in CI.

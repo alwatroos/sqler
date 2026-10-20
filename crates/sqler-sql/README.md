@@ -18,4 +18,8 @@ when no write syntax is found, so callers that must be sure also use a read-only
 [ADR-0020](../../docs/src/adr/0020-sql-text-services.md) and the
 [architecture page](../../docs/src/architecture/sql.md).
 
+SQL literals (pure, never fail): `sql_literal`, `push_literal`, `string_literal` render a `Value` for
+a dialect and never leave a string open. The lexer is public: `tokenize`, `Token`, `TokenKind`
+(`#[non_exhaustive]`). See [ADR-0028](../../docs/src/adr/0028-export-writer-api.md).
+
 See [AGENTS.md](../../AGENTS.md) for the project handbook.

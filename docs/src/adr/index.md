@@ -36,3 +36,4 @@ consequences. SQLer uses the MADR format.
 | [0024](0024-query-execution.md) | Query execution: headless pipeline in `sqler-ui`, bound parameters, per-statement results, prod gate | accepted |
 | [0025](0025-sql-editor-component.md) | SQL editor component: `gpui-component` editor with headless logic | accepted |
 | [0026](0026-editor-intellisense.md) | Editor intellisense: completion, hover and diagnostics in the SQL editor | accepted |
+| [0028](0028-export-writer-api.md) | Export writer API: push-style row writers, a format registry and SQL literals | accepted |
