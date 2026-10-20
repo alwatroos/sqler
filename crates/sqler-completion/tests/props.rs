@@ -7,7 +7,8 @@ use std::fmt::Write as _;
 
 use proptest::prelude::*;
 use sqler_completion::{
-    CompletionRequest, ContextKind, Ident, ItemKind, MemorySchema, analyze, complete,
+    CompletionRequest, ContextKind, DiagnosticCode, HoverRequest, Ident, ItemKind, MemorySchema,
+    analyze, complete, diagnose, hover,
 };
 use sqler_core::{ColumnInfo, DataType, ObjectKind};
 use sqler_sql::Dialect;
@@ -286,5 +287,220 @@ proptest! {
         prop_assert_eq!(done.context, ContextKind::None, "{:?} at {}", text, offset);
         prop_assert!(done.items.is_empty());
         prop_assert!(done.requests.is_empty());
+    }
+}
+
+/// `diagnose` and `hover` are total and their ranges are well-formed.
+fn check_diagnose_and_hover(text: &str, offset: usize, d: Dialect) -> Result<(), TestCaseError> {
+    let s = schema();
+    for diag in diagnose(text, d, &s) {
+        prop_assert!(diag.range.start < diag.range.end, "{:?}", diag);
+        prop_assert!(diag.range.end <= text.len(), "{:?}", diag);
+        prop_assert!(text.is_char_boundary(diag.range.start));
+        prop_assert!(text.is_char_boundary(diag.range.end));
+    }
+    let mut clamped = offset.min(text.len());
+    while !text.is_char_boundary(clamped) {
+        clamped -= 1;
+    }
+    if let Some(h) = hover(&HoverRequest::new(text, offset, d), &s) {
+        prop_assert!(h.range.start < h.range.end, "{:?}", h.range);
+        prop_assert!(h.range.end <= text.len());
+        prop_assert!(text.is_char_boundary(h.range.start));
+        prop_assert!(text.is_char_boundary(h.range.end));
+        prop_assert!(
+            h.range.start <= clamped && clamped <= h.range.end,
+            "{:?} contains or ends at {}",
+            h.range,
+            clamped
+        );
+    }
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(CASES))]
+
+    #[test]
+    fn diagnose_and_hover_never_panic_on_fragments(text in fragment_text(), seed in any::<usize>(), d in dialect()) {
+        check_diagnose_and_hover(&text, seed % (text.len() + 5), d)?;
+    }
+
+    #[test]
+    fn diagnose_and_hover_never_panic_on_arbitrary_text(text in any::<String>(), seed in any::<usize>(), d in dialect()) {
+        check_diagnose_and_hover(&text, seed % (text.len() + 5), d)?;
+    }
+
+    #[test]
+    fn hover_is_safe_at_every_offset(text in fragment_text(), d in dialect()) {
+        for offset in 0..text.len() + 3 {
+            check_diagnose_and_hover(&text, offset, d)?;
+        }
+    }
+}
+
+/// A schema name: mostly plain lower case, sometimes mixed case, with spaces or non-ASCII.
+fn name_part(prefix: &'static str) -> impl Strategy<Value = String> {
+    prop_oneof![
+        5 => "[a-z][a-z0-9_]{0,6}".prop_map(move |s| format!("{prefix}{s}")),
+        1 => "[A-Za-z][A-Za-z0-9 _é名]{0,6}".prop_map(move |s| format!("{}{s}", prefix.to_uppercase())),
+    ]
+}
+
+/// Tables with columns; names are unique when case is ignored.
+fn generated_schema() -> impl Strategy<Value = Vec<(String, Vec<String>)>> {
+    prop::collection::vec(
+        (
+            name_part("t_"),
+            prop::collection::vec(name_part("c_"), 1..5),
+        ),
+        1..5,
+    )
+    .prop_map(|tables| {
+        let fold = |s: &str| s.to_lowercase();
+        let mut seen: Vec<String> = Vec::new();
+        let mut out = Vec::new();
+        for (name, cols) in tables {
+            if seen.contains(&fold(&name)) {
+                continue;
+            }
+            seen.push(fold(&name));
+            let mut cs: Vec<String> = Vec::new();
+            for c in cols {
+                if !cs.iter().any(|x| fold(x) == fold(&c)) {
+                    cs.push(c);
+                }
+            }
+            out.push((name, cs));
+        }
+        out
+    })
+}
+
+/// A name as written in SQL: bare when plain lower case, else quoted for the dialect.
+fn written(d: Dialect, name: &str) -> String {
+    let plain = name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if plain {
+        name.to_owned()
+    } else {
+        match sqler_sql::quote_identifier(d, name) {
+            Ok(quoted) => quoted,
+            Err(e) => panic!("cannot quote {name:?}: {e}"),
+        }
+    }
+}
+
+/// One statement over the schema, built only from its names. `pick` drives every choice.
+fn statement(
+    tables: &[(String, Vec<String>)],
+    d: Dialect,
+    pick: &mut impl Iterator<Item = usize>,
+) -> String {
+    let mut next = |n: usize| pick.next().unwrap_or(0) % n.max(1);
+    let first = next(tables.len());
+    let mut chosen = vec![first];
+    if tables.len() > 1 && next(2) == 1 {
+        let mut second = next(tables.len());
+        if second == first {
+            second = (second + 1) % tables.len();
+        }
+        chosen.push(second);
+    }
+    // Aliases and the names the columns can be qualified with.
+    let mut quals = Vec::new();
+    let mut from = String::new();
+    for (k, &t) in chosen.iter().enumerate() {
+        let name = written(d, &tables[t].0);
+        let alias = next(2) == 1;
+        let q = if alias { format!("a{k}") } else { name.clone() };
+        if k > 0 {
+            let (qa, ca) = (&quals[0], &tables[chosen[0]].1[0]);
+            let cb = &tables[t].1[0];
+            let _ = write!(from, " JOIN {name}");
+            if alias {
+                let _ = write!(from, " AS {q}");
+            }
+            let _ = write!(from, " ON {qa}.{} = {q}.{}", written(d, ca), written(d, cb));
+        } else {
+            let _ = write!(from, "{name}");
+            if alias {
+                let _ = write!(from, " {q}");
+            }
+        }
+        quals.push(q);
+    }
+    // A column is unqualified only if no other table in the statement has it.
+    let all: Vec<(usize, &String)> = chosen
+        .iter()
+        .enumerate()
+        .flat_map(|(k, &t)| tables[t].1.iter().map(move |c| (k, c)))
+        .collect();
+    let col = |n: &mut dyn FnMut(usize) -> usize| -> String {
+        let (k, c) = all[n(all.len())];
+        let unique = all
+            .iter()
+            .filter(|(_, o)| o.to_lowercase() == c.to_lowercase())
+            .count()
+            == 1;
+        if unique && n(2) == 1 {
+            written(d, c)
+        } else {
+            format!("{}.{}", quals[k], written(d, c))
+        }
+    };
+    let items: Vec<String> = (0..=next(3)).map(|_| col(&mut next)).collect();
+    let mut sql = format!("SELECT {} FROM {from}", items.join(", "));
+    if next(2) == 1 {
+        let _ = write!(sql, " WHERE {} = 1", col(&mut next));
+    }
+    if next(2) == 1 {
+        let _ = write!(sql, " ORDER BY {}", col(&mut next));
+    }
+    sql
+}
+
+fn memory_schema(tables: &[(String, Vec<String>)]) -> MemorySchema {
+    let mut s = MemorySchema::new(["public"]);
+    for (name, cols) in tables {
+        let cols = cols
+            .iter()
+            .map(|c| ColumnInfo::new(c.as_str(), DataType::Integer))
+            .collect();
+        s.add_table("public", name, ObjectKind::Table, Some(cols));
+    }
+    s
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(CASES))]
+
+    /// Text built only from schema names has no unknown-identifier diagnostics.
+    #[test]
+    fn schema_only_text_has_no_unknown_identifiers(
+        tables in generated_schema(),
+        picks in prop::collection::vec(any::<usize>(), 64),
+        count in 1usize..4,
+        d in dialect(),
+    ) {
+        let s = memory_schema(&tables);
+        let mut it = picks.into_iter();
+        let sql = (0..count)
+            .map(|_| statement(&tables, d, &mut it))
+            .collect::<Vec<_>>()
+            .join("; ");
+        for diag in diagnose(&sql, d, &s) {
+            prop_assert!(
+                !matches!(
+                    diag.code,
+                    DiagnosticCode::UnknownSchema
+                        | DiagnosticCode::UnknownRelation
+                        | DiagnosticCode::UnknownColumn
+                        | DiagnosticCode::UnknownQualifier
+                ),
+                "{:?} in {}", diag, sql
+            );
+        }
     }
 }

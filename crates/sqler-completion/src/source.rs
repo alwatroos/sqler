@@ -3,7 +3,7 @@
 
 //! The schema view the engine reads, defined over `sqler-core` types.
 
-use sqler_core::{ColumnInfo, ObjectKind};
+use sqler_core::{ColumnInfo, ForeignKey, ObjectKind};
 
 /// Data that may not have been fetched yet.
 ///
@@ -57,4 +57,13 @@ pub trait SchemaSource {
 
     /// The columns of a relation, by exact stored names; `None` schema means the search path.
     fn columns(&self, schema: Option<&str>, relation: &str) -> Loadable<&[ColumnInfo]>;
+
+    /// The foreign keys declared on a relation, by exact stored names; `None` schema means the
+    /// search path. Hover uses them to show what a column references.
+    ///
+    /// The default reports none, so sources written before hover existed keep compiling.
+    fn foreign_keys(&self, schema: Option<&str>, relation: &str) -> Loadable<&[ForeignKey]> {
+        let _ = (schema, relation);
+        Loadable::Loaded(&[])
+    }
 }

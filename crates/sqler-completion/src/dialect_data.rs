@@ -130,6 +130,35 @@ pub(crate) fn ident_eq(dialect: Dialect, id: &Ident, stored: &str) -> bool {
     }
 }
 
+/// Whether the identifier `id`, as typed, names exactly the stored name `stored`, with no
+/// lenient fallback: `PostgreSQL` folds an unquoted name to ASCII lower case and compares exactly,
+/// a quoted name is compared exactly; `MySQL` and `SQLite` compare case-insensitively.
+pub(crate) fn stored_eq_strict(dialect: Dialect, id: &Ident, stored: &str) -> bool {
+    match flavor(dialect) {
+        Flavor::Postgres if id.quoted => id.value == stored,
+        Flavor::Postgres => {
+            id.value.len() == stored.len()
+                && id
+                    .value
+                    .bytes()
+                    .zip(stored.bytes())
+                    .all(|(a, b)| a.to_ascii_lowercase() == b)
+        }
+        _ => eq_fold(&id.value, stored),
+    }
+}
+
+/// A hash of the case-folded name; equal for names that [`eq_fold`] treats as equal, so it keys
+/// buckets in which the strict or lenient comparison then decides.
+pub(crate) fn fold_hash(name: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for c in name.chars() {
+        h ^= u64::from(u32::from(fold(c)));
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
 /// Finds the stored item for a typed identifier: a strict match first, a case-insensitive match
 /// as a lenient fallback. `key` returns the stored name of an item.
 pub(crate) fn find_stored_by<T>(
@@ -846,6 +875,159 @@ const SQLITE_FUNCS: &[Func] = &[
     f("nullif", "nullif(a, b) -> null if a = b"),
 ];
 
+/// Words that are not columns although they are neither reserved nor in the keyword and function
+/// tables: type names, date parts, window-frame words and special values.
+const NON_COLUMN_WORDS: &[&str] = &[
+    "int",
+    "integer",
+    "bigint",
+    "smallint",
+    "tinyint",
+    "mediumint",
+    "text",
+    "varchar",
+    "char",
+    "character",
+    "varying",
+    "boolean",
+    "bool",
+    "numeric",
+    "decimal",
+    "float",
+    "double",
+    "precision",
+    "real",
+    "date",
+    "time",
+    "timestamp",
+    "timestamptz",
+    "datetime",
+    "interval",
+    "json",
+    "jsonb",
+    "uuid",
+    "bytea",
+    "blob",
+    "signed",
+    "unsigned",
+    "binary",
+    "zone",
+    "year",
+    "quarter",
+    "month",
+    "week",
+    "day",
+    "hour",
+    "minute",
+    "second",
+    "microsecond",
+    "millisecond",
+    "epoch",
+    "dow",
+    "doy",
+    "isodow",
+    "isoyear",
+    "century",
+    "decade",
+    "timezone",
+    "current_date",
+    "current_time",
+    "current_timestamp",
+    "current_user",
+    "session_user",
+    "localtime",
+    "localtimestamp",
+    "ilike",
+    "similar",
+    "nulls",
+    "unbounded",
+    "preceding",
+    "following",
+    "row",
+    "rows",
+    "range",
+    "groups",
+    "partition",
+    "exclude",
+    "ties",
+    "others",
+    "within",
+    "ordinality",
+    "both",
+    "leading",
+    "trailing",
+    "unknown",
+    "glob",
+    "regexp",
+    "rlike",
+    "div",
+    "mod",
+    // MySQL select modifiers.
+    "distinctrow",
+    "high_priority",
+    "low_priority",
+    "straight_join",
+    "sql_small_result",
+    "sql_big_result",
+    "sql_buffer_result",
+    "sql_cache",
+    "sql_no_cache",
+    "sql_calc_found_rows",
+    // `GROUP BY GROUPING SETS (...)`, `CUBE`, `ROLLUP`.
+    "grouping",
+    "sets",
+    "cube",
+    "rollup",
+    "share",
+    "mode",
+];
+
+/// Whether `word` can be something other than a column: a reserved word, a keyword, a function
+/// name, or a type name or date part. Used to keep unknown-column diagnostics conservative.
+pub(crate) fn is_non_column_word(dialect: Dialect, word: &str) -> bool {
+    is_reserved(dialect, word)
+        || keywords(dialect).any(|k| k.eq_ignore_ascii_case(word))
+        || functions(dialect).any(|f| f.name.eq_ignore_ascii_case(word))
+        || NON_COLUMN_WORDS
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(word))
+}
+
+/// Whether `name` is an implicit column every row has without it being declared (`ctid`,
+/// `rowid`). MySQL has only the hidden `_rowid` of `InnoDB`.
+pub(crate) fn is_system_column(dialect: Dialect, name: &str) -> bool {
+    let list: &[&str] = match flavor(dialect) {
+        Flavor::Postgres => &["ctid", "xmin", "xmax", "cmin", "cmax", "tableoid", "oid"],
+        Flavor::MySql => &["_rowid"],
+        Flavor::Sqlite => &["rowid", "_rowid_", "oid"],
+    };
+    list.iter().any(|c| c.eq_ignore_ascii_case(name))
+}
+
+/// Whether `name` is a schema the database provides itself, so a source that omits it is not
+/// evidence that it does not exist.
+pub(crate) fn is_system_schema(dialect: Dialect, name: &str) -> bool {
+    let list: &[&str] = match flavor(dialect) {
+        Flavor::Postgres => &["pg_catalog", "information_schema", "pg_toast"],
+        Flavor::MySql => &["information_schema", "mysql", "performance_schema", "sys"],
+        Flavor::Sqlite => &["main", "temp"],
+    };
+    list.iter().any(|s| s.eq_ignore_ascii_case(name))
+}
+
+/// Whether the unqualified `name` is a system relation (`pg_class`, `sqlite_master`, `dual`).
+pub(crate) fn is_system_relation(dialect: Dialect, name: &str) -> bool {
+    let starts = |prefix: &str| {
+        name.get(..prefix.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+    };
+    match flavor(dialect) {
+        Flavor::Postgres => starts("pg_"),
+        Flavor::MySql => name.eq_ignore_ascii_case("dual"),
+        Flavor::Sqlite => starts("sqlite_"),
+    }
+}
+
 /// Built-in functions of the dialect.
 pub(crate) fn functions(dialect: Dialect) -> impl Iterator<Item = &'static Func> {
     let own: &'static [Func] = match flavor(dialect) {
@@ -1013,5 +1195,41 @@ mod tests {
             "select ${1:Table} x"
         );
         assert_eq!(apply_case("SELECT", false), "SELECT");
+    }
+
+    #[test]
+    fn strict_stored_match() {
+        let pg = Dialect::Postgres;
+        assert!(stored_eq_strict(pg, &id("USERS", false), "users"));
+        assert!(!stored_eq_strict(pg, &id("users", false), "Users"));
+        assert!(!stored_eq_strict(pg, &id("Users", true), "users"));
+        assert!(stored_eq_strict(pg, &id("Users", true), "Users"));
+        assert!(!stored_eq_strict(pg, &id("ÉCOLE", false), "école"));
+        assert!(stored_eq_strict(pg, &id("ÉCOLE", false), "École"));
+        for d in [Dialect::MySql, Dialect::Sqlite] {
+            assert!(stored_eq_strict(d, &id("USERS", false), "users"));
+            assert!(stored_eq_strict(d, &id("Users", true), "users"));
+            assert!(!stored_eq_strict(d, &id("user", true), "users"));
+        }
+        assert_eq!(fold_hash("Users"), fold_hash("uSERS"));
+        assert_ne!(fold_hash("users"), fold_hash("user"));
+    }
+
+    #[test]
+    fn non_column_words_and_system_names() {
+        let pg = Dialect::Postgres;
+        for w in ["SELECT", "int", "YEAR", "count", "Zone", "ilike"] {
+            assert!(is_non_column_word(pg, w), "{w}");
+        }
+        assert!(!is_non_column_word(pg, "customer_id"));
+        assert!(is_system_schema(pg, "PG_CATALOG"));
+        assert!(!is_system_schema(pg, "public"));
+        assert!(is_system_schema(Dialect::Sqlite, "main"));
+        assert!(is_system_schema(Dialect::MySql, "mysql"));
+        assert!(is_system_relation(pg, "pg_class"));
+        assert!(!is_system_relation(pg, "users"));
+        assert!(is_system_relation(Dialect::Sqlite, "sqlite_master"));
+        assert!(is_system_relation(Dialect::MySql, "DUAL"));
+        assert!(!is_system_relation(Dialect::MySql, "pg_class"));
     }
 }

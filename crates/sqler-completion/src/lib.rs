@@ -34,23 +34,50 @@
 //! ```
 //!
 //! [`analyze`] runs the same analysis without a schema and returns the statement, the context,
-//! the qualifier and the [`Scope`]; hover and diagnostics build on it.
+//! the qualifier and the [`Scope`]. [`fn@hover`] describes the identifier under the cursor (column
+//! type, nullability and foreign key, or the kind of a relation) and [`fn@diagnose`] reports unknown
+//! schemas, tables, columns and qualifiers, per statement; both use the same scanner and are
+//! deliberately silent about anything the schema source has not loaded.
+//!
+//! ```
+//! use sqler_completion::{DiagnosticCode, MemorySchema, diagnose};
+//! use sqler_core::{ColumnInfo, DataType, ObjectKind};
+//! use sqler_sql::Dialect;
+//!
+//! let mut schema = MemorySchema::new(["public"]);
+//! schema.add_table(
+//!     "public",
+//!     "users",
+//!     ObjectKind::Table,
+//!     Some(vec![ColumnInfo::new("id", DataType::Integer)]),
+//! );
+//!
+//! let sql = "SELECT u.idd FROM users u";
+//! let found = diagnose(sql, Dialect::Postgres, &schema);
+//! assert_eq!(found[0].code, DiagnosticCode::UnknownColumn);
+//! assert_eq!(&sql[found[0].range.clone()], "idd");
+//! ```
 
 #![forbid(unsafe_code)]
 
 mod context;
+mod diagnose;
 mod dialect_data;
 mod engine;
+mod hover;
 mod lexer;
 mod memory;
 mod rank;
+mod resolve;
 mod scope;
 mod source;
 
 pub use context::{Analysis, ContextKind, analyze};
+pub use diagnose::{Diagnostic, DiagnosticCode, Severity, diagnose};
 pub use engine::{
     CompletionItem, CompletionRequest, Completions, InsertFormat, ItemKind, SchemaRequest, complete,
 };
+pub use hover::{Hover, HoverRequest, HoverTarget, RelationInfo, RelationKind, hover};
 pub use memory::MemorySchema;
 pub use scope::{Cte, Ident, RelationSource, Scope, ScopeRelation};
 pub use source::{Loadable, Relation, SchemaSource};
