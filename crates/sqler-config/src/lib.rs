@@ -15,6 +15,11 @@ mod keymap;
 mod paths;
 mod settings;
 
+pub use connections::{
+    CONNECTIONS_FORMAT_VERSION, ConnectionId, ConnectionProfile, ConnectionSpec, ConnectionStore,
+    Group, GroupId, ProfileSecret, SecretKind, SshAuth, SshProfile, StoreError, TlsMode,
+    TlsProfile,
+};
 pub use error::ConfigError;
 pub use keymap::{CommandId, Conflict, KeyChord, KeybindingOverrides, Keymap, Modifiers, Platform};
 pub use paths::ConfigDir;

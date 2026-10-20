@@ -10,7 +10,7 @@ Options: `-h`/`--help`, `-V`/`--version`, and `--exit-after-first-frame` (exits 
 
 ## Saved connections
 
-The sidebar lists the connections from `connections.toml` in the config directory, in file order. The file location and format are described in [Settings](settings.md). SQLer only reads the file in this version, so add connections by editing it. If the file is missing or invalid, the sidebar shows the error text, and the app still starts. With no connections it shows: "No saved connections. Add them to connections.toml in the config directory (see User guide > Settings)."
+The sidebar lists the connections from `connections.toml` in the config directory, in file order. The file location is described in [Settings](settings.md) and the format in [Connections](connections.md). The connection store edits and saves the file, and you can also edit it by hand. If the file is missing or invalid, the sidebar shows the error text, and the app still starts. With no connections it shows: "No saved connections. Add them to connections.toml in the config directory (see User guide > Settings)."
 
 Each row shows the name, the driver, a dot in the connection colour and an environment badge. While a connection opens the row shows "connecting..."; if it fails, the row shows the error text.
 

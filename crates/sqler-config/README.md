@@ -2,8 +2,14 @@
 
 Settings, keybindings, connection store and keychain access.
 
-Status: M1: settings, keybindings, connection list
+Status: M2: settings, keybindings, connection store
 
 Layer: L1
+
+Connection store: `ConnectionStore` holds nested groups and connection profiles
+(colour, environment, TLS, SSH tunnel) and is saved to `connections.toml` as a
+versioned file (`version = 1`) with atomic writes. A profile keeps only keychain
+references derived from its stable id, never a password or passphrase. Files
+written by M1 load unchanged and are migrated on the next save.
 
 See [AGENTS.md](../../AGENTS.md) for the project handbook.
