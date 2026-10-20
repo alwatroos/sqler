@@ -1,0 +1,13 @@
+[package]
+name = "sqler-catalog"
+description = "Schema cache with incremental refresh, search index and dependency graph."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true

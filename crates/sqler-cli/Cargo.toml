@@ -1,0 +1,17 @@
+[package]
+name = "sqler-cli"
+description = "Headless command-line interface: run a query, export results and start the MCP server. Proves the core is UI-independent."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+readme = "README.md"
+
+[[bin]]
+name = "sqler-cli"
+path = "src/main.rs"
+
+[lints]
+workspace = true
