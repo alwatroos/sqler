@@ -1,9 +1,47 @@
 # sqler-catalog
 
-Schema cache with incremental refresh, search index and dependency graph.
+Per-connection schema cache for the object browser. It loads tree nodes on demand through `Introspect` (ADR-0008), refreshes them in the background and never blocks a reader.
 
-Status: stub (M0)
+Status: implemented (M2, T7). The search index and the dependency graph are M3.
 
-Layer: L2
+Layer: L2. Depends on `sqler-core` (through `sqler-driver-api`), `sqler-driver-api`, `thiserror` and `tokio` (`sync` only). The crate spawns nothing.
+
+## API
+
+| Type | Role |
+| ---- | ---- |
+| `Catalog` | cloneable handle (`Send + Sync`); `new(source)` returns the handle and a `CatalogWorker` |
+| `CatalogWorker` | `run().await` owns the session, runs every introspection call in sequence and returns the `IntrospectSource` on shutdown |
+| `IntrospectSource` | `Session` or `Introspect` box; `From` for both |
+| `NodeKey`, `CacheKey`, `RefreshScope` | what is cached (`Children(NodeKey)` or `Table(DbObject)`) and what to refresh (`Node`, `Subtree`, `All`) |
+| `RefreshHandle`, `RefreshEvent`, `RefreshOutcome` | progress channel and cancel of one refresh |
+| `CatalogError` | `Driver`, `Cancelled`, `Closed`, `NoIntrospection` |
+
+Reads: `cached`, `cached_table`, `node_error` and `cached_len` are synchronous and never touch the database. `children` and `table` return a ready result on a cache hit and ask the worker on a miss. Concurrent misses on the same node cost one round-trip.
+
+## Usage
+
+```rust,ignore
+let (catalog, worker) = Catalog::new(session);       // session: Box<dyn Session>
+let task = handle.spawn(worker.run());               // tokio Handle, never the GPUI thread
+
+let key = NodeKey::new(ObjectPath::root(), ObjectKind::Schema);
+let schemas = catalog.children(key).await?;           // one list() call, then cached
+
+let mut refresh = catalog.refresh(RefreshScope::All);
+while let Some(event) = refresh.next_event().await {  // Started, Progress, NodeFailed, Finished
+    // update the UI; refresh.cancel() stops it
+}
+
+catalog.shutdown();
+let source = task.await?;                             // take the session back and close it
+```
+
+A refresh applies its results in one step at the end, so readers keep the previous snapshot until then. Design and policy: [ADR-0014](../../docs/src/adr/0014-catalog-cache-and-background-refresh.md) and [the catalog page](../../docs/src/architecture/catalog.md).
+
+## Tests and benchmark
+
+- `cargo nextest run -p sqler-catalog` (fake `Introspect` and the `SQLite` driver, no Docker).
+- `cargo bench -p sqler-catalog --bench catalog_tree` (5,000 tables; results in `docs/src/benchmarks.md`).
 
 See [AGENTS.md](../../AGENTS.md) for the project handbook.

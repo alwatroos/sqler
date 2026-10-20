@@ -1,1 +1,3 @@
 crates/sqler-sql/tests/snapshots/* -text
+# Throwaway TEST ONLY keys; keep the bytes exact (no CRLF conversion).
+crates/sqler-tunnel/tests/fixtures/* -text

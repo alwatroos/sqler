@@ -4,6 +4,7 @@ SQLer talks to databases through drivers. This page lists what each driver offer
 describe one driver each.
 
 - [SQLite](sqlite.md)
+- [PostgreSQL](postgresql.md)
 
 ## Object kinds
 
@@ -12,22 +13,22 @@ does not have is reported as unsupported, not as an error.
 
 | Kind | `SQLite` | `PostgreSQL` | `MySQL` |
 | ---- | -------- | ------------ | ------- |
-| Database | no | planned | planned |
-| Schema | yes (`main`, `temp`, attached) | planned | planned |
-| Table | yes | planned | planned |
-| View | yes | planned | planned |
-| Materialized view | no | planned | no |
-| Function | no | planned | planned |
-| Procedure | no | planned | planned |
-| Trigger | yes | planned | planned |
-| Sequence | no | planned | no |
-| Type | no | planned | no |
-| Index | yes | planned | planned |
-| Extension | no | planned | no |
-| Role | no | planned | planned |
+| Database | no | yes | planned |
+| Schema | yes (`main`, `temp`, attached) | yes | planned |
+| Table | yes | yes | planned |
+| View | yes | yes | planned |
+| Materialized view | no | yes | no |
+| Function | no | yes | planned |
+| Procedure | no | yes | planned |
+| Trigger | yes | yes | planned |
+| Sequence | no | yes | no |
+| Type | no | yes | no |
+| Index | yes | yes | planned |
+| Extension | no | yes | no |
+| Role | no | yes | planned |
 
-The `PostgreSQL` and `MySQL` columns show the plan, not the current state: those drivers are not
-available yet.
+The `MySQL` column shows the plan, not the current state: that driver is not available yet. The
+`PostgreSQL` driver lists only the current database; see [PostgreSQL](postgresql.md).
 
 ## How values display
 
