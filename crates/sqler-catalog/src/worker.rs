@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::catalog::{RefreshEvent, RefreshOutcome};
 use crate::error::CatalogError;
 use crate::key::{CacheKey, NodeKey, RefreshScope};
-use crate::store::{self, Shared, Staged};
+use crate::store::{self, ListEntry, Shared, Staged, Store, TableEntry};
 
 /// What the worker introspects: a session or a bare `Introspect`.
 ///
@@ -148,10 +148,34 @@ async fn fetch(source: &mut IntrospectSource, key: &CacheKey) -> Result<Fetched,
     }
 }
 
-fn stage(staged: &mut Staged, fetched: Fetched) {
+/// Replaces the published store with the result of `f` applied to a copy.
+///
+/// Only the worker writes, so nothing changes the store between the clone and the swap. `f` and
+/// the clone run outside the lock; the write lock is held for a pointer swap only.
+fn publish(shared: &Shared, f: impl FnOnce(&mut Store)) {
+    let mut next = Store::clone(&store::current(shared));
+    f(&mut next);
+    *store::write(shared) = Arc::new(next);
+}
+
+/// Stages a fetched value. An equal value keeps the cached entry (and its index); a new one gets
+/// its entry built here, outside any lock.
+fn stage(staged: &mut Staged, current: &Store, fetched: Fetched) {
     match fetched {
-        Fetched::List(key, listing) => staged.lists.push((key, Arc::new(listing))),
-        Fetched::Table(obj, Some(table)) => staged.tables.push((obj, Arc::new(table))),
+        Fetched::List(key, listing) => match current.lists.get(&key) {
+            Some(old) if *old.listing == listing => {
+                staged.unchanged.push(CacheKey::Children(key));
+            }
+            _ => staged
+                .lists
+                .push((key, Arc::new(ListEntry::new(Arc::new(listing))))),
+        },
+        Fetched::Table(obj, Some(table)) => match current.tables.get(&obj) {
+            Some(old) if *old.table == table => staged.unchanged.push(CacheKey::Table(obj)),
+            _ => staged
+                .tables
+                .push((obj, Arc::new(TableEntry::new(Arc::new(table))))),
+        },
         Fetched::Table(obj, None) => staged.gone.push(obj),
     }
 }
@@ -263,17 +287,24 @@ impl CatalogWorker {
     }
 
     fn lookup(&self, key: &CacheKey) -> Option<Loaded> {
-        let store = store::read(&self.store);
+        let store = store::current(&self.store);
         match key {
-            CacheKey::Children(k) => store.lists.get(k).map(|l| Loaded::List(Arc::clone(l))),
+            CacheKey::Children(k) => store
+                .lists
+                .get(k)
+                .map(|e| Loaded::List(Arc::clone(&e.listing))),
             CacheKey::Table(o) => store
                 .tables
                 .get(o)
-                .map(|t| Loaded::Table(Some(Arc::clone(t)))),
+                .map(|e| Loaded::Table(Some(Arc::clone(&e.table)))),
         }
     }
 
     async fn load(&mut self, key: CacheKey, reply: Reply) {
+        // The caller dropped its future: nobody wants the result, so do not fetch it.
+        if reply.is_closed() {
+            return;
+        }
         // Another caller may have loaded it while this request waited.
         if let Some(hit) = self.lookup(&key) {
             let _ = reply.send(Ok(hit));
@@ -283,25 +314,27 @@ impl CatalogWorker {
             Ok(Fetched::List(node, listing)) => {
                 let listing = Arc::new(listing);
                 let mut staged = Staged::default();
-                staged.lists.push((node, Arc::clone(&listing)));
-                store::write(&self.store).apply(staged);
+                let entry = Arc::new(ListEntry::new(Arc::clone(&listing)));
+                staged.lists.push((node, entry));
+                publish(&self.store, |s| s.apply(staged));
                 Ok(Loaded::List(listing))
             }
             Ok(Fetched::Table(obj, Some(table))) => {
                 let table = Arc::new(table);
                 let mut staged = Staged::default();
-                staged.tables.push((obj, Arc::clone(&table)));
-                store::write(&self.store).apply(staged);
+                let entry = Arc::new(TableEntry::new(Arc::clone(&table)));
+                staged.tables.push((obj, entry));
+                publish(&self.store, |s| s.apply(staged));
                 Ok(Loaded::Table(Some(table)))
             }
             Ok(Fetched::Table(_, None)) => {
-                store::write(&self.store).clear_error(&key);
+                publish(&self.store, |s| s.clear_error(&key));
                 Ok(Loaded::Table(None))
             }
             Err(error) => {
                 let mut staged = Staged::default();
                 staged.failures.push((key.clone(), error.clone()));
-                store::write(&self.store).apply(staged);
+                publish(&self.store, |s| s.apply(staged));
                 Err(error)
             }
         };
@@ -345,7 +378,7 @@ impl CatalogWorker {
         };
         if run.next >= run.keys.len() {
             let total = run.keys.len();
-            store::write(&self.store).apply(run.staged);
+            publish(&self.store, |s| s.apply(run.staged));
             active.job.finish(RefreshOutcome::Applied {
                 refreshed: total - run.failed,
                 failed: run.failed,
@@ -354,7 +387,7 @@ impl CatalogWorker {
         }
         let key = run.keys[run.next].clone();
         match fetch(&mut self.source, &key).await {
-            Ok(fetched) => stage(&mut run.staged, fetched),
+            Ok(fetched) => stage(&mut run.staged, &store::current(&self.store), fetched),
             Err(error) => {
                 run.failed += 1;
                 run.staged.failures.push((key.clone(), error.clone()));
@@ -373,8 +406,8 @@ impl CatalogWorker {
     fn scope_keys(&self, scope: &RefreshScope) -> Vec<CacheKey> {
         match scope {
             RefreshScope::Node(key) => vec![key.clone()],
-            RefreshScope::Subtree(path) => store::read(&self.store).keys_within(path),
-            RefreshScope::All => store::read(&self.store).keys_within(&ObjectPath::root()),
+            RefreshScope::Subtree(path) => store::current(&self.store).keys_within(path),
+            RefreshScope::All => store::current(&self.store).keys_within(&ObjectPath::root()),
         }
     }
 }

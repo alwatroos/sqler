@@ -96,7 +96,7 @@ The frame interval is bound by the display (8.3 ms is a 120 Hz screen), so it sh
 
 Notes:
 
-- The cached read is at timer resolution. One `Instant` pair costs about 41 ns on this machine, so 41 / 42 ns says the read is below one tick, not that it costs 42 ns. Its p95 is not meaningful beyond "below one tick". The 10 us budget and the `--compare` rule (25 % + 50 ns slack) still catch a real regression, such as a read that reaches the worker.
+- The cached read is at timer resolution. One `Instant` pair costs about 41 ns on this machine, so 41 / 42 ns says the read is below one tick, not that it costs 42 ns. Its p95 is not meaningful beyond "below one tick". The 10 us budget and the `--compare` rule (25 % + 150 ns slack, about three timer ticks, so one tick of jitter on a shared runner cannot fail the gate) still catch a real regression, such as a read that reaches the worker.
 - The bench-regression guard is weak for the cached read: its p95 sits at timer resolution, so the `--compare` rule can only catch a large jump (the absolute 10 us budget is the real guard), not a small slowdown.
 - Cold figures vary between runs (expand p50 was 137 to 203 us over several runs on the same machine).
 - Refresh all re-fetches 5,002 cached nodes (the schema list, the 5,000-table listing and every `table()`), then applies them in one write.
@@ -105,13 +105,46 @@ Notes:
 
 Run from the repository root on the commit being recorded:
 
-1. `cargo bench -p sqler-catalog --bench catalog_tree` (release profile). Flags: `--tables` (5000), `--columns` (8), `--samples` (200), `--hit-samples` (100000), `--source fake|sqlite` (fake), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--slack-ns` (50), `--budget-hit-p95-ns` (10000), `--budget-expand-p95-ns` (16000000).
+1. `cargo bench -p sqler-catalog --bench catalog_tree` (release profile). Flags: `--tables` (5000), `--columns` (8), `--samples` (200), `--hit-samples` (100000), `--source fake|sqlite` (fake), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--slack-ns` (150), `--budget-hit-p95-ns` (10000), `--budget-expand-p95-ns` (16000000).
 2. `schemas_cold_*`: a new catalog per sample, then `children` for the schema list. `expand_cold_*`: `children` for the N tables of `main`, cold. `hit_*`: `cached()` on that listing. `refresh_schema_*`: `refresh(Subtree(main))` with the list cached. `refresh_all_ms`: `refresh(All)` after `table()` was loaded for every table. p50 and p95 are nearest-rank percentiles.
 3. Exit code 0 passes, 1 is a regression or budget failure, 2 is a usage error. Budgets apply to `fake` only.
 
 ### Regression rule
 
 `bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `hit_p95_ns` is more than 25 % plus 50 ns above the base, or if a budget is exceeded. Without a baseline on the base branch only the budgets apply.
+
+## Catalog index
+
+`sqler-catalog` snapshot and name index on a synthetic catalog: one schema `main` with 5,000 tables, 500 views and 500 functions, and 8 columns on each of 50 loaded tables. Source is an in-memory `Introspect` that returns ready futures, so it measures the catalog and not a database. The design is in [ADR-0022](adr/0022-catalog-snapshot-name-index.md).
+
+| Date | Commit | OS | Snapshot take p50 / p95 (ns) | Prefix lookup p50 / p95 (ns) | Fuzzy lookup p50 / p95 (ns) | Load 50 tables (ms) | Publish, nothing changed (ms) | Index size (bytes) | Notes |
+| ---- | ------ | -- | ---------------------------- | ---------------------------- | --------------------------- | ------------------- | ----------------------------- | ------------------ | ----- |
+| 2026-10-20 | 7a7dd54 plus this PR | macOS arm64 | 0 / 42 | 30,167 / 145,917 | 138,667 / 157,708 | 0.113 | 0.450 | 220,600 | run 1; 200 samples, 2,000 lookups per kind |
+| 2026-10-20 | 7a7dd54 plus this PR | macOS arm64 | 0 / 42 | 21,208 / 138,042 | 121,875 / 155,250 | 0.109 | 0.433 | 220,600 | run 2, same setup |
+| 2026-10-20 | 7a7dd54 plus this PR | macOS arm64 | 0 / 42 | 21,833 / 138,750 | 142,167 / 156,167 | 0.109 | 0.477 | 220,600 | run 3, same setup |
+
+Budgets (fake source): snapshot p95 10 us, prefix p95 1 ms, fuzzy p95 5 ms, index size 4 MiB. Prefix p95 is about 140 us and fuzzy p95 about 157 us, so both are far inside their budgets.
+
+Notes:
+
+- The snapshot take is one read lock and one `Arc` clone, below the timer resolution here (one `Instant` pair is about 41 ns), so p50 reads 0 and p95 one tick. It is the same kind of figure as the cached read of the catalog tree.
+- Prefix needles cycle through `t`, `table_0`, `table_049` and `col_`. The broad needles (`t`, `table_0`) match 5,000 names and set the p95; the narrow ones are a binary search and cost a few microseconds. Fuzzy needles are `tbl49` and `vw1`, each a scan of all 5,500 object names plus the loaded columns.
+- Results are bounded to 50 hits, so the cost of a broad needle is the scan plus a partial sort, not the size of the match set.
+- Publish re-fetches every cached node (three listings and 50 tables) and applies an unchanged result: equal entries keep their `Arc` and index, only the generation grows.
+- The index holds about 220 KB for 5,500 names and 400 columns; names are stored lowercase.
+- The refresh-all figure of the catalog tree bench is in [Catalog tree](#catalog-tree); ADR-0022 compares it before and after this change.
+
+### Method
+
+Run from the repository root on the commit being recorded:
+
+1. `cargo bench -p sqler-catalog --bench catalog_index` (release profile). Flags: `--tables` (5000), `--columns` (8), `--loaded` (50), `--samples` (200), `--lookup-samples` (2000), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--slack-ns` (50), `--budget-snapshot-p95-ns` (10000), `--budget-prefix-p95-ns` (1000000), `--budget-fuzzy-p95-ns` (5000000), `--budget-index-bytes` (4194304).
+2. `snapshot_*`: `Catalog::snapshot()` timed alone. `prefix_*` and `fuzzy_*`: `CatalogSnapshot::lookup` on one snapshot, cycling through the needles above, default limit 50. `load_tables_ms`: `load_tables` for the first `--loaded` tables. `publish_ms`: p50 of `refresh(All)` runs with nothing changed. `index_bytes`: `CatalogSnapshot::index_bytes()`. p50 and p95 are nearest-rank percentiles.
+3. Exit code 0 passes, 1 is a regression or budget failure, 2 is a usage error.
+
+### Regression rule
+
+`bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `prefix_p95_ns` is more than 25 % plus 50 ns above the base, or if a budget is exceeded. Without a baseline on the base branch only the budgets apply.
 
 ## Object browser tree
 
