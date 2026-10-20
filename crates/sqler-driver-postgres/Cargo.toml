@@ -16,7 +16,7 @@ workspace = true
 sqler-driver-api.workspace = true
 futures-core.workspace = true
 sqlx = { workspace = true, features = ["postgres", "tls-rustls-ring-native-roots"] }
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["time", "net", "io-util", "rt"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "net", "io-util"] }

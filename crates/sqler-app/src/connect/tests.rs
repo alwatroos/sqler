@@ -445,18 +445,17 @@ async fn key_file_auth_carries_the_passphrase() {
     );
 }
 
-#[tokio::test]
-async fn verify_full_through_a_tunnel_opens_nothing() {
-    let rig = Rig::ok();
+fn verify_full_specs() -> Vec<ConnectionSpec> {
     let explicit = spec("postgres://db.internal/app?user=u")
         .with_tls(TlsProfile::new(ProfileTlsMode::VerifyFull))
         .with_ssh(ssh(SshAuth::Agent));
     let from_url =
-        spec("postgres://db.internal/app?user=u&sslmode=verify-full").with_ssh(ssh(SshAuth::Agent));
+        spec("postgres://db.internal/app?user=u&sslmode=verify-full&sslrootcert=/ca.pem")
+            .with_ssh(ssh(SshAuth::Agent));
     let mysql = ConnectionSpec::new(
         "m",
         driver(),
-        "mysql://db.internal/app?ssl-mode=VERIFY_IDENTITY",
+        "mysql://db.internal/app?ssl-mode=VERIFY_IDENTITY&ssl-ca=%2Fca.pem",
     )
     .with_ssh(ssh(SshAuth::Agent));
     let alias_pg = spec("postgres://db.internal/app?user=u&ssl-mode=verify-full")
@@ -467,15 +466,102 @@ async fn verify_full_through_a_tunnel_opens_nothing() {
         "mysql://db.internal/app?sslmode=VERIFY_IDENTITY",
     )
     .with_ssh(ssh(SshAuth::Agent));
-    for spec in [explicit, from_url, mysql, alias_pg, alias_my] {
-        let failure = fail(&rig, request(spec, SecretSource::None, SecretSource::None)).await;
-        assert!(
-            matches!(&failure, ConnectFailure::TlsHostnameThroughTunnel { host } if host == "db.internal"),
-            "{failure:?}"
-        );
+    vec![explicit, from_url, mysql, alias_pg, alias_my]
+}
+
+fn tls_of(rig: &Rig) -> Vec<Option<sqler_driver_api::sqler_core::TlsConfig>> {
+    rig.configs
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .map(|c| c.tls.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn verify_full_through_a_tunnel_maps_the_server_name_or_is_refused() {
+    let rig = Rig::ok();
+    for spec in verify_full_specs() {
+        let result = connect(&rig, request(spec, SecretSource::None, SecretSource::None)).await;
+        if cfg!(unix) {
+            result.unwrap();
+        } else {
+            let failure = result.err().unwrap();
+            assert!(
+                matches!(&failure, ConnectFailure::TlsHostnameThroughTunnel { host } if host == "db.internal"),
+                "{failure:?}"
+            );
+        }
     }
-    assert_eq!(rig.tunnels.opened(), 0);
-    assert_eq!(rig.targets().len(), 0);
+    if cfg!(unix) {
+        assert_eq!(rig.tunnels.opened(), 5);
+        let tls = tls_of(&rig);
+        assert_eq!(tls.len(), 5);
+        for tls in &tls {
+            let tls = tls.as_ref().unwrap();
+            assert_eq!(tls.mode, TlsMode::VerifyFull);
+            assert_eq!(tls.server_name.as_deref(), Some("db.internal"));
+        }
+        // The URL-only forms lift the CA file out of the query.
+        assert_eq!(tls[1].as_ref().unwrap().ca_cert, Some("/ca.pem".into()));
+        assert_eq!(tls[2].as_ref().unwrap().ca_cert, Some("/ca.pem".into()));
+        assert_eq!(tls[0].as_ref().unwrap().ca_cert, None);
+    } else {
+        assert_eq!(rig.tunnels.opened(), 0);
+        assert_eq!(rig.targets().len(), 0);
+    }
+}
+
+#[tokio::test]
+async fn a_tunnelled_profile_config_gets_the_server_name_in_any_mode() {
+    let rig = Rig::ok();
+    let spec = spec("postgres://db.internal/app?user=u")
+        .with_tls(TlsProfile::new(ProfileTlsMode::VerifyCa))
+        .with_ssh(ssh(SshAuth::Agent));
+    connect(&rig, request(spec, SecretSource::None, SecretSource::None))
+        .await
+        .unwrap();
+    let tls = tls_of(&rig).remove(0).unwrap();
+    assert_eq!(tls.mode, TlsMode::VerifyCa);
+    assert_eq!(tls.server_name.as_deref(), Some("db.internal"));
+}
+
+#[tokio::test]
+async fn a_tunnelled_target_without_tls_or_verify_full_keeps_no_tls_config() {
+    let rig = Rig::ok();
+    let spec =
+        spec("postgres://db.internal/app?user=u&sslmode=require").with_ssh(ssh(SshAuth::Agent));
+    connect(&rig, request(spec, SecretSource::None, SecretSource::None))
+        .await
+        .unwrap();
+    assert_eq!(tls_of(&rig), [None]);
+}
+
+#[tokio::test]
+async fn a_direct_connection_has_no_server_name() {
+    let rig = Rig::ok();
+    let plain = spec("postgres://db/app?user=u&sslmode=verify-full");
+    let profile =
+        spec("postgres://db/app?user=u").with_tls(TlsProfile::new(ProfileTlsMode::VerifyFull));
+    for spec in [plain, profile] {
+        connect(&rig, request(spec, SecretSource::None, SecretSource::None))
+            .await
+            .unwrap();
+    }
+    let tls = tls_of(&rig);
+    assert_eq!(tls[0], None);
+    assert_eq!(tls[1].as_ref().unwrap().server_name, None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failing_driver_with_verify_full_fails_closed_and_closes_the_tunnel() {
+    let rig = Rig::new(true, false, Some(PathBuf::from("kh")));
+    let spec =
+        spec("postgres://db.internal/app?user=u&sslmode=verify-full").with_ssh(ssh(SshAuth::Agent));
+    let failure = fail(&rig, request(spec, SecretSource::None, SecretSource::None)).await;
+    assert!(matches!(failure, ConnectFailure::Driver(_)), "{failure:?}");
+    assert_eq!(rig.tunnels.closed(), 1);
 }
 
 #[tokio::test]
