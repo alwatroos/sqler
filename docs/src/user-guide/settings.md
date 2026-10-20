@@ -19,12 +19,16 @@ Files in that directory: `settings.toml`, `keybindings.toml`, `connections.toml`
 ```toml
 theme = "system"
 ui_font_size = 14
+result_page_rows = 100000
 ```
 
 | Key | Values | Default |
 | --- | ------ | ------- |
 | `theme` | `light`, `dark`, `system` (follow the OS) | `system` |
 | `ui_font_size` | whole points, 8 to 48 | `14` |
+| `result_page_rows` | whole rows per result page, 1000 to 10000000 | `100000` |
+
+`result_page_rows` is how many rows a query result loads before it pauses and offers **Fetch more** (see [Results grid](results-grid.md)). It is set in this file only; the Settings tab has no control for it.
 
 Unknown keys and values outside the range are errors.
 

@@ -55,6 +55,7 @@
   - [ADR-0024: Query execution](adr/0024-query-execution.md)
   - [ADR-0025: SQL editor component](adr/0025-sql-editor-component.md)
   - [ADR-0026: Editor intellisense](adr/0026-editor-intellisense.md)
+  - [ADR-0027: Bounded result model](adr/0027-bounded-result-model.md)
   - [ADR-0028: Export writer API](adr/0028-export-writer-api.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
