@@ -16,7 +16,7 @@ SQL is highlighted with tree-sitter. The colours follow the theme, so they chang
 
 - Alt-click adds a cursor.
 - `editor:add-cursor-above` and `editor:add-cursor-below` add a cursor on the line above or below. Native chords are listed in [Keybindings](keybindings.md#sql-editor).
-- `editor:add-next-occurrence` (Cmd+D on macOS, Ctrl+D elsewhere): with no selection it selects the word under the cursor; pressed again it adds the next occurrence of the selected text, and wraps around to the start. It stops when the next match is already selected. Words are letters, digits, `_` and `$`.
+- `editor:add-next-occurrence` (Cmd+D on macOS, Ctrl+D elsewhere): with no selection it selects the word under the cursor; pressed again it adds the next occurrence of the selected text, and wraps around to the start. It stops when the next match is already selected. Words are letters, digits, `_` and `$`. When the first selection came from the word under the cursor, only whole words match (`id` does not match inside `valid`); with a selection you made yourself, any occurrence matches.
 
 Format and add-next-occurrence read the active selection only; with several cursors the other selections are left as they are.
 

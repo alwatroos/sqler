@@ -51,6 +51,33 @@ pub fn next_occurrence(text: &str, needle: &str, after: usize) -> Option<Range<u
     Some(start..start + needle.len())
 }
 
+fn is_whole_word(text: &str, range: &Range<usize>) -> bool {
+    let before = text.get(..range.start).and_then(|t| t.chars().next_back());
+    let after = text.get(range.end..).and_then(|t| t.chars().next());
+    !before.is_some_and(is_word) && !after.is_some_and(is_word)
+}
+
+/// Like [`next_occurrence`], but only matches that are not part of a longer identifier.
+#[must_use]
+pub fn next_whole_word(text: &str, needle: &str, after: usize) -> Option<Range<usize>> {
+    if needle.is_empty() {
+        return None;
+    }
+    let after = after.min(text.len());
+    let mut first = None;
+    for (i, _) in text.match_indices(needle) {
+        let range = i..i + needle.len();
+        if !is_whole_word(text, &range) {
+            continue;
+        }
+        if i >= after {
+            return Some(range);
+        }
+        first.get_or_insert(range);
+    }
+    first
+}
+
 fn hash_of(text: &str) -> u64 {
     let mut h = DefaultHasher::new();
     text.hash(&mut h);
@@ -65,13 +92,26 @@ pub struct OccurrenceChain {
     needle: String,
     text_hash: u64,
     added: Vec<Range<usize>>,
+    whole_word: bool,
 }
 
 impl OccurrenceChain {
     /// A chain that starts with the already selected `first`.
     #[must_use]
     pub fn new(text: &str, needle: &str, first: Range<usize>) -> Self {
+        Self::with_mode(text, needle, first, false)
+    }
+
+    /// A chain whose first selection came from the word under the cursor: later matches must be whole words.
+    #[must_use]
+    pub fn from_word(text: &str, word: Range<usize>) -> Option<Self> {
+        let needle = text.get(word.clone())?;
+        Some(Self::with_mode(text, needle, word, true))
+    }
+
+    fn with_mode(text: &str, needle: &str, first: Range<usize>, whole_word: bool) -> Self {
         Self {
+            whole_word,
             needle: needle.to_owned(),
             text_hash: hash_of(text),
             added: vec![first],
@@ -138,11 +178,16 @@ pub(super) fn step(
     else {
         *chain = None;
         return match word_at(text, selection.start) {
-            Some(w) => OccurrenceStep::Select(w),
+            Some(w) => {
+                *chain = OccurrenceChain::from_word(text, w.clone());
+                OccurrenceStep::Select(w)
+            }
             None => OccurrenceStep::Nothing,
         };
     };
-    let live = chain.as_ref().is_some_and(|c| c.continues(text, needle));
+    let live = chain
+        .as_ref()
+        .is_some_and(|c| c.continues(text, needle) && c.contains(selection));
     if !live {
         *chain = Some(OccurrenceChain::new(text, needle, selection.clone()));
     }
@@ -150,7 +195,12 @@ pub(super) fn step(
         return OccurrenceStep::Nothing;
     };
     let from = c.last().map_or(selection.end, |r| r.end);
-    match next_occurrence(text, needle, from) {
+    let found = if c.whole_word {
+        next_whole_word(text, needle, from)
+    } else {
+        next_occurrence(text, needle, from)
+    };
+    match found {
         Some(next) if !c.contains(&next) => {
             c.push(next.clone());
             OccurrenceStep::Add(next)
@@ -261,7 +311,33 @@ mod tests {
         let mut chain = None;
         let _ = step(&mut chain, "ab ab", &(0..2));
         assert!(chain.is_some());
-        let _ = step(&mut chain, "ab ab", &(0..0));
-        assert!(chain.is_none());
+        let _ = step(&mut chain, "ab  ab", &(3..3));
+        assert!(chain.is_none(), "no word at the cursor");
+    }
+
+    #[test]
+    fn word_derived_selection_matches_whole_words_only() {
+        let t = "id valid id_col id";
+        let mut chain = None;
+        assert_eq!(step(&mut chain, t, &(0..0)), OccurrenceStep::Select(0..2));
+        assert_eq!(step(&mut chain, t, &(0..2)), OccurrenceStep::Add(16..18));
+        assert_eq!(step(&mut chain, t, &(16..18)), OccurrenceStep::Nothing);
+    }
+
+    #[test]
+    fn explicit_selection_keeps_substring_matching() {
+        let t = "id valid id_col";
+        let mut chain = None;
+        assert_eq!(step(&mut chain, t, &(0..2)), OccurrenceStep::Add(6..8));
+    }
+
+    #[test]
+    fn whole_word_respects_non_ascii_boundaries() {
+        let t = "żid id idż id";
+        assert_eq!(next_whole_word(t, "id", 0), Some(5..7));
+        assert_eq!(next_whole_word(t, "id", 8), Some(13..15));
+        assert_eq!(next_whole_word(t, "id", 14), Some(5..7), "wraps");
+        assert_eq!(next_whole_word("żidż", "id", 0), None);
+        assert_eq!(next_whole_word("a", "", 0), None);
     }
 }

@@ -31,7 +31,7 @@ An own widget needs text layout, IME, selection, undo, scrolling, line numbers a
 
 | Gap | How it is closed |
 | --- | ---------------- |
-| No "add next occurrence" (Cmd+D style). Multi-cursor itself exists: Alt-click, `AddCursorAbove`, `AddCursorBelow`, `add_selection`. | `editor::occurrence` finds the word under the cursor (identifier characters: alphanumeric, `_`, `$`) and the next match, wrapping around; the view adds it with `add_selection`. The chain of added matches is kept per tab and stops when a match wraps onto an already added range. |
+| No "add next occurrence" (Cmd+D style). Multi-cursor itself exists: Alt-click, `AddCursorAbove`, `AddCursorBelow`, `add_selection`. | `editor::occurrence` finds the word under the cursor (identifier characters: alphanumeric, `_`, `$`) and the next match, wrapping around; the view adds it with `add_selection`. Matches are whole words when the first selection came from the word; an explicit selection matches substrings. The chain of added matches is kept per tab and stops when a match wraps onto an already added range. |
 | No bracket matching. | `editor::brackets` builds a sorted index of `()`, `[]`, `{}` pairs that skips strings, quoted identifiers and comments (per dialect: dollar quotes and nested block comments for `PostgreSQL`; backticks and `#` comments for `MySQL`/`MariaDB`). The view frames both brackets with a `RangeDecorationCollection`. The index is rebuilt only when the text changed and the cursor touches a bracket. |
 | No SQL formatter. | `editor::format` calls `sqler_sql::format` (ADR-0020) for the connection's dialect and returns one `TextEdit`; the view applies it with `EditorState::replace`, which records a single undo step. |
 

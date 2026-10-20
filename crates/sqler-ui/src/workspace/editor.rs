@@ -186,13 +186,13 @@ impl Workspace {
         let dialect = self.editors.get(tab).and_then(EditorDoc::dialect);
         let index = BracketIndex::build(dialect, &buffer.text);
         // The bracket to jump from: a lone selected one (the result of the last jump), else the
-        // one before the cursor, else the one after it.
+        // one at the cursor (as `pair_at` and the frame do), else the one before it.
         let bytes = buffer.text.as_bytes();
         let is_bracket = |p: usize| bytes.get(p).is_some_and(|b| b"()[]{}".contains(b));
         let here = Some(buffer.selection.start)
             .filter(|&p| buffer.selection.len() == 1 && is_bracket(p))
-            .or_else(|| buffer.cursor.checked_sub(1).filter(|&p| is_bracket(p)))
-            .or_else(|| Some(buffer.cursor).filter(|&p| is_bracket(p)));
+            .or_else(|| Some(buffer.cursor).filter(|&p| is_bracket(p)))
+            .or_else(|| buffer.cursor.checked_sub(1).filter(|&p| is_bracket(p)));
         let Some((here, (open, close))) =
             here.and_then(|p| index.pair_at(&buffer.text, p).map(|pair| (p, pair)))
         else {
@@ -551,8 +551,10 @@ mod tests {
             cursor: 4,
         };
         assert_eq!(jump(&mut w, again), 5..6);
-        // `()` with the cursor between: the bracket before it is the opening one.
-        assert_eq!(jump(&mut w, buffer("()", 1)), 1..2);
+        // `()` with the cursor between: the bracket at the cursor is the closing one.
+        assert_eq!(jump(&mut w, buffer("()", 1)), 0..1);
+        // `(a)(b)` with the cursor between the pairs: the bracket at the cursor wins.
+        assert_eq!(jump(&mut w, buffer("(a)(b)", 3)), 5..6);
     }
 
     #[test]
