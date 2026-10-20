@@ -19,7 +19,19 @@ pub(crate) fn read_optional(path: &Path) -> Result<Option<String>, ConfigError> 
     }
 }
 
-/// Writes `text` to a sibling `<name>.tmp` file, flushes it to disk, then renames
+/// Reads a file as raw bytes, returning `None` when it does not exist.
+pub(crate) fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, ConfigError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(ConfigError::Read {
+            path: path.to_owned(),
+            source,
+        }),
+    }
+}
+
+/// Writes `contents` to a sibling `<name>.tmp` file, flushes it to disk, then renames
 /// it over `path`. Creates the parent directory when missing.
 ///
 /// The temporary file is flushed (`fsync`) before the rename, so a process crash
@@ -28,7 +40,7 @@ pub(crate) fn read_optional(path: &Path) -> Result<Option<String>, ConfigError> 
 /// because the new file is already in place. Windows skips the directory flush.
 /// This does not promise power-loss durability: on macOS `fsync` does not force
 /// the drive cache to flush (that needs `F_FULLFSYNC`).
-pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<(), ConfigError> {
+pub(crate) fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<(), ConfigError> {
     let werr = |source| ConfigError::Write {
         path: path.to_owned(),
         source,
@@ -42,7 +54,7 @@ pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<(), ConfigError> {
     let tmp = path.with_file_name(name);
     let write_tmp = || -> io::Result<()> {
         let mut file = fs::File::create(&tmp)?;
-        file.write_all(text.as_bytes())?;
+        file.write_all(contents.as_ref())?;
         file.sync_all()
     };
     if let Err(e) = write_tmp() {
@@ -97,6 +109,19 @@ mod tests {
         assert!(write_atomic(&blocked, "x").is_err());
         assert!(!dir.join("blocked.tmp").exists());
         assert_eq!(fs::read_to_string(&path).unwrap(), "keep");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_optional_bytes_missing_and_present() {
+        let dir = scratch("bytes");
+        let path = dir.join("f.bin");
+        assert_eq!(read_optional_bytes(&path).unwrap(), None);
+        write_atomic(&path, [0xff_u8, 0x00, b'\n']).unwrap();
+        assert_eq!(
+            read_optional_bytes(&path).unwrap(),
+            Some(vec![0xff, 0x00, b'\n'])
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
