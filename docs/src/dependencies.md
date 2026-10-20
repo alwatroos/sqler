@@ -33,6 +33,9 @@ Source commands (all rows):
 | tokio | `tokio` | 1.54.0 | 2026-10-19 | Async runtime for the CLI (`rt`) and driver tests (`rt`); sqlx `runtime-tokio` pulls it in. Checked 2026-10-20. Source: API |
 | futures-core | `futures-core` | 0.3.34 | 2026-08-11 | `Stream` trait for the `SQLite` query stream; same version as sqlx uses. Checked 2026-10-20. Source: API |
 | anyhow | `anyhow` | 1.0.104 | 2026-07-18 | Error context in the `sqler-cli` binary only. Checked 2026-10-20. Source: API |
+| serde | `serde` | 1.0.229 | 2026-07-18 | `derive` feature; config file DTOs in `sqler-config`. `MIT OR Apache-2.0`. Checked 2026-10-20. Source: API; `cargo info serde` |
+| toml | `toml` | 1.1.8 | 2026-10-09 | crates.io reports `1.1.8+spec-1.1.0`; Cargo ignores the build metadata. Default features. `MIT OR Apache-2.0`. Used by `sqler-config`. Checked 2026-10-20. Source: API; `cargo info toml` |
+| directories | `directories` | 6.0.0 | 2025-01-12 | Evaluated, not used: it pulls `dirs-sys` 0.5.0 (`MIT OR Apache-2.0`), which pulls `option-ext` 0.2.0 (2023-01-11), licensed `MPL-2.0`, not on the `deny.toml` allow-list. See ADR-0005. Checked 2026-10-20. Source: API for `directories`, `dirs-sys`, `option-ext` |
 
 ## CI tools and actions
 
@@ -85,6 +88,12 @@ Per-dependency rationale is added by the PR that introduces it.
   `futures` crate. One version in the tree.
 - `anyhow` 1.0.104: error chains with context in the binary only (AGENTS.md §6); libraries keep
   `thiserror`.
+- `serde` 1.0.229 (`derive`) and `toml` 1.1.8: parse and write the `sqler-config` files
+  (`settings.toml`, `keybindings.toml`, `connections.toml`) into private DTOs (ADR-0005).
+  `sqler-core` does not depend on them. `toml` `rust-version` is 1.85, below the workspace's 1.99.
+- `directories` 6.0.0: not used. Its dependency `option-ext` is `MPL-2.0`, which `deny.toml` does not
+  allow, and `deny.toml` changes need an ADR. `sqler-config` resolves the three platform paths with
+  `std` only (ADR-0005).
 - `cargo-nextest`: faster, per-test-process runner used by CI and the local commands.
 - `cargo-deny`: enforces the Apache-2.0-compatible license allow-list in `deny.toml`, plus bans, sources and advisories.
 - `mdbook`: builds the documentation book in CI and for GitHub Pages.
