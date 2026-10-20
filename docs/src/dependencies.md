@@ -29,7 +29,7 @@ Source commands (all rows):
 | cargo-component | `cargo-component` | 0.21.1 | 2025-03-18 | No release for over a year; check the project status before relying on it. Source: API |
 | keyring | `keyring` | 4.2.0 | 2026-08-29 | Source: API |
 | cargo-dist | `cargo-dist` | 0.32.0 | 2026-05-22 | The tool was renamed `dist`, but the `dist` crate on crates.io is an unrelated 2016 crate (0.0.0), so the crate is still `cargo-dist`. GitHub `axodotdev/cargo-dist` latest release is v0.33.0 (2026-09-10), newer than crates.io; verify the install channel in M7. Source: API for `cargo-dist` and `dist`; `cargo info cargo-dist`; GitHub releases API |
-| thiserror | `thiserror` | 2.0.21 | 2026-09-23 | Derive for typed library errors; `rust-version` 1.77. Used by `sqler-core` and `sqler-driver-api`. Checked 2026-10-20. Source: API; `cargo info thiserror` |
+| thiserror | `thiserror` | 2.0.21 | 2026-09-23 | Derive for typed library errors; `rust-version` 1.77. Used by `sqler-core`, `sqler-driver-api` and `sqler-ui`. Checked 2026-10-20. Source: API; `cargo info thiserror` |
 | tokio | `tokio` | 1.54.0 | 2026-10-19 | Async runtime for the CLI (`rt`) and driver tests (`rt`); sqlx `runtime-tokio` pulls it in. Checked 2026-10-20. Source: API |
 | futures-core | `futures-core` | 0.3.34 | 2026-08-11 | `Stream` trait for the `SQLite` query stream; same version as sqlx uses. Checked 2026-10-20. Source: API |
 | anyhow | `anyhow` | 1.0.104 | 2026-07-18 | Error context in the `sqler-cli` binary only. Checked 2026-10-20. Source: API |

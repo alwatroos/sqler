@@ -4,3 +4,5 @@
 //! The `GPUI` application: workspace, tabs, panels, grid, editor, command palette and themes.
 
 #![forbid(unsafe_code)]
+
+pub mod command;

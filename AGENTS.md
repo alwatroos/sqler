@@ -109,7 +109,7 @@ cargo run -p xtask
 - UI: every user action is a `Command` with an ID; no business logic in views; views render state, actions mutate state.
 - Tests: unit tests next to code; integration tests under `tests/`; DB tests use testcontainers and are tagged so they can be skipped locally.
 - Performance: any PR touching the grid, catalog or completion must include a benchmark result in its description.
-- Naming: crates `sqler-*`, features `driver-*`, `ai-*`; commands `category:verb-object` (`query:run-selection`).
+- Naming: crates `sqler-*`, features `driver-*`, `ai-*`; commands `category:action`, where action is one or more hyphenated lowercase segments (`app:quit`, `workspace:open-command-palette`).
 
 Workspace lints (root `Cargo.toml`, inherited with `[lints] workspace = true`):
 
