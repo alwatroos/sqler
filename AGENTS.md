@@ -222,9 +222,22 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 
 ## 9. Roadmap status
 
-Current: **M1 code complete; Definition of Done pending maintainer verification (see list); M2 next** (connections and drivers). See `docs/reports/iteration-002.md`.
+Current: **M2 code complete; Definition of Done pending maintainer verification and product-owner decisions (see lists); M3 next** (editor and intellisense). See `docs/reports/iteration-003.md`. Per the rule below, M3 starts only after the lists are cleared or the owner explicitly waives them.
 
-M1 delivered the command registry, config files, GPUI (ADR-0001 accepted), the desktop shell, settings and themes, the command palette and keybindings, and the 1M-row results grid with benchmarks. Not yet met, by explicit list: the interactive macOS checks of the shell, settings and themes, palette and keybindings, and grid scrolling (listed in the iteration-002 report), and idle RSS with three sessions actually opened (98 MiB measured with three connections configured but not opened). Record the maintainer results in `docs/reports/` before M2 is called complete.
+M2 delivered the keychain secret store, the editable connection store, the object model with lazy introspection and typed values, the SSH tunnel crate, DDL generation, the catalog cache, the `PostgreSQL` and `MySQL`/`MariaDB` drivers, the connection manager with the connect pipeline, and the object browser (ADR-0008 to ADR-0017). Measured at `ba24c9a` on macOS: cold start 155.1 ms, idle RSS 100.0 MiB with three connections configured, binary 38.3 MiB, 814 tests.
+
+Pending maintainer-only checks (need a display, an OS desktop session or a real server; none can be done by an agent):
+
+- M1 (iteration-002 report): interactive checks of the workspace shell (PR #11), settings and themes (#12), palette and keybindings (#13) and grid scrolling (#14).
+- Idle RSS with three sessions actually opened (the app has no headless way to open sessions; 100.0 MiB was measured with three configured).
+- Keychain (PR #16): `cargo test -p sqler-config -- --ignored keychain_round_trip` on a desktop session of macOS, Windows and Linux, and a look at the OS keychain UI.
+- SSH bastion (PR #19): `SQLER_TEST_BASTION_*` set and `cargo test -p sqler-tunnel --test real_bastion -- --ignored`; the Windows named-pipe agent code is compiled by CI only.
+- Connection manager (PR #24): masked inputs and focus when a dialog opens, Escape with an input focused, drag preview, keychain prompts on the three OSes, the SSH host-key prompt with a real bastion.
+- Object browser (PR #25): context menus per node kind, the DROP dialog and the second `prod` step, read-only DDL and Properties tabs with Copy, scrolling a 5,000-table schema, keyboard navigation, copy to the clipboard.
+
+Pending product-owner decisions (details in the iteration-003 report): RSA SSH keys (RUSTSEC-2023-0071, `russh` `rsa` feature), plaintext RSA password exchange for `MySQL` (`mysql-rsa` feature, same advisory), `verify-full` TLS through an SSH tunnel (needs a server-name field on the core `TlsConfig`). Known limits: the `MySQL` cancel race window and the "Dropping..." step that blocks the window.
+
+M0 and M1 are described in `docs/reports/iteration-001.md` and `docs/reports/iteration-002.md`.
 
 M0 covers the workspace skeleton, this handbook, the mdBook skeleton, CI on three OSes, `cargo-deny`,
 license headers, ADR-0000 to ADR-0004, and a `sqler-cli` that runs a query on `SQLite`.

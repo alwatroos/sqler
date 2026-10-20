@@ -33,5 +33,5 @@ A tab header shows the connection name, a stripe in the connection `color`, and 
 
 ## Known limits
 
-- Open sessions are dropped, not closed, when the app quits; this matters for server drivers and is fixed in M2.
+- On quit open sessions are closed (ADR-0016): `app:quit` waits up to 2 s, the window-close hook only about 150 ms; a session that does not close in time is dropped.
 - The interactive check on macOS (clicking, two tabs on one connection, switching, closing, the prod look) is still pending for the maintainer.
