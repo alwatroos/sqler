@@ -11,6 +11,8 @@ use sqler_driver_api::{BoxFuture, Canceller, DriverError};
 use sqlx::Connection as _;
 use sqlx::postgres::{PgConnectOptions, PgConnection};
 
+use crate::session::Bridge;
+
 /// How long a cancel request may take, connect included.
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -21,6 +23,8 @@ const CANCEL_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) struct PgCanceller {
     opts: PgConnectOptions,
     pid: i32,
+    /// Keeps the TLS bridge alive for as long as a cancel can still connect through `opts`.
+    _bridge: Option<Bridge>,
     requested: AtomicBool,
     active: AtomicBool,
 }
@@ -33,10 +37,11 @@ impl fmt::Debug for PgCanceller {
 }
 
 impl PgCanceller {
-    pub(crate) fn new(opts: PgConnectOptions, pid: i32) -> Self {
+    pub(crate) fn new(opts: PgConnectOptions, pid: i32, bridge: Option<Bridge>) -> Self {
         Self {
             opts,
             pid,
+            _bridge: bridge,
             requested: AtomicBool::new(false),
             active: AtomicBool::new(false),
         }
@@ -100,7 +105,7 @@ mod tests {
 
     fn canceller() -> PgCanceller {
         let opts = PgConnectOptions::from_str("postgres://u:s3cret@127.0.0.1:1/x").unwrap();
-        PgCanceller::new(opts, 42)
+        PgCanceller::new(opts, 42, None)
     }
 
     #[test]

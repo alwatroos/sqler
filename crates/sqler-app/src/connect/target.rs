@@ -11,6 +11,7 @@
 use std::fmt::{self, Write as _};
 
 use sqler_config::Secret;
+use sqler_driver_api::sqler_core::{TlsConfig, TlsMode};
 use sqler_ui::connections::ConnectFailure;
 
 /// A parsed `scheme://[user[:password]@]host[:port][/rest]` target.
@@ -122,12 +123,47 @@ impl UrlTarget {
     /// (key `sslmode` or `ssl-mode`, value `verify-full` or `verify_identity`, in any driver,
     /// case-insensitive, also percent-encoded).
     pub(crate) fn wants_verify_full(&self) -> bool {
-        query_pairs(&self.rest).any(|(key, value)| {
+        query_pairs(&self.rest, decode_query).any(|(key, value)| {
             let key = key.to_ascii_lowercase();
             let value = value.to_ascii_lowercase();
             matches!(key.as_str(), "sslmode" | "ssl-mode")
                 && matches!(value.as_str(), "verify-full" | "verify_identity")
         })
+    }
+
+    /// The TLS config a URL-only `verify-full` target stands for: `VerifyFull` plus the certificate
+    /// files the query names (last value wins, exact lowercase keys, as sqlx parses them).
+    ///
+    /// The keys are those of the driver the scheme selects, exactly as sqlx reads them. CA:
+    /// `sslrootcert`, `ssl-root-cert`, `ssl-ca` for PostgreSQL, `sslca`, `ssl-ca` for MySQL and
+    /// MariaDB; client certificate: `sslcert`, `ssl-cert`; client key: `sslkey`, `ssl-key`. Values
+    /// are decoded like sqlx does (`+` is a space).
+    pub(crate) fn tls_from_query(&self) -> TlsConfig {
+        let ca_keys: &[&str] = if matches!(
+            self.scheme.to_ascii_lowercase().as_str(),
+            "postgres" | "postgresql"
+        ) {
+            &["sslrootcert", "ssl-root-cert", "ssl-ca"]
+        } else {
+            &["sslca", "ssl-ca"]
+        };
+        let last = |keys: &[&str]| {
+            query_pairs(&self.rest, decode_query)
+                .filter(|(key, _)| keys.contains(&key.as_str()))
+                .last()
+                .map(|(_, value)| value)
+        };
+        let mut tls = TlsConfig::new(TlsMode::VerifyFull);
+        if let Some(path) = last(ca_keys) {
+            tls = tls.with_ca_cert(path);
+        }
+        if let Some(path) = last(&["sslcert", "ssl-cert"]) {
+            tls = tls.with_client_cert(path);
+        }
+        if let Some(path) = last(&["sslkey", "ssl-key"]) {
+            tls = tls.with_client_key(path);
+        }
+        tls
     }
 
     /// The user from the `user` query parameter moved into the (percent-encoded) userinfo.
@@ -136,7 +172,7 @@ impl UrlTarget {
     /// already in the userinfo wins; a `user` parameter is dropped from the query either way. A
     /// target that names no user is returned unchanged.
     pub(crate) fn with_query_user(mut self) -> Self {
-        let from_query = query_pairs(&self.rest)
+        let from_query = query_pairs(&self.rest, decode)
             .find(|(key, _)| key.eq_ignore_ascii_case("user"))
             .map(|(_, value)| value)
             .filter(|value| !value.is_empty());
@@ -225,14 +261,18 @@ fn split_host_port(hostport: &str) -> Result<(String, Option<u16>), ConnectFailu
     Ok((host.to_owned(), port))
 }
 
-/// The `key=value` pairs of the query in `rest` (values percent-decoded).
-fn query_pairs(rest: &str) -> impl Iterator<Item = (String, String)> + '_ {
+/// The `key=value` pairs of the query in `rest`, keys and values run through `decoder`: plain
+/// [`decode`] or the form-decoding [`decode_query`] (only the TLS keys sqlx form-decodes).
+fn query_pairs(
+    rest: &str,
+    decoder: fn(&str) -> String,
+) -> impl Iterator<Item = (String, String)> + '_ {
     let query = rest
         .split_once('?')
         .map_or("", |(_, q)| q.split('#').next().unwrap_or(""));
-    query.split('&').filter(|p| !p.is_empty()).map(|pair| {
+    query.split('&').filter(|p| !p.is_empty()).map(move |pair| {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        (decode(key), decode(value))
+        (decoder(key), decoder(value))
     })
 }
 
@@ -275,6 +315,12 @@ fn encode(text: &str) -> String {
         }
     }
     out
+}
+
+/// Decodes a query key or value as `url::query_pairs` does (what sqlx uses): `+` is a space, then
+/// percent escapes (so `%2B` stays a plus).
+fn decode_query(text: &str) -> String {
+    decode(&text.replace('+', " "))
 }
 
 /// Percent-decodes (invalid escapes stay as they are; invalid UTF-8 becomes `U+FFFD`).
@@ -441,6 +487,87 @@ mod tests {
         ] {
             assert!(!parse(no).wants_verify_full(), "{no}");
         }
+    }
+
+    #[test]
+    fn tls_from_query_lifts_the_files_for_both_dialects() {
+        let pg = parse(
+            "postgres://h/d?sslmode=verify-full&sslrootcert=/ca.pem&sslcert=/c.pem&sslkey=/k.pem",
+        )
+        .tls_from_query();
+        assert_eq!(pg.mode, TlsMode::VerifyFull);
+        assert_eq!(pg.ca_cert, Some("/ca.pem".into()));
+        assert_eq!(pg.client_cert, Some("/c.pem".into()));
+        assert_eq!(pg.client_key, Some("/k.pem".into()));
+        assert_eq!(pg.server_name, None);
+        for key in ["ssl-ca", "sslca"] {
+            let my = parse(&format!(
+                "mysql://h/d?ssl-mode=VERIFY_IDENTITY&{key}=/ca.pem"
+            ))
+            .tls_from_query();
+            assert_eq!(my.ca_cert, Some("/ca.pem".into()), "{key}");
+        }
+        let my = parse("mysql://h/d?ssl-cert=/c.pem&ssl-key=/k.pem").tls_from_query();
+        assert_eq!(my.client_cert, Some("/c.pem".into()));
+        assert_eq!(my.client_key, Some("/k.pem".into()));
+    }
+
+    #[test]
+    fn tls_from_query_decodes_and_takes_the_last_value() {
+        let tls = parse("postgres://h/d?sslrootcert=%2Fa%20b%2Fca.pem").tls_from_query();
+        assert_eq!(tls.ca_cert, Some("/a b/ca.pem".into()));
+        let tls =
+            parse("mysql://h/d?ssl-ca=/one.pem&sslca=/two.pem&ssl-ca=/three.pem").tls_from_query();
+        assert_eq!(tls.ca_cert, Some("/three.pem".into()));
+    }
+
+    #[test]
+    fn tls_from_query_uses_the_keys_of_the_scheme_driver() {
+        // sqlx-postgres ignores `sslca`; sqlx-mysql ignores `sslrootcert` and `ssl-root-cert`.
+        for scheme in ["postgres", "postgresql"] {
+            assert_eq!(
+                parse(&format!("{scheme}://h/d?sslca=/x.pem"))
+                    .tls_from_query()
+                    .ca_cert,
+                None
+            );
+            for key in ["sslrootcert", "ssl-root-cert", "ssl-ca"] {
+                let tls = parse(&format!("{scheme}://h/d?{key}=/x.pem")).tls_from_query();
+                assert_eq!(tls.ca_cert, Some("/x.pem".into()), "{scheme} {key}");
+            }
+        }
+        for scheme in ["mysql", "mariadb"] {
+            for key in ["sslrootcert", "ssl-root-cert"] {
+                let tls = parse(&format!("{scheme}://h/d?{key}=/x.pem")).tls_from_query();
+                assert_eq!(tls.ca_cert, None, "{scheme} {key}");
+            }
+        }
+    }
+
+    #[test]
+    fn query_values_decode_plus_as_space_like_sqlx() {
+        let tls =
+            parse("postgres://h/d?sslrootcert=/a+b/ca.pem&sslcert=/c%2Bd.pem").tls_from_query();
+        assert_eq!(tls.ca_cert, Some("/a b/ca.pem".into()));
+        assert_eq!(tls.client_cert, Some("/c+d.pem".into()));
+    }
+
+    #[test]
+    fn query_user_keeps_plus_literal_and_decodes_percent_2b() {
+        let t = parse("mysql://db/app?user=ci+bot").with_query_user();
+        assert_eq!(t.render(), "mysql://ci%2Bbot@db/app");
+        let t = parse("mysql://db/app?user=ci%2Bbot").with_query_user();
+        assert_eq!(t.render(), "mysql://ci%2Bbot@db/app");
+    }
+
+    #[test]
+    fn tls_from_query_without_keys_has_no_paths() {
+        let tls = parse("postgres://h/d?sslmode=verify-full").tls_from_query();
+        assert_eq!(tls.mode, TlsMode::VerifyFull);
+        assert_eq!(
+            (tls.ca_cert, tls.client_cert, tls.client_key),
+            (None, None, None)
+        );
     }
 
     #[test]
