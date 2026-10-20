@@ -19,4 +19,5 @@ sqlx = { workspace = true, features = ["postgres", "tls-rustls-ring-native-roots
 tokio = { workspace = true, features = ["time", "net", "io-util", "rt"] }
 
 [dev-dependencies]
+sqler-sql.workspace = true
 tokio = { workspace = true, features = ["rt", "net", "io-util"] }

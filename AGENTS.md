@@ -47,7 +47,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-ai-mistral` | L2 | Mistral provider |
 | `sqler-catalog` | L2 | Schema cache, incremental refresh, search index, dependency graph |
 | `sqler-completion` | L2 | Intellisense engine: scope analysis, alias resolution, ranking; pure functions, heavily tested |
-| `sqler-export` | L2 | CSV, JSON, SQL, Parquet and XLSX writers |
+| `sqler-export` | L2 | CSV, JSON, SQL `INSERT` and Markdown writers behind a push-style `RowWriter` API and a format registry (ADR-0028); Parquet and XLSX follow |
 | `sqler-ai-tools` | L3 | Tool set exposed to models: list_schemas, describe_table, run_query (guarded), search_data, explain |
 | `sqler-plugin-host` | L3 | Plugin loading, sandboxing, capability grants, lifecycle |
 | `sqler-mcp` | L4 | MCP server (rmcp) exposing `sqler-ai-tools` to external agents |
@@ -97,6 +97,8 @@ cargo run -p sqler-cli -- run :memory: "select 1"
 cargo run -p sqler-cli -- run --driver postgres "$SQLER_TEST_POSTGRES_URL" "select 1"
 cargo nextest run --workspace -E 'binary(/^db_/)' --no-tests=pass
 cargo run -p sqler-app
+cargo build --release -p sqler-app --locked
+target/release/sqler --open-sessions
 cargo tree --workspace -i gpui-pre
 cargo run -p xtask
 cargo bench -p sqler-ui --bench grid_viewport
@@ -106,6 +108,7 @@ cargo bench -p sqler-ui --bench browser_tree
 cargo bench -p sqler-completion --bench completion
 cargo bench -p sqler-ui --bench editor_buffer
 cargo bench -p sqler-ui --bench editor_intellisense
+cargo bench -p sqler-export --bench export_throughput
 ```
 
 - CI (`.github/workflows/ci.yml`) runs this subset of the commands above: fmt, clippy, nextest on Linux/macOS/Windows; deny, docs (`cargo doc` and `mdbook build docs`), spdx on Linux. Since T5 the Linux `check` and `docs` jobs install the GPUI build packages with apt, and the macOS `check` job guards the Metal toolchain; the `deny` job also runs the "Dependency rules" step.
@@ -115,6 +118,7 @@ cargo bench -p sqler-ui --bench editor_intellisense
 - `vendor/` holds third-party source copied in for a `[patch.crates-io]` entry, today only `vendor/sqlx-mysql` (sqlx-mysql 0.9.0 plus an `aws-lc-rs` backend, ADR-0018). It is not a workspace member, so fmt and clippy skip it, and it gets no SPDX headers. Its README states the maintenance procedure; no other change belongs there.
 - CI tools (pinned, see `docs/src/dependencies.md`): `cargo install --locked cargo-nextest@0.9.148 cargo-deny@0.20.2 mdbook@0.5.4`.
 - `.github/workflows/bench.yml` runs the grid viewport, catalog tree, catalog index, browser tree and completion benchmarks on Linux for pull requests (base vs PR in one job).
+- `.github/workflows/size.yml` reports the release `sqler` size on Linux/macOS/Windows (main, `workflow_dispatch`, PRs touching `crates/**`, `Cargo.toml`, `Cargo.lock`, `vendor/**`); report only, budget 60 MB.
 - `.github/workflows/pages.yml` publishes the book (`target/book/`) to GitHub Pages on push to `main`.
 - Bench: `cargo bench -p sqler-ui --bench grid_viewport -- [--rows N --columns N --batch N --viewport N --samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-p95-ns B]`. Rule: p95 more than 25 % + 50 ns above the base branch, or p95 above 1 ms, fails `bench.yml`. Method and results: `docs/src/benchmarks.md`. The release CLI is still measured by hand as described there.
 - Catalog bench: `cargo bench -p sqler-catalog --bench catalog_tree -- [--tables N --columns N --samples N --hit-samples N --source fake|sqlite --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-hit-p95-ns B --budget-expand-p95-ns B]`. Defaults: 5000 tables, 8 columns, `fake`. Budgets (`fake` only): cached-read p95 10 us, cold expand of 5,000 tables p95 16 ms. `--compare` checks `hit_p95_ns` (25 % + 50 ns). Exit 0 pass, 1 regression or budget, 2 usage error. Wired into `bench.yml`.
@@ -123,6 +127,7 @@ cargo bench -p sqler-ui --bench editor_intellisense
 - Editor bench: `cargo bench -p sqler-ui --bench editor_buffer -- [--lines N --samples N --budget-p95-ns B]`. Defaults: 10000 lines, budget 16 ms. Prints `bracket_build_p95_ns`, `bracket_lookup_p95_ns`, `format_p95_ns`, `occurrence_p95_ns`. Exit 0 pass, 1 when the bracket build or format p95 exceeds the budget, 2 usage error. Not in `bench.yml`; put the numbers in the PR body.
 - Intellisense bench: `cargo bench -p sqler-ui --bench editor_intellisense -- [--tables N --columns N --samples N --budget-p95-ns B]`. Defaults: 5000 tables, 8 columns, 2000 samples, budget 16 ms. Prints `statement_start_p95_ns`, `from_prefix_p95_ns`, `qualified_column_p95_ns`, `alias_join_p95_ns`, `hover_p95_ns`, `diagnose_p95_ns`, `worst_p95_ns` (headless, from a fresh snapshot to items ready). Exit 0 pass, 1 when `worst_p95_ns` exceeds the budget, 2 usage error. Not in `bench.yml`; put the numbers in the PR body.
 - Browser tree bench: `cargo bench -p sqler-ui --bench browser_tree -- [--tables N --samples N --select-samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-expand-p95-ns B --budget-select-p95-ns B]`. Defaults: 5000 tables. Budgets: expand of a 5,000-table schema p95 16 ms (`expand_p95_ns`), selection change p95 1 ms (`select_p95_ns`). `--compare` checks `expand_p95_ns` (25 % + 50 ns). Exit 0 pass, 1 regression or budget, 2 usage error. Wired into `bench.yml`.
+- Export bench: `cargo bench -p sqler-export --bench export_throughput -- [--rows N --batch N]`. Defaults: 1,000,000 rows of five columns, batches of 1,000. Prints `<id>_rows_per_sec=` and `<id>_mib_per_sec=` for `csv`, `json`, `sql` and `markdown`; a `--bench` argument is ignored. Exit 0 ok, 1 writer error, 2 usage error. Not in `bench.yml`; put the numbers in the PR body.
 
 ## 4. Coding standards
 
@@ -238,6 +243,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0025](docs/src/adr/0025-sql-editor-component.md) | SQL editor component: `gpui-component` editor with headless logic | accepted |
 | [0026](docs/src/adr/0026-editor-intellisense.md) | Editor intellisense: completion, hover and diagnostics in the SQL editor | accepted |
 | [0027](docs/src/adr/0027-bounded-result-model.md) | Bounded result model: credit gate, fetch more and compact rows | accepted |
+| [0028](docs/src/adr/0028-export-writer-api.md) | Export writer API: push-style row writers, a format registry and SQL literals | accepted |
 
 ## 9. Roadmap status
 
@@ -297,7 +303,7 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build j
 - The apt packages in `ci.yml` are the build-only set (`pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev`); no runtime libraries are installed because no test opens a window.
 - `cargo test -p sqler-ui` is GPUI-free (the views need the `gui` feature, which only `sqler-app` enables). `cargo clippy --workspace --all-features` and `--workspace` builds do compile GPUI.
 - Never call `tokio::spawn` on the GPUI thread: there is no runtime context. Use `SessionBridge` (`Handle::spawn` plus a `oneshot` awaited with `cx.spawn`), see ADR-0007.
-- `sqler --exit-after-first-frame` exits with code 0 after the first frame (cold-start measurement). On quit, open sessions are closed (ADR-0016): `app:quit` closes them under a 2 s bound; the window-close hook only gets about 150 ms.
+- `sqler --exit-after-first-frame` exits with code 0 after the first frame (cold-start measurement). On quit, open sessions are closed (ADR-0016): `app:quit` closes them under a 2 s bound; the window-close hook only gets about 150 ms. `sqler --open-sessions` opens every saved connection through the same pipeline after startup and idles (idle RSS with sessions open); it skips, with a stderr line holding the connection name and a fixed reason (never error text; only the host-key reasons add the jump `host:port`), any connection with a keychain secret, an untrusted SSH host key or a failed connect, so SQLer itself never prompts (an SSH agent may).
 - Measuring the desktop app on macOS: the config directory is `$HOME/Library/Application Support/SQLer`, so run `sqler` with `HOME` pointed at a scratch directory to get a known `connections.toml` and leave the real config alone. `hyperfine` is at `/opt/homebrew/bin`, `mdbook` and `cargo-nextest` are in `~/.cargo/bin` and may be off `PATH`.
 - Secrets (T5, ADR-0012): headless Linux CI has no Secret Service, so tests use `MemoryStore`; `KeychainStore` is only checked by hand with `cargo test -p sqler-config -- --ignored keychain_round_trip` on a desktop session. `keyring` 4.x has no native-backend features of its own: enable `v1`, which turns on the Keychain, Credential Manager and `zbus` Secret Service (`crypto-rust`, `async-io`) stores per target. Never use keyutils, `vendored` `libdbus`, OpenSSL crypto, a `tokio` runtime feature or a mock store. `SecretStore` calls block; async callers use `spawn_blocking`.
 - `PostgreSQL` test server (ADR-0009): the server rejects a TLS key it does not own or that is group/world readable, so the script copies the key inside the container, runs `chown postgres` and `chmod 600`, then starts the server. GitHub `services:` cannot pass server arguments (`-c ssl=on`), hence the `docker run` script. The image's init server listens on the socket only; wait with `pg_isready -h 127.0.0.1`, not the socket.

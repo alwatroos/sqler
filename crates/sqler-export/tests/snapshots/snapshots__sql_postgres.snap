@@ -1,0 +1,62 @@
+---
+source: crates/sqler-export/tests/snapshots.rs
+expression: "render(&SqlFormat, &sql_options(Dialect::Postgres))"
+---
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('null', NULL, NULL, 'x'),
+('true', TRUE, NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('false', FALSE, NULL, 'x'),
+('int zero', 0, NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('int min', -9223372036854775808, NULL, 'x'),
+('int max', 9223372036854775807, NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('float', 1.5, NULL, 'x'),
+('float neg zero', '-0'::float8, NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('float large', 1e300, NULL, 'x'),
+('float nan', 'NaN'::float8, NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('float +inf', 'Infinity'::float8, NULL, 'x'),
+('float -inf', '-Infinity'::float8, NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('text empty', '', NULL, 'x'),
+('text plain', 'plain', NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('text quote', 'it''s', NULL, 'x'),
+('text dquote', 'say "hi"', NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('text backslash', E'back\\slash', NULL, 'x'),
+('text pipe', 'a|b', NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('text comma', 'a,b', NULL, 'x'),
+('text crlf', 'line1<CR>
+line2', NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('text lf', 'line1
+line2', NULL, 'x'),
+('text nul', E'nul\x00byte', NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('text unicode', 'héllo 名前', NULL, 'x'),
+('text comment', 'x''; DROP TABLE t; --', NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('text formula', '=1+1', NULL, 'x'),
+('text null word', 'NULL', NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('bytes empty', decode('', 'hex'), NULL, 'x'),
+('bytes', decode('00abff', 'hex'), NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('decimal', -12.50, NULL, 'x'),
+('date', DATE '2024-01-02', NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('date far', DATE '+12345-06-07', NULL, 'x'),
+('date neg', DATE '-0044-03-15', NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('time', TIME '03:04:05.123456789', NULL, 'x'),
+('timestamp', TIMESTAMP '2024-01-02 03:04:05', NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('timestamptz', TIMESTAMPTZ '2024-01-02 03:04:05-08:30', NULL, 'x'),
+('json ok', '{"a": [1, 2, {"b": null}]}', NULL, 'x');
+INSERT INTO "my schema"."my table" ("label", "value", "value", "odd ""name"" `x` | ,") VALUES
+('json bad', '{not json', NULL, 'x');

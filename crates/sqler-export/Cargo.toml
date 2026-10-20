@@ -1,6 +1,6 @@
 [package]
 name = "sqler-export"
-description = "Result writers for CSV, JSON, SQL, Parquet and XLSX."
+description = "Result writers for CSV, JSON, SQL, Markdown, Parquet and XLSX."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,3 +11,17 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-core.workspace = true
+sqler-sql.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "export_throughput"
+harness = false
