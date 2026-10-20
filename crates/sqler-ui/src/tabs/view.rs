@@ -116,6 +116,7 @@ pub(crate) fn tab_body(
 ) -> impl IntoElement + use<> {
     let muted = cx.theme().muted_foreground;
     let text = match tabs.active() {
+        // Query tabs get their own body (`query::view::query_tab_body`); this is a fallback.
         Some(tab) => format!(
             "Connected to {} ({}).",
             tab.connection().name,

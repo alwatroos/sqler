@@ -9,11 +9,12 @@ use std::ops::Range;
 use sqler_catalog::{CacheKey, CatalogWorker, RefreshHandle};
 use sqler_config::{ConnectionId, ConnectionProfile, Secret, SecretRef};
 use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId};
-use sqler_driver_api::{CancelFlag, Session};
+use sqler_driver_api::{CancelFlag, CancelHandle, Session};
 use sqler_sql::Dialect;
 
 use super::action::WorkspaceAction;
 use super::browser::{BrowserJob, BrowserState, OpenDataJob};
+use super::query::ActiveRun;
 use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
 use crate::connections::{
     ConnectFailure, ConnectRequest, ConnectionAction, ConnectionForm, Dialog, FieldError, FormMode,
@@ -21,6 +22,7 @@ use crate::connections::{
 };
 use crate::editor::{EditorDocs, EditorKey, TextEdit};
 use crate::grid::{GridTab, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS};
+use crate::query::{QueryJob, QueryTab, RunEvent};
 use crate::settings::SettingsModel;
 use crate::sidebar::SidebarModel;
 use crate::tabs::{TabConnection, TabId, TabKind, TabStrip};
@@ -168,6 +170,18 @@ pub enum Effect {
         /// The key.
         key: EditorKey,
     },
+    /// Run a query job on tokio, show its grids in the query tab and follow its events with
+    /// [`Workspace::query_event`]; when the events end, report with [`Workspace::query_finished`].
+    RunQuery {
+        /// The job; run it with `SessionBridge::spawn`.
+        job: QueryJob,
+        /// One grid per statement, in the job's order.
+        grids: Vec<GridTab>,
+        /// The progress of the job.
+        events: tokio::sync::mpsc::UnboundedReceiver<RunEvent>,
+    },
+    /// Ask the database to cancel the running statement.
+    CancelQuery(CancelHandle),
 }
 
 impl std::fmt::Debug for Effect {
@@ -249,6 +263,12 @@ impl std::fmt::Debug for Effect {
                 .field("tab", tab)
                 .field("key", key)
                 .finish(),
+            Self::RunQuery { job, grids, .. } => f
+                .debug_struct("RunQuery")
+                .field("job", job)
+                .field("grids", &grids.len())
+                .finish_non_exhaustive(),
+            Self::CancelQuery(_) => f.write_str("CancelQuery(..)"),
         }
     }
 }
@@ -308,6 +328,12 @@ pub struct Workspace {
     pub(super) editor_seeds: HashMap<RequestId, String>,
     /// Start text of an open that stopped at the host-key prompt, until the retry runs.
     pub(super) retry_seeds: HashMap<ConnectionId, String>,
+    /// The run state of every query tab.
+    pub(super) queries: HashMap<TabId, QueryTab>,
+    /// The query runs in progress; the session of such a tab is on loan to the job.
+    pub(super) query_runs: HashMap<TabId, ActiveRun>,
+    /// The last run id handed out.
+    pub(super) next_run: u64,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -355,6 +381,9 @@ impl Workspace {
             tab_conns: HashMap::new(),
             editor_seeds: HashMap::new(),
             retry_seeds: HashMap::new(),
+            queries: HashMap::new(),
+            query_runs: HashMap::new(),
+            next_run: 0,
         }
     }
 
@@ -527,12 +556,19 @@ impl Workspace {
             }
             WorkspaceAction::OpenSyntheticGrid => self.open_synthetic_grid(),
             WorkspaceAction::Quit => {
+                let cancels = self.cancel_all_queries();
                 let sessions = self.take_all_sessions();
                 let browsers = self.shutdown_browsers();
-                if sessions.is_empty() && !browsers {
+                if sessions.is_empty() && !browsers && cancels.is_empty() {
                     Effect::Quit
-                } else {
+                } else if cancels.is_empty() {
                     Effect::CloseSessions(sessions)
+                } else {
+                    // A session lent to a query is cancelled and dropped at exit.
+                    let mut effects: Vec<Effect> =
+                        cancels.into_iter().map(Effect::CancelQuery).collect();
+                    effects.push(Effect::CloseSessions(sessions));
+                    Effect::Batch(effects)
                 }
             }
             WorkspaceAction::OpenSettings => {
@@ -661,12 +697,16 @@ impl Workspace {
         self.close_object_tab(id);
         self.editors.remove(id);
         self.tab_conns.remove(&id);
+        self.queries.remove(&id);
+        let cancel = self.cancel_query_run(id);
         if self.tabs.is_empty() && self.settings_tab == SettingsTab::Background {
             self.settings_tab = SettingsTab::Active;
         }
-        match self.sessions.remove(&id) {
-            Some(session) => Effect::CloseSession(session),
-            None => Effect::None,
+        // A session on loan comes back through `query_finished`, which closes it.
+        match (self.sessions.remove(&id), cancel) {
+            (Some(session), _) => Effect::CloseSession(session),
+            (None, Some(handle)) => Effect::CancelQuery(handle),
+            (None, None) => Effect::None,
         }
     }
 
@@ -717,6 +757,7 @@ impl Workspace {
                 self.sessions.insert(tab, session);
                 self.tab_conns.insert(tab, id.clone());
                 self.editors.open(tab, dialect, seed);
+                self.queries.insert(tab, QueryTab::new());
                 self.show_connection_tabs();
                 return self.ensure_browser(id);
             }
@@ -845,6 +886,11 @@ impl Workspace {
     #[must_use]
     pub fn has_session(&self, id: TabId) -> bool {
         self.sessions.contains_key(&id)
+    }
+
+    /// Gives a session back to its tab (a query job returns it).
+    pub(super) fn restore_session(&mut self, id: TabId, session: Box<dyn Session>) {
+        self.sessions.insert(id, session);
     }
 
     /// Takes the tab's session out (for example to close it on quit).

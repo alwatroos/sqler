@@ -1,6 +1,6 @@
 # Workspace
 
-`sqler` opens a window with a connection sidebar on the left and a tab strip on the right. This is the M1 shell: the tab body is a placeholder, and the SQL editor arrives in M3.
+`sqler` opens a window with a connection sidebar on the left and a tab strip on the right. A query tab is a [SQL editor](sql-editor.md) above a results area; see [Running queries](running-queries.md). Completion comes later in M3.
 
 ```sh
 cargo run -p sqler-app

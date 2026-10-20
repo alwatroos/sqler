@@ -38,10 +38,13 @@ use crate::grid::view::{GridProbe, GridViews, action_for_command as grid_action_
 use crate::keymap::input::key_input;
 use crate::keymap::{KeyDispatcher, KeyOutcome, action_for, chord_from_input, route_key};
 use crate::palette::{self, OPEN_PALETTE, PaletteState};
+use crate::query::view::{OverlayChange, QueryViews, query_overlay, query_tab_body};
+use crate::query::{self, ParamInput, ParamKind, QueryCommand, RunEvent};
 use crate::settings::{self, SettingsModel};
 use crate::sidebar::view::{ListEntry, build_entries, new_list_state, sync_list};
 use crate::sidebar::{self, SidebarModel, key_command};
 use crate::tabs;
+use crate::tabs::TabId;
 use crate::theme::apply::{appearance_of, apply};
 use crate::theme::resolve;
 
@@ -135,6 +138,8 @@ pub(crate) struct WorkspaceView {
     pub(crate) grids: GridViews,
     /// The editor of every open SQL editor tab.
     pub(crate) editors: EditorViews,
+    /// The results and prompts of the query tabs.
+    pub(crate) queries: QueryViews,
     /// The running connect attempts; dropping a task cancels the attempt.
     tasks: HashMap<RequestId, Task<()>>,
     /// The text inputs of the dialog on screen.
@@ -155,6 +160,7 @@ pub(crate) struct WorkspaceView {
 }
 
 impl WorkspaceView {
+    #[allow(clippy::too_many_lines)] // registers every command set and builds the state
     fn new(startup: Startup, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = match startup.connections {
             Ok(store) => SidebarModel::from_store(store, startup.config_dir),
@@ -202,6 +208,9 @@ impl WorkspaceView {
         if let Err(err) = editor::register_commands(&mut commands) {
             eprintln!("sqler: could not register the editor commands: {err}");
         }
+        if let Err(err) = query::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the query commands: {err}");
+        }
         let keys = KeyDispatcher::new(Platform::current(), startup.keybindings, &commands);
         for notice in keys.notices() {
             eprintln!("sqler: {notice}");
@@ -229,6 +238,11 @@ impl WorkspaceView {
         // Any way of quitting (window close, the OS menu) closes the open sessions, within the
         // short time the platform allows. The `app:quit` command waits longer (`CLOSE_LIMIT`).
         let quit = cx.on_app_quit(|view, _| {
+            for handle in view.ws.cancel_all_queries() {
+                drop(view.bridge.spawn(async move {
+                    let _ = handle.cancel().await;
+                }));
+            }
             let sessions = view.ws.take_all_sessions();
             view.ws.shutdown_browsers();
             let closed = view.bridge.close_all(sessions, QUIT_HOOK_LIMIT);
@@ -248,6 +262,7 @@ impl WorkspaceView {
             focus,
             grids: GridViews::default(),
             editors: EditorViews::default(),
+            queries: QueryViews::default(),
             tasks: HashMap::new(),
             inputs: None,
             sidebar_focus: cx.focus_handle(),
@@ -332,6 +347,16 @@ impl WorkspaceView {
             // Escape cancels the DROP confirmation (refused once the statement runs).
             cx.stop_propagation();
             self.dispatch_browser(BrowserAction::CancelDrop, cx);
+            return;
+        }
+        if !was_open
+            && chord.key() == "escape"
+            && chord.modifiers() == Modifiers::default()
+            && let Some(tab) = self.query_overlay_tab()
+        {
+            // Escape closes the parameter prompt or the confirmation; nothing runs.
+            cx.stop_propagation();
+            self.query_dismiss(tab, cx);
             return;
         }
         if self.sidebar_key(event, window, cx) {
@@ -435,6 +460,9 @@ impl WorkspaceView {
             self.palette.close();
             self.dispatch_editor(action, window, cx);
             editor_focus = true;
+        } else if let Some(command) = query::action_for(id) {
+            self.palette.close();
+            self.run_query_command(command, window, cx);
         } else if let Some(grid_action) = grid_action_for(id) {
             self.palette.close();
             match self.ws_active_grid() {
@@ -615,6 +643,7 @@ impl WorkspaceView {
         }
         self.grids.retain(self.ws.tabs());
         self.editors.retain(&self.ws);
+        self.queries.retain(self.ws.tabs());
         self.sync_sidebar();
         cx.notify();
     }
@@ -694,8 +723,154 @@ impl WorkspaceView {
                     cx,
                 );
             }
+            Effect::RunQuery { job, grids, events } => self.start_query_job(job, grids, events, cx),
+            Effect::CancelQuery(handle) => {
+                // The answer does not matter: the job reports how the statement ended.
+                drop(self.bridge.spawn(async move {
+                    let _ = handle.cancel().await;
+                }));
+            }
             other => self.apply_browser(other, cx),
         }
+    }
+
+    /// Runs a query job on tokio and follows it: every event goes to the workspace, and when the
+    /// job ends the session goes back to its tab.
+    fn start_query_job(
+        &mut self,
+        job: query::QueryJob,
+        grids: Vec<crate::grid::GridTab>,
+        mut events: tokio::sync::mpsc::UnboundedReceiver<RunEvent>,
+        cx: &mut Context<Self>,
+    ) {
+        let (tab, run) = (job.tab, job.run);
+        self.queries.insert_grids(tab, grids);
+        let done = self.bridge.spawn(job.run());
+        cx.spawn(async move |this, cx| {
+            // The channel closes when the job ends, so every event arrives before the end.
+            while let Some(event) = events.recv().await {
+                let alive = this
+                    .update(cx, |view, cx| {
+                        view.ws.query_event(tab, run, event);
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !alive {
+                    return;
+                }
+            }
+            let result = done.await;
+            this.update(cx, |view, cx| {
+                let effect = if let Ok(done) = result {
+                    view.ws.query_finished(done)
+                } else {
+                    view.ws.query_lost(tab, run);
+                    Effect::None
+                };
+                view.apply(effect, cx);
+                view.settle(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The active tab, if it is a query tab.
+    fn active_query_tab(&self) -> Option<TabId> {
+        if self.ws.settings_tab_active() {
+            return None;
+        }
+        self.ws
+            .tabs()
+            .active()
+            .filter(|t| t.kind() == crate::tabs::TabKind::Query)
+            .map(crate::tabs::Tab::id)
+    }
+
+    /// The active query tab while its parameter prompt or confirmation is open.
+    fn query_overlay_tab(&self) -> Option<TabId> {
+        let tab = self.active_query_tab()?;
+        matches!(
+            self.ws.query_tab(tab)?.phase(),
+            query::Phase::Prompting(_) | query::Phase::Confirming(_)
+        )
+        .then_some(tab)
+    }
+
+    /// Carries out a query command on the active query tab.
+    fn run_query_command(
+        &mut self,
+        command: QueryCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.active_query_tab() else {
+            window.push_notification("Open a query tab first.", cx);
+            return;
+        };
+        let effect = match command {
+            QueryCommand::Run(mode) => {
+                let buffer = self.editors.buffer(tab, cx);
+                self.ws
+                    .run_editor(&mut editor::QueryRunPort, editor::run_mode(mode), buffer)
+            }
+            QueryCommand::Cancel => self.ws.cancel_editor_run(&mut editor::QueryRunPort),
+        };
+        self.apply(effect, cx);
+        self.settle(cx);
+    }
+
+    /// The Cancel button of a running query.
+    pub(crate) fn query_cancel(&mut self, tab: TabId, cx: &mut Context<Self>) {
+        let effect = self.ws.cancel_query(tab);
+        self.apply(effect, cx);
+        self.settle(cx);
+    }
+
+    /// Closes the parameter prompt or the confirmation of a tab; nothing runs.
+    pub(crate) fn query_dismiss(&mut self, tab: TabId, cx: &mut Context<Self>) {
+        self.ws.dismiss_query_prompt(tab);
+        self.settle(cx);
+    }
+
+    /// Answers the parameter prompt with the typed values.
+    pub(crate) fn query_submit(&mut self, tab: TabId, cx: &mut Context<Self>) {
+        let texts = self.queries.param_texts(tab, cx);
+        let inputs: Vec<ParamInput> = match self.ws.query_tab(tab).map(query::QueryTab::phase) {
+            Some(query::Phase::Prompting(form)) => form
+                .rows()
+                .iter()
+                .enumerate()
+                .map(|(i, row)| ParamInput {
+                    key: row.key.clone(),
+                    kind: row.kind,
+                    text: texts.get(i).cloned().unwrap_or_else(|| row.text.clone()),
+                })
+                .collect(),
+            _ => return,
+        };
+        let effect = self.ws.submit_query_params(tab, &inputs);
+        self.apply(effect, cx);
+        self.settle(cx);
+    }
+
+    /// Accepts the production confirmation of a tab.
+    pub(crate) fn query_confirm(&mut self, tab: TabId, cx: &mut Context<Self>) {
+        let effect = self.ws.confirm_query(tab);
+        self.apply(effect, cx);
+        self.settle(cx);
+    }
+
+    /// Changes how a parameter's text is read; the typed text is kept.
+    pub(crate) fn query_set_kind(
+        &mut self,
+        tab: TabId,
+        index: usize,
+        kind: ParamKind,
+        cx: &mut Context<Self>,
+    ) {
+        self.ws.set_query_param_kind(tab, index, kind);
+        cx.notify();
     }
 
     /// Carries out the effects of the object browser.
@@ -832,6 +1007,11 @@ impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.grids.materialize(window, cx);
         self.editors.materialize(&mut self.ws, window, cx);
+        if self.queries.materialize(&self.ws, window, cx) == OverlayChange::Closed
+            && let Some(tab) = self.active_query_tab()
+        {
+            self.editors.focus(tab, window, cx);
+        }
         self.sync_dialog_inputs(window, cx);
         if !self.notices.is_empty() {
             let notices = std::mem::take(&mut self.notices);
@@ -849,13 +1029,13 @@ impl Render for WorkspaceView {
         let strip_end = settings::view::strip_end(&self.ws, cx);
         let body = if settings_active {
             settings::view::page(&self.ws, cx).into_any_element()
+        } else if let Some((tab, editor)) = self
+            .active_query_tab()
+            .and_then(|t| self.editors.body(t).map(|e| (t, e.into_any_element())))
+        {
+            query_tab_body(editor, tab, self, cx)
         } else if let Some(grid) = self.ws_active_grid() {
             self.grids.body(grid, cx).into_any_element()
-        } else if let Some(editor) = self
-            .ws_active_editor()
-            .and_then(|tab| self.editors.body(tab))
-        {
-            editor.into_any_element()
         } else if let Some(tab) = self
             .ws
             .tabs()
@@ -868,6 +1048,9 @@ impl Render for WorkspaceView {
         };
         let dialog = dialog_overlay(&self.ws, self.inputs.as_ref(), cx);
         let drop_dialog = drop_overlay(self.ws.drop_dialog(), cx);
+        let query_dialog = self
+            .query_overlay_tab()
+            .and_then(|tab| query_overlay(self, tab, cx));
         let palette = self.palette.is_open().then(|| {
             let items = self.palette.items(&self.commands, &self.keys);
             palette::view::palette_overlay(
@@ -914,6 +1097,7 @@ impl Render for WorkspaceView {
             )
             .children(dialog)
             .children(drop_dialog)
+            .children(query_dialog)
             .children(palette)
     }
 }

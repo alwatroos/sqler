@@ -12,7 +12,7 @@ The SQL editor (T9) needs syntax highlighting for light and dark themes, multi-c
 - Highlighting through tree-sitter SQL, already enabled in the workspace `Cargo.toml`.
 - No new dependency and no second text widget to maintain.
 - Editor logic testable without a window.
-- A narrow seam to T8, which is not merged yet.
+- A narrow seam to query execution (T8, ADR-0024).
 
 ## Considered options
 
@@ -39,14 +39,14 @@ An own widget needs text layout, IME, selection, undo, scrolling, line numbers a
 
 **Active selection only.** `gpui-component` exposes only the active selection. With several cursors, format and add-next-occurrence read the active one. This is a documented limit, not a bug.
 
-**Seam to query execution.** The editor does not run SQL. It calls a `RunPort` trait (`run(workspace, tab, RunMode, EditorBuffer)` and `cancel`), where `RunMode` is `Selection`, `Statement` or `All`. Tests use a fake port. The adapter over the T8 run commands is added once T8 is merged; until then the editor opens, edits and formats but does not execute. Nothing under `query/**` is touched.
+**Seam to query execution.** The editor does not run SQL. It calls a `RunPort` trait (`run(workspace, tab, RunMode, EditorBuffer)` and `cancel`), where `RunMode` is `Selection`, `Statement` or `All`. Tests use a fake port. The real adapter is `QueryRunPort` (`editor/run_t8.rs`): it maps `EditorBuffer` to the `BufferSnapshot` of ADR-0024 and `RunMode` to `query::RunMode`, and calls `Workspace::run_query` and `cancel_query`. The `query:*` commands stay registered by `query::register_commands` only; the view routes them through `Workspace::run_editor`. The stand-in input of T8 is gone; the editor is the top of `query::view::query_tab_body`.
 
 **Performance.** `cargo bench -p sqler-ui --bench editor_buffer` measures bracket index build and lookup, format and next-occurrence on a 10,000-line synthetic script (`dev:open-large-sql-script` opens the same script in a tab). Budget: build and format p95 below 16 ms. Scrolling and typing speed of the widget itself is a maintainer check on a display.
 
 ## Consequences
 
 - Positive: no new dependency, no widget to maintain, highlighting and undo come with the component, and the rules we add are unit-tested.
-- Positive: the `RunPort` seam lets T8 and T9 merge in either order.
+- Positive: the `RunPort` seam let T8 and T9 merge in either order.
 - Negative: we depend on the behaviour of `gpui-component` 0.8.0 internals such as `add_selection`; a bump of `gpui-component` must re-check the gaps above, and some may disappear (then the headless code is removed).
 - Negative: with several cursors only the active selection is formatted or extended.
 - Negative: the bracket index is O(n) per rebuild; it is rebuilt only when needed and benchmarked.

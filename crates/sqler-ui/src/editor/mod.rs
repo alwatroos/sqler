@@ -14,6 +14,7 @@ mod doc;
 mod format;
 mod occurrence;
 mod run;
+mod run_t8;
 pub mod synthetic;
 #[cfg(feature = "gui")]
 pub(crate) mod view;
@@ -25,6 +26,7 @@ pub use doc::{EditorDoc, EditorDocs};
 pub use format::{FormatFailure, format_edit};
 pub use occurrence::{OccurrenceChain, OccurrenceStep, next_occurrence, word_at};
 pub use run::{RunMode, RunPort};
+pub use run_t8::{QueryRunPort, query_mode, run_mode, run_snapshot};
 
 #[cfg(test)]
 pub(crate) use run::FakeRunPort;

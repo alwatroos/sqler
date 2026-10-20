@@ -33,10 +33,10 @@ Chosen: option 1, `russh` 0.64.1 (verified live, see [Dependencies](../dependenc
 
 The `rsa` feature is deliberately off. It pulls in the `rsa` crate, which carries RUSTSEC-2023-0071 (Marvin timing attack, no patched version), and `deny.toml` has no ignore for it. Consequences:
 
-- RSA private key files are unsupported and are reported as `TunnelError::UnsupportedKeyType`; ed25519 and ECDSA keys work.
-- A server that offers only an RSA host key fails the handshake with a generic `Ssh` error.
+- RSA private key files were unsupported at this point (`TunnelError::UnsupportedKeyType`); ed25519 and ECDSA keys work. **Superseded by [ADR-0018](0018-rsa-alternatives.md):** RSA user keys now work through a `ring` signer, without the `rsa` crate.
+- A server that offers only an RSA host key fails the handshake with a generic `Ssh` error. This still holds (ADR-0018).
 
-RSA keys unsupported until the owner decides on RUSTSEC-2023-0071; re-enabling is one feature flag plus the advisory ignore.
+The `rsa` feature stays off for good; ADR-0018 adds RSA user keys without it.
 
 ### Verification policy
 
@@ -58,5 +58,5 @@ RSA keys unsupported until the owner decides on RUSTSEC-2023-0071; re-enabling i
 ### Consequences
 
 - Positive: no external binary, one dependency tree, tests that run everywhere.
-- Negative: no RSA keys for now; `ring` needs a C compiler; the Windows code paths need CI confirmation.
+- Negative: RSA-only host keys unsupported (RSA user keys: ADR-0018); `ring` needs a C compiler; the Windows code paths need CI confirmation.
 - Not covered here: wiring into the connect flow (T9), SSH profile storage (T4) and secret storage (T5). TLS through the tunnel must verify the original host name, not `127.0.0.1` (T9).

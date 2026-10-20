@@ -27,9 +27,11 @@ consequences. SQLer uses the MADR format.
 | [0015](0015-ddl-generation-dialects-and-quoting.md) | DDL generation: dialects and quoting | accepted |
 | [0016](0016-connect-pipeline.md) | Connect pipeline: `Connector` trait in `sqler-ui`, pipeline in `sqler-app` | accepted |
 | [0017](0017-object-browser-sessions-and-drop-confirmation.md) | Object browser: browser session per connection, short-lived action sessions, DROP confirmation | accepted |
+| [0018](0018-rsa-alternatives.md) | RSA without the `rsa` crate: a `ring` SSH signer and a vendored `sqlx-mysql` patch on `aws-lc-rs` | accepted |
 | [0019](0019-tls-server-name-through-tunnel.md) | TLS server name through a tunnel: `TlsConfig::server_name`, local Unix-socket bridge | accepted |
 | [0020](0020-sql-text-services.md) | SQL text services: own lexer, fail-safe classification | accepted |
 | [0021](0021-query-history-and-saved-queries.md) | Query history and saved queries: JSON Lines history, versioned TOML saved queries | accepted |
 | [0022](0022-catalog-snapshot-name-index.md) | Catalog snapshot, name index and on-demand column loading | accepted |
 | [0023](0023-completion-engine.md) | Completion engine: own lexer, schema source trait, ranking | accepted |
+| [0024](0024-query-execution.md) | Query execution: headless pipeline in `sqler-ui`, bound parameters, per-statement results, prod gate | accepted |
 | [0025](0025-sql-editor-component.md) | SQL editor component: `gpui-component` editor with headless logic | accepted |

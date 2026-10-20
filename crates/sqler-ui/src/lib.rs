@@ -3,7 +3,7 @@
 
 //! The `GPUI` application: workspace, tabs, panels, grid, editor, command palette and themes.
 //!
-//! State (`browser`, `connections`, `editor`, `sidebar`, `tabs`, `workspace`, `keymap`, `palette`) is plain Rust and unit-tested
+//! State (`browser`, `connections`, `editor`, `sidebar`, `tabs`, `workspace`, `keymap`, `palette`, `query`) is plain Rust and unit-tested
 //! headless. The `GPUI` views live behind the `gui` cargo feature, which only `sqler-app` turns on.
 
 #![forbid(unsafe_code)]
@@ -15,6 +15,7 @@ pub mod editor;
 pub mod grid;
 pub mod keymap;
 pub mod palette;
+pub mod query;
 pub mod settings;
 pub mod sidebar;
 pub mod tabs;

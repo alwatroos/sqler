@@ -54,7 +54,7 @@ jobs:
     name: db
     runs-on: ubuntu-latest
     env:
-      SQLER_TEST_REQUIRE_DB: postgres,mysql
+      SQLER_TEST_REQUIRE_DB: postgres,mysql,ssh
     steps:
       - uses: actions/checkout@v7
       - name: Install toolchain from rust-toolchain.toml
@@ -79,6 +79,10 @@ jobs:
         run: cargo nextest run -p sqler-driver-mysql --no-tests=fail
       - name: CLI smoke test (MariaDB)
         run: cargo run -p sqler-cli -- run --driver mysql "$SQLER_TEST_MYSQL_URL" "select 1" | grep -qx 1
+      - name: Start OpenSSH server (RSA keys)
+        run: sh crates/sqler-tunnel/tests/docker/start-sshd.sh "$RUNNER_TEMP/sshd" >> "$GITHUB_ENV"
+      - name: SSH tunnel tests (RSA)
+        run: cargo nextest run -p sqler-tunnel --no-tests=fail
       - name: CLI smoke test (PostgreSQL)
         run: cargo run -p sqler-cli -- run --driver postgres "$SQLER_TEST_POSTGRES_URL" "select 1" | grep -qx 1
 
