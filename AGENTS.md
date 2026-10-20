@@ -35,6 +35,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-sql` | L1 | Parsing (`sqlparser`), formatting, statement splitting, dialect handling |
 | `sqler-plugin-api` | L1 | WIT definitions and host bindings (wasmtime component model) |
 | `sqler-config` | L1 | Settings, keybindings, connection store, keychain |
+| `sqler-tunnel` | L1 | SSH session and local port forward (russh); drivers connect to a local address |
 | `sqler-driver-postgres` | L2 | `PostgreSQL` driver (sqlx / tokio-postgres) |
 | `sqler-driver-mysql` | L2 | `MySQL` driver |
 | `sqler-driver-sqlite` | L2 | `SQLite` driver |
@@ -60,7 +61,7 @@ Layering: a crate may depend only on crates in lower layers.
 
 ```
 L0 core
-L1 driver-api, ai-api, sql, plugin-api, config
+L1 driver-api, ai-api, sql, plugin-api, config, tunnel
 L2 driver-*, ai-ollama/anthropic/openai/mistral, catalog, completion, export
 L3 ai-tools, plugin-host
 L4 mcp
@@ -200,6 +201,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0005](docs/src/adr/0005-config-files-and-keybindings.md) | Config files and keybindings: TOML files, chord grammar, std-only directory lookup | accepted |
 | [0006](docs/src/adr/0006-grid-data-model-and-bench-harness.md) | Grid data model and bench harness | accepted |
 | [0007](docs/src/adr/0007-desktop-binary-and-ui-tokio-bridge.md) | Desktop binary and UI-thread/tokio bridge | accepted |
+| [0013](docs/src/adr/0013-ssh-tunnel-crate.md) | SSH tunnel crate: russh, strict known_hosts, loopback-only forward | accepted |
 
 ## 9. Roadmap status
 
@@ -241,3 +243,4 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build j
 - Never call `tokio::spawn` on the GPUI thread: there is no runtime context. Use `SessionBridge` (`Handle::spawn` plus a `oneshot` awaited with `cx.spawn`), see ADR-0007.
 - `sqler --exit-after-first-frame` exits with code 0 after the first frame (cold-start measurement). On quit, open sessions are dropped, not closed; M2 must close them.
 - Measuring the desktop app on macOS: the config directory is `$HOME/Library/Application Support/SQLer`, so run `sqler` with `HOME` pointed at a scratch directory to get a known `connections.toml` and leave the real config alone. `hyperfine` is at `/opt/homebrew/bin`, `mdbook` and `cargo-nextest` are in `~/.cargo/bin` and may be off `PATH`.
+- `sqler-tunnel` (ADR-0013): `russh` is built with `ring` only. RSA private keys are unsupported (`TunnelError::UnsupportedKeyType`) until the owner decides on RUSTSEC-2023-0071; re-enabling is the `rsa` feature on `russh` plus an advisory ignore in `deny.toml`. Host keys are never accepted silently: use `trust_host_key` after the user confirms the fingerprint. Tests use an in-process `russh` server, no Docker.

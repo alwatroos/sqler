@@ -32,6 +32,7 @@ sqler-acp = { path = "crates/sqler-acp", version = "0.1.0" }
 sqler-plugin-api = { path = "crates/sqler-plugin-api", version = "0.1.0" }
 sqler-plugin-host = { path = "crates/sqler-plugin-host", version = "0.1.0" }
 sqler-config = { path = "crates/sqler-config", version = "0.1.0" }
+sqler-tunnel = { path = "crates/sqler-tunnel", version = "0.1.0" }
 sqler-export = { path = "crates/sqler-export", version = "0.1.0" }
 sqler-ui = { path = "crates/sqler-ui", version = "0.1.0" }
 sqler-cli = { path = "crates/sqler-cli", version = "0.1.0" }
@@ -44,6 +45,9 @@ tokio = { version = "1.54.0", default-features = false }
 anyhow = "1.0.104"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
+russh = { version = "0.64.1", default-features = false, features = ["ring"] }
+rand = "0.10.3"
+tokio-stream = { version = "0.1.19", default-features = false, features = ["net"] }
 gpui-component = { version = "0.8.0", features = ["tree-sitter-sql"] }
 gpui = { version = "=0.3.9", package = "gpui-pre" }
 gpui_platform = { version = "=0.3.9", package = "gpui-pre-platform", features = ["font-kit", "x11", "wayland"] }
