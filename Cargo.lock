@@ -6995,6 +6995,7 @@ dependencies = [
  "sqler-driver-mysql",
  "sqler-driver-postgres",
  "sqler-driver-sqlite",
+ "sqler-tunnel",
  "sqler-ui",
  "tokio",
 ]

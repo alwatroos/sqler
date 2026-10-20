@@ -37,6 +37,7 @@
   - [ADR-0013: SSH tunnel crate](adr/0013-ssh-tunnel-crate.md)
   - [ADR-0014: Catalog cache and background refresh](adr/0014-catalog-cache-and-background-refresh.md)
   - [ADR-0015: DDL generation: dialects and quoting](adr/0015-ddl-generation-dialects-and-quoting.md)
+  - [ADR-0016: Connect pipeline](adr/0016-connect-pipeline.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
 - [Benchmarks](benchmarks.md)

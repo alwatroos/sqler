@@ -26,7 +26,11 @@ driver-mysql = ["dep:sqler-driver-mysql"]
 sqler-ui = { workspace = true, features = ["gui"] }
 sqler-config.workspace = true
 sqler-driver-api.workspace = true
+sqler-tunnel.workspace = true
 sqler-driver-sqlite = { workspace = true, optional = true }
 sqler-driver-postgres = { workspace = true, optional = true }
 sqler-driver-mysql = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "time"] }

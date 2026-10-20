@@ -20,7 +20,7 @@ gui = ["dep:gpui-component", "dep:gpui", "dep:gpui_platform"]
 sqler-config.workspace = true
 sqler-driver-api.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 gpui-component = { workspace = true, optional = true }
 gpui = { workspace = true, optional = true }
 gpui_platform = { workspace = true, optional = true }
