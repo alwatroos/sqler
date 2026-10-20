@@ -42,6 +42,7 @@
   - [ADR-0017: Object browser sessions and DROP confirmation](adr/0017-object-browser-sessions-and-drop-confirmation.md)
   - [ADR-0018: RSA without the rsa crate](adr/0018-rsa-alternatives.md)
   - [ADR-0019: TLS server name through a tunnel](adr/0019-tls-server-name-through-tunnel.md)
+  - [ADR-0021: Query history and saved queries](adr/0021-query-history-and-saved-queries.md)
   - [ADR-0022: Catalog snapshot and name index](adr/0022-catalog-snapshot-name-index.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)

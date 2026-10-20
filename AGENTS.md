@@ -224,6 +224,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0017](docs/src/adr/0017-object-browser-sessions-and-drop-confirmation.md) | Object browser: browser session per connection, short-lived action sessions, DROP confirmation | accepted |
 | [0018](docs/src/adr/0018-rsa-alternatives.md) | RSA without the `rsa` crate: a `ring` SSH signer and a vendored `sqlx-mysql` patch on `aws-lc-rs` | accepted |
 | [0019](docs/src/adr/0019-tls-server-name-through-tunnel.md) | TLS server name through a tunnel: `TlsConfig::server_name`, local Unix-socket bridge | accepted |
+| [0021](docs/src/adr/0021-query-history-and-saved-queries.md) | Query history and saved queries: JSON Lines history, versioned TOML saved queries | accepted |
 | [0022](docs/src/adr/0022-catalog-snapshot-name-index.md) | Catalog snapshot, name index and on-demand column loading | accepted |
 
 ## 9. Roadmap status
