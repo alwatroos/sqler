@@ -5,6 +5,7 @@ The user guide is planned. SQLer has no released application yet (M0 bootstrap).
 Available now:
 
 - [Command-line interface](cli.md): run a statement on `SQLite` from a terminal
+- [Settings](settings.md): settings, keybindings and saved connections files
 
 Planned topics:
 
@@ -14,4 +15,4 @@ Planned topics:
 - Results grid: planned (M4)
 - AI: planned (M5)
 - Plugins: planned (M6)
-- Keybindings: planned (M1)
+- Keybindings: file format in [Settings](settings.md); the in-app editor is planned (M1)

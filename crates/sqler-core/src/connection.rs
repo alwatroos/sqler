@@ -42,6 +42,41 @@ impl fmt::Display for DriverId {
     }
 }
 
+/// The kind of environment a connection points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Environment {
+    /// A development database.
+    Dev,
+    /// A staging database.
+    Staging,
+    /// A production database.
+    Prod,
+}
+
+impl Environment {
+    /// The lowercase identifier: `dev`, `staging` or `prod`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dev => "dev",
+            Self::Staging => "staging",
+            Self::Prod => "prod",
+        }
+    }
+
+    /// Parses an identifier produced by [`Environment::as_str`] (exact lowercase match).
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "dev" => Some(Self::Dev),
+            "staging" => Some(Self::Staging),
+            "prod" => Some(Self::Prod),
+            _ => None,
+        }
+    }
+}
+
 /// How to reach one database.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -54,6 +89,10 @@ pub struct ConnectionConfig {
     ///
     /// Secrets in the target move to the OS keychain in M2.
     pub target: String,
+    /// Optional environment tag (dev, staging, prod).
+    pub environment: Option<Environment>,
+    /// Optional accent colour as lowercase `#rrggbb`; validated by `sqler-config`.
+    pub color: Option<String>,
 }
 
 impl ConnectionConfig {
@@ -64,7 +103,29 @@ impl ConnectionConfig {
             name: name.into(),
             driver,
             target: target.into(),
+            environment: None,
+            color: None,
         }
+    }
+
+    /// Sets the environment tag.
+    #[must_use]
+    pub fn with_environment(mut self, env: Environment) -> Self {
+        self.environment = Some(env);
+        self
+    }
+
+    /// Sets the accent colour.
+    #[must_use]
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = Some(color.into());
+        self
+    }
+
+    /// Whether the target embeds a secret (URL userinfo or a secret-looking parameter).
+    #[must_use]
+    pub fn target_has_secret(&self) -> bool {
+        redact_target(&self.target) != self.target
     }
 }
 
@@ -74,6 +135,8 @@ impl fmt::Debug for ConnectionConfig {
             .field("name", &self.name)
             .field("driver", &self.driver)
             .field("target", &redact_target(&self.target))
+            .field("environment", &self.environment)
+            .field("color", &self.color)
             .finish()
     }
 }
@@ -172,5 +235,53 @@ mod tests {
         assert!(!out.contains("abc") && out.contains("Password=***;Db=x"));
         let c = ConnectionConfig::new("s", d, ":memory:");
         assert!(format!("{c:?}").contains(":memory:"));
+    }
+
+    #[test]
+    fn environment_ids() {
+        for (e, id) in [
+            (Environment::Dev, "dev"),
+            (Environment::Staging, "staging"),
+            (Environment::Prod, "prod"),
+        ] {
+            assert_eq!(e.as_str(), id);
+            assert_eq!(Environment::from_id(id), Some(e));
+        }
+        for bad in ["", "Dev", "production", " dev"] {
+            assert_eq!(Environment::from_id(bad), None);
+        }
+    }
+
+    #[test]
+    fn builders_set_fields() {
+        let d = DriverId::new("sqlite").unwrap();
+        let c = ConnectionConfig::new("a", d, ":memory:");
+        assert_eq!((c.environment, c.color.as_deref()), (None, None));
+        let c = c.with_environment(Environment::Prod).with_color("#aabbcc");
+        assert_eq!(c.environment, Some(Environment::Prod));
+        assert_eq!(c.color.as_deref(), Some("#aabbcc"));
+    }
+
+    #[test]
+    fn target_secret_detection() {
+        let d = DriverId::new("postgres").unwrap();
+        let has = |t: &str| ConnectionConfig::new("x", d.clone(), t).target_has_secret();
+        assert!(has("postgres://bob:pw@db/x"));
+        assert!(has("postgres://db/x?password=1"));
+        assert!(has("Server=h;Password=abc"));
+        assert!(!has("postgres://db:5432/x?sslmode=require"));
+        assert!(!has("app.db"));
+        assert!(!has(":memory:"));
+    }
+
+    #[test]
+    fn debug_shows_new_fields() {
+        let d = DriverId::new("postgres").unwrap();
+        let c = ConnectionConfig::new("p", d, "postgres://bob:hunter2@db/x")
+            .with_environment(Environment::Staging)
+            .with_color("#112233");
+        let out = format!("{c:?}");
+        assert!(out.contains("Staging") && out.contains("#112233"));
+        assert!(!out.contains("hunter2") && !out.contains("bob"));
     }
 }

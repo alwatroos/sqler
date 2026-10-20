@@ -29,10 +29,15 @@ Source commands (all rows):
 | cargo-component | `cargo-component` | 0.21.1 | 2025-03-18 | No release for over a year; check the project status before relying on it. Source: API |
 | keyring | `keyring` | 4.2.0 | 2026-08-29 | Source: API |
 | cargo-dist | `cargo-dist` | 0.32.0 | 2026-05-22 | The tool was renamed `dist`, but the `dist` crate on crates.io is an unrelated 2016 crate (0.0.0), so the crate is still `cargo-dist`. GitHub `axodotdev/cargo-dist` latest release is v0.33.0 (2026-09-10), newer than crates.io; verify the install channel in M7. Source: API for `cargo-dist` and `dist`; `cargo info cargo-dist`; GitHub releases API |
-| thiserror | `thiserror` | 2.0.21 | 2026-09-23 | Derive for typed library errors; `rust-version` 1.77. Used by `sqler-core` and `sqler-driver-api`. Checked 2026-10-20. Source: API; `cargo info thiserror` |
+| thiserror | `thiserror` | 2.0.21 | 2026-09-23 | Derive for typed library errors; `rust-version` 1.77. Used by `sqler-core`, `sqler-driver-api` and `sqler-ui`. Checked 2026-10-20. Source: API; `cargo info thiserror` |
 | tokio | `tokio` | 1.54.0 | 2026-10-19 | Async runtime for the CLI (`rt`) and driver tests (`rt`); sqlx `runtime-tokio` pulls it in. Checked 2026-10-20. Source: API |
 | futures-core | `futures-core` | 0.3.34 | 2026-08-11 | `Stream` trait for the `SQLite` query stream; same version as sqlx uses. Checked 2026-10-20. Source: API |
 | anyhow | `anyhow` | 1.0.104 | 2026-07-18 | Error context in the `sqler-cli` binary only. Checked 2026-10-20. Source: API |
+| criterion | `criterion` | 0.8.2 | 2026-02-04 | Bench harness candidate; rejected for the grid bench (ADR-0006); no harness crate added. Checked 2026-10-20. Source: API (`curl -s -A "sqler-bench-survey (github.com/sqler)" https://crates.io/api/v1/crates/criterion \| jq -r '.crate.max_stable_version, .crate.updated_at'`) |
+| divan | `divan` | 0.1.21 | 2025-04-10 | Bench harness candidate; rejected for the grid bench (ADR-0006); no harness crate added. Checked 2026-10-20. Source: API (same command for `divan`) |
+| serde | `serde` | 1.0.229 | 2026-07-18 | `derive` feature; config file DTOs in `sqler-config`. `MIT OR Apache-2.0`. Checked 2026-10-20. Source: API; `cargo info serde` |
+| toml | `toml` | 1.1.8 | 2026-10-09 | crates.io reports `1.1.8+spec-1.1.0`; Cargo ignores the build metadata. Default features. `MIT OR Apache-2.0`. Used by `sqler-config`. Checked 2026-10-20. Source: API; `cargo info toml` |
+| directories | `directories` | 6.0.0 | 2025-01-12 | Evaluated, not used: it pulls `dirs-sys` 0.5.0 (`MIT OR Apache-2.0`), which pulls `option-ext` 0.2.0 (2023-01-11), licensed `MPL-2.0`, not on the `deny.toml` allow-list. See ADR-0005. Checked 2026-10-20. Source: API for `directories`, `dirs-sys`, `option-ext` |
 
 ## CI tools and actions
 
@@ -47,8 +52,8 @@ Source commands:
 
 | Component | Source | Pinned | Released | Notes |
 | --------- | ------ | ------ | -------- | ----- |
-| `actions/checkout` | GitHub release | `v7` (v7.0.1) | 2026-07-20 | Repository checkout |
-| `Swatinem/rust-cache` | GitHub release | `v2` (v2.9.2) | 2026-08-06 | Cargo cache |
+| `actions/checkout` | GitHub release | `v7` (v7.0.1) | 2026-07-20 | Repository checkout; re-checked 2026-10-20, still the latest major |
+| `Swatinem/rust-cache` | GitHub release | `v2` (v2.9.2) | 2026-08-06 | Cargo cache; re-checked 2026-10-20, still the latest major |
 | `taiki-e/install-action` | GitHub release | `v2` (v2.87.29) | 2026-10-16 | Prebuilt tool binaries |
 | `actions/configure-pages` | GitHub release | `v6` (v6.0.0) | 2026-03-25 | Pages setup |
 | `actions/upload-pages-artifact` | GitHub release | `v5` (v5.0.0) | 2026-04-10 | Book artifact |
@@ -85,6 +90,13 @@ Per-dependency rationale is added by the PR that introduces it.
   `futures` crate. One version in the tree.
 - `anyhow` 1.0.104: error chains with context in the binary only (AGENTS.md §6); libraries keep
   `thiserror`.
+- Std-only bench harness (ADR-0006): `crates/sqler-ui/benches/grid_viewport.rs` is a `harness = false` binary, so `criterion` and `divan` are not added. There is no new runtime dependency: `sqler-ui` reuses `sqler-driver-api`; `sqler-driver-sqlite` and `tokio` (`rt`) are dev-dependencies only.
+- `serde` 1.0.229 (`derive`) and `toml` 1.1.8: parse and write the `sqler-config` files
+  (`settings.toml`, `keybindings.toml`, `connections.toml`) into private DTOs (ADR-0005).
+  `sqler-core` does not depend on them. `toml` `rust-version` is 1.85, below the workspace's 1.99.
+- `directories` 6.0.0: not used. Its dependency `option-ext` is `MPL-2.0`, which `deny.toml` does not
+  allow, and `deny.toml` changes need an ADR. `sqler-config` resolves the three platform paths with
+  `std` only (ADR-0005).
 - `cargo-nextest`: faster, per-test-process runner used by CI and the local commands.
 - `cargo-deny`: enforces the Apache-2.0-compatible license allow-list in `deny.toml`, plus bans, sources and advisories.
 - `mdbook`: builds the documentation book in CI and for GitHub Pages.

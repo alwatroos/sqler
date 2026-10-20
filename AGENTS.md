@@ -92,13 +92,15 @@ sh .github/scripts/check-spdx.sh
 cargo tree --workspace -i sqler-ui
 cargo run -p sqler-cli -- run :memory: "select 1"
 cargo run -p xtask
+cargo bench -p sqler-ui --bench grid_viewport
 ```
 
 - CI (`.github/workflows/ci.yml`) runs this subset of the commands above: fmt, clippy, nextest on Linux/macOS/Windows; deny, docs (`cargo doc` and `mdbook build docs`), spdx on Linux.
 - SPDX check (`sh .github/scripts/check-spdx.sh`) prints the offending paths and exits 1 when a tracked `*.rs` file lacks the header on line 1; it prints nothing otherwise.
 - CI tools (pinned, see `docs/src/dependencies.md`): `cargo install --locked cargo-nextest@0.9.148 cargo-deny@0.20.2 mdbook@0.5.4`.
+- `.github/workflows/bench.yml` runs the grid viewport benchmark on Linux for pull requests (base vs PR in one job).
 - `.github/workflows/pages.yml` publishes the book (`target/book/`) to GitHub Pages on push to `main`.
-- Bench: no benchmark harness exists yet; measure the release CLI by hand as described in `docs/src/benchmarks.md` (Method).
+- Bench: `cargo bench -p sqler-ui --bench grid_viewport -- [--rows N --columns N --batch N --viewport N --samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-p95-ns B]`. Rule: p95 more than 25 % + 50 ns above the base branch, or p95 above 1 ms, fails `bench.yml`. Method and results: `docs/src/benchmarks.md`. The release CLI is still measured by hand as described there.
 
 ## 4. Coding standards
 
@@ -109,7 +111,7 @@ cargo run -p xtask
 - UI: every user action is a `Command` with an ID; no business logic in views; views render state, actions mutate state.
 - Tests: unit tests next to code; integration tests under `tests/`; DB tests use testcontainers and are tagged so they can be skipped locally.
 - Performance: any PR touching the grid, catalog or completion must include a benchmark result in its description.
-- Naming: crates `sqler-*`, features `driver-*`, `ai-*`; commands `category:verb-object` (`query:run-selection`).
+- Naming: crates `sqler-*`, features `driver-*`, `ai-*`; commands `category:action`, where action is one or more hyphenated lowercase segments (`app:quit`, `workspace:open-command-palette`).
 
 Workspace lints (root `Cargo.toml`, inherited with `[lints] workspace = true`):
 
@@ -191,6 +193,8 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0002](docs/src/adr/0002-plugin-abi-wasm-component-model.md) | Plugin ABI: WASM Component Model | accepted |
 | [0003](docs/src/adr/0003-ai-tool-contract.md) | AI tool contract | accepted |
 | [0004](docs/src/adr/0004-driver-api.md) | Driver API: boxed futures, event stream, session cancellation | accepted |
+| [0005](docs/src/adr/0005-config-files-and-keybindings.md) | Config files and keybindings: TOML files, chord grammar, std-only directory lookup | accepted |
+| [0006](docs/src/adr/0006-grid-data-model-and-bench-harness.md) | Grid data model and bench harness | accepted |
 
 ## 9. Roadmap status
 
@@ -202,7 +206,7 @@ Later milestones: M1 UI foundation, M2 connections and drivers, M3 editor and in
 M4 results and editing, M5 AI, M6 plugins, M7 release 1.0. Do not start a milestone before the
 previous one's Definition of Done is met.
 
-M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build and benchmark-regression jobs, which are deferred (see Gotchas).
+M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build job, which is deferred (see Gotchas); `bench.yml` covers benchmark regressions.
 
 ## 10. Gotchas
 
@@ -215,5 +219,6 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build a
 - The `cargo-dist` tool was renamed `dist`, but the `dist` crate on crates.io is unrelated; the crate is still `cargo-dist`.
 - `clippy::unwrap_used`/`clippy::expect_used` are denied everywhere except tests; there is no exemption for `main`, so add an `allow` attribute there if needed.
 - GitHub Pages must be enabled once by hand (Settings > Pages > Source: GitHub Actions) before `pages.yml` can deploy.
-- The plugin-build and benchmark-regression CI jobs are deferred until `plugins/` (M6) and benchmarks exist.
+- The plugin-build CI job is deferred until `plugins/` (M6).
+- `cargo bench` passes `--bench` to `harness = false` binaries; their argument parser must ignore it.
 - CI installs the toolchain with a bare `rustup toolchain install`, which reads `rust-toolchain.toml` (rustup 1.28 or newer), so the Rust version is pinned in one place only.
