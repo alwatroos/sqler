@@ -166,24 +166,24 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 
 ## 7. Docs
 
-- Documentation lives under `docs/` as an mdBook (`docs/src/`). The book skeleton is added by T2.
+- Documentation lives under `docs/` as an mdBook (`docs/src/`). The book is configured in `docs/book.toml`, with the table of contents in `docs/src/SUMMARY.md`. Build it with `mdbook build docs`; the output goes to `target/book/` (the Pages job deploys that directory). mdBook 0.5.4 (latest stable on crates.io, checked 2026-10-20). A new page needs a SUMMARY line.
 - `docs/src/dependencies.md` is the dated dependency version survey and the version policy. Update it (or an ADR) with every dependency add or bump.
 - `CHANGELOG.md` follows Keep a Changelog. Every user-visible change adds an entry under `## [Unreleased]`.
-- Iteration reports go to `docs/reports/iteration-NNN.md`; benchmarks go to `docs/benchmarks.md`.
+- Iteration reports go to `docs/reports/iteration-NNN.md`; benchmarks go to `docs/src/benchmarks.md`.
 - A feature without docs is not done.
 
 ## 8. ADR process
 
-- Format: MADR. Files: `docs/src/adr/NNNN-title.md`.
+- Format: MADR. Files: `docs/src/adr/NNNN-title.md`. The full process is in [ADR-0000](docs/src/adr/0000-adr-process.md).
 - ADRs are never deleted. A changed decision is recorded by a new ADR that supersedes the old one.
 - Write the ADR before introducing a new dependency, crate, public API or cross-cutting change.
 
 | ADR | Title | Status |
 | --- | ----- | ------ |
-| 0000 | ADR process | planned (T2) |
-| 0001 | UI framework spike plan | planned (T2) |
-| 0002 | Plugin ABI: WASM Component Model | planned (T2) |
-| 0003 | AI tool contract | planned (T2) |
+| [0000](docs/src/adr/0000-adr-process.md) | ADR process | accepted |
+| [0001](docs/src/adr/0001-ui-framework-spike-plan.md) | UI framework spike plan | proposed |
+| [0002](docs/src/adr/0002-plugin-abi-wasm-component-model.md) | Plugin ABI: WASM Component Model | accepted |
+| [0003](docs/src/adr/0003-ai-tool-contract.md) | AI tool contract | accepted |
 
 ## 9. Roadmap status
 

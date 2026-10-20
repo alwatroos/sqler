@@ -1,0 +1,10 @@
+[book]
+title = "SQLer"
+authors = ["The SQLer Authors"]
+description = "A lightweight, native, open-source SQL IDE written in Rust."
+language = "en"
+src = "src"
+
+[build]
+build-dir = "../target/book"
+create-missing = false

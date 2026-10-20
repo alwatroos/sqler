@@ -6,4 +6,4 @@ Status: stub (M0)
 
 Layer: tooling (outside the layering)
 
-See [AGENTS.md](../../AGENTS.md) for the project handbook.
+See [AGENTS.md](../AGENTS.md) for the project handbook.
