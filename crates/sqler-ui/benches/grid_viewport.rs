@@ -11,14 +11,15 @@
 //!
 //! `p50_ns` and `p95_ns` time the viewport fetch plus the construction of a `RowRef` for each
 //! visible row; they read no cell and no per-row memory. `cells_p50_ns` and `cells_p95_ns` also
-//! read every cell of those rows, so they cover cell decoding and the arenas.
+//! read every cell of those rows: the value of inline cells, and the length plus the first and
+//! last byte of text, JSON and binary cells, so the walk touches the arenas.
 
 use std::hint::black_box;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use sqler_ui::grid::{
-    GridLimits, GridModel, IngestState, SyntheticSource, grid_channel_with, spawn_ingest,
+    CellRef, GridLimits, GridModel, IngestState, SyntheticSource, grid_channel_with, spawn_ingest,
 };
 
 struct Args {
@@ -102,6 +103,25 @@ fn xorshift(state: &mut u64) -> u64 {
     x ^= x << 17;
     *state = x;
     x
+}
+
+/// Reads the payload of a cell so the walk reaches the arenas: the length plus the first and last
+/// byte of text, JSON and binary cells, the value itself for the inline kinds.
+fn touch(cell: CellRef<'_>) -> u64 {
+    let ends = |b: &[u8]| {
+        let first = b.first().copied().map_or(0, u64::from);
+        let last = b.last().copied().map_or(0, u64::from);
+        (b.len() as u64).wrapping_add(first).wrapping_add(last)
+    };
+    match cell {
+        CellRef::Null => 0,
+        CellRef::Bool(v) => u64::from(v),
+        CellRef::Int(v) => v.cast_unsigned(),
+        CellRef::Float(v) => v.to_bits(),
+        CellRef::Text(t) | CellRef::Json(t) => ends(t.as_bytes()),
+        CellRef::Bytes(b) => ends(b),
+        _ => 1,
+    }
 }
 
 /// Nearest-rank percentile of a sorted slice.
@@ -229,7 +249,7 @@ fn run() -> Result<ExitCode, (u8, String)> {
             let view = model.viewport(first, a.viewport);
             for row in view.iter() {
                 for cell in row.iter() {
-                    black_box(cell);
+                    black_box(touch(cell));
                 }
             }
             let ns = start.elapsed().as_nanos();

@@ -125,9 +125,9 @@ async fn run(
         // Stop at the row that reaches the byte cap; the rest waits for the next page, so a batch
         // of huge rows overshoots the cap by at most one row.
         let mut take = remaining.min(held.len());
-        let room = sink.byte_room();
         let width = width.unwrap_or_default();
-        if room != usize::MAX {
+        // `None` for an unbounded sink: no cost pass at all.
+        if let Some(room) = sink.byte_room() {
             let mut cost = 0usize;
             for (n, row) in held.iter().take(take).enumerate() {
                 cost = cost.saturating_add(packed_cost(row, width));

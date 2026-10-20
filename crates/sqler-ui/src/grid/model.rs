@@ -55,8 +55,8 @@ impl IngestState {
 /// How much one page of a result may hold.
 ///
 /// Ingestion stops when a page is full (rows or bytes, whichever comes first) and continues
-/// when [`GridModel::fetch_more`] grants the next page. The byte cap may be overshot by one
-/// driver batch.
+/// when [`GridModel::fetch_more`] grants the next page. The byte cap is checked row by row, so
+/// it is overshot by at most one row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridLimits {
     /// Rows per page.
@@ -208,10 +208,12 @@ impl GridSink {
             .then(|| Ok(gate.granted_rows - gate.sent_rows))
     }
 
-    /// The bytes still free under the page's byte cap (0 when it is reached).
-    pub(super) fn byte_room(&self) -> usize {
+    /// The bytes still free under the page's byte cap (0 when it is reached), or `None` when the
+    /// sink has no byte cap ([`GridLimits::UNBOUNDED`]), which holds for the whole life of the sink.
+    pub(super) fn byte_room(&self) -> Option<usize> {
         let gate = lock(&self.gate);
-        gate.granted_bytes.saturating_sub(gate.sent_bytes)
+        (gate.granted_bytes != usize::MAX)
+            .then(|| gate.granted_bytes.saturating_sub(gate.sent_bytes))
     }
 
     /// Waits for credit: resolves to the rows that may be sent, or to [`DriverError::Cancelled`]
@@ -699,6 +701,24 @@ mod tests {
         assert_send::<GridModel>();
         assert_send::<GridSink>();
         assert_send::<GridCancel>();
+    }
+
+    #[test]
+    fn byte_room_is_none_for_unbounded_sinks_even_after_records() {
+        let (_model, sink) = grid_channel_with(GridLimits::UNBOUNDED);
+        assert_eq!(sink.byte_room(), None);
+        sink.record(10, 4_096);
+        assert_eq!(sink.byte_room(), None);
+        let (model, sink) = grid_channel_with(GridLimits {
+            page_rows: 100,
+            page_bytes: 1_000,
+        });
+        assert_eq!(sink.byte_room(), Some(1_000));
+        sink.record(1, 400);
+        assert_eq!(sink.byte_room(), Some(600));
+        sink.record(1, 900);
+        assert_eq!(sink.byte_room(), Some(0));
+        drop(model);
     }
 
     #[test]

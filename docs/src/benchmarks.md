@@ -51,7 +51,7 @@ Caveat for idle RSS: an agent cannot double-click, so the three connections are 
 
 ## Results grid model
 
-Viewport fetch from `sqler_ui::grid::GridModel` holding 1M synthetic rows (6 columns: integer, text, float, boolean, integer, text). Each sample (`p50_ns`, `p95_ns`) is one `viewport()` call plus the construction of a `RowRef` for each of the 50 visible rows; it reads no cell and no per-row memory. A second measurement reads every cell of those rows (`cells_p50_ns`, `cells_p95_ns`) and covers cell decoding and the arenas; it is gated once the baseline has the key (see the regression rule).
+Viewport fetch from `sqler_ui::grid::GridModel` holding 1M synthetic rows (6 columns: integer, text, float, boolean, integer, text). Each sample (`p50_ns`, `p95_ns`) is one `viewport()` call plus the construction of a `RowRef` for each of the 50 visible rows; it reads no cell and no per-row memory. A second measurement reads every cell of those rows (`cells_p50_ns`, `cells_p95_ns`) and reads the payload of each cell: the value of an inline cell, and the length plus the first and last byte of a text, JSON or binary cell, so it touches the arenas (an earlier version of the bench only resolved the span of each cell, which does not read the arena); it is gated once the baseline has the key (see the regression rule).
 
 | Date | Commit | OS | Rows | Viewport | p50 (ns) | p95 (ns) | Ingest (ms) | Heap estimate (MB) | RSS delta (MB) | Notes |
 | ---- | ------ | -- | ---- | -------- | -------- | -------- | ----------- | ------------------ | -------------- | ----- |
@@ -59,19 +59,19 @@ Viewport fetch from `sqler_ui::grid::GridModel` holding 1M synthetic rows (6 col
 
 Re-run at `e98f4c8` (macOS 27.0.1 arm64, Apple M4 Pro): unchanged within the gate (p50 125 ns, p95 167 ns, ingest 153 ms, heap estimate 246,433,024 bytes = 235.0 MiB; the p95 limit of the gate is 25 % plus 100 ns).
 
-Bounded, compact model (T1, `3e5ead6` plus this PR, macOS 27.0.1 arm64, Apple M4 Pro, `--reps 3`, minimum over the repetitions). The bench ingests with `GridLimits::UNBOUNDED`, so it still measures a whole 1,000,000-row result. The base column is `3e5ead6`. All PR figures come from one saved run (the fourth of six on the merged tree; the host was loaded by a virtual machine, load average 12 to 17, so the runs scatter: p95 125 to 250 ns, cells p95 1,000 to 1,542 ns, ingest 191 to 237 ms), compared against the base with `--compare` (exit code 0 in all six).
+Bounded, compact model (T1, `3e5ead6` plus this PR, macOS 27.0.1 arm64, Apple M4 Pro, `--reps 3`, minimum over the repetitions). The bench ingests with `GridLimits::UNBOUNDED`, so it still measures a whole 1,000,000-row result. The base column is `3e5ead6`. All PR figures come from one saved run per width, taken after the cell walk was changed to read the payloads (the host was loaded by other processes, load average above 30, so the runs scatter: cells p95 1,042 to 1,542 ns, ingest 172 to 475 ms in repeated runs), and `--compare` of a second run against the 6-column saved run exits 0. The base figures are from the earlier measurement at `3e5ead6`.
 
 | Columns | | p50 (ns) | p95 (ns) | Cells p50 / p95 (ns) | Ingest (ms) | Heap estimate (bytes) | Heap estimate (MB) |
 | ------- | - | -------- | -------- | -------------------- | ----------- | --------------------- | ------------------ |
 | 6 | base | 125 | 167 | n/a | 135 | 246,433,024 | 235.0 |
-| 6 | PR | 83 | 125 | 750 / 1,000 | 191 | 113,900,996 | 108.6 |
+| 6 | PR | 83 | 125 | 833 / 1,209 | 202 | 113,900,996 | 108.6 |
 | 8 | base | n/a | n/a | n/a | 156 | 310,433,136 | 296.1 |
-| 8 | PR | 83 | 125 | 958 / 1,625 | 208 | 145,901,108 | 139.1 |
+| 8 | PR | 84 | 125 | 1,000 / 1,667 | 196 | 145,901,108 | 139.1 |
 
 - Gate (AC4, 6 columns, the width the 246,433,024 baseline was measured at): p95 125 ns against the limit of 308 ns (25 % plus 100 ns over the base 167 ns); under the 1 ms budget; heap estimate 113,900,996 bytes against the target of 123,216,512 (half of 246,433,024): 46.2 % of the base, about 114 B per row. The 8-column run is for information (47.0 % of the base heap).
 - Layout: 16 bytes per cell in one row-major vector per ingested batch, text, JSON and binary data in per-batch arenas, rare variants in a side table (ADR-0027).
-- `cells_*` reads every cell of the 50 visible rows at random positions of a 114 MB model, so it is bound by cold memory reads (about 100 cache lines per sample), not by the cell decoding. The walk of earlier versions never read the cells, so it has no counterpart in the base file. The gated walk of this version does less work than the base walk: the base read each row's `Vec` header (a pointer and a length from the chunk's row array, one memory access per row), the new one builds a `RowRef` from the shared chunk header and touches no per-row memory. The gated key therefore protects the viewport fetch, the chunk lookup and the row iteration; the cell reads are protected by `cells_p95_ns`. For scale, the base layout with the same cell-reading walk (a scratch copy of the base bench that matches on each `Value`, not committed) gave p50 833 ns and p95 1,000 ns at 6 columns, and p50 875 ns and p95 1,125 ns at 8 columns: the compact layout reads the cells as fast or faster.
-- `ingest_ms` rose from 135 to 191 ms in the saved run (171 ms in a quiet run; not gated): the chunks are now built on the ingestion thread.
+- `cells_*` reads every cell of the 50 visible rows (value of inline cells; length, first and last byte of text, JSON and binary cells) at random positions of a 114 MB model, so it is bound by cold memory reads (about 100 cache lines per sample), not by the cell decoding. The walk of earlier versions never read the cells, so it has no counterpart in the base file. The gated walk of this version does less work than the base walk: the base read each row's `Vec` header (a pointer and a length from the chunk's row array, one memory access per row), the new one builds a `RowRef` from the shared chunk header and touches no per-row memory. The gated key therefore protects the viewport fetch, the chunk lookup and the row iteration; the cell reads are protected by `cells_p95_ns`. For scale, a scratch copy of the base bench that matched on each `Value` without reading text or bytes gave p50 833 ns and p95 1,000 ns at 6 columns, and p50 875 ns and p95 1,125 ns at 8 columns. That walk read less than the current one, so the two are not like for like; the current `cells_*` figures are the reference from now on.
+- `ingest_ms` rose from 135 to 202 ms in the saved run (about 170 to 215 ms in repeated runs on the loaded host; not gated): the chunks are now built on the ingestion thread.
 
 ### Method
 
