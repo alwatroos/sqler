@@ -1,0 +1,11 @@
+---
+source: crates/sqler-sql/tests/ddl_snapshots.rs
+expression: out
+---
+-- create
+CREATE INDEX `ix` ON `order"s` (`id`);
+
+-- drop
+DROP INDEX `index_name` ON `My Schema`.`order"s`;
+
+-- copy name: `My Schema`.`index_name`

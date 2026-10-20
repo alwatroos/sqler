@@ -1,0 +1,11 @@
+---
+source: crates/sqler-sql/tests/ddl_snapshots.rs
+expression: out
+---
+-- create
+CREATE EXTENSION "Some Name";
+
+-- drop
+DROP EXTENSION "Some Name";
+
+-- copy name: "Some Name"

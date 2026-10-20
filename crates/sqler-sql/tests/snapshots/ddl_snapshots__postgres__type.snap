@@ -1,0 +1,11 @@
+---
+source: crates/sqler-sql/tests/ddl_snapshots.rs
+expression: out
+---
+-- create
+CREATE TYPE mood AS ENUM ('sad', 'ok');
+
+-- drop
+DROP TYPE "My Schema"."Some Name";
+
+-- copy name: "My Schema"."Some Name"

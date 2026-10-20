@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- DDL and script generation for `PostgreSQL`, `MySQL`/`MariaDB` and `SQLite` (`sqler-sql`). ADR-0015 and the user guide page "DDL and scripts".
 - `sqler-driver-postgres`: `PostgreSQL` driver on sqlx (streaming, server-side cancel, TLS modes with CA and client certificate through rustls, typed values, introspection of all 13 object kinds); the `driver-postgres` feature (default) in `sqler-cli` and `sqler-app`.
 - `sqler-driver-mysql`: `MySQL` and `MariaDB` driver on sqlx (streaming, cancel with `KILL QUERY` on a side connection, TLS modes through rustls, typed values, introspection of schemas, tables, views, functions, procedures, triggers, indexes and roles); the `driver-mysql` feature (default) in `sqler-cli` and `sqler-app`. `sqlx` is built without `mysql-rsa`, so the `rsa` crate (RUSTSEC-2023-0071) is not in the tree and the RSA password exchange needs TLS.
 - CI `db` job: `MySQL` 8.4 and `MariaDB` 11.8 in Docker with TLS (`start-mysql.sh`), their DB tests and a CLI smoke test.

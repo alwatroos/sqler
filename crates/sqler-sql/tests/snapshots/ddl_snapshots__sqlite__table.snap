@@ -1,0 +1,29 @@
+---
+source: crates/sqler-sql/tests/ddl_snapshots.rs
+expression: out
+---
+-- create
+CREATE TABLE "My Schema"."order""s" (
+    "id" integer NOT NULL,
+    "select" TEXT DEFAULT 'x',
+    "Mixed Case" TIMESTAMP,
+    "back`tick",
+    CONSTRAINT "pk_orders" PRIMARY KEY ("id"),
+    CONSTRAINT "fk_user" FOREIGN KEY ("user id") REFERENCES "users" ("id") ON DELETE CASCADE
+);
+
+CREATE INDEX "ix" ON "order""s" ("id");
+
+-- select-star
+SELECT *
+FROM "My Schema"."order""s"
+LIMIT 1000;
+
+-- insert-template
+INSERT INTO "My Schema"."order""s" ("id", "select", "Mixed Case", "back`tick")
+VALUES (?, ?, ?, ?);
+
+-- drop
+DROP TABLE "My Schema"."order""s";
+
+-- copy name: "My Schema"."order""s"
