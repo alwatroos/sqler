@@ -8,6 +8,18 @@ all-features = true
 
 [advisories]
 yanked = "deny"
+# T5: the GPUI tree (ADR-0001, ADR-0007) pulls in these unmaintained crates. None has a
+# fixed version to move to, and none is a vulnerability. Revisit on every GPUI bump.
+ignore = [
+    { id = "RUSTSEC-2024-0384", reason = "`instant` is unmaintained; transitive via the GPUI tree" },
+    { id = "RUSTSEC-2024-0436", reason = "`paste` is unmaintained; transitive via the GPUI tree" },
+    { id = "RUSTSEC-2025-0134", reason = "`rustls-pemfile` is unmaintained; transitive via the GPUI HTTP client" },
+    { id = "RUSTSEC-2026-0206", reason = "`rustybuzz` is unmaintained; GPUI text shaping" },
+    { id = "RUSTSEC-2026-0192", reason = "`ttf-parser` is unmaintained; GPUI font handling" },
+    { id = "RUSTSEC-2026-0371", reason = "`zbus_names` is unmaintained; GPUI Linux desktop integration" },
+    { id = "RUSTSEC-2026-0370", reason = "`zvariant` is unmaintained; GPUI Linux desktop integration" },
+    { id = "RUSTSEC-2026-0372", reason = "`zvariant_derive` is unmaintained; GPUI Linux desktop integration" },
+]
 
 [licenses]
 allow = [
@@ -27,6 +39,14 @@ allow = [
 ]
 confidence-threshold = 0.93
 unused-allowed-license = "allow"
+
+# T5: weak-copyleft (MPL-2.0, file-level) crates of the GPUI tree. Allowed per crate only,
+# never globally. They are used unmodified as dependencies.
+exceptions = [
+    { crate = "cbindgen", allow = ["MPL-2.0"] },
+    { crate = "dwrote", allow = ["MPL-2.0"] },
+    { crate = "option-ext", allow = ["MPL-2.0"] },
+]
 
 [licenses.private]
 # Workspace crates are `publish = false`.

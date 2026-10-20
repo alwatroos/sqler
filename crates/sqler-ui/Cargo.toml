@@ -12,13 +12,21 @@ readme = "README.md"
 [lints]
 workspace = true
 
+[features]
+# GPUI views. Off by default so `cargo test -p sqler-ui` never builds GPUI; `sqler-app` turns it on.
+gui = ["dep:gpui-component", "dep:gpui", "dep:gpui_platform"]
+
 [dependencies]
 sqler-driver-api.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+gpui-component = { workspace = true, optional = true }
+gpui = { workspace = true, optional = true }
+gpui_platform = { workspace = true, optional = true }
 
 [dev-dependencies]
 sqler-driver-sqlite.workspace = true
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
 [[bench]]
 name = "grid_viewport"

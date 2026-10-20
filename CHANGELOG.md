@@ -36,3 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sqler-core`: optional `environment` (dev, staging, prod) and `color` fields on `ConnectionConfig`.
 - ADR-0005 (config files and keybindings) and the Settings user guide page.
 - `serde` 1.0.229 and `toml` 1.1.8 dependencies; `directories` evaluated and rejected (MPL-2.0 transitive license), see `docs/src/dependencies.md`.
+- `sqler-app`: the desktop binary `sqler` (layer L7). It opens a GPUI window with a connection sidebar and a tab strip; each tab is bound to one connection and several tabs per connection are allowed. The tab header shows name, colour and environment, and `prod` tabs use the danger colour.
+- `sqler-ui` workspace state (`sidebar`, `tabs`, `workspace`) with unit tests that need no window, a `SessionBridge` that opens driver sessions on tokio without blocking the UI thread, and the `gui` feature for the GPUI views.
+- `sqler --exit-after-first-frame` to measure cold start.
+- ADR-0007 (desktop binary and UI-thread/tokio bridge), the Workspace user guide page and the UI architecture page.
+- `gpui-component` 0.8.0, `gpui-pre` =0.3.9 and `gpui-pre-platform` =0.3.9 as root workspace dependencies (feature `gui`); `deny.toml` gains three per-crate `MPL-2.0` exceptions and eight advisory ignores for the GPUI tree. CI installs the GPUI build packages on Linux and guards the Metal toolchain on macOS.

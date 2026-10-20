@@ -17,16 +17,16 @@ Source commands (all rows):
 | --------- | --------------- | ------------- | ---------------- | ----- |
 | GPUI distribution | `gpui` | 0.2.2 | 2025-10-22 | Not chosen (ADR-0001). Published by Zed's `mikayla-maki`; repository `zed-industries/zed`. Cannot be unified with `gpui-component` 0.8.0. Source: API; `cargo search gpui` |
 | GPUI community fork | `gpui-ce` | 0.2.2 | 2026-08-28 | Not chosen (ADR-0001). Repository `gpui-ce/gpui-ce`. Source: API |
-| GPUI (chosen) | `gpui-pre` | =0.3.9 | 2026-10-12 | Chosen (ADR-0001). Snapshot of Zed's GPUI (`zed@93d7456`); required as `=0.3.9` by `gpui-component` 0.8.0. Verified 2026-10-20. Source: API; `gpui-component` 0.8.0 dependency list |
-| GPUI platform (chosen) | `gpui-pre-platform` | =0.3.9 | 2026-10-12 | Chosen (ADR-0001). Zed's `gpui_platform`; creates the application on each OS, not re-exported by `gpui-component`. Source: API |
-| gpui-component | `gpui-component` | 0.8.0 | 2026-10-19 | Chosen (ADR-0001). Repository `longbridge/gpui-kit`, Apache-2.0. Feature `tree-sitter-sql` for SQL highlighting. Verified 2026-10-20. Source: API; `cargo info gpui-component@0.8.0` |
+| GPUI (chosen) | `gpui-pre` | =0.3.9 | 2026-10-12 | Chosen (ADR-0001). Snapshot of Zed's GPUI (`zed@93d7456`); required as `=0.3.9` by `gpui-component` 0.8.0. Verified 2026-10-20. Root workspace dependency (optional, through the `sqler-ui` feature `gui`, T5). Source: API; `gpui-component` 0.8.0 dependency list |
+| GPUI platform (chosen) | `gpui-pre-platform` | =0.3.9 | 2026-10-12 | Chosen (ADR-0001). Zed's `gpui_platform`; creates the application on each OS, not re-exported by `gpui-component`. Root workspace dependency (optional, through `sqler-ui/gui`, T5). Verified 2026-10-20. Source: API |
+| gpui-component | `gpui-component` | 0.8.0 | 2026-10-19 | Chosen (ADR-0001). Repository `longbridge/gpui-kit`, Apache-2.0. Feature `tree-sitter-sql` for SQL highlighting. Root workspace dependency (optional, through `sqler-ui/gui`, T5). Verified 2026-10-20, no newer stable version than 0.8.0. Source: API; `cargo info gpui-component@0.8.0` |
 | iced | `iced` | 0.14.0 | 2025-12-07 | Not chosen: GPUI passed the spike, iced was not built (ADR-0001). Source: API |
 | sqlx | `sqlx` | 0.9.0 | 2026-05-21 | PostgreSQL, MySQL, `SQLite`. Used by `sqler-driver-sqlite` with `default-features = false` and `sqlite-bundled`, `runtime-tokio`. Checked 2026-10-20. Source: API; `cargo info sqlx` |
 | tiberius | `tiberius` | 0.13.0 | 2026-09-25 | TDS (MSSQL) driver. Source: API |
 | duckdb | `duckdb` | 1.10506.1 | 2026-10-16 | `duckdb-rs`; version number follows the bundled DuckDB release. Source: API |
 | sqlparser | `sqlparser` | 0.63.0 | 2026-09-13 | Apache DataFusion `sqlparser-rs`. Source: API |
-| tree-sitter | `tree-sitter` | 0.27.1 | 2026-10-08 | Rust bindings. The spike resolved 0.26.13 because `gpui-component` 0.8.0 requires `^0.26.13`. Source: API; spike `Cargo.lock` |
-| tree-sitter-sequel | `tree-sitter-sequel` | 0.3.11 | 2025-10-01 | SQL grammar pulled in by the `gpui-component` feature `tree-sitter-sql`. Spike only, not in the root workspace. Source: API; spike `Cargo.lock` |
+| tree-sitter | `tree-sitter` | 0.27.1 | 2026-10-08 | Rust bindings. `gpui-component` 0.8.0 requires `^0.26.13`, so the root `Cargo.lock` resolves 0.26.13 (through `sqler-ui/gui`). Source: API; `Cargo.lock` |
+| tree-sitter-sequel | `tree-sitter-sequel` | 0.3.11 | 2025-10-01 | SQL grammar pulled in by the `gpui-component` feature `tree-sitter-sql`; now in the root `Cargo.lock` (0.3.11) through `sqler-ui/gui`. Verified 2026-10-20. Source: API; `Cargo.lock` |
 | memory-stats | `memory-stats` | 1.2.0 | 2024-06-26 | Reads process RSS for the `SPIKE rss_mb` value. Spike only, not in the root workspace. Verified 2026-10-20. Source: API |
 | rmcp | `rmcp` | 3.6.0 | 2026-10-20 | Official MCP Rust SDK. Source: API |
 | agent-client-protocol | `agent-client-protocol` | 3.4.0 | 2026-10-16 | Repository `agentclientprotocol/rust-sdk`. Source: API |
@@ -35,7 +35,7 @@ Source commands (all rows):
 | keyring | `keyring` | 4.2.0 | 2026-08-29 | Source: API |
 | cargo-dist | `cargo-dist` | 0.32.0 | 2026-05-22 | The tool was renamed `dist`, but the `dist` crate on crates.io is an unrelated 2016 crate (0.0.0), so the crate is still `cargo-dist`. GitHub `axodotdev/cargo-dist` latest release is v0.33.0 (2026-09-10), newer than crates.io; verify the install channel in M7. Source: API for `cargo-dist` and `dist`; `cargo info cargo-dist`; GitHub releases API |
 | thiserror | `thiserror` | 2.0.21 | 2026-09-23 | Derive for typed library errors; `rust-version` 1.77. Used by `sqler-core`, `sqler-driver-api` and `sqler-ui`. Checked 2026-10-20. Source: API; `cargo info thiserror` |
-| tokio | `tokio` | 1.54.0 | 2026-10-19 | Async runtime for the CLI (`rt`) and driver tests (`rt`); sqlx `runtime-tokio` pulls it in. Checked 2026-10-20. Source: API |
+| tokio | `tokio` | 1.54.0 | 2026-10-19 | Async runtime for the CLI (`rt`), driver tests (`rt`), `sqler-ui` (`rt`, `sync`; dev: `rt-multi-thread`) and `sqler-app` (`rt-multi-thread`); sqlx `runtime-tokio` pulls it in. Checked 2026-10-20. Source: API |
 | futures-core | `futures-core` | 0.3.34 | 2026-08-11 | `Stream` trait for the `SQLite` query stream; same version as sqlx uses. Checked 2026-10-20. Source: API |
 | anyhow | `anyhow` | 1.0.104 | 2026-07-18 | Error context in the `sqler-cli` binary only. Checked 2026-10-20. Source: API |
 | criterion | `criterion` | 0.8.2 | 2026-02-04 | Bench harness candidate; rejected for the grid bench (ADR-0006); no harness crate added. Checked 2026-10-20. Source: API (`curl -s -A "sqler-bench-survey (github.com/sqler)" https://crates.io/api/v1/crates/criterion \| jq -r '.crate.max_stable_version, .crate.updated_at'`) |
@@ -92,7 +92,8 @@ Per-dependency rationale is added by the PR that introduces it.
   used because it also enables `deserialize`, `load-extension` and `unlock-notify`. The first build is
   slower because it compiles C.
 - `tokio` 1.54.0: required by sqlx `runtime-tokio`. Declared with `default-features = false`; the
-  CLI and the driver tests add only `rt`. The CLI runs a current-thread runtime.
+  CLI and the driver tests add only `rt`. The CLI runs a current-thread runtime. `sqler-ui` adds `rt` and
+  `sync` (`oneshot`, ADR-0007); `sqler-app` adds `rt-multi-thread` for the two-worker database runtime.
 - `futures-core` 0.3.34: only the `Stream` trait, to drive sqlx row streams without the full
   `futures` crate. One version in the tree.
 - `anyhow` 1.0.104: error chains with context in the binary only (AGENTS.md §6); libraries keep
@@ -108,9 +109,8 @@ Per-dependency rationale is added by the PR that introduces it.
   (plus `gpui-pre-platform` for the application and window creation) is the one GPUI in the tree;
   `gpui` 0.2.2 and `gpui-ce` 0.2.2 would add a second one. Pin `gpui-component` and `gpui-pre` together
   and bump them as one unit. The check is `cargo tree -i gpui-pre` (and `gpui`/`gpui-ce` must not match).
-- Spike-only dependencies (`memory-stats`, `tree-sitter-sequel` through `gpui-component`): live in
-  `spikes/ui-framework/`, outside the root workspace, so `cargo deny` and the root `Cargo.lock` do not see
-  them. They are re-evaluated, with `cargo deny`, when `sqler-ui` adds the real dependencies.
+- GPUI in the root workspace (T5, ADR-0007): `gpui-component` 0.8.0 (with `tree-sitter-sql`), `gpui` (`gpui-pre` =0.3.9) and `gpui_platform` (`gpui-pre-platform` =0.3.9) are optional dependencies of `sqler-ui` behind the feature `gui`, enabled only by `sqler-app`. `cargo deny` now sees the tree; the three MPL-2.0 exceptions and eight advisory ignores it needed are listed in ADR-0007. Versions re-checked live on 2026-10-20: no newer stable `gpui-component`, `gpui-pre` or `gpui-pre-platform` than the pinned ones, so there is no pending bump.
+- Spike-only dependency `memory-stats`: lives in `spikes/ui-framework/`, outside the root workspace.
 - `actions/upload-artifact` and `hyperfine`: used only by the spike workflow `spike.yml`.
 - `cargo-nextest`: faster, per-test-process runner used by CI and the local commands.
 - `cargo-deny`: enforces the Apache-2.0-compatible license allow-list in `deny.toml`, plus bans, sources and advisories.

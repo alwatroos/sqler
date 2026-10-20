@@ -53,6 +53,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-acp` | L5 | ACP client: spawn and host Claude Code, Codex CLI, Gemini CLI and others inside SQLer |
 | `sqler-ui` | L6 | GPUI app: workspace, tabs, panels, grid, editor, palette, themes |
 | `sqler-cli` | L6 | Headless CLI (run query, export, start MCP server); proves the core is UI-independent |
+| `sqler-app` | L7 | Desktop binary `sqler`: tokio runtime, driver registry, opens the `sqler-ui` window (ADR-0007) |
 | `xtask` | tooling | Repository automation (generate WIT bindings, release, bench) |
 
 Layering: a crate may depend only on crates in lower layers.
@@ -65,12 +66,13 @@ L3 ai-tools, plugin-host
 L4 mcp
 L5 acp
 L6 ui, cli
+L7 app
 ```
 
 Rules:
 
-- No workspace crate depends on `sqler-ui`; only a future desktop binary may. Check:
-  `cargo tree --workspace -i sqler-ui` must show `sqler-ui` alone.
+- Only `sqler-app` depends on `sqler-ui`; driver crates are wired only by binaries (`sqler-app`, `sqler-cli`). Check:
+  `cargo tree --workspace -i sqler-ui` must show `sqler-ui` and `sqler-app` only (CI "Dependency rules" step).
 - `sqler-core` and `sqler-completion` have no async, no I/O, no UI: pure and exhaustively unit-tested.
 - Drivers communicate through `sqler-driver-api` only. The UI never imports a driver crate.
 - Every long-running operation is cancellable and reports progress through a channel; the UI thread never blocks.
@@ -91,11 +93,13 @@ mdbook build docs
 sh .github/scripts/check-spdx.sh
 cargo tree --workspace -i sqler-ui
 cargo run -p sqler-cli -- run :memory: "select 1"
+cargo run -p sqler-app
+cargo tree --workspace -i gpui-pre
 cargo run -p xtask
 cargo bench -p sqler-ui --bench grid_viewport
 ```
 
-- CI (`.github/workflows/ci.yml`) runs this subset of the commands above: fmt, clippy, nextest on Linux/macOS/Windows; deny, docs (`cargo doc` and `mdbook build docs`), spdx on Linux.
+- CI (`.github/workflows/ci.yml`) runs this subset of the commands above: fmt, clippy, nextest on Linux/macOS/Windows; deny, docs (`cargo doc` and `mdbook build docs`), spdx on Linux. Since T5 the Linux `check` and `docs` jobs install the GPUI build packages with apt, and the macOS `check` job guards the Metal toolchain; the `deny` job also runs the "Dependency rules" step.
 - SPDX check (`sh .github/scripts/check-spdx.sh`) prints the offending paths and exits 1 when a tracked `*.rs` file lacks the header on line 1; it prints nothing otherwise.
 - CI tools (pinned, see `docs/src/dependencies.md`): `cargo install --locked cargo-nextest@0.9.148 cargo-deny@0.20.2 mdbook@0.5.4`.
 - `.github/workflows/bench.yml` runs the grid viewport benchmark on Linux for pull requests (base vs PR in one job).
@@ -195,6 +199,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0004](docs/src/adr/0004-driver-api.md) | Driver API: boxed futures, event stream, session cancellation | accepted |
 | [0005](docs/src/adr/0005-config-files-and-keybindings.md) | Config files and keybindings: TOML files, chord grammar, std-only directory lookup | accepted |
 | [0006](docs/src/adr/0006-grid-data-model-and-bench-harness.md) | Grid data model and bench harness | accepted |
+| [0007](docs/src/adr/0007-desktop-binary-and-ui-tokio-bridge.md) | Desktop binary and UI-thread/tokio bridge | accepted |
 
 ## 9. Roadmap status
 
@@ -228,4 +233,8 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build j
 - macOS: the GPUI build needs the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`, about 840 MB; the `macos-latest` image already has it). Windows CI renders with WARP (software D3D). On shared CI VMs first-frame times vary up to about 3.6x between runs; cold start is stable.
 - macOS: a GPUI window may not present frames while the display is idle or the window is hidden, so smoke runs can stall (two manual runs ran 84 s and 120 s). Keep a watchdog and treat a one-off watchdog failure as environment, not as a GPUI failure.
 - `hyperfine` 2.0 JSON has the mean at `results[0].summary.time_wall_clock.mean`. On Windows run it with `-N` and a quoted path, or it fails.
-- Open follow-up for the first UI PR: the 2-minute interactive macOS check of the spike (trackpad scroll, typing SQL, resizing the split) has not been done. Do it and record the result.
+- Open follow-up from the first UI PR (T5): the 2-minute interactive macOS check has not been done. It covers the spike items (trackpad scroll, typing SQL, resizing the split) and the workspace shell (click and double-click a connection, two tabs on one connection, switch, close, the prod look). An agent cannot do it; the maintainer does it and records the result.
+- The apt packages in `ci.yml` are the build-only set (`pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev`); no runtime libraries are installed because no test opens a window.
+- `cargo test -p sqler-ui` is GPUI-free (the views need the `gui` feature, which only `sqler-app` enables). `cargo clippy --workspace --all-features` and `--workspace` builds do compile GPUI.
+- Never call `tokio::spawn` on the GPUI thread: there is no runtime context. Use `SessionBridge` (`Handle::spawn` plus a `oneshot` awaited with `cx.spawn`), see ADR-0007.
+- `sqler --exit-after-first-frame` exits with code 0 after the first frame (cold-start measurement). On quit, open sessions are dropped, not closed; M2 must close them.

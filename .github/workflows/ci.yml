@@ -29,6 +29,17 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - name: Linux system packages (GPUI build)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
+      # macOS images may ship Xcode without the separately downloaded Metal toolchain.
+      - name: Metal toolchain
+        if: runner.os == 'macOS'
+        run: xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
@@ -52,6 +63,14 @@ jobs:
           tool: cargo-deny@0.20.2
       - name: Licenses, bans, sources, advisories
         run: cargo deny check
+      - name: Dependency rules
+        run: |
+          # Only sqler-app may depend on sqler-ui.
+          test "$(cargo tree --workspace -i sqler-ui -e normal,build,dev --prefix none | awk '{print $1}' | sort -u | tr '\n' ' ')" = "sqler-app sqler-ui "
+          # Exactly one GPUI: the gpui-pre fork, no upstream gpui and no gpui-ce.
+          cargo tree --workspace -i gpui-pre --depth 0 >/dev/null
+          if cargo tree --workspace -i gpui 2>/dev/null; then echo "upstream gpui is in the tree"; exit 1; fi
+          if cargo tree --workspace -i gpui-ce 2>/dev/null; then echo "gpui-ce is in the tree"; exit 1; fi
 
   docs:
     name: docs
@@ -61,6 +80,13 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - name: Linux system packages (GPUI build)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
       - name: rustdoc
         env:
           RUSTDOCFLAGS: -D warnings

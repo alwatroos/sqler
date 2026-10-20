@@ -2,8 +2,14 @@
 // SPDX-FileCopyrightText: The SQLer Authors
 
 //! The `GPUI` application: workspace, tabs, panels, grid, editor, command palette and themes.
+//!
+//! State (`sidebar`, `tabs`, `workspace`) is plain Rust and unit-tested headless. The `GPUI`
+//! views live behind the `gui` cargo feature, which only `sqler-app` turns on.
 
 #![forbid(unsafe_code)]
 
 pub mod command;
 pub mod grid;
+pub mod sidebar;
+pub mod tabs;
+pub mod workspace;
