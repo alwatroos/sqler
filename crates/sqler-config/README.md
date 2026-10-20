@@ -2,7 +2,7 @@
 
 Settings, keybindings, connection store and keychain access.
 
-Status: stub (M0)
+Status: M1: settings, keybindings, connection list
 
 Layer: L1
 

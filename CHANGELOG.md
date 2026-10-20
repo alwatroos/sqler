@@ -32,3 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 1M-row viewport benchmark (`cargo bench -p sqler-ui --bench grid_viewport`), a std-only harness with p50/p95, memory and baseline comparison.
 - `.github/workflows/bench.yml`: Linux benchmark on pull requests that fails on a p95 regression against the base branch or above the 1 ms budget.
 - ADR-0006 (grid data model and bench harness).
+- `sqler-config`: settings (theme, UI font size), rebindable keybindings with per-platform defaults and conflict detection, and a read-only saved connection list, all from TOML files in the platform config directory.
+- `sqler-core`: optional `environment` (dev, staging, prod) and `color` fields on `ConnectionConfig`.
+- ADR-0005 (config files and keybindings) and the Settings user guide page.
+- `serde` 1.0.229 and `toml` 1.1.8 dependencies; `directories` evaluated and rejected (MPL-2.0 transitive license), see `docs/src/dependencies.md`.
