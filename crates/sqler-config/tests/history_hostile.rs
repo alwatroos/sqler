@@ -83,6 +83,9 @@ fn reader_survives_garbage() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A base size and a generator of a hostile input of that many repeats.
+type Family = (usize, fn(usize) -> String);
+
 #[test]
 fn redactor_hostile_sql() {
     let big = "'".repeat(1_000_001);
@@ -105,15 +108,36 @@ fn redactor_hostile_sql() {
         "$a$".repeat(300_000),
         "'".to_owned() + &"é".repeat(500_000),
     ];
+    // Every hostile input must be handled without panicking. Speed is checked by scaling below,
+    // not by a wall-clock bound, which fails on a loaded machine.
     for c in &cases {
-        let t = std::time::Instant::now();
-        let out = redact_credentials(c);
+        let _ = redact_credentials(c).len();
+    }
+    // A quadratic blow-up shows as a time ratio near 64 for an 8x larger input, a linear scan as
+    // one near 8. The bound of 30 sits between them and ignores machine speed and load.
+    let families: [Family; 3] = [
+        (10_000, |n| "password ".repeat(n)),
+        (60_000, |n| "$a$".repeat(n)),
+        (60_000, |n| "'".to_owned() + &"é".repeat(n)),
+    ];
+    for (base, make) in families {
+        let (small, large) = (make(base), make(base * 8));
+        let best = |input: &str| {
+            (0..2)
+                .map(|_| {
+                    let t = std::time::Instant::now();
+                    let _ = redact_credentials(input).len();
+                    t.elapsed()
+                })
+                .min()
+                .unwrap_or_default()
+        };
+        let (t_small, t_large) = (best(&small), best(&large));
         assert!(
-            t.elapsed() < Duration::from_secs(5),
-            "slow on {:?}",
-            &c[..c.len().min(30)]
+            t_large < t_small.max(Duration::from_millis(2)) * 30,
+            "superlinear on {:?}: {t_small:?} -> {t_large:?}",
+            &small[..small.len().min(30)]
         );
-        let _ = out.len();
     }
     assert!(!redact_credentials("alter user x password 'hunter2'").contains("hunter2"));
     assert!(!redact_credentials("alter user x password 'hun''ter2'").contains("ter2"));
