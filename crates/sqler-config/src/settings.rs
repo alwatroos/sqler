@@ -11,6 +11,12 @@ use crate::{ConfigDir, ConfigError};
 /// Accepted UI font sizes in points.
 pub const FONT_SIZE_RANGE: RangeInclusive<u16> = 8..=48;
 
+/// Accepted values of `result_page_rows`: rows the results grid loads per page.
+pub const RESULT_PAGE_ROWS_RANGE: RangeInclusive<u32> = 1_000..=10_000_000;
+
+/// Default of `result_page_rows`.
+pub const DEFAULT_RESULT_PAGE_ROWS: u32 = 100_000;
+
 /// Colour theme selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -34,6 +40,9 @@ pub struct Settings {
     pub theme: ThemePreference,
     /// UI font size in points; must be within [`FONT_SIZE_RANGE`].
     pub ui_font_size: u16,
+    /// Rows per result page; the grid stops loading when a page is full and "Fetch more"
+    /// continues. Must be within [`RESULT_PAGE_ROWS_RANGE`].
+    pub result_page_rows: u32,
 }
 
 impl Default for Settings {
@@ -41,6 +50,7 @@ impl Default for Settings {
         Self {
             theme: ThemePreference::System,
             ui_font_size: 14,
+            result_page_rows: DEFAULT_RESULT_PAGE_ROWS,
         }
     }
 }
@@ -60,13 +70,28 @@ fn check_font_size(path: &std::path::Path, size: u16) -> Result<(), ConfigError>
     }
 }
 
+fn check_result_page_rows(path: &std::path::Path, rows: u32) -> Result<(), ConfigError> {
+    if RESULT_PAGE_ROWS_RANGE.contains(&rows) {
+        Ok(())
+    } else {
+        Err(ConfigError::Invalid {
+            path: path.to_owned(),
+            message: format!(
+                "result_page_rows {rows} is out of range ({}..={})",
+                RESULT_PAGE_ROWS_RANGE.start(),
+                RESULT_PAGE_ROWS_RANGE.end()
+            ),
+        })
+    }
+}
+
 impl ConfigDir {
     /// Loads `settings.toml`; a missing file yields [`Settings::default`].
     ///
     /// # Errors
     /// [`ConfigError::Read`], [`ConfigError::Parse`] for malformed TOML, wrong
     /// types or unknown keys, and [`ConfigError::Invalid`] for an out-of-range
-    /// font size.
+    /// font size or page size.
     pub fn load_settings(&self) -> Result<Settings, ConfigError> {
         let path = self.settings_path();
         let Some(text) = read_optional(&path)? else {
@@ -77,17 +102,19 @@ impl ConfigDir {
             message: e.to_string(),
         })?;
         check_font_size(&path, settings.ui_font_size)?;
+        check_result_page_rows(&path, settings.result_page_rows)?;
         Ok(settings)
     }
 
     /// Writes `settings.toml`, creating the directory when missing.
     ///
     /// # Errors
-    /// [`ConfigError::Invalid`] for an out-of-range font size,
+    /// [`ConfigError::Invalid`] for an out-of-range font size or page size,
     /// [`ConfigError::Serialize`] or [`ConfigError::Write`].
     pub fn save_settings(&self, settings: &Settings) -> Result<(), ConfigError> {
         let path = self.settings_path();
         check_font_size(&path, settings.ui_font_size)?;
+        check_result_page_rows(&path, settings.result_page_rows)?;
         let text = toml::to_string_pretty(settings).map_err(|e| ConfigError::Serialize {
             path: path.clone(),
             message: e.to_string(),
@@ -110,6 +137,7 @@ mod tests {
         assert_eq!(s, Settings::default());
         assert_eq!(s.theme, ThemePreference::System);
         assert_eq!(s.ui_font_size, 14);
+        assert_eq!(s.result_page_rows, 100_000);
     }
 
     #[test]
@@ -118,6 +146,8 @@ mod tests {
         assert_eq!((s.theme, s.ui_font_size), (ThemePreference::Dark, 14));
         let s = parse("ui_font_size = 20").unwrap();
         assert_eq!((s.theme, s.ui_font_size), (ThemePreference::System, 20));
+        let s = parse("result_page_rows = 5000").unwrap();
+        assert_eq!((s.result_page_rows, s.ui_font_size), (5000, 14));
     }
 
     #[test]
@@ -138,6 +168,9 @@ mod tests {
         assert!(parse("them = \"dark\"").is_err());
         assert!(parse("ui_font_size = \"big\"").is_err());
         assert!(parse("ui_font_size = -1").is_err());
+        assert!(parse("result_page_rows = \"many\"").is_err());
+        assert!(parse("result_page_rows = -5").is_err());
+        assert!(parse("result_page_rows = 1.5").is_err());
     }
 
     #[test]
@@ -148,6 +181,21 @@ mod tests {
         for bad in [0, 7, 49] {
             let e = check_font_size(p, bad).unwrap_err().to_string();
             assert!(e.contains("8..=48"), "{e}");
+        }
+    }
+
+    #[test]
+    fn result_page_rows_range_checked() {
+        let p = std::path::Path::new("settings.toml");
+        assert!(check_result_page_rows(p, 1_000).is_ok());
+        assert!(check_result_page_rows(p, 10_000_000).is_ok());
+        for bad in [0, 999, 10_000_001] {
+            let e = check_result_page_rows(p, bad).unwrap_err().to_string();
+            assert!(e.contains("1000..=10000000"), "{e}");
+            assert!(
+                e.contains(&format!("result_page_rows {bad} is out of range")),
+                "{e}"
+            );
         }
     }
 }

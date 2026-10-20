@@ -48,7 +48,7 @@ Caveat for idle RSS: an agent cannot double-click, so the three connections are 
 
 ## Results grid model
 
-Viewport fetch from `sqler_ui::grid::GridModel` holding 1M synthetic rows (6 columns: integer, text, float, boolean, integer, text). Each sample is one `viewport()` call plus a walk over every cell of the 50 visible rows.
+Viewport fetch from `sqler_ui::grid::GridModel` holding 1M synthetic rows (6 columns: integer, text, float, boolean, integer, text). Each sample is one `viewport()` call plus a walk over the 50 visible rows (each row hands out the iterator over its cells). A second, information-only measurement reads every cell of those rows (`cells_p50_ns`, `cells_p95_ns`).
 
 | Date | Commit | OS | Rows | Viewport | p50 (ns) | p95 (ns) | Ingest (ms) | Heap estimate (MB) | RSS delta (MB) | Notes |
 | ---- | ------ | -- | ---- | -------- | -------- | -------- | ----------- | ------------------ | -------------- | ----- |
@@ -56,13 +56,27 @@ Viewport fetch from `sqler_ui::grid::GridModel` holding 1M synthetic rows (6 col
 
 Re-run at `e98f4c8` (macOS 27.0.1 arm64, Apple M4 Pro): unchanged within the gate (p50 125 ns, p95 167 ns, ingest 153 ms, heap estimate 246,433,024 bytes = 235.0 MiB; the p95 limit of the gate is 25 % plus 100 ns).
 
+Bounded, compact model (T1, `3e5ead6` plus this PR, macOS 27.0.1 arm64, Apple M4 Pro, `--reps 3`, minimum over the repetitions). The bench ingests with `GridLimits::UNBOUNDED`, so it still measures a whole 1,000,000-row result. The base column is `3e5ead6`; the gate compared this run against it with `--compare` (exit code 0).
+
+| Columns | | p50 (ns) | p95 (ns) | Cells p50 / p95 (ns) | Ingest (ms) | Heap estimate (bytes) | Heap estimate (MB) |
+| ------- | - | -------- | -------- | -------------------- | ----------- | --------------------- | ------------------ |
+| 6 | base | 125 | 167 | n/a | 135 | 246,433,024 | 235.0 |
+| 6 | PR | 83 | 84 | 708 / 875 | 161 | 113,900,996 | 108.6 |
+| 8 | base | n/a | n/a | n/a | 156 | 310,433,136 | 296.1 |
+| 8 | PR | 83 | 84 | 833 / 1,000 | 172 | 145,901,108 | 139.1 |
+
+- Gate (AC4, 6 columns, the width the 246,433,024 baseline was measured at): p95 84 ns against the limit of 308 ns (25 % plus 100 ns over the base 167 ns); under the 1 ms budget; heap estimate 113,900,996 bytes against the target of 123,216,512 (half of 246,433,024): 46.2 % of the base, about 114 B per row. The 8-column run is for information (47.0 % of the base heap).
+- Layout: 16 bytes per cell in one row-major vector per ingested batch, text, JSON and binary data in per-batch arenas, rare variants in a side table (ADR-0027).
+- `cells_*` reads every cell of the 50 visible rows at random positions of a 114 MB model, so it is bound by cold memory reads (about 100 cache lines per sample), not by the cell decoding. The walk of earlier versions never read the cells, so it has no counterpart in the base file. For scale, the base layout with the same cell-reading walk (a scratch copy of the base bench that matches on each `Value`, not committed) gave p50 833 ns and p95 1,000 ns at 6 columns, and p50 875 ns and p95 1,125 ns at 8 columns: the compact layout reads the cells as fast or faster.
+- `ingest_ms` rose from 135 to 161 ms (not gated): the chunks are now built on the ingestion thread.
+
 ### Method
 
 Run from the repository root on the commit being recorded:
 
 1. `cargo bench -p sqler-ui --bench grid_viewport` (release profile). Flags: `--rows` (1000000), `--columns` (6), `--batch` (1024), `--viewport` (50), `--samples` (100000), `--reps` (3), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--slack-ns` (100), `--budget-p95-ns` (1000000).
 2. The bench ingests the rows through `spawn_ingest(SyntheticSource)` while the main thread polls, then draws 100,000 viewport positions from a fixed-seed xorshift64 generator and times each fetch with `Instant`. p50 and p95 are nearest-rank percentiles.
-3. Memory: `heap_bytes` is the model's own estimate (capacity of the batches, row vectors and strings; MB = bytes / 1048576). On Linux the bench also prints `rss_delta_bytes` (`VmRSS` after ingestion minus before). On macOS, record the peak RSS with `/usr/bin/time -l <bench binary>`. A counting allocator would need `unsafe`, which the workspace forbids.
+3. Memory: `heap_bytes` is the model's own estimate (capacity of the cell vectors, text and binary arenas and side tables of the chunks; MB = bytes / 1048576). On Linux the bench also prints `rss_delta_bytes` (`VmRSS` after ingestion minus before). On macOS, record the peak RSS with `/usr/bin/time -l <bench binary>`. A counting allocator would need `unsafe`, which the workspace forbids.
 4. Each sample includes about 30 ns of `Instant` overhead.
 
 ### Regression rule
@@ -78,6 +92,7 @@ Frame data cost: `cargo run --release -p sqler-ui --example grid_scroll`. It scr
 | Date | Commit | OS | Rows | Max rows per frame (cap) | Frame data cost p50 / p95 / max (µs) | `jump_to_end` (µs) | Heap (MB) | Notes |
 | ---- | ------ | -- | ---- | ------------------------ | ------------------------------------ | ------------------ | --------- | ----- |
 | 2026-10-20 | 23a3f72 | macOS 27.0.1 arm64, Apple M4 Pro | 1,000,000 | 28 (29) | 9.4 / 9.8 / 40.8 (second run: 9.6 / 10.1 / 63.2) | 9.0 | 235.0 | 333,327 frames; ingest 133 to 158 ms; two runs |
+| 2026-10-21 | 3e5ead6 plus T1 | macOS 27.0.1 arm64, Apple M4 Pro | 1,000,000 | 28 (29) | 8.6 / 9.0 / 88.4 | 7.5 | 108.6 | 333,327 frames; ingest 182 ms; one run, bounded compact model (the synthetic grid is unbounded) |
 
 In-app probe: `SQLER_GRID_PROBE=1` on `sqler`, with a `connections.toml` that holds one SQLite `:memory:` entry. It opens the synthetic grid, waits for the end of loading, scrolls to 600 evenly spaced rows (one per presented frame), then to the last row, and prints `SQLER grid_*` lines. RSS is read with `ps` (macOS) or `VmRSS` (Linux). Peak RSS comes from `/usr/bin/time -l`.
 
@@ -88,7 +103,7 @@ In-app probe: `SQLER_GRID_PROBE=1` on `sqler`, with a `connections.toml` that ho
 | Linux X11, Wayland | | | | | | not measured: no GUI runner in `ci.yml` | | | | |
 | Windows | | | | | | not measured: no GUI runner in `ci.yml` | | | | |
 
-The frame interval is bound by the display (8.3 ms is a 120 Hz screen), so it shows responsiveness, not data cost. RSS with 1,000,000 rows open is above the 150 MB idle target, which is defined for an idle app with three connections and no large result, so it is recorded and not gated. Each open synthetic grid holds about 235 MB of result data (see the model bench above). The maintainer's interactive check (scrolling by hand) is still pending.
+The frame interval is bound by the display (8.3 ms is a 120 Hz screen), so it shows responsiveness, not data cost. RSS with 1,000,000 rows open is above the 150 MB idle target, which is defined for an idle app with three connections and no large result, so it is recorded and not gated. The RSS rows above were measured before the compact model (the synthetic grid then held about 235 MB); the heap estimate of the same 1,000,000 rows is now 108.6 MB (see the model bench above). The in-app probe was not repeated in T1: it needs a display (maintainer check). The maintainer's interactive check (scrolling by hand) is still pending.
 
 ## Catalog tree
 
