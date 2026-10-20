@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Linux release binary of `sqler` under the 60 MB budget: `[profile.release]` now has `strip = "symbols"` (the ELF symbol table was about 23 MB of 78 MB; macOS and Windows keep symbols in side files) and `codegen-units = 1` (about 9 MB less, release build about 1.7x slower). Release backtraces show addresses, not function names (AGENTS.md section 10). `size.yml` also prints the largest sections (`size -A`) and crates (`cargo bloat --crates`) on Linux, report only. Measurements in `docs/src/benchmarks.md`.
 - `grid_viewport` and `browser_tree` benchmarks gate on the minimum over `--reps` (3) repetitions with an absolute `--slack-ns` (100 ns and 250 us), so noise on shared CI runners no longer fails unrelated pull requests; a 2x slowdown still fails. `bench.yml` and `docs/src/benchmarks.md` updated.
 
 ### Fixed
