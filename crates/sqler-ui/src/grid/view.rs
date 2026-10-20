@@ -52,11 +52,16 @@ pub(crate) struct GridDelegate {
 }
 
 impl GridDelegate {
-    fn new(tab: GridTab) -> Self {
+    pub(crate) fn new(tab: GridTab) -> Self {
         Self {
             tab,
             columns: Vec::new(),
         }
+    }
+
+    /// The grid the table shows.
+    pub(crate) fn grid(&self) -> &GridTab {
+        &self.tab
     }
 
     /// Rebuilds the column list from the tab's headers.
@@ -148,7 +153,8 @@ impl TableDelegate for GridDelegate {
     }
 }
 
-type Table = Entity<TableState<GridDelegate>>;
+/// A table entity over a grid.
+pub(crate) type Table = Entity<TableState<GridDelegate>>;
 
 /// The grid tabs of the workspace: tabs waiting for a window and the table entity of each.
 #[derive(Default)]
@@ -271,7 +277,7 @@ impl GridViews {
 }
 
 /// Applies the pending ingestion messages every [`POLL_INTERVAL`] until the grid ends or goes.
-fn start_polling(table: &Table, cx: &mut Context<WorkspaceView>) {
+pub(crate) fn start_polling(table: &Table, cx: &mut Context<WorkspaceView>) {
     let weak = table.downgrade();
     cx.spawn(async move |this, cx| {
         loop {

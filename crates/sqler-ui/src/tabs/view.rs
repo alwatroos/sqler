@@ -108,19 +108,22 @@ pub(crate) fn tab_strip(
     strip
 }
 
-/// Renders the body of the active tab (a placeholder until the SQL editor arrives).
+/// Renders the body of the active tab when no other view claims it: the empty-state hint, or the
+/// moment before the editor of a new tab exists.
 pub(crate) fn tab_body(
     tabs: &TabStrip,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement + use<> {
     let muted = cx.theme().muted_foreground;
     let text = match tabs.active() {
+        // Query tabs get their own body (`query::view::query_tab_body`); this is a fallback.
         Some(tab) => format!(
-            "Connected to {} ({}). The SQL editor arrives in M3.",
+            "Connected to {} ({}).",
             tab.connection().name,
             tab.connection().driver
         ),
-        None => "Double-click a connection in the sidebar to open it in a tab.".to_owned(),
+        None => "Double-click a connection in the sidebar to open a SQL editor, or run \"Editor: New SQL Editor\" (editor:new) from the command palette."
+            .to_owned(),
     };
     div()
         .id("tab-body")
@@ -174,6 +177,21 @@ pub(crate) fn object_tab_body(
                 view.dispatch_browser(BrowserAction::CopyTabText, cx);
             }))
     };
+    let open_in_editor = |cx: &mut Context<WorkspaceView>| {
+        div()
+            .id("object-tab-open-in-editor")
+            .px_2()
+            .py_0p5()
+            .rounded_md()
+            .border_1()
+            .border_color(border)
+            .text_sm()
+            .cursor_pointer()
+            .child("Open in Editor")
+            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                view.dispatch_browser(BrowserAction::OpenTabInEditor, cx);
+            }))
+    };
     let body = match &tab.content {
         ObjectTabContent::Loading => message(format!("{}…", tab.title), muted),
         ObjectTabContent::Failed(error) => message(error.clone(), danger),
@@ -189,7 +207,9 @@ pub(crate) fn object_tab_body(
                     .flex()
                     .flex_row()
                     .justify_end()
+                    .gap_1()
                     .p_1()
+                    .child(open_in_editor(cx))
                     .child(copy("Copy", cx)),
             )
             .child(

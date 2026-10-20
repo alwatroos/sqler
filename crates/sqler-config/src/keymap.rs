@@ -233,6 +233,13 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("tab:next", &["ctrl+tab"]),
     ("tab:previous", &["ctrl+shift+tab"]),
     ("app:quit", &["mod+q"]),
+    ("query:run-selection", &["mod+e"]),
+    ("query:run-statement", &["mod+enter"]),
+    ("query:run-all", &["mod+shift+enter"]),
+    ("query:cancel", &["mod+."]),
+    ("editor:new", &["mod+n"]),
+    ("editor:format-sql", &["shift+alt+f"]),
+    ("editor:add-next-occurrence", &["mod+d"]),
 ];
 
 fn dedup(chords: Vec<KeyChord>) -> Vec<KeyChord> {
@@ -574,6 +581,27 @@ mod tests {
             Keymap::defaults(OTHER).chords_for(&quit),
             [chord("ctrl+q", OTHER)]
         );
+    }
+
+    #[test]
+    fn query_commands_have_default_chords() {
+        for (cmd, mac, other) in [
+            ("query:run-selection", "cmd+e", "ctrl+e"),
+            ("query:run-statement", "cmd+enter", "ctrl+enter"),
+            ("query:run-all", "shift+cmd+enter", "ctrl+shift+enter"),
+            ("query:cancel", "cmd+.", "ctrl+."),
+        ] {
+            assert_eq!(
+                Keymap::defaults(MAC).chords_for(&id(cmd)),
+                [chord(mac, MAC)],
+                "{cmd}"
+            );
+            assert_eq!(
+                Keymap::defaults(OTHER).chords_for(&id(cmd)),
+                [chord(other, OTHER)],
+                "{cmd}"
+            );
+        }
     }
 
     #[test]
