@@ -1,0 +1,38 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT status FROM orders GROUP BY status HAVING sum(|\", 8)"
+---
+sql: SELECT status FROM orders GROUP BY status HAVING sum(|
+
+== postgres ==
+context: Expression, replace: 53..53 "", items: 200
+ 1. "id" [Column] insert="id" detail="orders · integer"
+ 2. "total" [Column] insert="total" detail="orders · numeric"
+ 3. "status" [Column] insert="status" detail="orders · text"
+ 4. "user_id" [Column] insert="user_id" detail="orders · integer"
+ 5. "orders" [Alias] insert="orders" detail="table"
+ 6. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+ 7. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
+ 8. "age" [Function] insert="age($1)" snippet detail="age(timestamp [, timestamp]) -> interval"
+
+== mysql ==
+context: Expression, replace: 53..53 "", items: 200
+ 1. "id" [Column] insert="id" detail="orders · integer"
+ 2. "total" [Column] insert="total" detail="orders · numeric"
+ 3. "status" [Column] insert="status" detail="orders · text"
+ 4. "user_id" [Column] insert="user_id" detail="orders · integer"
+ 5. "orders" [Alias] insert="orders" detail="table"
+ 6. "if" [Function] insert="if($1)" snippet detail="if(cond, then, else) -> value"
+ 7. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+ 8. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
+
+== sqlite ==
+context: Expression, replace: 53..53 "", items: 200
+ 1. "id" [Column] insert="id" detail="orders · integer"
+ 2. "total" [Column] insert="total" detail="orders · numeric"
+ 3. "status" [Column] insert="status" detail="orders · text"
+ 4. "user_id" [Column] insert="user_id" detail="orders · integer"
+ 5. "orders" [Alias] insert="orders" detail="table"
+ 6. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+ 7. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
+ 8. "avg" [Function] insert="avg($1)" snippet detail="avg(expr) -> number"

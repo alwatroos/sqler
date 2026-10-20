@@ -1,0 +1,35 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT | FROM pending p JOIN orders o ON true\", 6)"
+---
+sql: SELECT | FROM pending p JOIN orders o ON true
+
+== postgres ==
+context: Expression, replace: 7..7 "", items: 200
+requests: [Columns { schema: Some("public"), relation: "pending" }]
+ 1. "id" [Column] insert="id" detail="o · integer"
+ 2. "total" [Column] insert="total" detail="o · numeric"
+ 3. "status" [Column] insert="status" detail="o · text"
+ 4. "user_id" [Column] insert="user_id" detail="o · integer"
+ 5. "o" [Alias] insert="o" detail="orders"
+ 6. "p" [Alias] insert="p" detail="pending"
+
+== mysql ==
+context: Expression, replace: 7..7 "", items: 200
+requests: [Columns { schema: Some("shop"), relation: "pending" }]
+ 1. "id" [Column] insert="id" detail="o · integer"
+ 2. "total" [Column] insert="total" detail="o · numeric"
+ 3. "status" [Column] insert="status" detail="o · text"
+ 4. "user_id" [Column] insert="user_id" detail="o · integer"
+ 5. "o" [Alias] insert="o" detail="orders"
+ 6. "p" [Alias] insert="p" detail="pending"
+
+== sqlite ==
+context: Expression, replace: 7..7 "", items: 200
+requests: [Columns { schema: Some("main"), relation: "pending" }]
+ 1. "id" [Column] insert="id" detail="o · integer"
+ 2. "total" [Column] insert="total" detail="o · numeric"
+ 3. "status" [Column] insert="status" detail="o · text"
+ 4. "user_id" [Column] insert="user_id" detail="o · integer"
+ 5. "o" [Alias] insert="o" detail="orders"
+ 6. "p" [Alias] insert="p" detail="pending"

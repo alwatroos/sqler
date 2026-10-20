@@ -27,3 +27,4 @@ consequences. SQLer uses the MADR format.
 | [0015](0015-ddl-generation-dialects-and-quoting.md) | DDL generation: dialects and quoting | accepted |
 | [0016](0016-connect-pipeline.md) | Connect pipeline: `Connector` trait in `sqler-ui`, pipeline in `sqler-app` | accepted |
 | [0017](0017-object-browser-sessions-and-drop-confirmation.md) | Object browser: browser session per connection, short-lived action sessions, DROP confirmation | accepted |
+| [0023](0023-completion-engine.md) | Completion engine: own lexer, schema source trait, ranking | accepted |

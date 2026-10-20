@@ -1,0 +1,17 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"select * from orders wh|\", 6)"
+---
+sql: select * from orders wh|
+
+== postgres ==
+context: RelationTail, replace: 21..23 "wh", items: 1
+ 1. "where" [Keyword] insert="where" detail="-"
+
+== mysql ==
+context: RelationTail, replace: 21..23 "wh", items: 1
+ 1. "where" [Keyword] insert="where" detail="-"
+
+== sqlite ==
+context: RelationTail, replace: 21..23 "wh", items: 1
+ 1. "where" [Keyword] insert="where" detail="-"

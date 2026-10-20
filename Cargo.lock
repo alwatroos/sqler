@@ -7025,6 +7025,12 @@ dependencies = [
 [[package]]
 name = "sqler-completion"
 version = "0.1.0"
+dependencies = [
+ "insta",
+ "proptest",
+ "sqler-core",
+ "sqler-sql",
+]
 
 [[package]]
 name = "sqler-config"

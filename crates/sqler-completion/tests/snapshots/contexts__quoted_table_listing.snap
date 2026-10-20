@@ -1,0 +1,23 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT * FROM ord|\", 6)"
+---
+sql: SELECT * FROM ord|
+
+== postgres ==
+context: Relation, replace: 14..17 "ord", items: 3
+ 1. "orders" [Table] insert="orders" detail="public · table"
+ 2. "Order Items" [Table] insert="\"Order Items\"" detail="public · table"
+ 3. "order_items" [Table] insert="order_items" detail="public · table"
+
+== mysql ==
+context: Relation, replace: 14..17 "ord", items: 3
+ 1. "orders" [Table] insert="orders" detail="shop · table"
+ 2. "Order Items" [Table] insert="`Order Items`" detail="shop · table"
+ 3. "order_items" [Table] insert="order_items" detail="shop · table"
+
+== sqlite ==
+context: Relation, replace: 14..17 "ord", items: 3
+ 1. "orders" [Table] insert="orders" detail="main · table"
+ 2. "Order Items" [Table] insert="\"Order Items\"" detail="main · table"
+ 3. "order_items" [Table] insert="order_items" detail="main · table"

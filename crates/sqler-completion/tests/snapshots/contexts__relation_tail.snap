@@ -1,0 +1,44 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT * FROM users u |\", 10)"
+---
+sql: SELECT * FROM users u |
+
+== postgres ==
+context: RelationTail, replace: 22..22 "", items: 30
+ 1. "JOIN" [Keyword] insert="JOIN" detail="-"
+ 2. "LEFT JOIN" [Keyword] insert="LEFT JOIN" detail="-"
+ 3. "INNER JOIN" [Keyword] insert="INNER JOIN" detail="-"
+ 4. "RIGHT JOIN" [Keyword] insert="RIGHT JOIN" detail="-"
+ 5. "FULL JOIN" [Keyword] insert="FULL JOIN" detail="-"
+ 6. "CROSS JOIN" [Keyword] insert="CROSS JOIN" detail="-"
+ 7. "ON" [Keyword] insert="ON" detail="-"
+ 8. "USING" [Keyword] insert="USING" detail="-"
+ 9. "WHERE" [Keyword] insert="WHERE" detail="-"
+10. "GROUP BY" [Keyword] insert="GROUP BY" detail="-"
+
+== mysql ==
+context: RelationTail, replace: 22..22 "", items: 30
+ 1. "JOIN" [Keyword] insert="JOIN" detail="-"
+ 2. "LEFT JOIN" [Keyword] insert="LEFT JOIN" detail="-"
+ 3. "INNER JOIN" [Keyword] insert="INNER JOIN" detail="-"
+ 4. "RIGHT JOIN" [Keyword] insert="RIGHT JOIN" detail="-"
+ 5. "FULL JOIN" [Keyword] insert="FULL JOIN" detail="-"
+ 6. "CROSS JOIN" [Keyword] insert="CROSS JOIN" detail="-"
+ 7. "ON" [Keyword] insert="ON" detail="-"
+ 8. "USING" [Keyword] insert="USING" detail="-"
+ 9. "WHERE" [Keyword] insert="WHERE" detail="-"
+10. "GROUP BY" [Keyword] insert="GROUP BY" detail="-"
+
+== sqlite ==
+context: RelationTail, replace: 22..22 "", items: 30
+ 1. "JOIN" [Keyword] insert="JOIN" detail="-"
+ 2. "LEFT JOIN" [Keyword] insert="LEFT JOIN" detail="-"
+ 3. "INNER JOIN" [Keyword] insert="INNER JOIN" detail="-"
+ 4. "RIGHT JOIN" [Keyword] insert="RIGHT JOIN" detail="-"
+ 5. "FULL JOIN" [Keyword] insert="FULL JOIN" detail="-"
+ 6. "CROSS JOIN" [Keyword] insert="CROSS JOIN" detail="-"
+ 7. "ON" [Keyword] insert="ON" detail="-"
+ 8. "USING" [Keyword] insert="USING" detail="-"
+ 9. "WHERE" [Keyword] insert="WHERE" detail="-"
+10. "GROUP BY" [Keyword] insert="GROUP BY" detail="-"

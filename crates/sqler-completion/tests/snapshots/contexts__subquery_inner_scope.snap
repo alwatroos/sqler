@@ -1,0 +1,50 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT * FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = |)\",\n12)"
+---
+sql: SELECT * FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = |)
+
+== postgres ==
+context: Expression, replace: 77..77 "", items: 200
+ 1. "id" [Column] insert="o.id" detail="o · integer"
+ 2. "total" [Column] insert="total" detail="o · numeric"
+ 3. "status" [Column] insert="status" detail="o · text"
+ 4. "user_id" [Column] insert="user_id" detail="o · integer"
+ 5. "id" [Column] insert="u.id" detail="u · integer"
+ 6. "name" [Column] insert="name" detail="u · Text"
+ 7. "email" [Column] insert="email" detail="u · text"
+ 8. "created_at" [Column] insert="created_at" detail="u · timestamp"
+ 9. "o" [Alias] insert="o" detail="orders"
+10. "u" [Alias] insert="u" detail="users"
+11. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+12. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
+
+== mysql ==
+context: Expression, replace: 77..77 "", items: 200
+ 1. "id" [Column] insert="o.id" detail="o · integer"
+ 2. "total" [Column] insert="total" detail="o · numeric"
+ 3. "status" [Column] insert="status" detail="o · text"
+ 4. "user_id" [Column] insert="user_id" detail="o · integer"
+ 5. "id" [Column] insert="u.id" detail="u · integer"
+ 6. "name" [Column] insert="name" detail="u · Text"
+ 7. "email" [Column] insert="email" detail="u · text"
+ 8. "created_at" [Column] insert="created_at" detail="u · timestamp"
+ 9. "o" [Alias] insert="o" detail="orders"
+10. "u" [Alias] insert="u" detail="users"
+11. "if" [Function] insert="if($1)" snippet detail="if(cond, then, else) -> value"
+12. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+
+== sqlite ==
+context: Expression, replace: 77..77 "", items: 200
+ 1. "id" [Column] insert="o.id" detail="o · integer"
+ 2. "total" [Column] insert="total" detail="o · numeric"
+ 3. "status" [Column] insert="status" detail="o · text"
+ 4. "user_id" [Column] insert="user_id" detail="o · integer"
+ 5. "id" [Column] insert="u.id" detail="u · integer"
+ 6. "name" [Column] insert="name" detail="u · Text"
+ 7. "email" [Column] insert="email" detail="u · text"
+ 8. "created_at" [Column] insert="created_at" detail="u · timestamp"
+ 9. "o" [Alias] insert="o" detail="orders"
+10. "u" [Alias] insert="u" detail="users"
+11. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+12. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"

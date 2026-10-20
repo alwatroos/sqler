@@ -1,0 +1,21 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT group| FROM orders\", 4)"
+---
+sql: SELECT group| FROM orders
+
+== postgres ==
+context: Expression, replace: 7..12 "group", items: 1
+ 1. "group" [Keyword] insert="group" detail="-"
+
+== mysql ==
+context: Expression, replace: 7..12 "group", items: 2
+ 1. "group" [Keyword] insert="group" detail="-"
+ 2. "group_concat" [Function] insert="group_concat($1)" snippet detail="group_concat(expr [separator s]) -> text"
+
+== sqlite ==
+context: Expression, replace: 7..12 "group", items: 4
+ 1. "group" [Keyword] insert="group" detail="-"
+ 2. "group_concat" [Function] insert="group_concat($1)" snippet detail="group_concat(expr [, sep]) -> text"
+ 3. "json_group_array" [Function] insert="json_group_array($1)" snippet detail="json_group_array(expr) -> text"
+ 4. "json_group_object" [Function] insert="json_group_object($1)" snippet detail="json_group_object(k, v) -> text"

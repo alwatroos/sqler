@@ -1,0 +1,26 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"INSERT INTO orders (|\", 6)"
+---
+sql: INSERT INTO orders (|
+
+== postgres ==
+context: InsertColumns, replace: 20..20 "", items: 4
+ 1. "id" [Column] insert="id" detail="integer"
+ 2. "total" [Column] insert="total" detail="numeric"
+ 3. "status" [Column] insert="status" detail="text"
+ 4. "user_id" [Column] insert="user_id" detail="integer"
+
+== mysql ==
+context: InsertColumns, replace: 20..20 "", items: 4
+ 1. "id" [Column] insert="id" detail="integer"
+ 2. "total" [Column] insert="total" detail="numeric"
+ 3. "status" [Column] insert="status" detail="text"
+ 4. "user_id" [Column] insert="user_id" detail="integer"
+
+== sqlite ==
+context: InsertColumns, replace: 20..20 "", items: 4
+ 1. "id" [Column] insert="id" detail="integer"
+ 2. "total" [Column] insert="total" detail="numeric"
+ 3. "status" [Column] insert="status" detail="text"
+ 4. "user_id" [Column] insert="user_id" detail="integer"

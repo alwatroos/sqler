@@ -1,0 +1,20 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT * FROM users ORDER BY cre|\", 6)"
+---
+sql: SELECT * FROM users ORDER BY cre|
+
+== postgres ==
+context: Expression, replace: 29..32 "cre", items: 2
+ 1. "created_at" [Column] insert="created_at" detail="users · timestamp"
+ 2. "create" [Keyword] insert="create" detail="-"
+
+== mysql ==
+context: Expression, replace: 29..32 "cre", items: 2
+ 1. "created_at" [Column] insert="created_at" detail="users · timestamp"
+ 2. "create" [Keyword] insert="create" detail="-"
+
+== sqlite ==
+context: Expression, replace: 29..32 "cre", items: 2
+ 1. "created_at" [Column] insert="created_at" detail="users · timestamp"
+ 2. "create" [Keyword] insert="create" detail="-"
