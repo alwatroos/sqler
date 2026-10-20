@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: The SQLer Authors
 #
-# Fails, listing every tracked *.rs file whose first line is not the SPDX header.
+# Fails, listing every tracked *.rs file (outside vendor/) whose first line is not the SPDX header.
 set -eu
 
 header='// SPDX-License-Identifier: Apache-2.0'
@@ -12,7 +12,8 @@ missing=''
 # Reading from a file keeps the loop in the current shell.
 list=$(mktemp)
 trap 'rm -f "$list"' EXIT
-git ls-files '*.rs' >"$list"
+# vendor/ holds third-party code that keeps its upstream licence files (vendor/*/README.md).
+git ls-files '*.rs' ':!:vendor/' >"$list"
 
 while IFS= read -r f; do
     first=$(head -n 1 "$f" | tr -d '\r')

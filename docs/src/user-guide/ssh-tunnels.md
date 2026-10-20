@@ -29,14 +29,21 @@ written to logs or error messages.
 | Private key file | With an optional passphrase. An encrypted key without a passphrase gives a "passphrase required" error. |
 | SSH agent | Uses `SSH_AUTH_SOCK` on Linux and macOS, or an explicit socket path. On Windows it uses the `OpenSSH` agent pipe. If no agent is reachable, the error is "SSH agent unavailable". Pageant is not supported. |
 
-### RSA keys are not supported
+### RSA keys
 
-RSA private keys are unsupported for now. Use an ed25519 or ECDSA key (for example
-`ssh-keygen -t ed25519`). An RSA key file is rejected with the error "is an RSA key, which is not
-supported". The reason is the open advisory RUSTSEC-2023-0071 against the `rsa` crate, which has no
-fix; the project owner will decide whether to accept it. A server that offers only an RSA host key
-cannot be used either. Keys held by an SSH agent are signed by the agent, but this has not been
-verified with a real agent.
+RSA private keys work, without the `rsa` crate (see [ADR-0018](../adr/0018-rsa-alternatives.md)).
+SQLer signs with `rsa-sha2-256` or `rsa-sha2-512`, whichever the server offers.
+
+- Key files: `OpenSSH` format (also passphrase-encrypted), and unencrypted PKCS#1 (`BEGIN RSA PRIVATE
+  KEY`) and PKCS#8 (`BEGIN PRIVATE KEY`) PEM files.
+- Key sizes: 2048, 3072 and 4096 bits. A 1024-bit key, or an odd size such as 2560 bits, is
+  refused with an error that names the supported sizes and Ed25519/ECDSA.
+- Not supported: the old SHA-1 `ssh-rsa` signature (a server that accepts RSA keys only with it
+  gives an error; enable `rsa-sha2-256` on the server or use an Ed25519 or ECDSA key), PEM files
+  encrypted the legacy way (`Proc-Type: 4,ENCRYPTED`; convert with `ssh-keygen -p -o -f <file>`),
+  and an RSA-only server host key.
+- Keys held by an SSH agent are signed by the agent and work too; the agent decides the key
+  size and hash.
 
 ## Host key verification
 

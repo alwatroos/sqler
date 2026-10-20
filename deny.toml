@@ -56,6 +56,10 @@ ignore = true
 multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
+# ADR-0018: the `rsa` crate (RUSTSEC-2023-0071, Marvin attack, no fix) must never come back.
+deny = [
+    { crate = "rsa", reason = "RUSTSEC-2023-0071, ADR-0018" },
+]
 
 [sources]
 unknown-registry = "deny"

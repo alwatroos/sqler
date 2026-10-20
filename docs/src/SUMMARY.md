@@ -40,6 +40,7 @@
   - [ADR-0015: DDL generation: dialects and quoting](adr/0015-ddl-generation-dialects-and-quoting.md)
   - [ADR-0016: Connect pipeline](adr/0016-connect-pipeline.md)
   - [ADR-0017: Object browser sessions and DROP confirmation](adr/0017-object-browser-sessions-and-drop-confirmation.md)
+  - [ADR-0018: RSA without the rsa crate](adr/0018-rsa-alternatives.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
 - [Benchmarks](benchmarks.md)

@@ -36,8 +36,13 @@
 //! `VERIFY_CA` and `VerifyFull` `VERIFY_IDENTITY`.
 //!
 //! The RSA password exchange (`caching_sha2_password` on a cold server cache, and
-//! `sha256_password`) over an unencrypted connection is not compiled in: use TLS, or log in once
-//! over TLS so the server caches the account.
+//! `sha256_password`) works over an unencrypted connection through the vendored `sqlx-mysql`
+//! patch, which encrypts with `aws-lc-rs` (no `rsa` crate), but only for an explicit
+//! `DISABLED` (`TlsMode::Disable`): under `PREFERRED` an attacker could strip the server's TLS
+//! offer, so the patch refuses with "plaintext RSA password exchange needs an explicit
+//! ssl-mode=disabled; use TLS". The server sends its public key in the same unencrypted stream,
+//! so even then an active man in the middle can substitute it and read the password. Only
+//! `REQUIRED`, `VERIFY_CA` and `VERIFY_IDENTITY` protect the password.
 //!
 //! # Secrets
 //! The connect options hold the password. The driver never prints them and never puts the target

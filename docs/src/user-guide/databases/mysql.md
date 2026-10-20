@@ -36,14 +36,28 @@ URL parameters.
 
 ## Passwords without TLS
 
-The driver is built without the `sqlx` feature `mysql-rsa`, which would add the `rsa` crate
-(RUSTSEC-2023-0071). The RSA public-key password exchange is therefore not available:
+Over TLS the password is sent inside the encrypted channel and every authentication plugin works.
+With the default mode `prefer`, servers that offer TLS are connected with TLS, but `prefer` does
+not protect the password against an active attacker: a man in the middle can remove the server's
+TLS offer and the connection then continues in plaintext. Only `require`, `verify-ca` and
+`verify-full` protect the password (`verify-ca` and `verify-full` also check the server).
 
-- Over TLS the password is sent inside the encrypted channel and every authentication plugin works.
-  With the default mode `prefer`, servers that offer TLS are connected with TLS.
-- Without TLS, `mysql_native_password` works, and so does `caching_sha2_password` when the server has
-  the account in its cache (after one successful login over TLS). Otherwise the connection fails with
-  `RSA auth backend disabled`; use TLS.
+Without TLS, `mysql_native_password` works. `caching_sha2_password` (when the server has not cached
+the account yet) and `sha256_password` use the RSA public-key exchange: the server sends its public
+key and the driver encrypts the password with it (RSA-OAEP). This works through a patched copy of
+`sqlx-mysql` that uses `aws-lc-rs`, so the vulnerable `rsa` crate is not part of SQLer
+(RUSTSEC-2023-0071).
+
+SQLer runs this exchange over a plaintext link **only when you chose plaintext explicitly**
+(`ssl-mode=disabled`, or TLS mode `Disable` in the connection settings). With `prefer` (the
+default), or any other mode, a connection that ends up without TLS is refused with
+"plaintext RSA password exchange needs an explicit ssl-mode=disabled; use TLS", so an attacker who
+strips the TLS offer cannot make SQLer send the password this way.
+
+Even with `ssl-mode=disabled` the exchange protects the password only against a passive observer.
+The server key arrives in the same stream, so an attacker who can modify the traffic can
+substitute their own key and read the password. Use TLS (`require`, or `verify-ca` /
+`verify-full` to also check the server) wherever the network is not trusted.
 
 ## Cancel
 

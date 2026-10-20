@@ -15,8 +15,15 @@ workspace = true
 [dependencies]
 sqler-driver-api.workspace = true
 sqlx = { workspace = true, features = ["mysql", "tls-rustls-ring-native-roots"] }
+# ADR-0018: the MySQL RSA password exchange runs on aws-lc-rs through the vendored sqlx-mysql
+# patch (root `[patch.crates-io]`); the upstream `rsa` crate stays banned in deny.toml.
+sqlx-mysql.workspace = true
 futures-core.workspace = true
 tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "time"] }
+tokio = { workspace = true, features = ["rt", "time", "net", "io-util"] }
+
+# aws-lc-sys on x86_64 Windows needs NASM; the prebuilt objects avoid a tool-install step in CI.
+[target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
+aws-lc-sys = { workspace = true, features = ["prebuilt-nasm"] }

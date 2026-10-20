@@ -86,6 +86,8 @@ async fn scenarios(server: &Server) {
     cancel_statements_without_rows(server).await;
     eprintln!("tls_modes");
     tls_modes(server).await;
+    eprintln!("rsa_exchange_over_plaintext_cold_cache");
+    rsa_exchange_over_plaintext_cold_cache(server).await;
     eprintln!("errors_typed_and_redacted");
     errors_typed_and_redacted(server).await;
     eprintln!("create_procedure_falls_back");
@@ -469,6 +471,146 @@ async fn tls_modes(server: &Server) {
         .err()
         .unwrap();
     assert!(matches!(err, DriverError::Connection(_)), "{err:?}");
+}
+
+/// A fresh `caching_sha2_password` account has no entry in the server cache, so a plaintext login
+/// needs the RSA public-key exchange (the vendored `sqlx-mysql` backend on `aws-lc-rs`).
+async fn rsa_exchange_over_plaintext_cold_cache(server: &Server) {
+    if server.flavour != Flavour::MySql {
+        println!("skipped: MariaDB has no caching_sha2_password (no RSA exchange)");
+        return;
+    }
+    let mut admin = connect(&server.config()).await;
+    sql(&mut *admin, "drop user if exists 'sqler_rsa'@'%'").await;
+    sql(
+        &mut *admin,
+        "create user 'sqler_rsa'@'%' identified with caching_sha2_password by 'rsa-pass'",
+    )
+    .await;
+    sql(&mut *admin, "grant all on sqler.* to 'sqler_rsa'@'%'").await;
+    // Empties the authentication cache, so the first login must use the full exchange.
+    sql(&mut *admin, "flush privileges").await;
+
+    let url = server.url_for("sqler_rsa", "rsa-pass", "ssl-mode=disabled");
+    let mut s = connect(&config(&url)).await;
+    assert!(cipher(&mut *s).await.is_empty(), "the link must be plain");
+    assert_eq!(sql(&mut *s, "select 1 as one").await.len(), 1);
+    s.close().await.unwrap();
+
+    // Downgrade protection: an attacker who strips the server's TLS offer must not obtain the
+    // password through the in-band RSA key. `prefer` (the default) refuses the plaintext
+    // exchange; only an explicit disable accepts it.
+    let strip = tls_stripping_proxy(server.addr()).await;
+    for query in ["", "ssl-mode=preferred"] {
+        let url = proxied(&server.url_for("sqler_rsa", "rsa-pass", query), &strip);
+        let err = MySqlDriver::new()
+            .connect(&config(&url))
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, DriverError::Connection(_)), "{err:?}");
+        assert!(
+            err.to_string().contains(
+                "plaintext RSA password exchange needs an explicit ssl-mode=disabled; use TLS"
+            ),
+            "{err}"
+        );
+        assert!(!format!("{err} {err:?}").contains("rsa-pass"));
+    }
+    // The same through the typed TLS mode of the connection config.
+    let url = proxied(&server.url_for("sqler_rsa", "rsa-pass", ""), &strip);
+    let err = MySqlDriver::new()
+        .connect(&config(&url).with_tls(TlsConfig::new(TlsMode::Prefer)))
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        err.to_string().contains("explicit ssl-mode=disabled"),
+        "{err}"
+    );
+    // `require` is unchanged: with no TLS offered it fails on TLS, not on the RSA exchange.
+    let url = proxied(
+        &server.url_for("sqler_rsa", "rsa-pass", "ssl-mode=required"),
+        &strip,
+    );
+    let err = MySqlDriver::new()
+        .connect(&config(&url))
+        .await
+        .err()
+        .unwrap();
+    assert!(err.to_string().contains("does not support TLS"), "{err}");
+    // An explicit disable still works through the same proxy.
+    let url = proxied(
+        &server.url_for("sqler_rsa", "rsa-pass", "ssl-mode=disabled"),
+        &strip,
+    );
+    let mut s = connect(&config(&url)).await;
+    assert_eq!(sql(&mut *s, "select 1 as one").await.len(), 1);
+    s.close().await.unwrap();
+
+    // A wrong password still fails with a typed, redacted error.
+    let bad = server.url_for("sqler_rsa", "rsa-wrong-1234", "ssl-mode=disabled");
+    let err = MySqlDriver::new()
+        .connect(&config(&bad))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(err, DriverError::Connection(_)), "{err:?}");
+    assert!(!format!("{err} {err:?}").contains("rsa-wrong-1234"));
+
+    sql(&mut *admin, "drop user 'sqler_rsa'@'%'").await;
+    admin.close().await.unwrap();
+}
+
+/// Replaces the `host:port` of `url` with the proxy address.
+fn proxied(url: &str, proxy: &str) -> String {
+    let (head, rest) = url.split_once('@').unwrap();
+    let tail = rest.find(['/', '?']).map_or("", |i| &rest[i..]);
+    format!("{head}@{proxy}{tail}")
+}
+
+/// A TCP proxy to `upstream` that clears the `CLIENT_SSL` capability in the server's handshake,
+/// like an active attacker stripping the TLS offer. Returns its `127.0.0.1:port`.
+async fn tls_stripping_proxy(upstream: String) -> String {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::net::{TcpListener, TcpStream};
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(async move {
+        while let Ok((client, _)) = listener.accept().await {
+            let upstream = upstream.clone();
+            tokio::spawn(async move {
+                let Ok(server) = TcpStream::connect(upstream).await else {
+                    return;
+                };
+                let (mut cr, mut cw) = client.into_split();
+                let (mut sr, mut sw) = server.into_split();
+                tokio::spawn(async move {
+                    let _ = tokio::io::copy(&mut cr, &mut sw).await;
+                });
+                // The first packet is the handshake: header(4), protocol(1), version(NUL),
+                // connection id(4), scramble(8), filler(1), capabilities(2, low bytes first).
+                let mut header = [0u8; 4];
+                if sr.read_exact(&mut header).await.is_err() {
+                    return;
+                }
+                let len = usize::from(header[0])
+                    | usize::from(header[1]) << 8
+                    | usize::from(header[2]) << 16;
+                let mut payload = vec![0u8; len];
+                if sr.read_exact(&mut payload).await.is_err() {
+                    return;
+                }
+                let nul = payload.iter().position(|b| *b == 0).unwrap();
+                payload[nul + 1 + 4 + 8 + 1 + 1] &= !0x08; // CLIENT_SSL is bit 11
+                let _ = cw.write_all(&header).await;
+                let _ = cw.write_all(&payload).await;
+                let _ = tokio::io::copy(&mut sr, &mut cw).await;
+            });
+        }
+    });
+    addr
 }
 
 async fn errors_typed_and_redacted(server: &Server) {
