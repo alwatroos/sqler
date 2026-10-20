@@ -103,16 +103,25 @@ struct Mode {
     dashes: bool,
     /// `$tag$ ... $tag$` is a literal (`PostgreSQL`).
     dollar: bool,
+    /// With `dollar`: `$tag$` opens a literal even right after a word or digit
+    /// (`1$$secret$$`).
+    glued: bool,
+    /// Oracle `q'[...]'` alternative quoting.
+    qquote: bool,
 }
 
 fn modes() -> impl Iterator<Item = Mode> {
-    (0..32_u8).map(|n| Mode {
-        backslash: n & 1 != 0,
-        nesting: n & 2 != 0,
-        hash: n & 4 != 0,
-        dashes: n & 8 != 0,
-        dollar: n & 16 != 0,
-    })
+    (0..128_u8)
+        .map(|n| Mode {
+            backslash: n & 1 != 0,
+            nesting: n & 2 != 0,
+            hash: n & 4 != 0,
+            dashes: n & 8 != 0,
+            dollar: n & 16 != 0,
+            glued: n & 32 != 0,
+            qquote: n & 64 != 0,
+        })
+        .filter(|m| m.dollar || !m.glued)
 }
 
 /// Lexes `sql` under `mode` and calls `mark(start, end)` for every segment
@@ -127,9 +136,12 @@ fn lex(sql: &str, mode: Mode, mut mark: impl FnMut(usize, usize)) {
             b'-' if mode.dashes && b.get(i + 1) == Some(&b'-') => Some(line_end(sql, i)),
             b'#' if mode.hash => Some(line_end(sql, i)),
             b'/' if b.get(i + 1) == Some(&b'*') => Some(block_comment_end(b, i, mode.nesting)),
+            b'\'' if mode.qquote && i > 0 && matches!(b[i - 1], b'q' | b'Q') => {
+                Some(q_quote_end(sql, i).unwrap_or_else(|| quoted_end(sql, i, c, false).0))
+            }
             b'\'' | b'"' => Some(quoted_end(sql, i, c, mode.backslash).0),
             b'`' => Some(quoted_end(sql, i, c, false).0),
-            b'$' if mode.dollar && !prev_word => dollar_end(sql, i),
+            b'$' if mode.dollar && (mode.glued || !prev_word) => dollar_end(sql, i),
             _ => None,
         };
         if let Some(end) = end {
@@ -202,10 +214,36 @@ fn quoted_end(sql: &str, start: usize, q: u8, backslash: bool) -> (usize, bool) 
     (b.len(), false)
 }
 
+/// End (exclusive) of an Oracle `q'<d>...<d>'` literal whose opening quote is at
+/// `quote`; `[ ( { <` close with their mirror, any other non-space character
+/// with itself. `None` when no delimiter follows. Unterminated: to the end.
+fn q_quote_end(sql: &str, quote: usize) -> Option<usize> {
+    let d = sql[quote + 1..].chars().next()?;
+    if d.is_whitespace() {
+        return None;
+    }
+    let close = match d {
+        '[' => ']',
+        '(' => ')',
+        '{' => '}',
+        '<' => '>',
+        o => o,
+    };
+    let body = quote + 1 + d.len_utf8();
+    let mut pat = String::new();
+    pat.push(close);
+    pat.push('\'');
+    Some(
+        sql[body..]
+            .find(&pat)
+            .map_or(sql.len(), |n| body + n + pat.len()),
+    )
+}
+
 /// End (exclusive) of a `$tag$ ... $tag$` literal starting at `start`, or
 /// `None` when `$` does not open one (for example `$1`). As in `PostgreSQL`, a
-/// tag is empty or starts with a letter (any script) or `_` and continues with
-/// letters, digits and `_`.
+/// tag is empty or starts with an ASCII letter, `_` or any non-ASCII character
+/// (letter, symbol or emoji) and continues with those and ASCII digits.
 fn dollar_end(sql: &str, start: usize) -> Option<usize> {
     let rest = &sql[start + 1..];
     let tag_len = rest.find('$')?;
@@ -214,7 +252,8 @@ fn dollar_end(sql: &str, start: usize) -> Option<usize> {
     let tag_ok = match chars.next() {
         None => true,
         Some(f) => {
-            (f.is_alphabetic() || f == '_') && chars.all(|c| c.is_alphanumeric() || c == '_')
+            let head = |c: char| c.is_ascii_alphabetic() || c == '_' || !c.is_ascii();
+            head(f) && chars.all(|c| head(c) || c.is_ascii_digit())
         }
     };
     if !tag_ok {
@@ -272,7 +311,7 @@ fn is_sensitive(sql: &str) -> bool {
 /// backtick identifier that is never closed becomes `'<redacted>'`. The text is
 /// lexed under every combination of the readings that differ between dialects
 /// (backslash escapes, nesting block comments, `#` and bare `--` comments,
-/// dollar quoting) and the union of the ranges is redacted. An unterminated
+/// dollar quoting, also glued to a preceding word, Oracle `q'[..]'` quoting) and the union of the ranges is redacted. An unterminated
 /// construct in any reading hides everything to the end of the statement.
 /// Literals holding JSON, YAML, `key=value` or URL credentials are redacted
 /// whole because all literals are. Other statements are returned unchanged
@@ -595,6 +634,41 @@ mod tests {
             "ALTER ROLE u PASSWORD $日本$hunter2$日本$",
             "ALTER ROLE u PASSWORD $é$ x $é$ || $é$hunter2$é$",
             "ALTER ROLE u PASSWORD $é$hunter2",
+            "ALTER ROLE u PASSWORD $😀$hunter2$😀$",
+            "ALTER ROLE u PASSWORD $→$hunter2$→$",
+            "ALTER ROLE u PASSWORD $é·$hunter2$é·$",
+            "ALTER ROLE u PASSWORD $a→1$hunter2$a→1$",
+        ] {
+            let out = r(s);
+            assert!(!leaks(&out), "{s} -> {out}");
+        }
+    }
+
+    #[test]
+    fn dollar_quote_glued_to_a_word_does_not_leak() {
+        for s in [
+            "ALTER ROLE u PASSWORD 1$$hunter2$$",
+            "ALTER ROLE u PASSWORD x$t$hunter2$t$",
+            "ALTER ROLE u PASSWORD a1$$it's hunter2$$",
+        ] {
+            let out = r(s);
+            assert!(!leaks(&out), "{s} -> {out}");
+        }
+    }
+
+    #[test]
+    fn oracle_q_quotes_do_not_leak() {
+        for s in [
+            "ALTER USER u IDENTIFIED BY q'[it's hunter2]'",
+            "ALTER USER u IDENTIFIED BY Q'(it's hunter2)'",
+            "ALTER USER u IDENTIFIED BY q'{it's hunter2}'",
+            "ALTER USER u IDENTIFIED BY q'<it's hunter2>'",
+            "ALTER USER u IDENTIFIED BY q'!it's hunter2!'",
+            "ALTER USER u IDENTIFIED BY q'#it's hunter2#'",
+            "ALTER USER u IDENTIFIED BY q'-it's hunter2-'",
+            "ALTER USER u IDENTIFIED BY q'é it's hunter2é'",
+            "ALTER USER u IDENTIFIED BY nq'[it's hunter2]'",
+            "ALTER USER u IDENTIFIED BY q'[it's hunter2",
         ] {
             let out = r(s);
             assert!(!leaks(&out), "{s} -> {out}");
@@ -724,7 +798,7 @@ mod tests {
         "''", "\\'", "/* /*", "'a\\'", "password", "$1", "é", "--'", "`a``", "$é$", "$ж$",
     ];
     /// Places for the secret.
-    const WRAPS: [&str; 18] = [
+    const WRAPS: [&str; 27] = [
         "'S'",
         "\"S\"",
         "`S`",
@@ -743,6 +817,15 @@ mod tests {
         "$é$S$é$",
         "$ü_1$S$ü_1$",
         "$日本$S$日本$",
+        "$😀$S$😀$",
+        "$→$S$→$",
+        "$é·$S$é·$",
+        "1$$S$$",
+        "x$t$S$t$",
+        "q'[it's S]'",
+        "Q'{it's S}'",
+        "q'!it's S!'",
+        "q'<it's S",
     ];
     const SENSITIVE: [&str; 14] = [
         "pw",
@@ -781,6 +864,39 @@ mod tests {
             }
             let out = redact_credentials(&sql);
             assert!(!out.contains(SECRET), "{sql:?} -> {out:?}");
+        }
+    }
+
+    /// Detection, not lexing: every real marker, in varied case and position,
+    /// must make the statement sensitive so its literal is removed.
+    #[test]
+    fn every_marker_in_varied_positions_triggers_redaction() {
+        let mut rng = Rng(0xDEAD_BEEF_CAFE_F00D);
+        let mut markers: Vec<&str> = MARKERS.to_vec();
+        markers.extend(MULTI_WORD_MARKERS);
+        markers.extend(WORD_MARKERS);
+        for m in markers {
+            for _ in 0..40 {
+                let cased: String = m
+                    .chars()
+                    .map(|c| match rng.next() % 3 {
+                        0 => c.to_ascii_uppercase(),
+                        _ => c,
+                    })
+                    .collect();
+                let m = cased.as_str();
+                let sql = match rng.next() % 7 {
+                    0 => format!("select '{SECRET}' from t where {m} = 1"),
+                    1 => format!("select {m}, '{SECRET}' from t"),
+                    2 => format!("select '{SECRET}' /* {m} */"),
+                    3 => format!("select x.{m}, '{SECRET}'"),
+                    4 => format!("-- {m}\nselect '{SECRET}'"),
+                    5 => format!("select \"{m}\" = '{SECRET}'"),
+                    _ => format!("select '{SECRET}' where a = '{m}'"),
+                };
+                let out = redact_credentials(&sql);
+                assert!(!out.contains(SECRET), "{sql:?} -> {out:?}");
+            }
         }
     }
 
