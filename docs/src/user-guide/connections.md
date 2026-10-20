@@ -178,10 +178,11 @@ the file yourself.
 
 ### Limits
 
-- `verify-full` TLS through an SSH tunnel is refused with the message "verify-full TLS through an SSH
-  tunnel is not supported yet; use verify-ca or connect without the tunnel". The database sees the
-  tunnel's local address, so the host name cannot be checked. Lifting this needs a server-name option
-  in the TLS settings and in the drivers.
+- `verify-full` TLS through an SSH tunnel checks the certificate against the connection's original
+  host, not the tunnel's local address ([ADR-0019](../adr/0019-tls-server-name-through-tunnel.md)).
+  A certificate for another name fails the connection. On Windows this is still refused with the
+  message "verify-full TLS through an SSH tunnel is not supported yet; use verify-ca or connect
+  without the tunnel", because the TLS library cannot separate the dial address from the name there.
 - Quitting closes open sessions and tunnels, waiting at most a couple of seconds.
 
 See [ADR-0016](../adr/0016-connect-pipeline.md) for the connect pipeline.

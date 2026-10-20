@@ -76,3 +76,21 @@ pub async fn fresh_schema(session: &mut dyn Session, name: &str) {
     sql(session, &format!("create schema {name}")).await;
     sql(session, &format!("set search_path to {name}")).await;
 }
+
+/// Forwards `127.0.0.1:<returned port>` to `127.0.0.1:port`; stands in for an SSH tunnel.
+#[cfg(unix)]
+pub async fn forwarder(port: u16) -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut inbound, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                if let Ok(mut outbound) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await
+                {
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                }
+            });
+        }
+    });
+    local
+}

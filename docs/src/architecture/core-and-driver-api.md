@@ -13,7 +13,7 @@ Decision records: [ADR-0004](../adr/0004-driver-api.md) (driver API) and [ADR-00
 `sqler-core`:
 
 - `CoreError`, `DriverId`, `ConnectionConfig`, `Query`
-- `TlsMode`, `TlsConfig`: connection security options, carried in `ConnectionConfig::tls`
+- `TlsMode`, `TlsConfig`: connection security options, carried in `ConnectionConfig::tls`; `TlsConfig::server_name` is the name to verify and send as SNI when it differs from the dial host (ADR-0019)
 - `DataType`, `Value`, `Column`, `Row`, `ResultSet`
 - `Date`, `Time`, `Timestamp`, `TimestampTz`, `Decimal`: validated value types, std only
 - `ObjectKind`, `ObjectLevel`, `ObjectPath`, `DbObject`, `Listing`: the object model

@@ -3,8 +3,9 @@
 
 //! The cloneable catalog handle, refresh handles and refresh events.
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use sqler_driver_api::CancelFlag;
 use sqler_driver_api::sqler_core::{DbObject, Listing, Table};
@@ -12,8 +13,13 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::error::CatalogError;
 use crate::key::{CacheKey, NodeKey, RefreshScope};
-use crate::store::{self, Shared, Store};
+use crate::snapshot::CatalogSnapshot;
+use crate::store::{self, Shared};
 use crate::worker::{CatalogWorker, Command, IntrospectSource, Job, Loaded};
+
+/// One table of a [`Catalog::load_tables`] answer: the table and its details, `Ok(None)` if the
+/// driver found no such table.
+type TableLoad = (DbObject, Result<Option<Arc<Table>>, CatalogError>);
 
 /// How a refresh ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +109,7 @@ pub struct Catalog {
 impl Catalog {
     /// Creates a catalog and its worker. Run [`CatalogWorker::run`] on an executor.
     pub fn new(source: impl Into<IntrospectSource>) -> (Catalog, CatalogWorker) {
-        let store: Shared = Arc::new(RwLock::new(Store::default()));
+        let store: Shared = store::new_shared();
         let (tx, rx) = mpsc::unbounded_channel();
         let worker = CatalogWorker::new(source.into(), rx, Arc::clone(&store));
         (Catalog { store, tx }, worker)
@@ -112,7 +118,10 @@ impl Catalog {
     /// The cached children of `key`, if loaded. Never touches the database.
     #[must_use]
     pub fn cached(&self, key: &NodeKey) -> Option<Arc<Listing>> {
-        store::read(&self.store).lists.get(key).cloned()
+        store::current(&self.store)
+            .lists
+            .get(key)
+            .map(|e| Arc::clone(&e.listing))
     }
 
     /// The children of `key`: from the cache, or loaded by the worker (one call per node).
@@ -140,7 +149,10 @@ impl Catalog {
     /// The cached details of `obj`, if loaded. Never touches the database.
     #[must_use]
     pub fn cached_table(&self, obj: &DbObject) -> Option<Arc<Table>> {
-        store::read(&self.store).tables.get(obj).cloned()
+        store::current(&self.store)
+            .tables
+            .get(obj)
+            .map(|e| Arc::clone(&e.table))
     }
 
     /// The details of `obj`: from the cache, or loaded by the worker.
@@ -166,16 +178,89 @@ impl Catalog {
         }
     }
 
+    /// The details of several tables at once, in input order, loaded off the calling thread.
+    ///
+    /// Cache hits are answered at once. Every miss is sent to the worker when this method is
+    /// called, not when the future is first polled, and the worker's single-flight rule applies:
+    /// duplicates in `tables` and concurrent [`Catalog::table`] calls cost one introspection call
+    /// per table. Each result is `Ok(None)` if the driver found no such table. Dropping the
+    /// future cancels the loads that have not started.
+    pub fn load_tables(
+        &self,
+        tables: Vec<DbObject>,
+    ) -> impl Future<Output = Vec<TableLoad>> + Send + 'static {
+        enum Slot {
+            Hit(Arc<Table>),
+            Closed,
+            Wait(oneshot::Receiver<Result<Loaded, CatalogError>>),
+            Same(usize),
+        }
+        let current = store::current(&self.store);
+        let mut first: HashMap<DbObject, usize> = HashMap::new();
+        let mut slots: Vec<(DbObject, Slot)> = Vec::with_capacity(tables.len());
+        for obj in tables {
+            let slot = if let Some(&i) = first.get(&obj) {
+                Slot::Same(i)
+            } else if let Some(entry) = current.tables.get(&obj) {
+                Slot::Hit(Arc::clone(&entry.table))
+            } else {
+                let (reply, rx) = oneshot::channel();
+                if self
+                    .tx
+                    .send(Command::Load(CacheKey::Table(obj.clone()), reply))
+                    .is_ok()
+                {
+                    Slot::Wait(rx)
+                } else {
+                    Slot::Closed
+                }
+            };
+            if !matches!(slot, Slot::Same(_)) {
+                first.insert(obj.clone(), slots.len());
+            }
+            slots.push((obj, slot));
+        }
+        async move {
+            let mut results: Vec<TableLoad> = Vec::with_capacity(slots.len());
+            for (obj, slot) in slots {
+                let result = match slot {
+                    Slot::Hit(table) => Ok(Some(table)),
+                    Slot::Closed => Err(CatalogError::Closed),
+                    Slot::Wait(rx) => match rx.await {
+                        Ok(Ok(Loaded::Table(table))) => Ok(table),
+                        Ok(Ok(Loaded::List(_))) | Err(_) => Err(CatalogError::Closed),
+                        Ok(Err(error)) => Err(error),
+                    },
+                    Slot::Same(i) => results
+                        .get(i)
+                        .map_or(Err(CatalogError::Closed), |(_, r)| r.clone()),
+                };
+                results.push((obj, result));
+            }
+            results
+        }
+    }
+
+    /// An immutable view of the cache as it is now.
+    ///
+    /// One read lock and an `Arc` clone: it never waits for the worker, a refresh or the
+    /// database, and later changes do not affect it. Take a fresh one per request rather than
+    /// keeping one, because it holds the data it shows.
+    #[must_use]
+    pub fn snapshot(&self) -> CatalogSnapshot {
+        CatalogSnapshot::new(store::current(&self.store))
+    }
+
     /// The last error of `key`, until a later load or refresh of it succeeds.
     #[must_use]
     pub fn node_error(&self, key: &CacheKey) -> Option<CatalogError> {
-        store::read(&self.store).errors.get(key).cloned()
+        store::current(&self.store).errors.get(key).cloned()
     }
 
     /// Number of cached lists plus tables.
     #[must_use]
     pub fn cached_len(&self) -> usize {
-        store::read(&self.store).len()
+        store::current(&self.store).len()
     }
 
     /// Starts a refresh in the background and returns its handle.

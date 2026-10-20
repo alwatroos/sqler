@@ -11,7 +11,8 @@ use std::future::Future;
 use std::path::PathBuf;
 
 use sqler_catalog::{
-    CacheKey, Catalog, IntrospectSource, NodeKey, RefreshEvent, RefreshOutcome, RefreshScope,
+    CacheKey, Catalog, IntrospectSource, NameKind, NameQuery, NodeKey, RefreshEvent,
+    RefreshOutcome, RefreshScope, TableState,
 };
 use sqler_driver_api::sqler_core::{
     ConnectionConfig, DataType, DbObject, DriverId, Listing, ObjectKind, ObjectPath, Query,
@@ -170,6 +171,66 @@ fn a_refresh_shows_tables_created_and_dropped_by_another_session() {
         let fresh = DbObject::new(ObjectKind::Table, main_path(), "fresh");
         let table = catalog.table(fresh).await.unwrap().unwrap();
         assert_eq!(table.columns.len(), 2);
+
+        catalog.shutdown();
+        let IntrospectSource::Session(session) = join.await.unwrap() else {
+            panic!("expected the session back");
+        };
+        session.close().await.unwrap();
+        a.close().await.unwrap();
+    });
+}
+
+#[test]
+fn foreign_keys_columns_and_lookups_work_on_sqlite() {
+    let db = TempDb::new("fk");
+    run(async {
+        let mut a = db.open().await;
+        exec(
+            &mut *a,
+            "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT)",
+        )
+        .await;
+        exec(
+            &mut *a,
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER REFERENCES customers(id))",
+        )
+        .await;
+        let (catalog, worker) = Catalog::new(db.open().await);
+        let join = tokio::spawn(worker.run());
+
+        catalog
+            .children(NodeKey::new(main_path(), ObjectKind::Table))
+            .await
+            .unwrap();
+        let customers = DbObject::new(ObjectKind::Table, main_path(), "customers");
+        let orders = DbObject::new(ObjectKind::Table, main_path(), "orders");
+        let before = catalog.snapshot();
+        assert_eq!(before.table_state(&orders), TableState::NotLoaded);
+        assert_eq!(before.foreign_keys(&orders), None);
+
+        let loaded = catalog
+            .load_tables(vec![orders.clone(), customers.clone()])
+            .await;
+        assert!(loaded.iter().all(|(_, r)| matches!(r, Ok(Some(_)))));
+
+        let snap = catalog.snapshot();
+        let fks = snap.foreign_keys(&orders).unwrap();
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].target, customers);
+        assert_eq!(fks[0].columns, ["customer_id"]);
+        assert_eq!(fks[0].referenced_columns, ["id"]);
+        assert_eq!(snap.foreign_keys(&customers).unwrap().len(), 0);
+
+        let hits = snap.lookup(&NameQuery::new("ORD"));
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].object(), Some(orders.clone()));
+        let cols = snap.lookup(&NameQuery::new("customer_i"));
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].kind, NameKind::Column);
+        assert_eq!(cols[0].parent, main_path().in_table("orders"));
+
+        assert_eq!(snap.find_relations(&main_path(), "ORDERS"), vec![orders]);
 
         catalog.shutdown();
         let IntrospectSource::Session(session) = join.await.unwrap() else {
