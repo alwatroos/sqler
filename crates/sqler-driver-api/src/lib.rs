@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! The `Driver` trait, streaming result protocol, cancellation and introspection trait that every database driver implements.
+//! The `Driver` trait, streaming result protocol, cancellation and lazy per-node introspection trait that every database driver implements.
 //!
 //! A [`DriverRegistry`] maps a [`sqler_core::DriverId`] to a boxed [`Driver`]. `connect` yields a
 //! boxed [`Session`]. Take a [`CancelHandle`] from the session, then `execute` a query to get a

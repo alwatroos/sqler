@@ -115,7 +115,112 @@ fn declared_types_and_runtime_values() {
         assert!(rs.columns().iter().all(|c| c.native_type.is_some()));
         let row = &rs.rows()[0];
         assert_eq!(row.get(4), Some(&Value::Int(1)));
-        assert_eq!(row.get(5), Some(&Value::Text("2024-01-02".into())));
+        assert_eq!(
+            row.get(5),
+            Some(&Value::Date("2024-01-02".parse().unwrap()))
+        );
+        assert_eq!(
+            row.get(6),
+            Some(&Value::Timestamp("2024-01-02 03:04:05".parse().unwrap()))
+        );
+    });
+}
+
+#[test]
+fn temporal_text_decodes_with_fallbacks() {
+    run(async {
+        let mut s = memory().await;
+        sql(&mut *s, "create table t (d DATE, ts DATETIME, tm TIME)").await;
+        sql(
+            &mut *s,
+            "insert into t values ('2024-02-29', '2024-01-02T03:04:05.5+02:00', '23:59:58'), \
+             ('garbage', 'also garbage', '25:00'), (19000, 'x', NULL)",
+        )
+        .await;
+        sql(
+            &mut *s,
+            "insert into t values (NULL, '2024-01-02 03:04:05Z', NULL)",
+        )
+        .await;
+        let rs = sql(&mut *s, "select * from t").await;
+        let rows = rs.rows();
+        assert_eq!(
+            rows[0].get(0),
+            Some(&Value::Date("2024-02-29".parse().unwrap()))
+        );
+        assert_eq!(
+            rows[0].get(1),
+            Some(&Value::TimestampTz(
+                "2024-01-02 03:04:05.5+02:00".parse().unwrap()
+            ))
+        );
+        assert_eq!(
+            rows[0].get(2),
+            Some(&Value::Time("23:59:58".parse().unwrap()))
+        );
+        assert_eq!(rows[1].get(0), Some(&Value::Text("garbage".into())));
+        assert_eq!(rows[1].get(1), Some(&Value::Text("also garbage".into())));
+        assert_eq!(rows[1].get(2), Some(&Value::Text("25:00".into())));
+        assert_eq!(rows[2].get(0), Some(&Value::Int(19000)));
+        assert_eq!(rows[2].get(2), Some(&Value::Null));
+        assert!(matches!(rows[3].get(1), Some(Value::TimestampTz(_))));
+    });
+}
+
+#[test]
+fn malformed_non_ascii_datetime_falls_back_to_text() {
+    run(async {
+        let mut s = memory().await;
+        sql(&mut *s, "create table t (ts DATETIME, d DATE, tm TIME)").await;
+        sql(
+            &mut *s,
+            "insert into t values ('2024-01-02 03:04:05+aéb', '20é4-01-02', '1é:00:00')",
+        )
+        .await;
+        let rs = sql(&mut *s, "select * from t").await;
+        let row = &rs.rows()[0];
+        assert_eq!(
+            row.get(0),
+            Some(&Value::Text("2024-01-02 03:04:05+aéb".into()))
+        );
+        assert_eq!(row.get(1), Some(&Value::Text("20é4-01-02".into())));
+        assert_eq!(row.get(2), Some(&Value::Text("1é:00:00".into())));
+    });
+}
+
+#[test]
+fn typed_params_round_trip() {
+    run(async {
+        let mut s = memory().await;
+        let date: sqler_driver_api::sqler_core::Date = "2024-01-02".parse().unwrap();
+        let time: sqler_driver_api::sqler_core::Time = "03:04:05.25".parse().unwrap();
+        let ts: sqler_driver_api::sqler_core::Timestamp = "2024-01-02 03:04:05".parse().unwrap();
+        let tz: sqler_driver_api::sqler_core::TimestampTz =
+            "2024-01-02 03:04:05-05:00".parse().unwrap();
+        let dec: sqler_driver_api::sqler_core::Decimal = "12.50".parse().unwrap();
+        sql(
+            &mut *s,
+            "create table t (d DATE, tm TIME, ts DATETIME, tz DATETIME, n NUMERIC, j JSON)",
+        )
+        .await;
+        let q = Query::new("insert into t values (?, ?, ?, ?, ?, ?)").with_params(vec![
+            Value::Date(date),
+            Value::Time(time),
+            Value::Timestamp(ts),
+            Value::TimestampTz(tz),
+            Value::Decimal(dec),
+            Value::Json("{\"a\":1}".into()),
+        ]);
+        query(&mut *s, &q).await.unwrap();
+        let rs = sql(&mut *s, "select * from t").await;
+        let row = &rs.rows()[0];
+        assert_eq!(row.get(0), Some(&Value::Date(date)));
+        assert_eq!(row.get(1), Some(&Value::Time(time)));
+        assert_eq!(row.get(2), Some(&Value::Timestamp(ts)));
+        assert_eq!(row.get(3), Some(&Value::TimestampTz(tz)));
+        // NUMERIC affinity stores the text as a real; JSON stays text.
+        assert_eq!(row.get(4), Some(&Value::Float(12.5)));
+        assert_eq!(row.get(5), Some(&Value::Text("{\"a\":1}".into())));
     });
 }
 

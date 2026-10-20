@@ -9,6 +9,10 @@
 //! The `ConnectionConfig::target` is `:memory:`, a `sqlite:` URL, or a file path. A missing file
 //! is created.
 //!
+//! The session also implements [`sqler_driver_api::Introspect`] from `sqlite_master` and the
+//! `pragma_*` functions, and decodes TEXT cells of DATE, TIME and DATETIME columns into typed
+//! values (falling back to `Text`).
+//!
 //! # Runtime
 //! `sqlx` runs on Tokio (`runtime-tokio`): the futures returned by the driver must be polled inside
 //! a Tokio runtime context.
@@ -20,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 mod convert;
+mod introspect;
 mod session;
 mod stream;
 

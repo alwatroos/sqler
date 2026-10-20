@@ -94,7 +94,7 @@ Groups nest to any depth. Moving a group below itself or a descendant is rejecte
 
 ### TLS
 
-The store keeps its own TLS profile (mode `disable`, `prefer`, `require`, `verify-ca` or `verify-full`, plus optional CA certificate, client certificate and client key paths), so the file format does not depend on how drivers consume it. A client certificate and key must be given together. The profile is stored and round-tripped. `sqler-core` `ConnectionConfig` has no TLS field yet, so the conversion maps name, driver, target, colour and environment only; mapping the TLS profile follows when that field exists.
+The store keeps its own TLS profile (mode `disable`, `prefer`, `require`, `verify-ca` or `verify-full`, plus optional CA certificate, client certificate and client key paths), so the file format does not depend on how drivers consume it. A client certificate and key must be given together. The profile is stored and round-tripped, and the conversion to `sqler-core` `ConnectionConfig` maps it to the core `TlsConfig` (same modes and paths). The SSH tunnel is not part of `ConnectionConfig`.
 
 ### Writes
 

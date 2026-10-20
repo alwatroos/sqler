@@ -6,7 +6,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use sqler_core::{ConnectionConfig, DriverId, Environment};
+use sqler_core::{ConnectionConfig, DriverId, Environment, TlsConfig, TlsMode as CoreTlsMode};
 
 use super::store::StoreError;
 use crate::secrets::{MAX_ID_LEN, SecretError, SecretRef};
@@ -220,6 +220,16 @@ impl TlsMode {
         }
     }
 
+    fn to_core(self) -> CoreTlsMode {
+        match self {
+            Self::Disable => CoreTlsMode::Disable,
+            Self::Prefer => CoreTlsMode::Prefer,
+            Self::Require => CoreTlsMode::Require,
+            Self::VerifyCa => CoreTlsMode::VerifyCa,
+            Self::VerifyFull => CoreTlsMode::VerifyFull,
+        }
+    }
+
     /// Parses an identifier produced by [`TlsMode::as_str`] (exact match).
     #[must_use]
     pub fn from_id(id: &str) -> Option<Self> {
@@ -234,7 +244,7 @@ impl TlsMode {
     }
 }
 
-/// TLS settings of a connection. Stored only; see ADR-0011.
+/// TLS settings of a connection; see ADR-0011.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TlsProfile {
@@ -258,6 +268,22 @@ impl TlsProfile {
             client_cert: None,
             client_key: None,
         }
+    }
+
+    /// The `sqler-core` TLS options for this profile.
+    #[must_use]
+    pub fn to_core(&self) -> TlsConfig {
+        let mut cfg = TlsConfig::new(self.mode.to_core());
+        if let Some(p) = &self.ca_cert {
+            cfg = cfg.with_ca_cert(p.clone());
+        }
+        if let Some(p) = &self.client_cert {
+            cfg = cfg.with_client_cert(p.clone());
+        }
+        if let Some(p) = &self.client_key {
+            cfg = cfg.with_client_key(p.clone());
+        }
+        cfg
     }
 }
 
@@ -563,7 +589,7 @@ impl ConnectionProfile {
             .collect()
     }
 
-    /// The `sqler-core` configuration for this profile (TLS and SSH are not part of it yet).
+    /// The `sqler-core` configuration for this profile (the SSH tunnel is not part of it).
     #[must_use]
     pub fn to_connection_config(&self) -> ConnectionConfig {
         let mut cfg = self.spec.core_config();
@@ -572,6 +598,9 @@ impl ConnectionProfile {
         }
         if let Some(env) = self.spec.environment {
             cfg = cfg.with_environment(env);
+        }
+        if let Some(tls) = &self.spec.tls {
+            cfg = cfg.with_tls(tls.to_core());
         }
         cfg
     }
@@ -775,5 +804,33 @@ mod tests {
         assert_eq!(cfg.target, "app.db");
         assert_eq!(cfg.color.as_deref(), Some("#112233"));
         assert_eq!(cfg.environment, Some(Environment::Prod));
+    }
+
+    #[test]
+    fn to_connection_config_maps_tls() {
+        let mut tls = TlsProfile::new(TlsMode::VerifyFull);
+        tls.ca_cert = Some("/ca.pem".into());
+        tls.client_cert = Some("/c.pem".into());
+        tls.client_key = Some("/k.pem".into());
+        let spec = ConnectionSpec::new("n", sqlite(), "x").with_tls(tls);
+        let p = ConnectionProfile::new(ConnectionId::from_valid("n".into()), None, spec);
+        let got = p.to_connection_config().tls.unwrap();
+        let want = TlsConfig::new(CoreTlsMode::VerifyFull)
+            .with_ca_cert("/ca.pem")
+            .with_client_cert("/c.pem")
+            .with_client_key("/k.pem");
+        assert_eq!(got, want);
+
+        for (m, c) in [
+            (TlsMode::Disable, CoreTlsMode::Disable),
+            (TlsMode::Prefer, CoreTlsMode::Prefer),
+            (TlsMode::Require, CoreTlsMode::Require),
+            (TlsMode::VerifyCa, CoreTlsMode::VerifyCa),
+        ] {
+            assert_eq!(TlsProfile::new(m).to_core(), TlsConfig::new(c));
+        }
+        let plain = ConnectionSpec::new("n", sqlite(), "x");
+        let p = ConnectionProfile::new(ConnectionId::from_valid("n".into()), None, plain);
+        assert_eq!(p.to_connection_config().tls, None);
     }
 }
