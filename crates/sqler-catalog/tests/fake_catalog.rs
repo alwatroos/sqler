@@ -358,6 +358,29 @@ fn concurrent_misses_cost_one_call() {
 }
 
 #[test]
+fn concurrent_requests_for_a_failing_node_share_one_call() {
+    run(async {
+        let r = rig(&Fake::standard());
+        let bad = CacheKey::Table(tbl("a"));
+        r.fake.fail(bad.clone());
+        r.fake.gate();
+        let waiters: Vec<_> = (0..5)
+            .map(|_| tokio::spawn(r.catalog.clone().table(tbl("a"))))
+            .collect();
+        r.fake.wait_calls(1).await;
+        settle().await;
+        r.fake.ungate();
+        for w in waiters {
+            assert_eq!(
+                w.await.unwrap().unwrap_err(),
+                CatalogError::Driver("query failed: scripted failure".into())
+            );
+        }
+        assert_eq!(r.fake.log(), [bad]);
+    });
+}
+
+#[test]
 fn errors_are_per_node_and_a_retry_clears_them() {
     run(async {
         let r = rig(&Fake::standard());
@@ -678,6 +701,26 @@ fn shutdown_returns_the_source_and_closes_pending_refreshes() {
             events(&mut late).await,
             [RefreshEvent::Finished(RefreshOutcome::Closed)]
         );
+    });
+}
+
+#[test]
+fn dropping_the_worker_future_closes_open_refreshes() {
+    run(async {
+        let r = rig(&Fake::standard());
+        load_all(&r.catalog).await;
+        r.fake.gate();
+        let mut running = r.catalog.refresh(RefreshScope::All);
+        let mut queued = r.catalog.refresh(RefreshScope::All);
+        r.fake.wait_calls(6).await;
+        r.join.abort();
+        for h in [&mut running, &mut queued] {
+            let all = events(h).await;
+            assert_eq!(
+                all.last(),
+                Some(&RefreshEvent::Finished(RefreshOutcome::Closed))
+            );
+        }
     });
 }
 

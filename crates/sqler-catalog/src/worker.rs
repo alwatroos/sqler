@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use sqler_driver_api::sqler_core::{DbObject, Listing, ObjectPath, Table};
 use sqler_driver_api::{CancelFlag, Introspect, Session};
@@ -69,16 +70,41 @@ pub(crate) struct Job {
     pub(crate) scope: RefreshScope,
     pub(crate) flag: CancelFlag,
     pub(crate) events: mpsc::UnboundedSender<RefreshEvent>,
+    finished: AtomicBool,
 }
 
 impl Job {
+    pub(crate) fn new(
+        scope: RefreshScope,
+        flag: CancelFlag,
+        events: mpsc::UnboundedSender<RefreshEvent>,
+    ) -> Self {
+        Self {
+            scope,
+            flag,
+            events,
+            finished: AtomicBool::new(false),
+        }
+    }
+
     pub(crate) fn finish(&self, outcome: RefreshOutcome) {
+        // Exactly one `Finished` per job, whichever path gets there first.
+        if self.finished.swap(true, Ordering::SeqCst) {
+            return;
+        }
         // A dropped handle means nobody listens; the refresh ran regardless.
         let _ = self.events.send(RefreshEvent::Finished(outcome));
     }
 
     fn emit(&self, event: RefreshEvent) {
         let _ = self.events.send(event);
+    }
+}
+
+impl Drop for Job {
+    /// A job that is dropped unfinished (the worker future was dropped or aborted) is closed.
+    fn drop(&mut self) {
+        self.finish(RefreshOutcome::Closed);
     }
 }
 
@@ -140,6 +166,8 @@ pub struct CatalogWorker {
     rx: mpsc::UnboundedReceiver<Command>,
     store: Shared,
     jobs: VecDeque<Active>,
+    /// Commands taken off the channel while answering duplicate loads, still to be handled.
+    deferred: VecDeque<Command>,
 }
 
 impl CatalogWorker {
@@ -153,6 +181,7 @@ impl CatalogWorker {
             rx,
             store,
             jobs: VecDeque::new(),
+            deferred: VecDeque::new(),
         }
     }
 
@@ -160,11 +189,18 @@ impl CatalogWorker {
     ///
     /// Pending refreshes end with [`RefreshOutcome::Closed`] and waiting loads see
     /// [`CatalogError::Closed`]. Returns the source so the caller can close the session.
+    ///
+    /// If the future is dropped instead, open refreshes still end with `Closed` and waiting
+    /// loads see [`CatalogError::Closed`], because the pending requests are dropped with it.
     pub async fn run(mut self) -> IntrospectSource {
         loop {
             let mut open = true;
             loop {
-                match self.rx.try_recv() {
+                let next = match self.deferred.pop_front() {
+                    Some(cmd) => Ok(cmd),
+                    None => self.rx.try_recv(),
+                };
+                match next {
                     Ok(cmd) => {
                         if !self.handle(cmd).await {
                             open = false;
@@ -214,6 +250,11 @@ impl CatalogWorker {
         for active in self.jobs.drain(..) {
             active.job.finish(RefreshOutcome::Closed);
         }
+        for cmd in self.deferred.drain(..) {
+            if let Command::Refresh(job) = cmd {
+                job.finish(RefreshOutcome::Closed);
+            }
+        }
         while let Ok(cmd) = self.rx.try_recv() {
             if let Command::Refresh(job) = cmd {
                 job.finish(RefreshOutcome::Closed);
@@ -259,11 +300,25 @@ impl CatalogWorker {
             }
             Err(error) => {
                 let mut staged = Staged::default();
-                staged.failures.push((key, error.clone()));
+                staged.failures.push((key.clone(), error.clone()));
                 store::write(&self.store).apply(staged);
                 Err(error)
             }
         };
+        // Waiters queued for the same key share this one result, success or failure.
+        while let Ok(cmd) = self.rx.try_recv() {
+            self.deferred.push_back(cmd);
+        }
+        let mut rest = VecDeque::with_capacity(self.deferred.len());
+        for cmd in self.deferred.drain(..) {
+            match cmd {
+                Command::Load(k, waiter) if k == key => {
+                    let _ = waiter.send(result.clone());
+                }
+                other => rest.push_back(other),
+            }
+        }
+        self.deferred = rest;
         let _ = reply.send(result);
     }
 

@@ -55,7 +55,7 @@ jobs:
             cargo bench -p sqler-ui --bench grid_viewport -- --save "$GITHUB_WORKSPACE/target/bench-pr.txt"
           fi
       - name: Baseline catalog bench on the base commit
-        if: github.event_name == 'pull_request'
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
           mkdir -p "$GITHUB_WORKSPACE/target"
           if [ -f ../base/crates/sqler-catalog/benches/catalog_tree.rs ]; then
@@ -66,6 +66,7 @@ jobs:
             echo "::notice::no catalog baseline bench on base"
           fi
       - name: Bench the catalog on the PR (or branch) commit
+        if: ${{ !cancelled() }}
         run: |
           mkdir -p "$GITHUB_WORKSPACE/target"
           if [ -f "$GITHUB_WORKSPACE/target/catalog-base.txt" ]; then

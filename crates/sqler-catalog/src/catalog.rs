@@ -186,11 +186,7 @@ impl Catalog {
     pub fn refresh(&self, scope: RefreshScope) -> RefreshHandle {
         let flag = CancelFlag::new();
         let (events, rx) = mpsc::unbounded_channel();
-        let job = Job {
-            scope,
-            flag: flag.clone(),
-            events,
-        };
+        let job = Job::new(scope, flag.clone(), events);
         if let Err(mpsc::error::SendError(Command::Refresh(job))) =
             self.tx.send(Command::Refresh(job))
         {
