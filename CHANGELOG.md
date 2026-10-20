@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `grid_viewport` and `browser_tree` benchmarks gate on the minimum over `--reps` (3) repetitions with an absolute `--slack-ns` (100 ns and 250 us), so noise on shared CI runners no longer fails unrelated pull requests; a 2x slowdown still fails. `bench.yml` and `docs/src/benchmarks.md` updated.
+
 ### Added
 
 - `sqler-catalog` snapshot and name index for intellisense: `Catalog::snapshot()` returns an immutable, `Send + Sync` `CatalogSnapshot` without waiting on the worker (copy-on-write store, sharded maps, unchanged objects shared across refreshes), `lookup` does prefix and fuzzy search over objects and loaded columns, scoped, bounded and ranked, `load_tables` loads the columns of named tables on demand and cancellably, `table_state` tells "not loaded" from "no columns", and `foreign_keys` resolves the targets of loaded tables. ADR-0022, an updated "Schema catalog" page and a `catalog_index` benchmark on 5,000 tables (also run by `bench.yml`).
