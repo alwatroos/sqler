@@ -14,10 +14,11 @@ workspace = true
 
 [features]
 # GPUI views. Off by default so `cargo test -p sqler-ui` never builds GPUI; `sqler-app` turns it on.
-gui = ["dep:gpui-component", "dep:gpui", "dep:gpui_platform"]
+gui = ["dep:gpui-component", "dep:gpui", "dep:gpui_platform", "dep:lsp-types"]
 
 [dependencies]
 sqler-catalog.workspace = true
+sqler-completion.workspace = true
 sqler-config.workspace = true
 sqler-driver-api.workspace = true
 sqler-sql.workspace = true
@@ -26,6 +27,7 @@ tokio = { workspace = true, features = ["rt", "sync", "time"] }
 gpui-component = { workspace = true, optional = true }
 gpui = { workspace = true, optional = true }
 gpui_platform = { workspace = true, optional = true }
+lsp-types = { workspace = true, optional = true }
 
 [dev-dependencies]
 sqler-driver-sqlite.workspace = true
@@ -41,4 +43,8 @@ harness = false
 
 [[bench]]
 name = "editor_buffer"
+harness = false
+
+[[bench]]
+name = "editor_intellisense"
 harness = false

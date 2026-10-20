@@ -9,15 +9,24 @@
 //! decoration collection; the index is rebuilt only when the text changed and the cursor touches a
 //! bracket.
 
+mod provider;
+
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::{
     AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, Styled as _, Subscription, Window, div, relative,
+    ParentElement as _, Styled as _, Subscription, Task, Window, div, relative,
 };
-use gpui_component::input::{Editor, EditorState, RangeDecoration, RangeDecorationCollection};
+use gpui_component::input::{
+    Editor, EditorState, InputEvent, RangeDecoration, RangeDecorationCollection,
+};
 use sqler_sql::Dialect;
 
+use self::provider::{IntelHandle, SqlProvider};
+use super::intellisense::{DIAGNOSE_DEBOUNCE, bootstrap_keys};
 use super::{BracketIndex, EditorBuffer, EditorKey, touches_bracket};
 use crate::tabs::TabId;
 use crate::workspace::{Effect, Workspace, WorkspaceView};
@@ -29,6 +38,8 @@ const LANGUAGE: &str = "sql";
 const ADD_CURSOR_ABOVE: &str = "input::AddCursorAbove";
 /// The name of the editor's own "add cursor below" action.
 const ADD_CURSOR_BELOW: &str = "input::AddCursorBelow";
+/// The name of the editor's own "show completions" action.
+const SHOW_COMPLETIONS: &str = "input::ShowCompletions";
 
 /// The brackets of the last text the cursor stood next to.
 struct BracketCache {
@@ -41,8 +52,14 @@ struct EditorView {
     state: Entity<EditorState>,
     frames: RangeDecorationCollection,
     cache: Option<BracketCache>,
+    /// What the completion and hover providers and the diagnose task share.
+    intel: IntelHandle,
+    /// The pending or running diagnose pass; a newer one replaces it.
+    diagnose: Task<()>,
     /// Keeps the observer of the state alive.
     _observe: Subscription,
+    /// Keeps the change subscription alive.
+    _change: Subscription,
 }
 
 /// The editor tabs of the workspace.
@@ -85,6 +102,23 @@ impl EditorViews {
                     .and_then(super::EditorDoc::dialect);
                 view.editors.refresh_brackets(tab, &state, dialect, cx);
             });
+            let intel: IntelHandle = Rc::new(RefCell::new(provider::IntelState::default()));
+            SqlProvider::install(&state, &intel, cx);
+            let shared = intel.clone();
+            let change = cx.subscribe_in(
+                &state,
+                window,
+                move |view, state, event: &InputEvent, window, cx| {
+                    if !matches!(event, InputEvent::Change) {
+                        return;
+                    }
+                    shared.borrow_mut().intel.edited();
+                    if let Some(v) = view.editors.views.get_mut(&tab) {
+                        v.diagnose =
+                            provider::diagnose_task(state, &shared, DIAGNOSE_DEBOUNCE, window, cx);
+                    }
+                },
+            );
             let handle = state.read(cx).focus_handle(cx);
             window.focus(&handle, cx);
             self.views.insert(
@@ -93,9 +127,68 @@ impl EditorViews {
                     state,
                     frames,
                     cache: None,
+                    intel,
+                    diagnose: Task::ready(()),
                     _observe: observe,
+                    _change: change,
                 },
             );
+        }
+        self.sync_intellisense(ws, window, cx);
+    }
+
+    /// Hands every editor the catalog and dialect of its connection. When the connection changed,
+    /// the editor loads the schema listings and diagnoses; when the catalog has a newer snapshot
+    /// (a refresh, a load), it diagnoses again.
+    fn sync_intellisense(
+        &mut self,
+        ws: &Workspace,
+        window: &mut Window,
+        cx: &mut Context<WorkspaceView>,
+    ) {
+        for (tab, view) in &mut self.views {
+            let ctx = ws
+                .editor_doc(*tab)
+                .and_then(super::EditorDoc::dialect)
+                .zip(ws.editor_catalog(*tab))
+                .map(|(dialect, (generation, catalog))| (generation, catalog, dialect));
+            let (changed, preload, refreshed) = {
+                let mut shared = view.intel.borrow_mut();
+                let changed = shared.intel.bind(ctx.as_ref().map(|c| c.0));
+                shared.ctx = ctx.as_ref().map(|(_, catalog, dialect)| provider::Context {
+                    catalog: catalog.clone(),
+                    dialect: *dialect,
+                });
+                let (preload, refreshed) = match &ctx {
+                    Some(_) if changed => (shared.intel.fresh(bootstrap_keys()), false),
+                    Some((_, catalog, _)) => (
+                        Vec::new(),
+                        shared
+                            .intel
+                            .snapshot_changed(catalog.snapshot().generation()),
+                    ),
+                    None => (Vec::new(), false),
+                };
+                (changed, preload, refreshed)
+            };
+            if !preload.is_empty()
+                && let Some((_, catalog, _)) = &ctx
+            {
+                // Its own task: the keys are marked asked, so a diagnose pass that is replaced
+                // must not be the one that loses them.
+                provider::preload(
+                    &view.intel,
+                    &view.state.downgrade(),
+                    catalog,
+                    preload,
+                    window,
+                    cx,
+                );
+            }
+            if changed || refreshed {
+                view.diagnose =
+                    provider::diagnose_task(&view.state, &view.intel, Duration::ZERO, window, cx);
+            }
         }
     }
 
@@ -194,6 +287,7 @@ impl EditorViews {
         let name = match key {
             EditorKey::AddCursorAbove => ADD_CURSOR_ABOVE,
             EditorKey::AddCursorBelow => ADD_CURSOR_BELOW,
+            EditorKey::ShowCompletions => SHOW_COMPLETIONS,
         };
         match cx.build_action(name, None) {
             Ok(action) => {

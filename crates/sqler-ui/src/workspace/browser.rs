@@ -299,6 +299,18 @@ impl Workspace {
         }
     }
 
+    /// The browser generation and catalog of the connection behind `tab`, for the editor's
+    /// intellisense. `Some` only while that browser is `Ready`.
+    #[must_use]
+    pub fn editor_catalog(&self, tab: TabId) -> Option<(u64, Catalog)> {
+        let conn = self.tab_conns.get(&tab)?;
+        let b = self.browsers.get(conn)?;
+        match &b.status {
+            BrowserStatus::Ready(catalog) => Some((b.generation, catalog.clone())),
+            _ => None,
+        }
+    }
+
     /// The menu entries of a node, in menu order.
     #[must_use]
     pub fn menu_entries(&self, conn: &ConnectionId, node: TreeNodeId) -> Vec<MenuEntry> {
@@ -1339,6 +1351,26 @@ mod tests {
         h.click("main", BrowserAction::Expand);
         assert_eq!(h.labels()[0..2], ["Schemas (1)", "  main"]);
         assert!(h.labels().contains(&"    Tables (2)".to_owned()));
+    }
+
+    #[test]
+    fn editor_catalog_follows_the_browser() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        let effect = h.w.dispatch(WorkspaceAction::OpenConnection(0));
+        let Effect::Connect { request, connect } = effect else {
+            panic!("expected Connect");
+        };
+        let result = h.rt.block_on(h.bridge.connect(connect));
+        let browse = h.w.connect_finished(request, result);
+        let tab = h.w.tabs().active().map(crate::tabs::Tab::id).unwrap();
+        // The browser is still connecting.
+        assert!(h.w.editor_catalog(tab).is_none());
+        h.apply(browse);
+        let (generation, _catalog) = h.w.editor_catalog(tab).expect("ready");
+        assert!(generation > 0);
+        let id = conn_id(&h.w);
+        h.w.end_browser(&id);
+        assert!(h.w.editor_catalog(tab).is_none());
     }
 
     #[test]

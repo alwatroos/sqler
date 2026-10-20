@@ -48,6 +48,7 @@ impl Workspace {
             }
             EditorAction::AddCursorAbove => self.editor_key(EditorKey::AddCursorAbove),
             EditorAction::AddCursorBelow => self.editor_key(EditorKey::AddCursorBelow),
+            EditorAction::TriggerCompletion => self.editor_key(EditorKey::ShowCompletions),
             EditorAction::FormatSql => match self.editor_target(buffer) {
                 Some((tab, buffer)) => self.format(tab, &buffer),
                 None => Effect::None,
@@ -571,6 +572,16 @@ mod tests {
                 key: EditorKey::AddCursorBelow,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn trigger_completion_asks_the_editor_to_show_completions() {
+        let mut w = ws();
+        let tab = open(&mut w);
+        assert!(matches!(
+            w.dispatch_editor(EditorAction::TriggerCompletion, None),
+            Effect::EditorKey { tab: t, key: EditorKey::ShowCompletions } if t == tab
         ));
     }
 
