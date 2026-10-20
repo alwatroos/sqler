@@ -68,7 +68,9 @@ fn escape_into(field: &str, out: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use sqler_driver_api::sqler_core::{DataType, Value};
+    use sqler_driver_api::sqler_core::{
+        DataType, Date, Decimal, Time, Timestamp, TimestampTz, Value,
+    };
 
     use super::*;
 
@@ -99,6 +101,31 @@ mod tests {
             render(&cols(&["a", "b", "c"]), &rows),
             "a\tb\tc\n1\tNULL\t0xdead\n"
         );
+    }
+
+    #[test]
+    fn typed_values_print_in_normalised_form() {
+        let date = Date::new(2024, 2, 29).unwrap();
+        let ts = Timestamp::new(date, Time::new(3, 4, 5, 120_000_000).unwrap());
+        let rows = [Row(vec![
+            Value::Decimal("-12.50".parse::<Decimal>().unwrap()),
+            Value::Date(date),
+            Value::Time(Time::new(23, 59, 1, 0).unwrap()),
+            Value::Timestamp(ts),
+            Value::TimestampTz(TimestampTz::new(ts, -(5 * 3600 + 1800)).unwrap()),
+            Value::Json("{\"a\":[1,2]}".to_owned()),
+        ])];
+        assert_eq!(
+            render(&cols(&["a", "b", "c", "d", "e", "f"]), &rows),
+            "a\tb\tc\td\te\tf\n\
+             -12.50\t2024-02-29\t23:59:01\t2024-02-29 03:04:05.12\t2024-02-29 03:04:05.12-05:30\t{\"a\":[1,2]}\n"
+        );
+    }
+
+    #[test]
+    fn json_with_control_characters_is_escaped() {
+        let rows = [Row(vec![Value::Json("{\n\t\"a\": 1}".to_owned())])];
+        assert_eq!(render(&cols(&["j"]), &rows), "j\n{\\n\\t\"a\": 1}\n");
     }
 
     #[test]

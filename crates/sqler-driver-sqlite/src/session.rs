@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use sqler_driver_api::sqler_core::{ConnectionConfig, Query};
-use sqler_driver_api::{BoxFuture, CancelHandle, Canceller, DriverError, QueryStream, Session};
+use sqler_driver_api::{
+    BoxFuture, CancelHandle, Canceller, DriverError, Introspect, QueryStream, Session,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{Connection as _, Executor as _, Statement as _};
 use std::str::FromStr as _;
@@ -52,7 +54,7 @@ fn options(target: &str) -> Result<SqliteConnectOptions, sqlx::Error> {
 
 /// One open `SQLite` connection.
 pub(crate) struct SqliteSession {
-    conn: SqliteConnection,
+    pub(crate) conn: SqliteConnection,
     cancel: Arc<SqliteCanceller>,
 }
 
@@ -72,6 +74,10 @@ impl SqliteSession {
 impl Session for SqliteSession {
     fn cancel_handle(&self) -> CancelHandle {
         CancelHandle::new(self.cancel.clone())
+    }
+
+    fn introspection(&mut self) -> Option<&mut dyn Introspect> {
+        Some(self)
     }
 
     fn execute<'s>(

@@ -16,6 +16,11 @@ mod paths;
 mod secrets;
 mod settings;
 
+pub use connections::{
+    CONNECTIONS_FORMAT_VERSION, ConnectionId, ConnectionProfile, ConnectionSpec, ConnectionStore,
+    Group, GroupId, ProfileSecret, ProfileSecretKind, SshAuth, SshProfile, StoreError, TlsMode,
+    TlsProfile,
+};
 pub use error::ConfigError;
 pub use keymap::{CommandId, Conflict, KeyChord, KeybindingOverrides, Keymap, Modifiers, Platform};
 pub use paths::ConfigDir;

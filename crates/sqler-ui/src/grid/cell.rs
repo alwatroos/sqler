@@ -65,6 +65,7 @@ pub fn type_label(t: DataType) -> &'static str {
         DataType::Date => "date",
         DataType::Time => "time",
         DataType::Timestamp => "timestamp",
+        DataType::TimestampTz => "timestamptz",
         DataType::Json => "json",
         _ => "other",
     }
@@ -104,6 +105,8 @@ pub fn group_thousands(n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use sqler_driver_api::sqler_core::{Date, Decimal, Time, Timestamp, TimestampTz};
+
     use super::*;
 
     #[test]
@@ -124,6 +127,34 @@ mod tests {
         assert_eq!(cell_text(&Value::Bool(true)), "true");
         assert_eq!(cell_text(&Value::Float(1.5)), "1.5");
         assert_eq!(cell_text(&Value::Bytes(vec![0xde, 0xad])), "0xdead");
+    }
+
+    #[test]
+    fn typed_values_render_with_display() {
+        let date = Date::new(2024, 2, 29).unwrap();
+        let time = Time::new(3, 4, 5, 500_000_000).unwrap();
+        let ts = Timestamp::new(date, time);
+        assert_eq!(cell_text(&Value::Date(date)), "2024-02-29");
+        assert_eq!(cell_text(&Value::Time(time)), "03:04:05.5");
+        assert_eq!(cell_text(&Value::Timestamp(ts)), "2024-02-29 03:04:05.5");
+        let tz = TimestampTz::new(ts, 3600).unwrap();
+        assert_eq!(
+            cell_text(&Value::TimestampTz(tz)),
+            "2024-02-29 03:04:05.5+01:00"
+        );
+        let dec: Decimal = "-12.50".parse().unwrap();
+        assert_eq!(cell_text(&Value::Decimal(dec)), "-12.50");
+    }
+
+    #[test]
+    fn json_cells_are_single_line_and_cut() {
+        assert_eq!(
+            cell_text(&Value::Json("{\n\t\"a\": 1\n}".into())),
+            "{  \"a\": 1 }"
+        );
+        let long = cell_text(&Value::Json("x".repeat(MAX_CELL_CHARS + 1)));
+        assert_eq!(long.chars().count(), MAX_CELL_CHARS + 1);
+        assert!(long.ends_with('…'));
     }
 
     #[test]
@@ -155,6 +186,7 @@ mod tests {
             (DataType::Date, "date"),
             (DataType::Time, "time"),
             (DataType::Timestamp, "timestamp"),
+            (DataType::TimestampTz, "timestamptz"),
             (DataType::Json, "json"),
             (DataType::Other, "other"),
         ];
