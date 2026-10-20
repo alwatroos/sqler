@@ -113,3 +113,27 @@ pub fn run<F: Future>(fut: F) -> F::Output {
         .unwrap()
         .block_on(fut)
 }
+
+/// Starts a TCP forwarder on `127.0.0.1:0` to `127.0.0.1:port` and returns its port. It stands in
+/// for an SSH tunnel: the driver dials this port while the certificate names another host.
+pub async fn forwarder(port: u16) -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut client, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                if let Ok(mut server) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+                }
+            });
+        }
+    });
+    local
+}
+
+/// The port of a `mysql://` URL.
+pub fn url_port(url: &str) -> u16 {
+    let rest = url.split_once('@').unwrap().1;
+    let authority = rest.split(['/', '?']).next().unwrap();
+    authority.rsplit_once(':').unwrap().1.parse().unwrap()
+}
