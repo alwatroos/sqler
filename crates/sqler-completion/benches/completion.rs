@@ -7,9 +7,10 @@
 //! `complete_p95_ns` (and `hover_p95_ns`, `diagnose_p95_ns` when the baseline has them) against a
 //! saved baseline. Eight scenarios time `complete`, two time `hover` and two time `diagnose`;
 //! `complete_p95_ns` aggregates the completion scenarios only, so older baselines stay comparable.
-//! The measurement loop runs `--reps` times (3) in process and the repetition with the lowest
-//! `complete_p95_ns` is reported and compared, so a noisy neighbour in one repetition does not
-//! fail the gate. Exit codes: 0 ok, 1 budget or regression failure, 2 bad arguments or unreadable
+//! The measurement loop runs `--reps` times (3) in process. `complete_p95_ns` is the minimum over
+//! the repetitions, and so are `hover_p95_ns` and `diagnose_p95_ns` (each metric takes its own
+//! best repetition); the per-scenario lines and `worst_p95_ns` come from the repetition with the
+//! lowest `complete_p95_ns`. A noisy neighbour in one repetition does not fail the gate. Exit codes: 0 ok, 1 budget or regression failure, 2 bad arguments or unreadable
 //! baseline. See `docs/src/benchmarks.md` for the method and rule.
 
 use std::fmt::Write as _;
@@ -317,8 +318,11 @@ fn run() -> Result<ExitCode, (u8, String)> {
     let schema = build_schema(a.tables, a.columns);
     let scs = scenarios(a.tables);
     let mut best: Option<Measured> = None;
+    let (mut min_hover, mut min_diagnose) = (u64::MAX, u64::MAX);
     for _ in 0..a.reps {
         let m = measure(&a, &schema, &scs).map_err(|e| (1, e))?;
+        min_hover = min_hover.min(m.hover_p95);
+        min_diagnose = min_diagnose.min(m.diagnose_p95);
         if best.as_ref().is_none_or(|b| m.p95 < b.p95) {
             best = Some(m);
         }
@@ -327,13 +331,13 @@ fn run() -> Result<ExitCode, (u8, String)> {
         lines,
         p50,
         p95: complete_p95,
-        hover_p95,
-        diagnose_p95,
         worst,
+        ..
     }) = best
     else {
         return Err((2, "no repetition ran".to_owned()));
     };
+    let (hover_p95, diagnose_p95) = (min_hover, min_diagnose);
     let report = format!(
         "bench=completion\nos={}-{}\ntables={}\ncolumns={}\nsamples={}\nreps={}\n{lines}complete_p50_ns={p50}\ncomplete_p95_ns={complete_p95}\nhover_p95_ns={hover_p95}\ndiagnose_p95_ns={diagnose_p95}\nworst_p95_ns={worst}\n",
         std::env::consts::OS,

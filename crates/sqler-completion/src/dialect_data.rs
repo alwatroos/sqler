@@ -1007,6 +1007,16 @@ pub(crate) fn is_system_column(dialect: Dialect, name: &str) -> bool {
 /// Whether `name` is a schema the database provides itself, so a source that omits it is not
 /// evidence that it does not exist.
 pub(crate) fn is_system_schema(dialect: Dialect, name: &str) -> bool {
+    if flavor(dialect) == Flavor::Postgres {
+        // The session's temporary schemas: `pg_temp`, `pg_temp_N`, `pg_toast_temp_N`.
+        let lower = name.to_ascii_lowercase();
+        if lower == "pg_temp"
+            || lower.starts_with("pg_temp_")
+            || lower.starts_with("pg_toast_temp_")
+        {
+            return true;
+        }
+    }
     let list: &[&str] = match flavor(dialect) {
         Flavor::Postgres => &["pg_catalog", "information_schema", "pg_toast"],
         Flavor::MySql => &["information_schema", "mysql", "performance_schema", "sys"],

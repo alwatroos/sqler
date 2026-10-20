@@ -109,15 +109,11 @@ pub fn diagnose(text: &str, dialect: Dialect, schema: &dyn SchemaSource) -> Vec<
             Checker::new(text, stmt, dialect, &scan, &mut res).run(&mut out);
         }
     }
-    // Parameters, DECLAREd locals and NEW/OLD rows look like columns but are not.
+    // Parameters, DECLAREd locals and NEW/OLD rows look like columns but are not: nothing inside a
+    // routine definition is reported.
     let bodies = routine_bodies(text, &toks);
     if !bodies.is_empty() {
-        out.retain(|d| {
-            !matches!(
-                d.code,
-                DiagnosticCode::UnknownColumn | DiagnosticCode::UnknownQualifier
-            ) || !bodies.iter().any(|b| b.contains(&d.range.start))
-        });
+        out.retain(|d| !bodies.iter().any(|b| b.contains(&d.range.start)));
     }
     out.sort_by(|a, b| {
         a.range
@@ -130,23 +126,41 @@ pub fn diagnose(text: &str, dialect: Dialect, schema: &dyn SchemaSource) -> Vec<
     out
 }
 
+/// Whether token `t` is the first thing on its line (`DELIMITER` is a client command only there).
+fn starts_line(text: &str, t: &Token) -> bool {
+    text.get(..t.start).is_some_and(|before| {
+        before
+            .rsplit('\n')
+            .next()
+            .is_some_and(|l| l.trim().is_empty())
+    })
+}
+
 /// The byte ranges of stored-routine definitions (`CREATE`/`ALTER` `PROCEDURE`, `FUNCTION`,
-/// `TRIGGER`, `EVENT`): each runs to the next `DELIMITER` command, or the end of the text. Names in
-/// them may be parameters, variables or `NEW`/`OLD` rows, so they are never judged as columns.
+/// `TRIGGER`, `EVENT`). Names in them may be parameters, variables or `NEW`/`OLD` rows, so nothing
+/// inside is reported.
+///
+/// Under a custom `DELIMITER` (MySQL clients) a range runs to the next `DELIMITER` line, or the end
+/// of the text. Otherwise it ends at the routine's own closing `;`, outside any `BEGIN ... END`
+/// or `CASE ... END` nesting (a dollar-quoted body is a single token), so later statements are
+/// still checked.
 fn routine_bodies(text: &str, toks: &[Token]) -> Vec<Range<usize>> {
     let is = |i: usize, w: &str| {
         toks.get(i)
             .is_some_and(|t| t.kind == TokKind::Word && t.text(text).eq_ignore_ascii_case(w))
     };
+    let delimiter_line = |i: usize| is(i, "delimiter") && starts_line(text, &toks[i]);
     let mut out: Vec<Range<usize>> = Vec::new();
-    let mut open: Option<usize> = None;
-    for (i, t) in toks.iter().enumerate() {
-        if is(i, "delimiter")
-            && let Some(start) = open.take()
-        {
-            out.push(start..t.start);
-        }
-        if open.is_none() && (is(i, "create") || is(i, "alter")) {
+    let mut custom = false;
+    let mut i = 0;
+    while i < toks.len() {
+        if delimiter_line(i) {
+            let arg = text.get(toks[i].end..).and_then(|r| r.lines().next());
+            custom = arg.is_some_and(|a| {
+                let a = a.trim();
+                !a.is_empty() && a != ";"
+            });
+        } else if is(i, "create") || is(i, "alter") {
             // Skip modifiers and a `DEFINER = user@host` clause up to the object kind.
             let kind = (i + 1..toks.len().min(i + 16)).find(|&j| {
                 ["procedure", "function", "trigger", "event"]
@@ -161,14 +175,61 @@ fn routine_bodies(text: &str, toks: &[Token]) -> Vec<Range<usize>> {
                 .any(|k| is(j, k))
             });
             if kind.is_some() && !stopped {
-                open = Some(t.start);
+                let end = routine_end(text, toks, i, custom);
+                let end_byte = toks.get(end).map_or(text.len(), |t| {
+                    if custom || !t.is_punct(text, ';') {
+                        t.start
+                    } else {
+                        t.end
+                    }
+                });
+                out.push(toks[i].start..end_byte);
+                i = end.max(i + 1);
+                continue;
             }
         }
-    }
-    if let Some(start) = open {
-        out.push(start..text.len());
+        i += 1;
     }
     out
+}
+
+/// The index of the token that ends the routine starting at `start`: the next `DELIMITER` line, or
+/// (without a custom delimiter) the closing `;` at nesting depth zero. `toks.len()` when neither.
+fn routine_end(text: &str, toks: &[Token], start: usize, custom: bool) -> usize {
+    let word = |i: usize| {
+        toks.get(i)
+            .filter(|t| t.kind == TokKind::Word)
+            .map(|t| t.text(text))
+    };
+    let is = |i: usize, w: &str| word(i).is_some_and(|x| x.eq_ignore_ascii_case(w));
+    let mut depth = 0usize;
+    let mut i = start + 1;
+    while i < toks.len() {
+        if is(i, "delimiter") && starts_line(text, &toks[i]) {
+            return i;
+        }
+        if !custom {
+            if is(i, "begin") || is(i, "case") {
+                depth += 1;
+            } else if is(i, "end") {
+                if ["if", "loop", "while", "repeat"]
+                    .iter()
+                    .any(|k| is(i + 1, k))
+                {
+                    i += 1;
+                } else {
+                    depth = depth.saturating_sub(1);
+                    if is(i + 1, "case") {
+                        i += 1;
+                    }
+                }
+            } else if depth == 0 && toks[i].is_punct(text, ';') {
+                return i;
+            }
+        }
+        i += 1;
+    }
+    toks.len()
 }
 
 /// Names the text itself creates, renames or alters: tables and views (their columns cannot be
@@ -322,6 +383,39 @@ struct Checker<'r, 'a, 's> {
     scan: &'s Scan,
     /// `USING` or `NATURAL` anywhere: same-named columns are merged, not ambiguous.
     merged: bool,
+    /// Per token: whether the parenthesis group it sits in (or closes) is followed by `=`, as in
+    /// `SET (a, b) = ...`. Computed once per statement.
+    group_assigned: Vec<bool>,
+}
+
+/// For every token, whether the innermost parenthesis group around it is directly followed by
+/// `=`. One pass, no rescanning.
+fn group_assigned(text: &str, toks: &[Token]) -> Vec<bool> {
+    let mut enclosing: Vec<Option<usize>> = Vec::with_capacity(toks.len());
+    let mut closed_at: Vec<Option<usize>> = vec![None; toks.len()];
+    let mut stack: Vec<usize> = Vec::new();
+    for (k, t) in toks.iter().enumerate() {
+        if t.is_punct(text, ')') {
+            let open = stack.pop();
+            if let Some(o) = open {
+                closed_at[o] = Some(k);
+            }
+            enclosing.push(open);
+        } else {
+            enclosing.push(stack.last().copied());
+            if t.is_punct(text, '(') {
+                stack.push(k);
+            }
+        }
+    }
+    enclosing
+        .iter()
+        .map(|e| {
+            e.and_then(|o| closed_at[o])
+                .and_then(|c| toks.get(c + 1))
+                .is_some_and(|t| t.is_punct(text, '='))
+        })
+        .collect()
 }
 
 impl<'r, 'a: 's, 's> Checker<'r, 'a, 's> {
@@ -345,6 +439,7 @@ impl<'r, 'a: 's, 's> Checker<'r, 'a, 's> {
             res,
             scan,
             merged,
+            group_assigned: group_assigned(text, toks),
         }
     }
 
@@ -486,20 +581,10 @@ impl<'r, 'a: 's, 's> Checker<'r, 'a, 's> {
             return true;
         }
         // Inside a parenthesised target list: the token after the closing parenthesis is `=`.
-        let mut depth = 0i32;
-        let mut k = chain.next;
-        while let Some(t) = self.toks.get(k) {
-            if t.is_punct(text, '(') {
-                depth += 1;
-            } else if t.is_punct(text, ')') {
-                if depth == 0 {
-                    return is_eq(k + 1);
-                }
-                depth -= 1;
-            }
-            k += 1;
-        }
-        false
+        self.group_assigned
+            .get(chain.next)
+            .copied()
+            .unwrap_or(false)
     }
 
     /// The rules that leave a chain alone.
@@ -674,14 +759,22 @@ impl<'r, 'a: 's, 's> Checker<'r, 'a, 's> {
         let mut hits: Vec<usize> = Vec::new();
         let mut unknown = false;
         let in_branch = self.scan.branch_relations(level, branch).count();
+        // `RETURNING` of an `INSERT` sees the insert target only; elsewhere the insert target is
+        // not visible to the rows being selected.
+        let insert_target = self.scan.target(level);
+        let returning_only = if clause == Clause::Returning {
+            insert_target
+        } else {
+            None
+        };
         let target = if clause == Clause::Returning || in_branch == 1 {
             None
         } else {
-            self.scan.target(level)
+            insert_target
         };
         let local = cache.get(level).and_then(Option::as_ref);
         for (ri, _) in self.scan.branch_relations(level, branch) {
-            if Some(ri) == target {
+            if Some(ri) == target || returning_only.is_some_and(|t| t != ri) {
                 continue;
             }
             let cols = local.and_then(|c| c.get(ri)).copied();
@@ -836,14 +929,16 @@ impl<'r, 'a: 's, 's> Checker<'r, 'a, 's> {
         let mut next = Some((level, branch));
         while let Some((l, b)) = next {
             for (ri, rel) in self.scan.branch_relations(l, b) {
-                if let RelationSource::Table {
-                    schema: Some(rs),
-                    name,
-                } = &rel.source
-                    && idents_match(self.dialect, rs, s)
+                if let RelationSource::Table { schema: rs, name } = &rel.source
                     && idents_match(self.dialect, name, t)
                 {
-                    found = Some((l, ri));
+                    match rs {
+                        Some(rs) if idents_match(self.dialect, rs, s) => found = Some((l, ri)),
+                        // Written without a schema (`FROM users`): the search path decides which
+                        // schema it is, so `public.users.id` is valid and not judged further.
+                        None => return,
+                        Some(_) => {}
+                    }
                 }
             }
             if found.is_some() {

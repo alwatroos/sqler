@@ -513,3 +513,117 @@ fn long_scripts_report_only_the_bad_statement() {
     assert_eq!(d[0].code, UnknownColumn);
     assert_eq!(&script[d[0].range.clone()], "nope_col");
 }
+
+// ---- Review round: RETURNING, temp schemas, schema-qualified columns, routine ranges, SET ----
+
+#[test]
+fn returning_of_an_insert_sees_only_the_target() {
+    for sql in [
+        "INSERT INTO users (id) SELECT id FROM orders RETURNING id",
+        "INSERT INTO users (id, name) SELECT o.id, 'x' FROM orders o RETURNING id, name",
+    ] {
+        assert!(pg(sql).is_empty(), "{sql}: {:?}", pg(sql));
+    }
+    // A name only the other relation has is not visible to RETURNING.
+    one(
+        "INSERT INTO users (id) SELECT id FROM orders RETURNING total",
+        UnknownColumn,
+        "total",
+    );
+    // UPDATE ... FROM and DELETE ... USING keep the from-items visible and ambiguity real.
+    one(
+        "UPDATE users SET name = 'x' FROM orders WHERE users.id = orders.user_id RETURNING id",
+        AmbiguousColumn,
+        "id",
+    );
+}
+
+#[test]
+fn postgres_temp_schemas_are_system_schemas() {
+    for sql in [
+        "SELECT * FROM pg_temp.t",
+        "SELECT * FROM pg_temp_3.t",
+        "SELECT * FROM pg_toast_temp_3.t",
+    ] {
+        assert!(pg(sql).is_empty(), "{sql}");
+    }
+    one("SELECT * FROM pg_tempx.t", UnknownSchema, "pg_tempx");
+}
+
+#[test]
+fn schema_qualified_column_matches_a_from_item_without_schema() {
+    assert_eq!(pg("SELECT * FROM users WHERE public.users.id = 1"), []);
+    assert_eq!(pg("SELECT public.users.id FROM users"), []);
+    let my = run(
+        "SELECT * FROM users WHERE shop.users.id = 1",
+        Dialect::MySql,
+    );
+    assert!(my.is_empty(), "{my:?}");
+    // Still reported when no from-item has that name.
+    one(
+        "SELECT * FROM users WHERE public.orders.id = 1",
+        UnknownQualifier,
+        "orders",
+    );
+}
+
+const BODY_MY: &str = "CREATE PROCEDURE p() BEGIN SELECT delimiter FROM users; UPDATE users SET name = p_x WHERE id = p_id; END";
+
+#[test]
+fn delimiter_is_a_command_only_at_the_start_of_a_line() {
+    let d = run(BODY_MY, Dialect::MySql);
+    assert!(d.is_empty(), "{d:?}");
+    // A real command line still ends the routine.
+    let sql = "DELIMITER //\nCREATE PROCEDURE p() BEGIN UPDATE users SET name = p_x; END//\nDELIMITER ;\nSELECT nme FROM users;";
+    let d = run(sql, Dialect::MySql);
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert_eq!(&sql[d[0].range.clone()], "nme");
+}
+
+#[test]
+fn routine_without_delimiter_ends_at_its_statement() {
+    let pg_sql = "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1; SELECT nme FROM users $$; SELECT nme FROM users;";
+    let d = run(pg_sql, Dialect::Postgres);
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert_eq!(d[0].range.start, pg_sql.rfind("nme").unwrap());
+
+    let lite = "CREATE TRIGGER t AFTER INSERT ON users BEGIN UPDATE users SET name = CASE WHEN id = 1 THEN 'a' END WHERE id = new_id; INSERT INTO usrs VALUES (1); END; SELECT nme FROM users;";
+    let d = run(lite, Dialect::Sqlite);
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert_eq!(&lite[d[0].range.clone()], "nme");
+
+    let my = "CREATE PROCEDURE p() BEGIN IF 1 THEN SELECT 1; END IF; WHILE 1 DO SELECT 2; END WHILE; END; SELECT nme FROM users;";
+    let d = run(my, Dialect::MySql);
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert_eq!(&my[d[0].range.clone()], "nme");
+}
+
+#[test]
+fn nothing_inside_a_routine_is_reported() {
+    let sql = "DELIMITER //\nCREATE PROCEDURE p() BEGIN SELECT 1; INSERT INTO usrs VALUES (1); SELECT * FROM nope.users; END//\nDELIMITER ;";
+    let d = run(sql, Dialect::MySql);
+    assert!(d.is_empty(), "{d:?}");
+    let sql = "CREATE PROCEDURE p() BEGIN SELECT 1; INSERT INTO usrs VALUES (1); END";
+    let d = run(sql, Dialect::MySql);
+    assert!(d.is_empty(), "{d:?}");
+}
+
+#[test]
+fn long_set_with_many_case_branches_is_linear() {
+    let mut sql = String::from("UPDATE users SET name = CASE");
+    for i in 0..32_000 {
+        let _ = write!(sql, " WHEN id = {i} THEN name");
+    }
+    sql.push_str(" END WHERE id > 0");
+    let start = std::time::Instant::now();
+    let d = run(&sql, Dialect::Postgres);
+    let took = start.elapsed();
+    assert!(d.is_empty(), "{:?}", d.len());
+    assert!(took.as_millis() < 2000, "took {took:?}");
+}
+
+#[test]
+fn set_tuple_targets_are_still_exempt_from_ambiguity() {
+    let sql = "UPDATE users SET (id, name) = (1, 'x') FROM orders WHERE users.id = orders.user_id";
+    assert!(pg(sql).is_empty(), "{:?}", pg(sql));
+}
