@@ -11,3 +11,7 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-core.workspace = true
+thiserror.workspace = true

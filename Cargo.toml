@@ -36,6 +36,9 @@ sqler-export = { path = "crates/sqler-export", version = "0.1.0" }
 sqler-ui = { path = "crates/sqler-ui", version = "0.1.0" }
 sqler-cli = { path = "crates/sqler-cli", version = "0.1.0" }
 
+# external
+thiserror = "2.0.21"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
