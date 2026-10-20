@@ -48,3 +48,29 @@ Run from the repository root on the commit being recorded:
 ### Regression rule
 
 `bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job. It fails if the PR p95 is more than 25 % plus 50 ns above the base p95, or if the p95 is above 1 ms (`--budget-p95-ns 1000000`). Without a baseline on the base branch only the 1 ms budget applies.
+
+## UI framework spike
+
+Data, not pass/fail; spike build, not the product. Measured on `spikes/ui-framework` (ADR-0001), release profile
+with `--locked`, unstripped, with 1M synthetic rows and the SQL editor open and no database
+connections. Idle RSS here is not the "three connections" metric of the targets above. CI rows come
+from [run 39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) and use software
+renderers or VM Metal; first frame varies a lot between runs on shared VMs.
+
+| Date | Commit | Target | How obtained | Cold start (ms) | First frame (ms) | RSS idle, 1M rows (MB) | Binary size (MB) | Renderer | Notes |
+| ---- | ------ | ------ | ------------ | --------------- | ---------------- | ---------------------- | ---------------- | -------- | ----- |
+| 2026-10-20 | 4d3d5d1 | macOS 27.0.1 arm64, Apple M4 Pro | manual | 157.8 | 191.7 | 151.4 | 26.4 | metal | mean of 3 `measure.sh` runs; cold start is hyperfine mean (20 runs) |
+| 2026-10-20 | 3c59a65 | macOS (macos-latest, arm64 VM) | CI | 203.8 | 933.9 | 124.2 | 26.4 | metal | first run: cold 494.7, first frame 2981.6 |
+| 2026-10-20 | 3c59a65 | Linux X11 (ubuntu-latest, xvfb) | CI | 200.7 | 515.0 | 264.3 | 57.7 | llvmpipe | 4 vCPU VM, software Vulkan; first run: first frame 1853.5 |
+| 2026-10-20 | 3c59a65 | Linux Wayland (ubuntu-latest, cage) | CI | 181.9 | 2285.1 | 267.5 | 57.7 | llvmpipe | software Vulkan |
+| 2026-10-20 | 3c59a65 | Windows (windows-latest) | CI | 206.0 | 185.0 | 103.2 | 26.3 | WARP | software D3D |
+
+Binary size on Linux is 57.7 MB, close to the 60 MB target, unstripped and with the default release profile.
+Watch it when the real UI lands.
+
+### Method
+
+`first_frame_ms` is `main()` start to the first presented frame, without exec and loader time. Cold
+start is the `hyperfine` mean of the whole process (`--exit-after-first-frame`, 3 warm-ups, 20 runs).
+The procedure is `spikes/ui-framework/scripts/measure.sh` (Linux, macOS) and
+`spikes/ui-framework/scripts/measure.ps1` (Windows); CI runs it in `.github/workflows/spike.yml`.
