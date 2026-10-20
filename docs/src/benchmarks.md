@@ -167,6 +167,32 @@ Expand p95 is about 0.7 ms against the 16 ms budget (one frame at 60 Hz), and se
 
 `bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `expand_p95_ns` is more than 25 % plus 250 us above the base, or if a budget is exceeded. Every metric is the minimum over `--reps 3` repetitions of the whole measurement, on the base and on the PR alike. The 250 us slack is an absolute allowance for runner noise on a millisecond-scale metric (about 0.7 ms on the reference machine, so the limit is about 1.1 ms); a 2x slowdown (about 1.35 ms) is above it and fails (checked by halving the saved baseline: expand p95 790 us against a baseline of 336 us, limit 670 us). Only `expand_p95_ns` is compared; the select p95 is guarded by its 1 ms budget.
 
+## Completion
+
+`sqler_completion::complete` on a synthetic schema of 5,000 tables (8 columns each) in `public` plus 20 more schemas of 10 tables, `PostgreSQL` dialect, driven through `MemorySchema`. The bench is engine-only: no editor, no popup and no catalog, so it is not the end-to-end figure that T10 measures with the editor.
+
+| Date | Commit | OS | complete p50 / p95 (ns) | Worst scenario p95 (ns) | Notes |
+| ---- | ------ | -- | ----------------------- | ----------------------- | ----- |
+| 2026-10-20 | 7a7dd54 plus this PR | macOS arm64, Apple M4 Pro | 116,000 / 514,333 | 986,833 (`from_fuzzy`) | run 1; 2,000 samples per scenario; budget p95 16 ms |
+| 2026-10-20 | 7a7dd54 plus this PR | macOS arm64, Apple M4 Pro | 114,167 / 449,458 | 487,500 (`from_fuzzy`) | run 2, same setup |
+| 2026-10-20 | 7a7dd54 plus this PR | macOS arm64, Apple M4 Pro | 115,792 / 465,167 | 581,250 (`from_fuzzy`) | run 3, same setup |
+| 2026-10-20 | 7a7dd54 plus this PR | macOS arm64, Apple M4 Pro | 71,583 / 442,291 | 480,250 (`from_fuzzy`) | run 4, after the identifier-folding change; best of 3 repetitions (`--reps 3`) |
+
+Per scenario p95 in run 2 (ns): `from_empty` 211,541; `from_prefix` 404,209; `from_fuzzy` 487,500; `select_list_join5` 51,958; `alias_dot` 2,292; `where_prefix` 12,583; `insert_columns` 1,958; `big_script` (2,000 statements, cursor mid-file) 121,541.
+
+The worst p95 is about 0.5 to 1.0 ms against the 16 ms budget (one frame at 60 Hz), roughly 16 to 32 times under it. The cost is dominated by scanning the 5,000 relation names (`FROM` with a prefix or a fuzzy match); in-scope column completion, which is what the editor asks for most, takes microseconds. The Linux CI figures are recorded by the `Bench` workflow summary (`completion-pr.txt`) on the pull request and are not part of this table until that run exists.
+
+### Method
+
+1. `cargo bench -p sqler-completion --bench completion` (release profile). Flags: `--tables` (5000), `--columns` (8), `--samples` (2000 per scenario), `--save PATH`, `--compare PATH`, `--reps` (3), `--threshold-pct` (25), `--slack-ns` (250000), `--budget-p95-ns` (16000000).
+2. Eight scenarios, each a fresh `CompletionRequest` per sample after 20 warm-up requests: `from_empty` (`FROM |`), `from_prefix` (`FROM table_00|`), `from_fuzzy` (`FROM t_4|`), `select_list_join5` (select list over a 5-table join), `alias_dot` (`a.|`), `where_prefix` (`WHERE col_|` over a join), `insert_columns` (`INSERT INTO t (|`) and `big_script` (a 2,000-statement script, cursor in the middle). A scenario that returns no items fails the run.
+3. The measurement loop (all scenarios) runs `--reps` times in process; the repetition with the lowest `complete_p95_ns` is the one reported, saved and compared. Output is `key=value` lines: `<scenario>_p50_ns` and `<scenario>_p95_ns`, `complete_p50_ns` and `complete_p95_ns` over all samples, and `worst_p95_ns`, the largest scenario p95. p50 and p95 are nearest-rank percentiles.
+4. Exit code 0 passes, 1 is a regression or a budget failure, 2 is a usage error or an unreadable baseline.
+
+### Regression rule
+
+`bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `complete_p95_ns`, taken as the minimum over 3 in-process repetitions, is more than 25 % plus 250 us (`--slack-ns 250000`, 1/64 of the budget) above the same figure on the base, or if `complete_p95_ns` or `worst_p95_ns` exceeds the 16 ms budget. Without a baseline on the base branch only the budget applies. The p95 of this bench is in the hundreds of microseconds and sits in the tail of the relation-scan scenarios, so the fixed 50 ns slack of the ns-scale benches would flake on a shared runner; the minimum over repetitions drops a noisy repetition and the 250 us floor keeps a real 2x regression (about +450 us on the M4, more on a runner) failing. If the gate still flakes, report it here rather than widening the default silently.
+
 ## UI framework spike
 
 Data, not pass/fail; spike build, not the product. Measured on `spikes/ui-framework` (ADR-0001), release profile

@@ -1,0 +1,26 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"WITH recent AS (SELECT 1) SELECT * FROM re|\", 6)"
+---
+sql: WITH recent AS (SELECT 1) SELECT * FROM re|
+
+== postgres ==
+context: Relation, replace: 40..42 "re", items: 4
+ 1. "recent" [Cte] insert="recent" detail="cte"
+ 2. "orders" [Table] insert="orders" detail="public · table"
+ 3. "Order Items" [Table] insert="\"Order Items\"" detail="public · table"
+ 4. "order_items" [Table] insert="order_items" detail="public · table"
+
+== mysql ==
+context: Relation, replace: 40..42 "re", items: 4
+ 1. "recent" [Cte] insert="recent" detail="cte"
+ 2. "orders" [Table] insert="orders" detail="shop · table"
+ 3. "Order Items" [Table] insert="`Order Items`" detail="shop · table"
+ 4. "order_items" [Table] insert="order_items" detail="shop · table"
+
+== sqlite ==
+context: Relation, replace: 40..42 "re", items: 4
+ 1. "recent" [Cte] insert="recent" detail="cte"
+ 2. "orders" [Table] insert="orders" detail="main · table"
+ 3. "Order Items" [Table] insert="\"Order Items\"" detail="main · table"
+ 4. "order_items" [Table] insert="order_items" detail="main · table"

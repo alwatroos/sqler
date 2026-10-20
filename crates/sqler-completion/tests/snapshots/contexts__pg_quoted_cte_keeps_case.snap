@@ -1,0 +1,32 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"WITH {q}Recent{q} AS (SELECT {q}Total{q} FROM orders) SELECT | FROM {q}Recent{q}\",\n6)"
+---
+sql: WITH "Recent" AS (SELECT "Total" FROM orders) SELECT | FROM "Recent"
+
+== postgres ==
+context: Expression, replace: 53..53 "", items: 200
+ 1. "Total" [Column] insert="\"Total\"" detail="Recent"
+ 2. "Recent" [Cte] insert="\"Recent\"" detail="cte"
+ 3. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+ 4. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
+ 5. "age" [Function] insert="age($1)" snippet detail="age(timestamp [, timestamp]) -> interval"
+ 6. "avg" [Function] insert="avg($1)" snippet detail="avg(expr) -> number"
+
+== mysql ==
+context: Expression, replace: 53..53 "", items: 200
+ 1. "Total" [Column] insert="Total" detail="Recent"
+ 2. "Recent" [Cte] insert="Recent" detail="cte"
+ 3. "if" [Function] insert="if($1)" snippet detail="if(cond, then, else) -> value"
+ 4. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+ 5. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
+ 6. "avg" [Function] insert="avg($1)" snippet detail="avg(expr) -> number"
+
+== sqlite ==
+context: Expression, replace: 53..53 "", items: 197
+ 1. "Total" [Column] insert="Total" detail="Recent"
+ 2. "Recent" [Cte] insert="Recent" detail="cte"
+ 3. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+ 4. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
+ 5. "avg" [Function] insert="avg($1)" snippet detail="avg(expr) -> number"
+ 6. "cos" [Function] insert="cos($1)" snippet detail="cos(x) -> number"

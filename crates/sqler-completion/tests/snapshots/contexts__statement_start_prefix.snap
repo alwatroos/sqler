@@ -1,0 +1,20 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"sel|\", 6)"
+---
+sql: sel|
+
+== postgres ==
+context: StatementStart, replace: 0..3 "sel", items: 2
+ 1. "sel" [Snippet] insert="select ${1:*}\nfrom ${2:table}\nwhere ${3:condition}$0" snippet detail="SELECT ... FROM ... WHERE"
+ 2. "select" [Keyword] insert="select" detail="-"
+
+== mysql ==
+context: StatementStart, replace: 0..3 "sel", items: 2
+ 1. "sel" [Snippet] insert="select ${1:*}\nfrom ${2:table}\nwhere ${3:condition}$0" snippet detail="SELECT ... FROM ... WHERE"
+ 2. "select" [Keyword] insert="select" detail="-"
+
+== sqlite ==
+context: StatementStart, replace: 0..3 "sel", items: 2
+ 1. "sel" [Snippet] insert="select ${1:*}\nfrom ${2:table}\nwhere ${3:condition}$0" snippet detail="SELECT ... FROM ... WHERE"
+ 2. "select" [Keyword] insert="select" detail="-"

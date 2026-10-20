@@ -1,0 +1,17 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT p.| FROM pending p\", 6)"
+---
+sql: SELECT p.| FROM pending p
+
+== postgres ==
+context: Qualified, replace: 9..9 "", items: 0
+requests: [Columns { schema: Some("public"), relation: "pending" }]
+
+== mysql ==
+context: Qualified, replace: 9..9 "", items: 0
+requests: [Columns { schema: Some("shop"), relation: "pending" }]
+
+== sqlite ==
+context: Qualified, replace: 9..9 "", items: 0
+requests: [Columns { schema: Some("main"), relation: "pending" }]

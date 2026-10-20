@@ -1,0 +1,14 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT 1 -- note|\", 6)"
+---
+sql: SELECT 1 -- note|
+
+== postgres ==
+context: None, replace: 16..16 "", items: 0
+
+== mysql ==
+context: None, replace: 16..16 "", items: 0
+
+== sqlite ==
+context: None, replace: 16..16 "", items: 0

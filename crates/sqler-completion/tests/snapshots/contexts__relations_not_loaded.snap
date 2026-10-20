@@ -1,0 +1,11 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: out
+---
+context: Relation, replace: 14..14 "", items: 6
+requests: [Relations { schema: None }]
+ 1. "audit" [Schema] insert="audit" detail="schema"
+ 2. "public" [Schema] insert="public" detail="schema"
+ 3. "ONLY" [Keyword] insert="ONLY" detail="-"
+ 4. "SELECT" [Keyword] insert="SELECT" detail="-"
+ 5. "VALUES" [Keyword] insert="VALUES" detail="-"

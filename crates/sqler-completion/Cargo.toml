@@ -11,3 +11,15 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-core.workspace = true
+sqler-sql.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "completion"
+harness = false

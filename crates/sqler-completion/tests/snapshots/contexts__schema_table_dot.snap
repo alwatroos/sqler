@@ -1,0 +1,20 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT audit.log.| FROM audit.log\", 6)"
+---
+sql: SELECT audit.log.| FROM audit.log
+
+== postgres ==
+context: Qualified, replace: 17..17 "", items: 2
+ 1. "id" [Column] insert="id" detail="log · integer"
+ 2. "message" [Column] insert="message" detail="log · text"
+
+== mysql ==
+context: Qualified, replace: 17..17 "", items: 2
+ 1. "id" [Column] insert="id" detail="log · integer"
+ 2. "message" [Column] insert="message" detail="log · text"
+
+== sqlite ==
+context: Qualified, replace: 17..17 "", items: 2
+ 1. "id" [Column] insert="id" detail="log · integer"
+ 2. "message" [Column] insert="message" detail="log · text"

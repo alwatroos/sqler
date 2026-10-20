@@ -1,0 +1,22 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: out
+---
+== postgres ==
+context: Qualified, replace: 9..9 "", items: 4
+ 1. "plain" [Column] insert="plain" detail="t · Text"
+ 2. "select" [Column] insert="\"select\"" detail="t · Text"
+ 3. "has space" [Column] insert="\"has space\"" detail="t · Text"
+ 4. "MixedCase" [Column] insert="\"MixedCase\"" detail="t · Text"
+== mysql ==
+context: Qualified, replace: 9..9 "", items: 4
+ 1. "plain" [Column] insert="plain" detail="t · Text"
+ 2. "select" [Column] insert="`select`" detail="t · Text"
+ 3. "has space" [Column] insert="`has space`" detail="t · Text"
+ 4. "MixedCase" [Column] insert="MixedCase" detail="t · Text"
+== sqlite ==
+context: Qualified, replace: 9..9 "", items: 4
+ 1. "plain" [Column] insert="plain" detail="t · Text"
+ 2. "select" [Column] insert="\"select\"" detail="t · Text"
+ 3. "has space" [Column] insert="\"has space\"" detail="t · Text"
+ 4. "MixedCase" [Column] insert="MixedCase" detail="t · Text"

@@ -1,0 +1,26 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT * FROM users u WHERE u.|\", 6)"
+---
+sql: SELECT * FROM users u WHERE u.|
+
+== postgres ==
+context: Qualified, replace: 30..30 "", items: 4
+ 1. "id" [Column] insert="id" detail="u · integer"
+ 2. "name" [Column] insert="name" detail="u · Text"
+ 3. "email" [Column] insert="email" detail="u · text"
+ 4. "created_at" [Column] insert="created_at" detail="u · timestamp"
+
+== mysql ==
+context: Qualified, replace: 30..30 "", items: 4
+ 1. "id" [Column] insert="id" detail="u · integer"
+ 2. "name" [Column] insert="name" detail="u · Text"
+ 3. "email" [Column] insert="email" detail="u · text"
+ 4. "created_at" [Column] insert="created_at" detail="u · timestamp"
+
+== sqlite ==
+context: Qualified, replace: 30..30 "", items: 4
+ 1. "id" [Column] insert="id" detail="u · integer"
+ 2. "name" [Column] insert="name" detail="u · Text"
+ 3. "email" [Column] insert="email" detail="u · text"
+ 4. "created_at" [Column] insert="created_at" detail="u · timestamp"

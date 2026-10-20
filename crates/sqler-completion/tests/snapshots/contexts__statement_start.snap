@@ -1,0 +1,50 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"|\", 12)"
+---
+sql: |
+
+== postgres ==
+context: StatementStart, replace: 0..0 "", items: 27
+ 1. "SELECT" [Keyword] insert="SELECT" detail="-"
+ 2. "WITH" [Keyword] insert="WITH" detail="-"
+ 3. "INSERT" [Keyword] insert="INSERT" detail="-"
+ 4. "UPDATE" [Keyword] insert="UPDATE" detail="-"
+ 5. "DELETE" [Keyword] insert="DELETE" detail="-"
+ 6. "CREATE" [Keyword] insert="CREATE" detail="-"
+ 7. "ALTER" [Keyword] insert="ALTER" detail="-"
+ 8. "DROP" [Keyword] insert="DROP" detail="-"
+ 9. "TRUNCATE" [Keyword] insert="TRUNCATE" detail="-"
+10. "EXPLAIN" [Keyword] insert="EXPLAIN" detail="-"
+11. "BEGIN" [Keyword] insert="BEGIN" detail="-"
+12. "COMMIT" [Keyword] insert="COMMIT" detail="-"
+
+== mysql ==
+context: StatementStart, replace: 0..0 "", items: 29
+ 1. "SELECT" [Keyword] insert="SELECT" detail="-"
+ 2. "WITH" [Keyword] insert="WITH" detail="-"
+ 3. "INSERT" [Keyword] insert="INSERT" detail="-"
+ 4. "UPDATE" [Keyword] insert="UPDATE" detail="-"
+ 5. "DELETE" [Keyword] insert="DELETE" detail="-"
+ 6. "REPLACE" [Keyword] insert="REPLACE" detail="-"
+ 7. "CREATE" [Keyword] insert="CREATE" detail="-"
+ 8. "ALTER" [Keyword] insert="ALTER" detail="-"
+ 9. "DROP" [Keyword] insert="DROP" detail="-"
+10. "TRUNCATE" [Keyword] insert="TRUNCATE" detail="-"
+11. "EXPLAIN" [Keyword] insert="EXPLAIN" detail="-"
+12. "DESCRIBE" [Keyword] insert="DESCRIBE" detail="-"
+
+== sqlite ==
+context: StatementStart, replace: 0..0 "", items: 25
+ 1. "SELECT" [Keyword] insert="SELECT" detail="-"
+ 2. "WITH" [Keyword] insert="WITH" detail="-"
+ 3. "INSERT" [Keyword] insert="INSERT" detail="-"
+ 4. "UPDATE" [Keyword] insert="UPDATE" detail="-"
+ 5. "DELETE" [Keyword] insert="DELETE" detail="-"
+ 6. "REPLACE" [Keyword] insert="REPLACE" detail="-"
+ 7. "CREATE" [Keyword] insert="CREATE" detail="-"
+ 8. "ALTER" [Keyword] insert="ALTER" detail="-"
+ 9. "DROP" [Keyword] insert="DROP" detail="-"
+10. "EXPLAIN" [Keyword] insert="EXPLAIN" detail="-"
+11. "PRAGMA" [Keyword] insert="PRAGMA" detail="-"
+12. "BEGIN" [Keyword] insert="BEGIN" detail="-"
