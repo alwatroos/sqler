@@ -8,7 +8,7 @@
 mod support;
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -191,30 +191,6 @@ async fn auth_key_files() {
     .await
     .unwrap_err();
     assert!(matches!(err, TunnelError::KeyFile { .. }), "{err:?}");
-}
-
-#[tokio::test]
-async fn rsa_key_files_are_unsupported() {
-    // RSA is compiled out (RUSTSEC-2023-0071); the fixtures are throwaway test keys.
-    let (_server, _echo, _dir, cfg) = trusted("rsa-keys").await;
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    for name in ["rsa_openssh_unencrypted", "rsa_pkcs1_unencrypted"] {
-        let path = fixtures.join(name);
-        let err = Tunnel::open(
-            &cfg,
-            &SshAuth::KeyFile {
-                path: path.clone(),
-                passphrase: None,
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(&err, TunnelError::UnsupportedKeyType { path: p } if *p == path),
-            "{name}: {err:?}"
-        );
-        assert!(err.to_string().contains("ed25519 or ECDSA"), "{err}");
-    }
 }
 
 #[tokio::test]

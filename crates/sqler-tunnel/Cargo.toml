@@ -14,6 +14,10 @@ workspace = true
 
 [dependencies]
 russh.workspace = true
+ring.workspace = true
+crypto-bigint.workspace = true
+pem-rfc7468.workspace = true
+zeroize.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "time", "io-util", "macros"] }
 

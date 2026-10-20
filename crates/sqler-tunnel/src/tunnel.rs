@@ -11,6 +11,7 @@ use russh::Disconnect;
 use russh::client::{self, Handle};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
+use russh::keys::ssh_key::HashAlg;
 use russh::keys::{Error as KeyError, PrivateKeyWithHashAlg, load_secret_key};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
@@ -21,6 +22,7 @@ use crate::auth::{Secret, SshAuth};
 use crate::config::TunnelConfig;
 use crate::error::TunnelError;
 use crate::host_key::HostKeyHandler;
+use crate::rsa_key::{self, RsaSigner};
 
 /// Keepalive interval of the SSH session. After three unanswered keepalives russh closes it.
 const KEEPALIVE: Duration = Duration::from_secs(30);
@@ -178,15 +180,28 @@ async fn authenticate(
             require(result.success())
         }
         SshAuth::KeyFile { path, passphrase } => {
-            let key = load_key(path, passphrase.as_ref())?;
-            let hash = if key.algorithm().is_rsa() {
-                handle.best_supported_rsa_hash().await?.flatten()
-            } else {
-                None
+            let result = match load_key(path, passphrase.as_ref())? {
+                LoadedKey::Native(key) => {
+                    handle
+                        .authenticate_publickey(
+                            user,
+                            PrivateKeyWithHashAlg::new(Arc::new(key), None),
+                        )
+                        .await?
+                }
+                LoadedKey::Rsa(mut signer) => {
+                    let hash = match handle.best_supported_rsa_hash().await? {
+                        Some(Some(hash)) => hash,
+                        Some(None) => return Err(rsa_key::sha1_only()),
+                        // The server sent no `server-sig-algs`: try the SHA-2 signature anyway.
+                        None => HashAlg::Sha256,
+                    };
+                    let public = signer.public_key().clone();
+                    handle
+                        .authenticate_publickey_with(user, public, Some(hash), &mut signer)
+                        .await?
+                }
             };
-            let result = handle
-                .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
-                .await?;
             require(result.success())
         }
         SshAuth::Agent { socket } => authenticate_agent(handle, user, socket.as_deref()).await,
@@ -203,16 +218,20 @@ fn require(ok: bool) -> Result<(), TunnelError> {
     }
 }
 
-fn load_key(
-    path: &Path,
-    passphrase: Option<&Secret>,
-) -> Result<russh::keys::PrivateKey, TunnelError> {
-    let unsupported = || TunnelError::UnsupportedKeyType {
-        path: path.to_path_buf(),
-    };
+/// A private key ready to authenticate with.
+enum LoadedKey {
+    /// A key `russh` signs with itself (Ed25519, ECDSA).
+    Native(russh::keys::PrivateKey),
+    /// An RSA key, signed by `ring` through [`RsaSigner`].
+    Rsa(RsaSigner),
+}
+
+fn load_key(path: &Path, passphrase: Option<&Secret>) -> Result<LoadedKey, TunnelError> {
+    if let Some(signer) = RsaSigner::load_if_rsa(path, passphrase)? {
+        return Ok(LoadedKey::Rsa(signer));
+    }
     let key = load_secret_key(path, passphrase.map(Secret::expose)).map_err(|e| {
         match (e, passphrase) {
-            _ if is_rsa_key_file(path) => unsupported(),
             (KeyError::KeyIsEncrypted, None) => TunnelError::KeyPassphraseRequired {
                 path: path.to_path_buf(),
             },
@@ -226,28 +245,16 @@ fn load_key(
             },
         }
     })?;
-    // The loader parses an unencrypted `OpenSSH` RSA key, but signing with it is compiled out.
+    // RSA keys in a format `RsaSigner` does not read cannot be signed with here.
     if key.algorithm().is_rsa() {
-        return Err(unsupported());
+        return Err(TunnelError::KeyFile {
+            path: path.to_path_buf(),
+            message: "this RSA key format is not supported; convert it with `ssh-keygen -p -o -f \
+                      <file>` (OpenSSH format), or use an Ed25519 or ECDSA key"
+                .into(),
+        });
     }
-    Ok(key)
-}
-
-/// Whether the file holds an RSA private key. RSA support is compiled out (RUSTSEC-2023-0071), so
-/// the loader fails on such a file; this tells that failure apart from a corrupt key. Works for
-/// encrypted `OpenSSH` keys too, because the public part is stored in clear.
-fn is_rsa_key_file(path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    if text.contains("BEGIN RSA PRIVATE KEY") {
-        return true;
-    }
-    if text.contains("BEGIN OPENSSH PRIVATE KEY") {
-        return russh::keys::ssh_key::PrivateKey::from_openssh(&text)
-            .is_ok_and(|k| k.algorithm().is_rsa());
-    }
-    false
+    Ok(LoadedKey::Native(key))
 }
 
 #[cfg(unix)]
