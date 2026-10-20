@@ -19,7 +19,8 @@ use gpui_component::input::{InputEvent, InputState, MoveDown, MoveUp};
 use gpui_component::{ActiveTheme as _, Root, WindowExt as _};
 use sqler_catalog::{CacheKey, RefreshEvent};
 use sqler_config::{
-    ConfigDir, ConnectionId, ConnectionStore, KeybindingOverrides, Modifiers, Platform, SecretStore,
+    ConfigDir, ConnectionId, ConnectionStore, HistoryOptions, KeybindingOverrides, Modifiers,
+    Platform, SecretStore,
 };
 use tokio::sync::oneshot;
 
@@ -35,6 +36,8 @@ use crate::connections::view::{DialogInputs, dialog_overlay};
 use crate::connections::{self, ConnectionAction, Connector, Dialog};
 use crate::editor::{self, EditorAction, view::EditorViews};
 use crate::grid::view::{GridProbe, GridViews, action_for_command as grid_action_for};
+use crate::history::view::HistoryViews;
+use crate::history::{self, HistoryCommand, HistoryService};
 use crate::keymap::input::key_input;
 use crate::keymap::{KeyDispatcher, KeyOutcome, action_for, chord_from_input, route_key};
 use crate::palette::{self, OPEN_PALETTE, PaletteState};
@@ -71,6 +74,8 @@ pub struct Startup {
     pub settings: SettingsModel,
     /// The user keybinding overrides, or why they could not be loaded.
     pub keybindings: Result<KeybindingOverrides, String>,
+    /// Where the query history and the saved queries live; `None` without a config directory.
+    pub history_dir: Option<ConfigDir>,
 }
 
 impl std::fmt::Debug for Startup {
@@ -81,6 +86,7 @@ impl std::fmt::Debug for Startup {
             .field("exit_after_first_frame", &self.exit_after_first_frame)
             .field("settings", &self.settings)
             .field("keybindings", &self.keybindings)
+            .field("history_dir", &self.history_dir)
             .finish_non_exhaustive()
     }
 }
@@ -153,6 +159,10 @@ pub(crate) struct WorkspaceView {
     catalog_runs: Vec<oneshot::Receiver<()>>,
     /// Messages to show as notifications at the next render.
     notices: Vec<String>,
+    /// The blocking store behind the history and the saved queries.
+    history: HistoryService,
+    /// The inputs of the history tabs and the history dialogs.
+    pub(crate) history_views: HistoryViews,
     /// Keeps the OS appearance observer alive.
     _appearance: Subscription,
     /// Keeps the quit hook (closes sessions when the app quits any way) alive.
@@ -211,6 +221,9 @@ impl WorkspaceView {
         if let Err(err) = query::register_commands(&mut commands) {
             eprintln!("sqler: could not register the query commands: {err}");
         }
+        if let Err(err) = history::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the history commands: {err}");
+        }
         let keys = KeyDispatcher::new(Platform::current(), startup.keybindings, &commands);
         for notice in keys.notices() {
             eprintln!("sqler: {notice}");
@@ -252,6 +265,7 @@ impl WorkspaceView {
                 let _ = runs.await;
             }
         });
+        let history = HistoryService::new(startup.history_dir, HistoryOptions::default());
         let mut view = Self {
             ws,
             bridge: SessionBridge::new(startup.connector, startup.secrets, startup.runtime),
@@ -270,11 +284,14 @@ impl WorkspaceView {
             list_entries: Vec::new(),
             catalog_runs: Vec::new(),
             notices: Vec::new(),
+            history,
+            history_views: HistoryViews::default(),
             _appearance: appearance,
             _quit: quit,
         };
         GridProbe::start_if_requested(window, cx);
         view.sync_sidebar();
+        view.load_history(cx);
         view
     }
 
@@ -359,6 +376,16 @@ impl WorkspaceView {
             self.query_dismiss(tab, cx);
             return;
         }
+        if !was_open
+            && chord.key() == "escape"
+            && chord.modifiers() == Modifiers::default()
+            && self.history_overlay_open()
+        {
+            // Escape closes the history dialog or the saved-query picker; nothing changes.
+            cx.stop_propagation();
+            self.history_escape(cx);
+            return;
+        }
         if self.sidebar_key(event, window, cx) {
             cx.stop_propagation();
             return;
@@ -403,6 +430,12 @@ impl WorkspaceView {
     /// Moves the palette selection for the arrow keys. The input binds `up` and `down` to its
     /// own actions, which run before key-down listeners, so they are intercepted here.
     fn move_palette_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if self.ws.saved_picker().is_some() && !self.palette.is_open() {
+            self.ws.move_picker(delta);
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if !self.palette.is_open() {
             cx.propagate();
             return;
@@ -463,6 +496,9 @@ impl WorkspaceView {
         } else if let Some(command) = query::action_for(id) {
             self.palette.close();
             self.run_query_command(command, window, cx);
+        } else if let Some(command) = history::action_for(id) {
+            self.palette.close();
+            self.history_command(command, cx);
         } else if let Some(grid_action) = grid_action_for(id) {
             self.palette.close();
             match self.ws_active_grid() {
@@ -644,6 +680,7 @@ impl WorkspaceView {
         self.grids.retain(self.ws.tabs());
         self.editors.retain(&self.ws);
         self.queries.retain(self.ws.tabs());
+        self.history_views.retain(&self.ws);
         self.sync_sidebar();
         cx.notify();
     }
@@ -724,6 +761,10 @@ impl WorkspaceView {
                 );
             }
             Effect::RunQuery { job, grids, events } => self.start_query_job(job, grids, events, cx),
+            Effect::RecordHistory(_)
+            | Effect::SearchHistory(_)
+            | Effect::ClearHistory
+            | Effect::SaveSavedQueries { .. } => self.apply_history(effect, cx),
             Effect::CancelQuery(handle) => {
                 // The answer does not matter: the job reports how the statement ended.
                 drop(self.bridge.spawn(async move {
@@ -731,6 +772,54 @@ impl WorkspaceView {
                 }));
             }
             other => self.apply_browser(other, cx),
+        }
+    }
+
+    /// Carries out the history effects: each runs on a blocking thread and reports back.
+    fn apply_history(&mut self, effect: Effect, cx: &mut Context<Self>) {
+        match effect {
+            Effect::RecordHistory(entry) => {
+                let store = self.history.clone();
+                let done = self.bridge.blocking(move || store.record(entry));
+                Self::finish_history(done, Workspace::history_recorded, cx);
+            }
+            Effect::SearchHistory(search) => {
+                let store = self.history.clone();
+                let (tab, request) = (search.tab, search.request);
+                let done = self.bridge.blocking(move || store.search(&search));
+                cx.spawn(async move |this, cx| {
+                    let Ok(entries) = done.await else { return };
+                    this.update(cx, |view, cx| {
+                        view.ws.history_results(tab, request, entries);
+                        view.settle(cx);
+                    })
+                    .ok();
+                })
+                .detach();
+            }
+            Effect::ClearHistory => {
+                let store = self.history.clone();
+                let done = self.bridge.blocking(move || store.clear());
+                Self::finish_history(done, Workspace::history_cleared, cx);
+            }
+            Effect::SaveSavedQueries {
+                generation,
+                queries,
+            } => {
+                let store = self.history.clone();
+                let done = self
+                    .bridge
+                    .blocking(move || store.save_saved(generation, &queries));
+                Self::finish_history(
+                    done,
+                    move |ws, result| {
+                        ws.saved_queries_written(generation, result);
+                        Effect::None
+                    },
+                    cx,
+                );
+            }
+            _ => {}
         }
     }
 
@@ -751,7 +840,8 @@ impl WorkspaceView {
             while let Some(event) = events.recv().await {
                 let alive = this
                     .update(cx, |view, cx| {
-                        view.ws.query_event(tab, run, event);
+                        let effect = view.ws.query_event(tab, run, event);
+                        view.apply(effect, cx);
                         cx.notify();
                     })
                     .is_ok();
@@ -773,6 +863,83 @@ impl WorkspaceView {
             .ok();
         })
         .detach();
+    }
+
+    /// Waits for a blocking history call and hands its result to the workspace; the effect that
+    /// comes back is carried out.
+    fn finish_history(
+        done: oneshot::Receiver<Result<(), String>>,
+        handle: impl FnOnce(&mut Workspace, Result<(), String>) -> Effect + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let result = done
+                .await
+                .unwrap_or_else(|_| Err("the history task was lost".to_owned()));
+            this.update(cx, |view, cx| {
+                let effect = handle(&mut view.ws, result);
+                view.apply(effect, cx);
+                view.settle(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens the store and loads the saved queries off the UI thread.
+    fn load_history(&mut self, cx: &mut Context<Self>) {
+        let store = self.history.clone();
+        let done = self
+            .bridge
+            .blocking(move || (store.open(), store.load_saved()));
+        cx.spawn(async move |this, cx| {
+            let Ok((opened, saved)) = done.await else {
+                return;
+            };
+            this.update(cx, |view, cx| {
+                match opened {
+                    Ok(notices) => view.notices.extend(notices),
+                    Err(err) => view.notices.push(format!("History: {err}")),
+                }
+                view.ws.saved_queries_loaded(saved);
+                view.settle(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Runs a history or saved-query command with a copy of the active editor's text.
+    pub(crate) fn history_command(&mut self, command: HistoryCommand, cx: &mut Context<Self>) {
+        let buffer = self
+            .ws_active_editor()
+            .and_then(|tab| self.editors.buffer(tab, cx));
+        let effect = self.ws.dispatch_history(command, buffer);
+        self.apply(effect, cx);
+        self.settle(cx);
+    }
+
+    /// Runs a workspace history method that returns an effect, and carries it out.
+    pub(crate) fn history_do(
+        &mut self,
+        f: impl FnOnce(&mut Workspace) -> Effect,
+        cx: &mut Context<Self>,
+    ) {
+        let effect = f(&mut self.ws);
+        self.apply(effect, cx);
+        self.settle(cx);
+    }
+
+    /// Whether a history dialog or the saved-query picker is on screen.
+    fn history_overlay_open(&self) -> bool {
+        self.ws.history_dialog().is_some() || self.ws.saved_picker().is_some()
+    }
+
+    /// Escape: closes the history dialog or the picker.
+    fn history_escape(&mut self, cx: &mut Context<Self>) {
+        self.ws.cancel_history_dialog();
+        self.ws.close_picker();
+        self.settle(cx);
     }
 
     /// The active tab, if it is a query tab.
@@ -1004,6 +1171,7 @@ impl WorkspaceView {
 }
 
 impl Render for WorkspaceView {
+    #[allow(clippy::too_many_lines)] // one declarative element tree
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.grids.materialize(window, cx);
         self.editors.materialize(&mut self.ws, window, cx);
@@ -1013,6 +1181,10 @@ impl Render for WorkspaceView {
             self.editors.focus(tab, window, cx);
         }
         self.sync_dialog_inputs(window, cx);
+        if self.history_views.materialize(&self.ws, window, cx) {
+            // A history dialog or the picker closed: the root takes the focus back.
+            window.focus(&self.focus, cx);
+        }
         if !self.notices.is_empty() {
             let notices = std::mem::take(&mut self.notices);
             window.defer(cx, move |window, cx| {
@@ -1034,6 +1206,14 @@ impl Render for WorkspaceView {
             .and_then(|t| self.editors.body(t).map(|e| (t, e.into_any_element())))
         {
             query_tab_body(editor, tab, self, cx)
+        } else if let Some(tab) = self
+            .ws
+            .tabs()
+            .active()
+            .map(crate::tabs::Tab::id)
+            .filter(|id| self.ws.history_tab(*id).is_some())
+        {
+            history::view::history_body(self, tab, cx)
         } else if let Some(grid) = self.ws_active_grid() {
             self.grids.body(grid, cx).into_any_element()
         } else if let Some(tab) = self
@@ -1051,6 +1231,7 @@ impl Render for WorkspaceView {
         let query_dialog = self
             .query_overlay_tab()
             .and_then(|tab| query_overlay(self, tab, cx));
+        let history_dialog = history::view::history_overlay(self, cx);
         let palette = self.palette.is_open().then(|| {
             let items = self.palette.items(&self.commands, &self.keys);
             palette::view::palette_overlay(
@@ -1098,6 +1279,7 @@ impl Render for WorkspaceView {
             .children(dialog)
             .children(drop_dialog)
             .children(query_dialog)
+            .children(history_dialog)
             .children(palette)
     }
 }

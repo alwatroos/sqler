@@ -67,6 +67,7 @@ fn start(exit_after_first_frame: bool) -> ExitCode {
         .and_then(|dir| dir.load_connection_store().map_err(|err| err.to_string()));
     // Saving is only offered when the file loaded: a broken file is never overwritten.
     let config_dir = dir.as_ref().ok().cloned().filter(|_| connections.is_ok());
+    let history_dir = dir.as_ref().ok().cloned();
     let keybindings = dir.as_ref().map_err(ToString::to_string).and_then(|dir| {
         dir.load_keybinding_overrides(Platform::current())
             .map_err(|err| err.to_string())
@@ -88,6 +89,7 @@ fn start(exit_after_first_frame: bool) -> ExitCode {
         exit_after_first_frame,
         settings: SettingsModel::load(dir),
         keybindings,
+        history_dir,
     });
     ExitCode::SUCCESS
 }

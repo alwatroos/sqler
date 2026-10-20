@@ -130,6 +130,26 @@ The `TabKind::Query` tab is the SQL editor. Its text lives in a `gpui-component`
 
 Decision and the gaps in `gpui-component` (no add-next-occurrence, no bracket matching): [ADR-0025](../adr/0025-sql-editor-component.md). User view: [SQL editor](../user-guide/sql-editor.md).
 
+## Query history and saved queries
+
+[ADR-0021](../adr/0021-query-history-and-saved-queries.md) is the store; the UI follows the pattern of [ADR-0024](../adr/0024-query-execution.md). `sqler_ui::history` is headless (no GPUI): `model` (`HistoryTab`, `HistoryRow`, `SavedState`, `HistoryDialog`, `SavedPicker`), `record` (`history_entry`), `action` (the nine `history:*` and `query:*` commands) and `service` (`HistoryService`). `workspace/history.rs` is the `Workspace` side and `history/view.rs` only draws it.
+
+```text
+Workspace::query_event (terminal RunEvent) -> history_entry -> Effect::RecordHistory
+  SessionBridge::blocking -> HistoryService::record -> Workspace::history_recorded -> SearchHistory (open History tabs)
+history tab text/scope change -> Effect::SearchHistory -> blocking search -> Workspace::history_results (stale request ignored)
+saved query edit (generation += 1) -> Effect::SaveSavedQueries -> blocking save_saved -> Workspace::saved_queries_written
+```
+
+- Recording: `query_event` records the start time on `Started`. A `Finished`, `Failed` or `Cancelled` event becomes a `NewHistoryEntry` from `ResultEntry.sql`, the statement text before binding, so bound values never reach the store. Failed entries carry no message.
+- Effects added: `RecordHistory`, `SearchHistory`, `ClearHistory` and `SaveSavedQueries`. Their `Debug` output never prints SQL text.
+- `HistoryService` is a blocking facade over `HistoryStore` and `queries.toml`. It opens the store lazily on first use and every call runs on a tokio blocking thread through `SessionBridge::blocking`, because the store lock is held during append and compaction. Without a config directory, recording is a no-op and saved queries report an error.
+- Saved queries: edits need `SavedLoad::Ready`, so a `queries.toml` that failed to load is never overwritten. Each change bumps a `generation`, and `save_saved` skips a snapshot older than the last one written, so overlapping writes end with the newest state.
+- Open and run again reuse `open_editor_on`. `Workspace` keeps a `PendingOpen` per connect request (`Run(sql)` or `Saved(id)`); when `connect_finished` activates the new Query tab, the hook runs the SQL through `run_query` (so the `prod` confirmation applies) or binds the tab to the saved query.
+- A History tab is a `TabKind::History` tab bound to a connection, with title `History: <connection>`; one tab per connection is reused. Dialogs (name, delete and clear confirmations) and the saved-query picker are refused while a connection dialog is open.
+
+User view: [Query history and saved queries](../user-guide/query-history.md).
+
 ## Hook points
 
 - Themes (T7): the shell paints only with `gpui_component` theme tokens (`cx.theme()`), with no second palette. `theme::apply` (gui only) calls `Theme::change` and sets `Theme::font_size`. `workspace::run` applies the startup settings, `WorkspaceView::new` observes the OS appearance, and `Effect::ApplySettings` saves and re-applies. The prod tint uses the theme's `danger` token.
@@ -139,6 +159,6 @@ Decision and the gaps in `gpui-component` (no add-next-occurrence, no bracket ma
 
 ## Startup
 
-`sqler-app` loads `connections.toml` (`load_connection_store`) and the keybinding overrides from `keybindings.toml`, builds the driver registry, the `KeychainStore` and the `Pipeline`, starts the runtime and calls `sqler_ui::workspace::run(Startup)`. `Startup` carries `connections: Result<ConnectionStore, String>`, `config_dir: Option<ConfigDir>` (where to save; only set when the store loaded), `connector`, `secrets`, `runtime`, `exit_after_first_frame`, `settings` and `keybindings`. A load error is shown in the sidebar and does not stop the app, and nothing is saved over a file that failed to load. `--exit-after-first-frame` makes `run` exit with code 0 after the first frame.
+`sqler-app` loads `connections.toml` (`load_connection_store`) and the keybinding overrides from `keybindings.toml`, builds the driver registry, the `KeychainStore` and the `Pipeline`, starts the runtime and calls `sqler_ui::workspace::run(Startup)`. `Startup` carries `connections: Result<ConnectionStore, String>`, `config_dir: Option<ConfigDir>` (where to save; only set when the store loaded), `connector`, `secrets`, `runtime`, `exit_after_first_frame`, `settings`, `keybindings` and `history_dir: Option<ConfigDir>` (where `history.jsonl` and `queries.toml` live; set independently of the connections load result). A load error is shown in the sidebar and does not stop the app, and nothing is saved over a file that failed to load. `--exit-after-first-frame` makes `run` exit with code 0 after the first frame.
 
 Open sessions are closed on quit: the `app:quit` command goes through `Effect::CloseSessions`; the `cx.on_app_quit` hook (window close) has only a 150 ms bound because the platform waits about 200 ms.

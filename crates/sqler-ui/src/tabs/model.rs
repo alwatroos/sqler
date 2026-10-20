@@ -33,6 +33,8 @@ pub enum TabKind {
     Ddl,
     /// The properties of a database object or column (read-only table).
     Properties,
+    /// The query history of one connection, with a search box.
+    History,
 }
 
 /// The connection data a tab needs to render its header.
@@ -90,7 +92,7 @@ impl Tab {
 
     /// The connection name, plus ` (n)` for the n-th tab opened for that name (n >= 2). Grid tabs
     /// are prefixed with `Results: `. A tab opened for a database object shows the object name
-    /// instead: `DDL: <object>`, `Properties: <object>`, `Results: <object>`.
+    /// instead: `DDL: <object>`, `Properties: <object>`, `Results: <object>`, `History: <object>`.
     #[must_use]
     pub fn title(&self) -> String {
         if let Some(object) = &self.object {
@@ -98,6 +100,7 @@ impl Tab {
                 TabKind::Ddl => format!("DDL: {object}"),
                 TabKind::Properties => format!("Properties: {object}"),
                 TabKind::Grid => format!("Results: {object}"),
+                TabKind::History => format!("History: {object}"),
                 TabKind::Query => object.clone(),
             };
         }
@@ -108,6 +111,7 @@ impl Tab {
         };
         match self.kind {
             TabKind::Grid => format!("Results: {base}"),
+            TabKind::History => format!("History: {base}"),
             TabKind::Query | TabKind::Ddl | TabKind::Properties => base,
         }
     }
@@ -411,5 +415,14 @@ mod tests {
         assert_eq!(s.get(g).unwrap().header().title, "Results: x (2)");
         let first = s.open(conn("y"), TabKind::Grid);
         assert_eq!(s.get(first).unwrap().title(), "Results: y");
+    }
+
+    #[test]
+    fn history_tab_title_names_the_object_or_the_connection() {
+        let mut s = TabStrip::default();
+        let named = s.open_object(conn("x"), TabKind::History, "prod");
+        let plain = s.open(conn("y"), TabKind::History);
+        assert_eq!(s.get(named).unwrap().title(), "History: prod");
+        assert_eq!(s.get(plain).unwrap().title(), "History: y");
     }
 }
