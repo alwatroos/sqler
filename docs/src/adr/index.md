@@ -20,3 +20,4 @@ consequences. SQLer uses the MADR format.
 | [0008](0008-object-model-lazy-introspection-value-types-tls.md) | Object model, lazy introspection, typed values and TLS options | accepted |
 | [0011](0011-connection-store-format.md) | Connection store format: versioned TOML, groups, derived secret references | accepted |
 | [0012](0012-keychain-secrets.md) | Keychain secrets: `keyring` 4.x, reference scheme, failure policy | accepted |
+| [0013](0013-ssh-tunnel-crate.md) | SSH tunnel crate: russh, strict known_hosts, loopback-only forward | accepted |

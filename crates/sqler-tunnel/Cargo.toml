@@ -1,0 +1,23 @@
+[package]
+name = "sqler-tunnel"
+description = "SSH session and local port forward (russh); drivers connect to a local address."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+russh.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "sync", "time", "io-util", "macros"] }
+
+[dev-dependencies]
+rand.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio-stream.workspace = true

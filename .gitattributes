@@ -1,0 +1,2 @@
+# Throwaway TEST ONLY keys; keep the bytes exact (no CRLF conversion).
+crates/sqler-tunnel/tests/fixtures/* -text

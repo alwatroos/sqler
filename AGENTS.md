@@ -35,6 +35,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-sql` | L1 | Parsing (`sqlparser`), formatting, statement splitting, dialect handling |
 | `sqler-plugin-api` | L1 | WIT definitions and host bindings (wasmtime component model) |
 | `sqler-config` | L1 | Settings, keybindings, connection store, keychain |
+| `sqler-tunnel` | L1 | SSH session and local port forward (russh); drivers connect to a local address |
 | `sqler-driver-postgres` | L2 | `PostgreSQL` driver (sqlx / tokio-postgres) |
 | `sqler-driver-mysql` | L2 | `MySQL` driver |
 | `sqler-driver-sqlite` | L2 | `SQLite` driver |
@@ -60,7 +61,7 @@ Layering: a crate may depend only on crates in lower layers.
 
 ```
 L0 core
-L1 driver-api, ai-api, sql, plugin-api, config
+L1 driver-api, ai-api, sql, plugin-api, config, tunnel
 L2 driver-*, ai-ollama/anthropic/openai/mistral, catalog, completion, export
 L3 ai-tools, plugin-host
 L4 mcp
@@ -203,6 +204,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0008](docs/src/adr/0008-object-model-lazy-introspection-value-types-tls.md) | Object model, lazy introspection, typed values and TLS options | accepted |
 | [0011](docs/src/adr/0011-connection-store-format.md) | Connection store format: versioned TOML, groups, derived secret references | accepted |
 | [0012](docs/src/adr/0012-keychain-secrets.md) | Keychain secrets: `keyring` 4.x, reference scheme, failure policy | accepted |
+| [0013](docs/src/adr/0013-ssh-tunnel-crate.md) | SSH tunnel crate: russh, strict known_hosts, loopback-only forward | accepted |
 
 ## 9. Roadmap status
 
@@ -245,3 +247,4 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build j
 - `sqler --exit-after-first-frame` exits with code 0 after the first frame (cold-start measurement). On quit, open sessions are dropped, not closed; M2 must close them.
 - Measuring the desktop app on macOS: the config directory is `$HOME/Library/Application Support/SQLer`, so run `sqler` with `HOME` pointed at a scratch directory to get a known `connections.toml` and leave the real config alone. `hyperfine` is at `/opt/homebrew/bin`, `mdbook` and `cargo-nextest` are in `~/.cargo/bin` and may be off `PATH`.
 - Secrets (T5, ADR-0012): headless Linux CI has no Secret Service, so tests use `MemoryStore`; `KeychainStore` is only checked by hand with `cargo test -p sqler-config -- --ignored keychain_round_trip` on a desktop session. `keyring` 4.x has no native-backend features of its own: enable `v1`, which turns on the Keychain, Credential Manager and `zbus` Secret Service (`crypto-rust`, `async-io`) stores per target. Never use keyutils, `vendored` `libdbus`, OpenSSL crypto, a `tokio` runtime feature or a mock store. `SecretStore` calls block; async callers use `spawn_blocking`.
+- `sqler-tunnel` (ADR-0013): `russh` is built with `ring` only. RSA private keys are unsupported (`TunnelError::UnsupportedKeyType`) until the owner decides on RUSTSEC-2023-0071; re-enabling is the `rsa` feature on `russh` plus an advisory ignore in `deny.toml`. Host keys are never accepted silently: use `trust_host_key` after the user confirms the fingerprint. Tests use an in-process `russh` server, no Docker.
