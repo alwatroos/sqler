@@ -81,11 +81,17 @@ fn lower(s: &str) -> String {
     s.chars().map(fold).collect()
 }
 
+/// `PostgreSQL` folds unquoted identifiers with ASCII rules only: non-ASCII letters keep their case.
+fn pg_fold(s: &str) -> String {
+    s.to_ascii_lowercase()
+}
+
 /// The identifier as the dialect stores it: `PostgreSQL` folds unquoted names to lower case, the
 /// others compare case-insensitively (lower case here).
 pub(crate) fn normalize(dialect: Dialect, id: &Ident) -> String {
     match flavor(dialect) {
         Flavor::Postgres if id.quoted => id.value.clone(),
+        Flavor::Postgres => pg_fold(&id.value),
         _ => lower(&id.value),
     }
 }
@@ -94,8 +100,11 @@ pub(crate) fn normalize(dialect: Dialect, id: &Ident) -> String {
 /// folds an unquoted name to lower case, a quoted name keeps its case; the other dialects keep
 /// the name as written (their case rules depend on the server and the object).
 pub(crate) fn text_name(dialect: Dialect, id: &Ident) -> Cow<'_, str> {
-    if flavor(dialect) == Flavor::Postgres && !id.quoted && id.value.chars().any(|c| fold(c) != c) {
-        Cow::Owned(lower(&id.value))
+    if flavor(dialect) == Flavor::Postgres
+        && !id.quoted
+        && id.value.bytes().any(|b| b.is_ascii_uppercase())
+    {
+        Cow::Owned(pg_fold(&id.value))
     } else {
         Cow::Borrowed(id.value.as_str())
     }
@@ -108,7 +117,7 @@ pub(crate) fn idents_match(dialect: Dialect, a: &Ident, b: &Ident) -> bool {
 
 /// Whether the identifier `id`, as typed, names the stored name `stored`.
 ///
-/// `PostgreSQL`: an unquoted name is folded to lower case and compared exactly; a quoted name is
+/// `PostgreSQL`: an unquoted name is folded to ASCII lower case and compared exactly; a quoted name is
 /// compared exactly. `MySQL` and `SQLite`: case-insensitive.
 ///
 /// [`find_stored_by`] applies the same rule to many candidates without allocating per candidate.
@@ -116,7 +125,7 @@ pub(crate) fn idents_match(dialect: Dialect, a: &Ident, b: &Ident) -> bool {
 pub(crate) fn ident_eq(dialect: Dialect, id: &Ident, stored: &str) -> bool {
     match flavor(dialect) {
         Flavor::Postgres if id.quoted => id.value == stored,
-        Flavor::Postgres => lower(&id.value) == stored,
+        Flavor::Postgres => pg_fold(&id.value) == stored,
         _ => eq_fold(&id.value, stored),
     }
 }
@@ -130,7 +139,7 @@ pub(crate) fn find_stored_by<T>(
     key: impl Fn(&T) -> &str,
 ) -> Option<T> {
     let folded = if flavor(dialect) == Flavor::Postgres && !id.quoted {
-        Some(lower(&id.value))
+        Some(pg_fold(&id.value))
     } else {
         None
     };
@@ -942,11 +951,31 @@ mod tests {
     fn text_names_follow_the_dialect() {
         let pg = |v: &str, q| text_name(Dialect::Postgres, &id(v, q)).into_owned();
         assert_eq!(pg("USERS", false), "users");
+        // PostgreSQL folds ASCII only: a non-ASCII capital keeps its case.
+        assert_eq!(pg("ÉCOLE", false), "École");
+        assert_eq!(pg("Ünï_ID", false), "Ünï_id");
         assert_eq!(pg("Users", true), "Users");
         assert_eq!(pg("users", true), "users");
         for d in [Dialect::MySql, Dialect::Sqlite] {
             assert_eq!(text_name(d, &id("USERS", false)), "USERS");
         }
+    }
+
+    #[test]
+    fn postgres_folds_ascii_only() {
+        let upper = id("ÉCOLE", false);
+        assert_eq!(normalize(Dialect::Postgres, &upper), "École");
+        assert!(!ident_eq(Dialect::Postgres, &upper, "école"));
+        assert!(ident_eq(Dialect::Postgres, &upper, "École"));
+        let names = ["école", "École"];
+        assert_eq!(
+            find_stored(Dialect::Postgres, &upper, names.into_iter()),
+            Some("École")
+        );
+        assert_eq!(
+            find_stored(Dialect::MySql, &upper, names.into_iter()),
+            Some("école")
+        );
     }
 
     #[test]

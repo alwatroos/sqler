@@ -55,7 +55,7 @@ Viewport fetch from `sqler_ui::grid::GridModel` holding 1M synthetic rows (6 col
 
 Run from the repository root on the commit being recorded:
 
-1. `cargo bench -p sqler-ui --bench grid_viewport` (release profile). Flags: `--rows` (1000000), `--columns` (6), `--batch` (1024), `--viewport` (50), `--samples` (100000), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--slack-ns` (250000), `--reps` (3), `--budget-p95-ns` (1000000).
+1. `cargo bench -p sqler-ui --bench grid_viewport` (release profile). Flags: `--rows` (1000000), `--columns` (6), `--batch` (1024), `--viewport` (50), `--samples` (100000), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--slack-ns` (50), `--budget-p95-ns` (1000000).
 2. The bench ingests the rows through `spawn_ingest(SyntheticSource)` while the main thread polls, then draws 100,000 viewport positions from a fixed-seed xorshift64 generator and times each fetch with `Instant`. p50 and p95 are nearest-rank percentiles.
 3. Memory: `heap_bytes` is the model's own estimate (capacity of the batches, row vectors and strings; MB = bytes / 1048576). On Linux the bench also prints `rss_delta_bytes` (`VmRSS` after ingestion minus before). On macOS, record the peak RSS with `/usr/bin/time -l <bench binary>`. A counting allocator would need `unsafe`, which the workspace forbids.
 4. Each sample includes about 30 ns of `Instant` overhead.
@@ -184,7 +184,7 @@ The worst p95 is about 0.5 to 1.0 ms against the 16 ms budget (one frame at 60 H
 
 ### Method
 
-1. `cargo bench -p sqler-completion --bench completion` (release profile). Flags: `--tables` (5000), `--columns` (8), `--samples` (2000 per scenario), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--slack-ns` (50), `--budget-p95-ns` (16000000).
+1. `cargo bench -p sqler-completion --bench completion` (release profile). Flags: `--tables` (5000), `--columns` (8), `--samples` (2000 per scenario), `--save PATH`, `--compare PATH`, `--reps` (3), `--threshold-pct` (25), `--slack-ns` (250000), `--budget-p95-ns` (16000000).
 2. Eight scenarios, each a fresh `CompletionRequest` per sample after 20 warm-up requests: `from_empty` (`FROM |`), `from_prefix` (`FROM table_00|`), `from_fuzzy` (`FROM t_4|`), `select_list_join5` (select list over a 5-table join), `alias_dot` (`a.|`), `where_prefix` (`WHERE col_|` over a join), `insert_columns` (`INSERT INTO t (|`) and `big_script` (a 2,000-statement script, cursor in the middle). A scenario that returns no items fails the run.
 3. The measurement loop (all scenarios) runs `--reps` times in process; the repetition with the lowest `complete_p95_ns` is the one reported, saved and compared. Output is `key=value` lines: `<scenario>_p50_ns` and `<scenario>_p95_ns`, `complete_p50_ns` and `complete_p95_ns` over all samples, and `worst_p95_ns`, the largest scenario p95. p50 and p95 are nearest-rank percentiles.
 4. Exit code 0 passes, 1 is a regression or a budget failure, 2 is a usage error or an unreadable baseline.
