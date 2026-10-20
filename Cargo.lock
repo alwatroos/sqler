@@ -7032,6 +7032,7 @@ version = "0.1.0"
 dependencies = [
  "keyring",
  "serde",
+ "serde_json",
  "sqler-core",
  "thiserror 2.0.21",
  "toml 1.1.8+spec-1.1.0",
