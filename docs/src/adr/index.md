@@ -10,7 +10,7 @@ consequences. SQLer uses the MADR format.
 | ADR | Title | Status |
 | --- | ----- | ------ |
 | [0000](0000-adr-process.md) | ADR process | accepted |
-| [0001](0001-ui-framework-spike-plan.md) | UI framework spike plan | proposed |
+| [0001](0001-ui-framework-spike-plan.md) | UI framework spike plan | accepted |
 | [0002](0002-plugin-abi-wasm-component-model.md) | Plugin ABI: WASM Component Model | accepted |
 | [0003](0003-ai-tool-contract.md) | AI tool contract | accepted |
 | [0004](0004-driver-api.md) | Driver API: boxed futures, event stream, session cancellation | accepted |

@@ -189,7 +189,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | ADR | Title | Status |
 | --- | ----- | ------ |
 | [0000](docs/src/adr/0000-adr-process.md) | ADR process | accepted |
-| [0001](docs/src/adr/0001-ui-framework-spike-plan.md) | UI framework spike plan | proposed |
+| [0001](docs/src/adr/0001-ui-framework-spike-plan.md) | UI framework spike plan | accepted |
 | [0002](docs/src/adr/0002-plugin-abi-wasm-component-model.md) | Plugin ABI: WASM Component Model | accepted |
 | [0003](docs/src/adr/0003-ai-tool-contract.md) | AI tool contract | accepted |
 | [0004](docs/src/adr/0004-driver-api.md) | Driver API: boxed futures, event stream, session cancellation | accepted |
@@ -222,3 +222,10 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build j
 - The plugin-build CI job is deferred until `plugins/` (M6).
 - `cargo bench` passes `--bench` to `harness = false` binaries; their argument parser must ignore it.
 - CI installs the toolchain with a bare `rustup toolchain install`, which reads `rust-toolchain.toml` (rustup 1.28 or newer), so the Rust version is pinned in one place only.
+- UI framework spike (ADR-0001): GPUI is accepted. The resolved GPUI crate is `gpui-pre` (=0.3.9, pulled by `gpui-component` 0.8.0), not `gpui` or `gpui-ce`; the check is `cargo tree -i gpui-pre`, since `cargo tree -i gpui` can never match. Application creation needs `gpui-pre-platform` (features `font-kit`, `x11`, `wayland`); `gpui-component` does not re-export it.
+- Spike Linux apt packages: `libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libvulkan1 mesa-vulkan-drivers vulkan-tools fonts-dejavu-core xvfb xauth cage pkg-config`. Software Vulkan is lavapipe (`mesa-vulkan-drivers`); the renderer shows as `llvmpipe` and GPUI runs on it with no extra setup.
+- Headless Wayland in CI needs a `wl_seat`: `weston --backend=headless` has none and GPUI panics (`Wayland compositor does not provide wl_seat`). Use `cage` with `WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 WLR_HEADLESS_OUTPUTS=1`, unset `DISPLAY`, and check that the report says `display=wayland`.
+- macOS: the GPUI build needs the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`, about 840 MB; the `macos-latest` image already has it). Windows CI renders with WARP (software D3D). On shared CI VMs first-frame times vary up to about 3.6x between runs; cold start is stable.
+- macOS: a GPUI window may not present frames while the display is idle or the window is hidden, so smoke runs can stall (two manual runs ran 84 s and 120 s). Keep a watchdog and treat a one-off watchdog failure as environment, not as a GPUI failure.
+- `hyperfine` 2.0 JSON has the mean at `results[0].summary.time_wall_clock.mean`. On Windows run it with `-N` and a quoted path, or it fails.
+- Open follow-up for the first UI PR: the 2-minute interactive macOS check of the spike (trackpad scroll, typing SQL, resizing the split) has not been done. Do it and record the result.

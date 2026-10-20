@@ -15,14 +15,19 @@ Source commands (all rows):
 
 | Component | crates.io crate | Latest stable | Released/updated | Notes |
 | --------- | --------------- | ------------- | ---------------- | ----- |
-| GPUI distribution | `gpui` | 0.2.2 | 2025-10-22 | Published by Zed's `mikayla-maki`; repository `zed-industries/zed`. Community fork `gpui-ce` 0.2.2 (2026-08-28, `gpui-ce/gpui-ce`) also exists. ADR-0001 decides. Source: API for `gpui`, `gpui-ce`; `cargo search gpui` |
-| gpui-component | `gpui-component` | 0.8.0 | 2026-10-19 | Repository `longbridge/gpui-kit`. Source: API |
-| iced | `iced` | 0.14.0 | 2025-12-07 | UI alternative for the ADR-0001 spike. Source: API |
+| GPUI distribution | `gpui` | 0.2.2 | 2025-10-22 | Not chosen (ADR-0001). Published by Zed's `mikayla-maki`; repository `zed-industries/zed`. Cannot be unified with `gpui-component` 0.8.0. Source: API; `cargo search gpui` |
+| GPUI community fork | `gpui-ce` | 0.2.2 | 2026-08-28 | Not chosen (ADR-0001). Repository `gpui-ce/gpui-ce`. Source: API |
+| GPUI (chosen) | `gpui-pre` | =0.3.9 | 2026-10-12 | Chosen (ADR-0001). Snapshot of Zed's GPUI (`zed@93d7456`); required as `=0.3.9` by `gpui-component` 0.8.0. Verified 2026-10-20. Source: API; `gpui-component` 0.8.0 dependency list |
+| GPUI platform (chosen) | `gpui-pre-platform` | =0.3.9 | 2026-10-12 | Chosen (ADR-0001). Zed's `gpui_platform`; creates the application on each OS, not re-exported by `gpui-component`. Source: API |
+| gpui-component | `gpui-component` | 0.8.0 | 2026-10-19 | Chosen (ADR-0001). Repository `longbridge/gpui-kit`, Apache-2.0. Feature `tree-sitter-sql` for SQL highlighting. Verified 2026-10-20. Source: API; `cargo info gpui-component@0.8.0` |
+| iced | `iced` | 0.14.0 | 2025-12-07 | Not chosen: GPUI passed the spike, iced was not built (ADR-0001). Source: API |
 | sqlx | `sqlx` | 0.9.0 | 2026-05-21 | PostgreSQL, MySQL, `SQLite`. Used by `sqler-driver-sqlite` with `default-features = false` and `sqlite-bundled`, `runtime-tokio`. Checked 2026-10-20. Source: API; `cargo info sqlx` |
 | tiberius | `tiberius` | 0.13.0 | 2026-09-25 | TDS (MSSQL) driver. Source: API |
 | duckdb | `duckdb` | 1.10506.1 | 2026-10-16 | `duckdb-rs`; version number follows the bundled DuckDB release. Source: API |
 | sqlparser | `sqlparser` | 0.63.0 | 2026-09-13 | Apache DataFusion `sqlparser-rs`. Source: API |
-| tree-sitter | `tree-sitter` | 0.27.1 | 2026-10-08 | Rust bindings. Source: API |
+| tree-sitter | `tree-sitter` | 0.27.1 | 2026-10-08 | Rust bindings. The spike resolved 0.26.13 because `gpui-component` 0.8.0 requires `^0.26.13`. Source: API; spike `Cargo.lock` |
+| tree-sitter-sequel | `tree-sitter-sequel` | 0.3.11 | 2025-10-01 | SQL grammar pulled in by the `gpui-component` feature `tree-sitter-sql`. Spike only, not in the root workspace. Source: API; spike `Cargo.lock` |
+| memory-stats | `memory-stats` | 1.2.0 | 2024-06-26 | Reads process RSS for the `SPIKE rss_mb` value. Spike only, not in the root workspace. Verified 2026-10-20. Source: API |
 | rmcp | `rmcp` | 3.6.0 | 2026-10-20 | Official MCP Rust SDK. Source: API |
 | agent-client-protocol | `agent-client-protocol` | 3.4.0 | 2026-10-16 | Repository `agentclientprotocol/rust-sdk`. Source: API |
 | wasmtime | `wasmtime` | 49.0.4 | 2026-10-19 | `max_version` is the pre-release 50.0.0-rc.1, not used. Source: API (`max_stable_version`) |
@@ -55,6 +60,8 @@ Source commands:
 | `actions/checkout` | GitHub release | `v7` (v7.0.1) | 2026-07-20 | Repository checkout; re-checked 2026-10-20, still the latest major |
 | `Swatinem/rust-cache` | GitHub release | `v2` (v2.9.2) | 2026-08-06 | Cargo cache; re-checked 2026-10-20, still the latest major |
 | `taiki-e/install-action` | GitHub release | `v2` (v2.87.29) | 2026-10-16 | Prebuilt tool binaries |
+| `actions/upload-artifact` | GitHub release | `v7` (v7.0.2) | 2026-10-07 | Spike results artifacts (`spike.yml`) |
+| `hyperfine` | crates.io, GitHub release | 2.0.0 | 2026-10-07 | Cold-start measurement in `spike.yml`, installed through `taiki-e/install-action`. 2.0 JSON: mean at `results[0].summary.time_wall_clock.mean` |
 | `actions/configure-pages` | GitHub release | `v6` (v6.0.0) | 2026-03-25 | Pages setup |
 | `actions/upload-pages-artifact` | GitHub release | `v5` (v5.0.0) | 2026-04-10 | Book artifact |
 | `actions/deploy-pages` | GitHub release | `v5` (v5.0.1) | 2026-09-01 | Pages deploy |
@@ -97,6 +104,14 @@ Per-dependency rationale is added by the PR that introduces it.
 - `directories` 6.0.0: not used. Its dependency `option-ext` is `MPL-2.0`, which `deny.toml` does not
   allow, and `deny.toml` changes need an ADR. `sqler-config` resolves the three platform paths with
   `std` only (ADR-0005).
+- GPUI distribution (ADR-0001): `gpui-component` 0.8.0 depends on `gpui-pre` `=0.3.9`, so that crate
+  (plus `gpui-pre-platform` for the application and window creation) is the one GPUI in the tree;
+  `gpui` 0.2.2 and `gpui-ce` 0.2.2 would add a second one. Pin `gpui-component` and `gpui-pre` together
+  and bump them as one unit. The check is `cargo tree -i gpui-pre` (and `gpui`/`gpui-ce` must not match).
+- Spike-only dependencies (`memory-stats`, `tree-sitter-sequel` through `gpui-component`): live in
+  `spikes/ui-framework/`, outside the root workspace, so `cargo deny` and the root `Cargo.lock` do not see
+  them. They are re-evaluated, with `cargo deny`, when `sqler-ui` adds the real dependencies.
+- `actions/upload-artifact` and `hyperfine`: used only by the spike workflow `spike.yml`.
 - `cargo-nextest`: faster, per-test-process runner used by CI and the local commands.
 - `cargo-deny`: enforces the Apache-2.0-compatible license allow-list in `deny.toml`, plus bans, sources and advisories.
 - `mdbook`: builds the documentation book in CI and for GitHub Pages.

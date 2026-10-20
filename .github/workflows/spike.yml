@@ -80,6 +80,7 @@ jobs:
       - name: Dependency tree has exactly one GPUI
         run: |
           cargo tree -i gpui-pre | head -n 1
+          if cargo tree -i gpui 2>/dev/null; then echo "upstream gpui is in the tree"; exit 1; fi
           if cargo tree -i gpui-ce 2>/dev/null; then echo "gpui-ce is in the tree"; exit 1; fi
 
       - uses: taiki-e/install-action@v2

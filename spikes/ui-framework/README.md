@@ -38,7 +38,7 @@ SPIKE result=pass | result=fail reason=<slug>
 ```
 
 `SPIKE_TRACE=1` prints phase timestamps on stderr. CI runs the same steps in
-`.github/workflows/spike.yml` (X11 under `xvfb-run`, Wayland under headless `weston`, macOS, Windows).
+`.github/workflows/spike.yml` (X11 under `xvfb-run`, Wayland under headless `cage`, macOS, Windows).
 
 What the code is: `gpui-spike/src/data.rs` (column-stored `SyntheticRows`, cells formatted on
 demand), `grid.rs` (gpui-component `DataTable` with a `TableDelegate`), `editor.rs` (gpui-component
@@ -52,7 +52,7 @@ crate registered by the spike.
 
 | | Date |
 | - | ---- |
-| Start | 2026-10-20 (first work on the branch; replace with the first commit date if it differs) |
+| Start | 2026-10-20 (first commit 4d3d5d1) |
 | End | 2026-10-27 (start + 7 days) |
 
 ## Distribution choice (AC4)
@@ -73,7 +73,7 @@ actually depends on; on a tie prefer the newer release with recent commits, then
 - Check in the spike workspace (output under `## Versions`): `cargo tree -i gpui-pre` succeeds,
   `cargo tree -i gpui` and `cargo tree -i gpui-ce` both report "did not match any packages". The
   literal `cargo tree -i gpui` from the spec therefore can never succeed here, because the crate is
-  named `gpui-pre`; the `spike.yml` check uses `gpui-pre` and fails if `gpui-ce` appears.
+  named `gpui-pre`; the `spike.yml` check uses `gpui-pre` and fails if `gpui` or `gpui-ce` appears.
 
 ## Versions
 
@@ -147,13 +147,13 @@ macOS run weighs most.
 
 | Target | How obtained | Run | Build | Grid | Editor | Cold start ms (hyperfine mean) | first_frame_ms | rss_mb | Binary MB | Renderer | Notes |
 | ------ | ------------ | --- | ----- | ---- | ------ | ------------------------------ | -------------- | ------ | --------- | -------- | ----- |
-| macOS | manual (Apple M4 Pro, macOS 27.0.1, Xcode 27.0) | commit 4d3d5d1 (same tree as measured, then uncommitted) | pass | pass (smoke) | pass (smoke) | 157.8 (3 runs: 157.9, 158.4, 157.2) | 191.7 (3 runs: 178.6, 202.4, 194.2) | 151.4 (3 runs: 151.7, 151.7, 150.9) | 26.4 | metal | `scripts/measure.sh`, release `--locked`, unstripped. Peak RSS (`/usr/bin/time -l`, `--smoke`) 151.2 to 152.2 MB. The 2-minute interactive check (trackpad scroll, type and edit SQL, resize the split) is NOT done: an agent cannot do it. Pending the developer. |
-| Linux X11 | CI (ubuntu-latest, xvfb) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) | pass | pass | pass | 200.7 | 515.0 (run 1: 1853.5) | 264.3 | 57.7 | llvmpipe (LLVM 20.1.2) / llvmpipe (software) | 4 vCPU VM, software Vulkan. Peak RSS 252.3 MB. 26 rows/frame max. Run 1 ([link](https://github.com/alwatroos/sqler/actions/runs/39416330360)) also passed: cold 204.4, rss 264.5. |
-| Linux Wayland | CI (ubuntu-latest, headless cage) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) | pass | pass | pass | 181.9 | 2285.1 | 267.5 | 57.7 | llvmpipe (LLVM 20.1.2) / llvmpipe (software) | Report says `display=wayland`. Peak RSS 259.6 MB. Run 1 with headless weston failed on environment only: `Wayland compositor does not provide wl_seat` (weston headless has no input device, so no seat); fixed by using cage. |
-| macOS | CI (macos-latest, arm64 VM) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) | pass | pass | pass | 203.8 (run 1: 494.7) | 933.9 (run 1: 2981.6) | 124.2 | 26.4 | metal | VM Metal, no Metal toolchain step needed. Peak RSS 124.3 MB. 21 rows/frame max. |
-| Windows | CI (windows-latest) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) | pass | pass | pass | 206.0 | 185.0 (run 1: 224.7) | 103.2 | 26.3 | Microsoft Basic Render Driver (WARP) | Software D3D. 24 rows/frame max. Run 1 cold start was `failed` (hyperfine launched through a shell with an unquoted path); fixed with `-N` and a quoted path. |
+| macOS | manual (Apple M4 Pro, macOS 27.0.1, Xcode 27.0) | commit 4d3d5d1 (same tree as measured, then uncommitted) | pass | pass (smoke) | pass (smoke) | 157.8 (3 runs: 157.9, 158.4, 157.2) | 191.7 (3 runs: 178.6, 202.4, 194.2) | 151.4 (3 runs: 151.7, 151.7, 150.9) | 26.4 | metal | `scripts/measure.sh`, release `--locked`, unstripped. Peak RSS (`/usr/bin/time -l`, `--smoke`) 151.2 to 152.2 MB. 26 rows/frame max, 12 highlight kinds (`results/results.txt`). The 2-minute interactive check (trackpad scroll, type and edit SQL, resize the split) is NOT done: an agent cannot do it. Pending the developer. |
+| Linux X11 | CI (ubuntu-latest, xvfb) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) @ 3c59a65 | pass | pass | pass | 200.7 | 515.0 (run 1: 1853.5) | 264.3 | 57.7 | llvmpipe (LLVM 20.1.2) / llvmpipe (software) | 4 vCPU VM, software Vulkan. Peak RSS 252.3 MB. 26 rows/frame max, 12 highlight kinds. Run 1 ([link](https://github.com/alwatroos/sqler/actions/runs/39416330360)) also passed: cold 204.4, rss 264.5. |
+| Linux Wayland | CI (ubuntu-latest, headless cage) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) @ 3c59a65 | pass | pass | pass | 181.9 | 2285.1 | 267.5 | 57.7 | llvmpipe (LLVM 20.1.2) / llvmpipe (software) | Report says `display=wayland`. Peak RSS 259.6 MB. 26 rows/frame max, 12 highlight kinds. Run 1 with headless weston failed on environment only: `Wayland compositor does not provide wl_seat` (weston headless has no input device, so no seat); fixed by using cage. |
+| macOS | CI (macos-latest, arm64 VM) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) @ 3c59a65 | pass | pass | pass | 203.8 (run 1: 494.7) | 933.9 (run 1: 2981.6) | 124.2 | 26.4 | metal | VM Metal, no Metal toolchain step needed. Peak RSS 124.3 MB. 21 rows/frame max, 12 highlight kinds. |
+| Windows | CI (windows-latest) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) @ 3c59a65 | pass | pass | pass | 206.0 | 185.0 (run 1: 224.7) | 103.2 | 26.3 | Microsoft Basic Render Driver (WARP) | Software D3D. 24 rows/frame max, 12 highlight kinds. Run 1 cold start was `failed` (hyperfine launched through a shell with an unquoted path); fixed with `-N` and a quoted path. |
 
-CI first-frame numbers vary a lot between runs on shared VMs (macOS 934 vs 2982 ms, X11 515 vs 1853 ms); treat them as order of magnitude, cold start (hyperfine mean) is stable. CI VMs use software
+CI first-frame numbers vary a lot between runs on shared VMs (macOS 934 vs 2982 ms, 3.2x; X11 515 vs 1853 ms, 3.6x); treat them as order of magnitude, cold start (hyperfine mean) is stable. CI VMs use software
 renderers (llvmpipe, WARP) or VM Metal, so they say nothing about GPU performance.
 
 Reading the macOS numbers: `first_frame_ms` is main() start to the first frame callback and leaves out
