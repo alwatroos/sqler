@@ -121,7 +121,7 @@ impl HistoryStore {
     /// Records an executed query. Returns `Ok(false)` and changes nothing when
     /// history is disabled.
     ///
-    /// The SQL is passed through [`redact_credentials`](super::redact_credentials)
+    /// The SQL is passed through [`redact_credentials`]
     /// and cut to [`MAX_HISTORY_SQL_BYTES`](super::MAX_HISTORY_SQL_BYTES) first.
     /// Time and duration are kept at millisecond precision. When the file
     /// grows past the cap plus some slack it is compacted to the newest
