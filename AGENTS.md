@@ -224,6 +224,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0016](docs/src/adr/0016-connect-pipeline.md) | Connect pipeline: `Connector` trait in `sqler-ui`, pipeline in `sqler-app` | accepted |
 | [0017](docs/src/adr/0017-object-browser-sessions-and-drop-confirmation.md) | Object browser: browser session per connection, short-lived action sessions, DROP confirmation | accepted |
 | [0019](docs/src/adr/0019-tls-server-name-through-tunnel.md) | TLS server name through a tunnel: `TlsConfig::server_name`, local Unix-socket bridge | accepted |
+| [0021](docs/src/adr/0021-query-history-and-saved-queries.md) | Query history and saved queries: JSON Lines history, versioned TOML saved queries | accepted |
 | [0022](docs/src/adr/0022-catalog-snapshot-name-index.md) | Catalog snapshot, name index and on-demand column loading | accepted |
 | [0023](docs/src/adr/0023-completion-engine.md) | Completion engine: own lexer, schema source trait, ranking | accepted |
 

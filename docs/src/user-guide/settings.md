@@ -1,6 +1,6 @@
 # Settings
 
-SQLer reads three TOML files from one config directory. You can edit them by hand. A missing file is
+SQLer keeps its files in one config directory: three settings files (`settings.toml`, `connections.toml`, `keymap.toml`), the saved queries (`queries.toml`, also TOML) and the query history (`history.jsonl`). You can edit the TOML files by hand. A missing file is
 fine: SQLer then uses the defaults. A wrong key or value is reported with the file name and the
 problem; it is never silently ignored.
 
@@ -12,7 +12,7 @@ problem; it is never silently ignored.
 | macOS | `~/Library/Application Support/SQLer` |
 | Windows | `%APPDATA%\SQLer` |
 
-Files in that directory: `settings.toml`, `keybindings.toml`, `connections.toml`.
+Files in that directory: `settings.toml`, `keybindings.toml`, `connections.toml`, `history.jsonl`, `queries.toml`.
 
 ## settings.toml
 
@@ -66,6 +66,92 @@ conflict is a warning and does not stop SQLer from starting.
 ## connections.toml
 
 The saved connections, their groups, TLS and SSH settings are described in [Connections](connections.md).
+
+## history.jsonl
+
+SQLer records every executed query in `history.jsonl`: one JSON object per line, with the SQL, the
+connection ID, the start time, the duration, the outcome (`ok`, `error` or `cancelled`) and the row
+count when known. You do not need to edit it. The format is in
+[ADR-0021](../adr/0021-query-history-and-saved-queries.md).
+
+```json
+{"v":1,"started_ms":1760950000123,"connection":"billing","duration_ms":42,"outcome":"ok","rows":10,"sql":"select 1"}
+```
+
+- Retention: the newest 10,000 entries are kept by default (the limit can be set from 1 to 100,000).
+  The file is trimmed to that limit now and then, not on every query. SQL longer than 256 KiB is cut
+  and the entry gets `"truncated":true`.
+- Search is by text (every word must appear in the SQL, any case) and can be limited to one
+  connection. The newest entries come first.
+- A line that cannot be read, or that was written by a newer SQLer, is reported with its line number
+  and left in the file. The other lines still load. Clearing the history removes them.
+- History can be switched off, and it can be cleared completely or for one connection.
+- Use one SQLer window process at a time. Two running instances do not coordinate, and one may lose
+  lines that the other wrote while the file was being trimmed.
+
+### Privacy
+
+The history stores the SQL as you typed it. That can include literals such as names, e-mail
+addresses or a password written inside a statement. It never stores bound parameter values, the
+passwords of your connections, or error messages.
+
+Before saving, SQLer hides credentials, and it errs on the side of hiding too much. This is a
+heuristic, not a guarantee. A statement counts as sensitive if its text contains, anywhere and in
+any case, a marker such as `passw` (so `PASSWORD`, `passwd`, `password_hash`), `pwd`, `secret`,
+`token`, `credential`, `apikey`, `api_key`, `authorization`, `oauth`, `bearer`, `identified`,
+`_key`, `salt`, `encrypt`, `decrypt`, the whole words `pw` and `key` (as in
+`pgp_sym_encrypt(x, key)` or SQLCipher `ATTACH ... KEY`, not `PRIMARY KEY`), `private key`, or a URL
+with user info (`scheme://...@`). The marker may even sit inside a comment, a quoted name or a
+text. Bare `auth`, `ssl`, `cert`, `otp` and `hash` are not markers, since they appear in harmless
+words such as `author`. In a sensitive statement every `'...'` text, every `"..."` text, every
+dollar-quoted text, every backtick name, and every comment (including `MySQL` `/*! ... */` comments,
+which run as SQL) is saved as `'<redacted>'`. Texts that hold JSON, YAML or `key=value` credentials
+go away with the rest. Because dialects read quotes, backslashes and comments differently, SQLer
+checks the statement under each reading, hides everything any reading would treat as quoted, and
+hides everything after a quote or comment that is never closed. Other statements, with their
+comments, are saved as typed. A statement longer than the size limit is cut first.
+
+Hiding more than needed is by design, for example a harmless `SELECT` that mentions a column named
+`token_count` loses its texts. Known gaps: a secret written without quotes, such as the Oracle form
+`IDENTIFIED BY pw`; password hashes written as bare hex numbers (`MSSQL`); a secret behind a column
+or variable name that carries no marker; and an encryption key given as a text to a function whose
+name carries no marker (`encrypt`, `decrypt`). If that is a problem, switch the history off and
+clear it.
+
+The file is plain text. Do not put the config directory in a public dotfiles repository or another
+synced place without excluding `history.jsonl` and `queries.toml`.
+
+## queries.toml
+
+Saved queries are kept in `queries.toml`. You can edit it by hand.
+
+```toml
+version = 1
+
+[[query]]
+id = "q-1"
+name = "Open invoices"
+folder = "billing/reports"
+connection = "billing"
+tags = ["invoices", "monthly"]
+sql = """
+select * from invoices where paid = false
+"""
+```
+
+| Key | Meaning |
+| --- | ------- |
+| `version` | Required, `1`. A higher number is refused: "written by a newer SQLer". |
+| `id` | Required. Lowercase letters, digits and `-`, at most 64 characters, unique. New queries get `q-1`, `q-2`, and so on. Do not change it. |
+| `name` | Required. Not empty, and unique within its folder. |
+| `sql` | Required. The statement text. |
+| `folder` | Optional. A path such as `billing/reports`; no empty parts. |
+| `connection` | Optional. The ID of the connection to use. If that connection is gone, the value stays. |
+| `tags` | Optional. A list of non-empty words; duplicates are dropped. |
+
+Unknown keys are errors. The list shows queries in file order, and a new query goes to the end.
+SQLer writes the whole file when you save, so comments and spacing in a hand-edited file are not
+kept. If the file cannot be read, SQLer reports the problem and leaves the file as it is.
 
 ## Settings tab and themes
 
