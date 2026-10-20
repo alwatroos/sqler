@@ -26,6 +26,12 @@ The palette lists commands that need no argument. `connection:select`, `tab:acti
 | `tab:previous` | Ctrl+Shift+Tab | Ctrl+Shift+Tab |
 | `app:quit` | Cmd+Q | Ctrl+Q |
 | `settings:open` | Cmd+, | Ctrl+, |
+| `query:run-selection` | Cmd+E | Ctrl+E |
+| `query:run-statement` | Cmd+Enter | Ctrl+Enter |
+| `query:run-all` | Cmd+Shift+Enter | Ctrl+Shift+Enter |
+| `query:cancel` | Cmd+. | Ctrl+. |
+
+The `query:*` commands are described in [Running queries](running-queries.md).
 
 `theme:toggle-mode` has no default shortcut; run it from the palette or bind it yourself.
 
