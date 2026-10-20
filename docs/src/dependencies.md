@@ -33,6 +33,8 @@ Source commands (all rows):
 | tokio | `tokio` | 1.54.0 | 2026-10-19 | Async runtime for the CLI (`rt`) and driver tests (`rt`); sqlx `runtime-tokio` pulls it in. Checked 2026-10-20. Source: API |
 | futures-core | `futures-core` | 0.3.34 | 2026-08-11 | `Stream` trait for the `SQLite` query stream; same version as sqlx uses. Checked 2026-10-20. Source: API |
 | anyhow | `anyhow` | 1.0.104 | 2026-07-18 | Error context in the `sqler-cli` binary only. Checked 2026-10-20. Source: API |
+| criterion | `criterion` | 0.8.2 | 2026-02-04 | Bench harness candidate; rejected for the grid bench (ADR-0006); no harness crate added. Checked 2026-10-20. Source: API (`curl -s -A "sqler-bench-survey (github.com/sqler)" https://crates.io/api/v1/crates/criterion \| jq -r '.crate.max_stable_version, .crate.updated_at'`) |
+| divan | `divan` | 0.1.21 | 2025-04-10 | Bench harness candidate; rejected for the grid bench (ADR-0006); no harness crate added. Checked 2026-10-20. Source: API (same command for `divan`) |
 
 ## CI tools and actions
 
@@ -47,8 +49,8 @@ Source commands:
 
 | Component | Source | Pinned | Released | Notes |
 | --------- | ------ | ------ | -------- | ----- |
-| `actions/checkout` | GitHub release | `v7` (v7.0.1) | 2026-07-20 | Repository checkout |
-| `Swatinem/rust-cache` | GitHub release | `v2` (v2.9.2) | 2026-08-06 | Cargo cache |
+| `actions/checkout` | GitHub release | `v7` (v7.0.1) | 2026-07-20 | Repository checkout; re-checked 2026-10-20, still the latest major |
+| `Swatinem/rust-cache` | GitHub release | `v2` (v2.9.2) | 2026-08-06 | Cargo cache; re-checked 2026-10-20, still the latest major |
 | `taiki-e/install-action` | GitHub release | `v2` (v2.87.29) | 2026-10-16 | Prebuilt tool binaries |
 | `actions/configure-pages` | GitHub release | `v6` (v6.0.0) | 2026-03-25 | Pages setup |
 | `actions/upload-pages-artifact` | GitHub release | `v5` (v5.0.0) | 2026-04-10 | Book artifact |
@@ -85,6 +87,7 @@ Per-dependency rationale is added by the PR that introduces it.
   `futures` crate. One version in the tree.
 - `anyhow` 1.0.104: error chains with context in the binary only (AGENTS.md §6); libraries keep
   `thiserror`.
+- Std-only bench harness (ADR-0006): `crates/sqler-ui/benches/grid_viewport.rs` is a `harness = false` binary, so `criterion` and `divan` are not added. There is no new runtime dependency: `sqler-ui` reuses `sqler-driver-api`; `sqler-driver-sqlite` and `tokio` (`rt`) are dev-dependencies only.
 - `cargo-nextest`: faster, per-test-process runner used by CI and the local commands.
 - `cargo-deny`: enforces the Apache-2.0-compatible license allow-list in `deny.toml`, plus bans, sources and advisories.
 - `mdbook`: builds the documentation book in CI and for GitHub Pages.

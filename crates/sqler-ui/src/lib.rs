@@ -6,3 +6,4 @@
 #![forbid(unsafe_code)]
 
 pub mod command;
+pub mod grid;

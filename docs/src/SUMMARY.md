@@ -12,6 +12,7 @@
   - [ADR-0002: Plugin ABI: WASM Component Model](adr/0002-plugin-abi-wasm-component-model.md)
   - [ADR-0003: AI tool contract](adr/0003-ai-tool-contract.md)
   - [ADR-0004: Driver API](adr/0004-driver-api.md)
+  - [ADR-0006: Grid data model and bench harness](adr/0006-grid-data-model-and-bench-harness.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
 - [Benchmarks](benchmarks.md)

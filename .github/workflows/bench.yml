@@ -1,0 +1,67 @@
+name: Bench
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/bench.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  grid-viewport:
+    name: grid viewport (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Baseline bench on the base commit
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/target"
+          git worktree add ../base "$BASE_SHA"
+          if [ -f ../base/crates/sqler-ui/benches/grid_viewport.rs ]; then
+            cd ../base
+            rustup toolchain install
+            # Exit 1 means the base itself broke the 1 ms budget; the file is saved first.
+            cargo bench -p sqler-ui --bench grid_viewport -- --save "$GITHUB_WORKSPACE/target/bench-base.txt" || [ $? -eq 1 ]
+          else
+            echo "::notice::no baseline bench on base"
+          fi
+      - name: Bench the PR (or branch) commit
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/target"
+          if [ -f "$GITHUB_WORKSPACE/target/bench-base.txt" ]; then
+            cargo bench -p sqler-ui --bench grid_viewport -- --save "$GITHUB_WORKSPACE/target/bench-pr.txt" --compare "$GITHUB_WORKSPACE/target/bench-base.txt"
+          else
+            cargo bench -p sqler-ui --bench grid_viewport -- --save "$GITHUB_WORKSPACE/target/bench-pr.txt"
+          fi
+      - name: Summary
+        if: always()
+        run: |
+          for f in "$GITHUB_WORKSPACE/target/bench-base.txt" "$GITHUB_WORKSPACE/target/bench-pr.txt"; do
+            if [ -f "$f" ]; then
+              echo "### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              cat "$f" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
