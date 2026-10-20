@@ -41,9 +41,22 @@ The editor hands its text, selection and cursor to the query run commands, and t
 
 With several cursors, the run commands read the main selection and cursor. Placeholders, the production confirmation and cancelling are described in [Running queries](running-queries.md).
 
+## Intellisense
+
+Completion, hover and diagnostics need a connection whose object browser is open and loaded; until then the editor stays silent.
+
+- **Completion.** A popup opens while you type an identifier character or `.`. It offers keywords, functions, snippets, schemas, tables, views and columns, with the columns of the tables in the statement first. Press `.` after an alias (`SELECT u.` with `FROM users u`) to list that table's columns. `editor:trigger-completion` (Ctrl+Space, also in the palette under `Editor:`) opens the popup on demand.
+- **Hover.** Rest the mouse on a column to see its type, whether it is `NOT NULL` and the target of its foreign key; on a table or view to see its kind and schema.
+- **Diagnostics.** About 300 ms after you stop typing, unknown schemas, tables, columns and qualifiers are underlined as errors and ambiguous columns as warnings; hover the underline for the message. Names whose columns or lists are not loaded are never flagged.
+- **On-demand loading.** Columns of a table are loaded in the background when you reference it. The popup and the underlines update when they arrive. A catalog refresh in the object browser also updates suggestions without reopening the tab.
+
+Ctrl+Space is the default chord on every platform. On macOS it switches the input source by default (System Settings, Keyboard, Keyboard Shortcuts, Input Sources), so the system may take the key before the editor sees it. Either turn that system shortcut off or rebind `editor:trigger-completion` in `keybindings.toml` (see [Keybindings](keybindings.md)); the command is always available from the command palette.
+
 ## Limits
 
 - Format and add-next-occurrence use the active selection only.
-- Completion, hover and diagnostics, history and restoring editors after a restart are not part of this editor yet.
+- Snippets are inserted as plain text, without tab stops.
+- A load that failed is not retried until the connection's browser reconnects.
+- History and restoring editors after a restart are not part of this editor yet.
 
-Design: [ADR-0025](../adr/0025-sql-editor-component.md) and [UI workspace](../architecture/ui.md#sql-editor).
+Design: [ADR-0025](../adr/0025-sql-editor-component.md), [ADR-0026](../adr/0026-editor-intellisense.md) and [UI workspace](../architecture/ui.md#sql-editor).

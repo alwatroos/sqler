@@ -29,6 +29,7 @@ The palette lists commands that need no argument. `connection:select`, `tab:acti
 | `editor:new` | Cmd+N | Ctrl+N |
 | `editor:format-sql` | Shift+Alt+F | Shift+Alt+F |
 | `editor:add-next-occurrence` | Cmd+D | Ctrl+D |
+| `editor:trigger-completion` | Ctrl+Space | Ctrl+Space |
 | `query:run-selection` | Cmd+E | Ctrl+E |
 | `query:run-statement` | Cmd+Enter | Ctrl+Enter |
 | `query:run-all` | Cmd+Shift+Enter | Ctrl+Shift+Enter |
@@ -40,7 +41,7 @@ The `query:*` commands are described in [Running queries](running-queries.md).
 
 ## SQL editor
 
-The editor commands are in the palette under `Editor:`. The three above have default shortcuts; `editor:add-cursor-above`, `editor:add-cursor-below` and `editor:go-to-matching-bracket` have none, so run them from the palette or bind them in `keybindings.toml`.
+The editor commands are in the palette under `Editor:`. The four above have default shortcuts; `editor:add-cursor-above`, `editor:add-cursor-below` and `editor:go-to-matching-bracket` have none, so run them from the palette or bind them in `keybindings.toml`.
 
 | Command | Title |
 | ------- | ----- |
@@ -50,7 +51,10 @@ The editor commands are in the palette under `Editor:`. The three above have def
 | `editor:add-cursor-above` | Editor: Add Cursor Above |
 | `editor:add-cursor-below` | Editor: Add Cursor Below |
 | `editor:go-to-matching-bracket` | Editor: Go to Matching Bracket |
+| `editor:trigger-completion` | Editor: Trigger Completion |
 | `dev:open-large-sql-script` | Open Synthetic 10,000-Line SQL Script |
+
+On macOS Ctrl+Space is also the default shortcut for switching the input source, so the system can intercept it. Turn that system shortcut off or rebind `editor:trigger-completion` in `keybindings.toml`; the command is also in the palette. See [Intellisense](sql-editor.md#intellisense).
 
 While the editor has focus, the editor component also handles its own keys. These are not SQLer commands and cannot be rebound in `keybindings.toml`:
 

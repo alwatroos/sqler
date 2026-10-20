@@ -12,6 +12,7 @@ mod brackets;
 mod buffer;
 mod doc;
 mod format;
+pub mod intellisense;
 mod occurrence;
 mod run;
 mod run_t8;

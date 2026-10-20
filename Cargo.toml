@@ -59,6 +59,8 @@ pem-rfc7468 = { version = "1.0.0", default-features = false, features = ["alloc"
 zeroize = { version = "1.9.1", default-features = false, features = ["alloc"] }
 tokio-stream = { version = "0.1.19", default-features = false, features = ["net"] }
 gpui-component = { version = "0.8.0", features = ["tree-sitter-sql"] }
+# Same 0.97 line as gpui-component 0.8.0 (its CompletionProvider/HoverProvider speak these types); AGENTS.md section 10.
+lsp-types = "0.97.0"
 gpui = { version = "=0.3.9", package = "gpui-pre" }
 gpui_platform = { version = "=0.3.9", package = "gpui-pre-platform", features = ["font-kit", "x11", "wayland"] }
 

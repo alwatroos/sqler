@@ -197,6 +197,24 @@ The worst completion p95 is about 0.5 to 1.0 ms against the 16 ms budget (one fr
 
 `bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `complete_p95_ns`, taken as the minimum over 3 in-process repetitions, is more than 25 % plus 250 us (`--slack-ns 250000`, 1/64 of the budget) above the same figure on the base, or if `complete_p95_ns`, `hover_p95_ns`, `diagnose_p95_ns` or `worst_p95_ns` exceeds the 16 ms budget. `hover_p95_ns` and `diagnose_p95_ns` are compared the same way when the base's file has them (a base from before T7 does not; `bench.yml` therefore gates them only once the base branch has a baseline with those keys, and until then only the 16 ms budget applies to them; the gate code is checked by comparing against a saved file that has the keys). Without a baseline on the base branch only the budget applies. The p95 of this bench is in the hundreds of microseconds and sits in the tail of the relation-scan scenarios, so the fixed 50 ns slack of the ns-scale benches would flake on a shared runner; the minimum over repetitions drops a noisy repetition and the 250 us floor keeps a real 2x regression (about +450 us on the M4, more on a runner) failing. If the gate still flakes, report it here rather than widening the default silently.
 
+## SQL editor intellisense
+
+`sqler_ui::editor::intellisense` end to end, headless: a fresh `catalog.snapshot()`, `CatalogSchema::new` and one operation per sample (the engine and catalog work behind a keystroke, ADR-0022), on the synthetic source of 5,000 tables (8 columns each) in `public` plus 20 more schemas of 10 tables, `PostgreSQL` dialect. The catalog worker runs on a tokio runtime and the columns of the tables a scenario names are loaded before sampling. The input is a ready `&str` and a byte offset. It stops where the GPUI providers start: `Rope::to_string`, the byte-offset to LSP-position mapping, the conversion to the editor's LSP types, the debounce and the paint of the popup are not measured, they are a maintainer check on a display (T10 PR body).
+
+| Date | Commit | OS | Worst p95 (ns) | Notes |
+| ---- | ------ | -- | -------------- | ----- |
+| 2026-10-20 | 66f541f plus this PR | macOS arm64, Apple M4 Pro | 279,334 (`from_prefix`) | 2,000 samples per scenario; budget p95 16 ms; about 57 times under it |
+
+p50 / p95 per scenario (ns): `statement_start` (empty statement) 7,875 / 11,375; `from_prefix` (`SELECT * FROM t_04|`) 239,458 / 279,334; `qualified_column` (`SELECT u.| FROM t_00010 u`) 4,875 / 5,042; `alias_join` (column behind the alias of a join) 5,541 / 5,792; `hover` (column with a foreign key) 4,166 / 4,250; `diagnose` (five statements, one unknown column) 125,750 / 131,083.
+
+The popup the editor shows most often (a column behind an alias) takes microseconds; the slowest case is a table-name prefix, which scans and ranks the 5,000 relation names. Building the `CatalogSchema` per request is cheap: it holds `Arc`s of the cached listings and fills the per-table state only for the tables the engine looks at.
+
+### Method
+
+1. `cargo bench -p sqler-ui --bench editor_intellisense` (release profile). Flags: `--tables` (5000), `--columns` (8), `--samples` (2000 per scenario), `--budget-p95-ns` (16000000). Not part of `bench.yml`.
+2. Six scenarios as listed above. The run fails if the qualified scenario does not list the loaded columns or the hover finds nothing.
+3. Output is `key=value` lines: `<scenario>_p50_ns` and `<scenario>_p95_ns`, and `worst_p95_ns`, the largest p95. p50 and p95 are nearest-rank percentiles. Exit code 0 passes, 1 when the worst p95 exceeds the budget or the setup fails, 2 is a usage error.
+
 ## UI framework spike
 
 Data, not pass/fail; spike build, not the product. Measured on `spikes/ui-framework` (ADR-0001), release profile

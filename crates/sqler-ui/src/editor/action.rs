@@ -21,6 +21,8 @@ pub enum EditorAction {
     AddCursorBelow,
     /// Select the bracket that matches the one at the cursor.
     GoToMatchingBracket,
+    /// Open the completion popup at the cursor.
+    TriggerCompletion,
     /// Open a synthetic 10,000-line script in a new editor (for checking responsiveness).
     OpenSyntheticScript,
 }
@@ -33,6 +35,8 @@ pub enum EditorKey {
     AddCursorAbove,
     /// Add a cursor on the line below.
     AddCursorBelow,
+    /// Open the completion popup at the cursor.
+    ShowCompletions,
 }
 
 /// The commands: ID and title.
@@ -46,6 +50,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "editor:go-to-matching-bracket",
         "Editor: Go to Matching Bracket",
     ),
+    ("editor:trigger-completion", "Editor: Trigger Completion"),
     (
         "dev:open-large-sql-script",
         "Open Synthetic 10,000-Line SQL Script",
@@ -72,6 +77,7 @@ impl EditorAction {
             Self::AddCursorAbove => "editor:add-cursor-above",
             Self::AddCursorBelow => "editor:add-cursor-below",
             Self::GoToMatchingBracket => "editor:go-to-matching-bracket",
+            Self::TriggerCompletion => "editor:trigger-completion",
             Self::OpenSyntheticScript => "dev:open-large-sql-script",
         }
     }
@@ -87,6 +93,7 @@ pub fn action_for(id: &CommandId) -> Option<EditorAction> {
         "editor:add-cursor-above" => EditorAction::AddCursorAbove,
         "editor:add-cursor-below" => EditorAction::AddCursorBelow,
         "editor:go-to-matching-bracket" => EditorAction::GoToMatchingBracket,
+        "editor:trigger-completion" => EditorAction::TriggerCompletion,
         "dev:open-large-sql-script" => EditorAction::OpenSyntheticScript,
         _ => return None,
     })
@@ -110,13 +117,14 @@ mod tests {
 
     use super::*;
 
-    const ALL: [EditorAction; 7] = [
+    const ALL: [EditorAction; 8] = [
         EditorAction::New,
         EditorAction::FormatSql,
         EditorAction::AddNextOccurrence,
         EditorAction::AddCursorAbove,
         EditorAction::AddCursorBelow,
         EditorAction::GoToMatchingBracket,
+        EditorAction::TriggerCompletion,
         EditorAction::OpenSyntheticScript,
     ];
 
@@ -169,8 +177,16 @@ mod tests {
             EditorAction::OpenSyntheticScript.command_id().to_string(),
             "dev:open-large-sql-script"
         );
+        assert_eq!(
+            EditorAction::TriggerCompletion.command_id().to_string(),
+            "editor:trigger-completion"
+        );
         let title = |id: &str| COMMANDS.iter().find(|(i, _)| *i == id).map(|(_, t)| *t);
         assert_eq!(title("editor:format-sql"), Some("Editor: Format SQL"));
+        assert_eq!(
+            title("editor:trigger-completion"),
+            Some("Editor: Trigger Completion")
+        );
         assert_eq!(
             title("dev:open-large-sql-script"),
             Some("Open Synthetic 10,000-Line SQL Script")

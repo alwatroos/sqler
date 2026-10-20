@@ -130,6 +130,18 @@ The `TabKind::Query` tab is the SQL editor. Its text lives in a `gpui-component`
 
 Decision and the gaps in `gpui-component` (no add-next-occurrence, no bracket matching): [ADR-0025](../adr/0025-sql-editor-component.md). User view: [SQL editor](../user-guide/sql-editor.md).
 
+### Intellisense
+
+`sqler_ui::editor::intellisense` (GPUI-free) adapts the connection's browser catalog to `sqler-completion` (ADR-0026). Data flow per request:
+
+1. `Workspace::editor_catalog(tab)` gives the browser generation and `Catalog` of the tab's connection, only while the browser is `Ready`.
+2. The provider in `editor/view/provider.rs` (the only GPUI part) takes a fresh `CatalogSnapshot` (ADR-0022) and builds a `CatalogSchema`, a `SchemaSource` over it.
+3. `complete_popup`, `hover_markdown` and `diagnose` run on GPUI's background executor, so a refresh shows up on the next keystroke.
+4. Requests the engine could not answer (`SchemaRequest`) become `CacheKey`s (`keys_for`); `load` sends them to the catalog, and the futures are awaited on the GPUI executor (never `tokio::spawn`; the catalog worker already runs on tokio). The popup is then asked again.
+5. `TabIntel` remembers per tab which keys were asked, the browser generation and the snapshot generation, so a failed load is not repeated and a new snapshot re-runs the debounced (300 ms) diagnostics.
+
+Benchmark: `cargo bench -p sqler-ui --bench editor_intellisense` (5,000 tables; worst p95 under 16 ms). User view: [SQL editor](../user-guide/sql-editor.md#intellisense).
+
 ## Hook points
 
 - Themes (T7): the shell paints only with `gpui_component` theme tokens (`cx.theme()`), with no second palette. `theme::apply` (gui only) calls `Theme::change` and sets `Theme::font_size`. `workspace::run` applies the startup settings, `WorkspaceView::new` observes the OS appearance, and `Effect::ApplySettings` saves and re-applies. The prod tint uses the theme's `danger` token.

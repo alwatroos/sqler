@@ -52,6 +52,7 @@
   - [ADR-0023: Completion engine](adr/0023-completion-engine.md)
   - [ADR-0024: Query execution](adr/0024-query-execution.md)
   - [ADR-0025: SQL editor component](adr/0025-sql-editor-component.md)
+  - [ADR-0026: Editor intellisense](adr/0026-editor-intellisense.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
 - [Benchmarks](benchmarks.md)

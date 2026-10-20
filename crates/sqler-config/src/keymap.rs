@@ -240,6 +240,7 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("editor:new", &["mod+n"]),
     ("editor:format-sql", &["shift+alt+f"]),
     ("editor:add-next-occurrence", &["mod+d"]),
+    ("editor:trigger-completion", &["ctrl+space"]),
 ];
 
 fn dedup(chords: Vec<KeyChord>) -> Vec<KeyChord> {
