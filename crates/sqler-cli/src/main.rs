@@ -5,6 +5,104 @@
 
 #![forbid(unsafe_code)]
 
-fn main() {
-    println!("sqler-cli {}", env!("CARGO_PKG_VERSION"));
+mod args;
+mod output;
+
+use std::io::{self, Write};
+use std::process::ExitCode;
+
+use anyhow::{Context, Result};
+use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId, Query};
+use sqler_driver_api::{DriverRegistry, QueryEvent};
+
+use crate::args::{Command, USAGE, UsageError};
+use crate::output::TsvWriter;
+
+fn main() -> ExitCode {
+    match args::parse(std::env::args().skip(1)) {
+        Ok(Command::Help) => {
+            print!("{USAGE}");
+            ExitCode::SUCCESS
+        }
+        Ok(Command::Version) => {
+            println!("sqler-cli {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Ok(Command::Run {
+            driver,
+            target,
+            sql,
+        }) => match run(&driver, &target, &sql) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                ExitCode::from(1)
+            }
+        },
+        Err(UsageError(msg)) => {
+            eprintln!("error: {msg}\n\n{USAGE}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run(driver: &str, target: &str, sql: &str) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to start the async runtime")?;
+    runtime.block_on(run_query(driver, target, sql))
+}
+
+// Without any driver feature nothing can fail or be registered.
+#[cfg_attr(not(feature = "driver-sqlite"), allow(clippy::unnecessary_wraps))]
+fn registry() -> Result<DriverRegistry> {
+    #[allow(unused_mut)]
+    let mut registry = DriverRegistry::new();
+    #[cfg(feature = "driver-sqlite")]
+    registry.register(Box::new(sqler_driver_sqlite::SqliteDriver::new()))?;
+    Ok(registry)
+}
+
+async fn run_query(driver: &str, target: &str, sql: &str) -> Result<()> {
+    let registry = registry()?;
+    let config = ConnectionConfig::new(target, DriverId::new(driver)?, target);
+    let mut session = registry.connect(&config).await?;
+
+    let query = Query::new(sql);
+    let summary = {
+        let mut stream = session.execute(&query).await?;
+        let stdout = io::stdout();
+        let mut writer = TsvWriter::new(stdout.lock());
+        let mut rows = 0_u64;
+        let mut has_columns = false;
+        let mut summary = String::from("(done)");
+        while let Some(event) = stream.next_event().await {
+            match event? {
+                QueryEvent::Columns(columns) => {
+                    has_columns = !columns.is_empty();
+                    writer.columns(&columns)?;
+                }
+                QueryEvent::Rows(batch) => {
+                    rows += batch.len() as u64;
+                    writer.rows(&batch)?;
+                }
+                QueryEvent::Done { rows_affected } => {
+                    if has_columns {
+                        summary = format!("({rows} rows)");
+                    } else if let Some(n) = rows_affected {
+                        summary = format!("({n} rows affected)");
+                    }
+                }
+                _ => {}
+            }
+        }
+        writer.flush()?;
+        summary
+    };
+    eprintln!("{summary}");
+    io::stderr().flush().ok();
+
+    session.close().await?;
+    Ok(())
 }

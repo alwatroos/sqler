@@ -2,6 +2,10 @@
 
 The user guide is planned. SQLer has no released application yet (M0 bootstrap).
 
+Available now:
+
+- [Command-line interface](cli.md): run a statement on `SQLite` from a terminal
+
 Planned topics:
 
 - Install: planned (M7)

@@ -3,6 +3,7 @@
 [Introduction](introduction.md)
 
 - [User guide](user-guide/index.md)
+  - [Command-line interface](user-guide/cli.md)
 - [Architecture](architecture/index.md)
   - [Core and driver API](architecture/core-and-driver-api.md)
 - [Architecture decisions](adr/index.md)
