@@ -81,6 +81,21 @@ pub fn prefetch_keys(
     schema: &CatalogSchema,
     limit: usize,
 ) -> Vec<CacheKey> {
+    prefetch_keys_skipping(text, dialect, schema, limit, &HashSet::new())
+}
+
+/// [`prefetch_keys`] without the keys in `asked`, which do not count against `limit`.
+///
+/// A table whose load failed stays unloaded and asked; if it took a slot on every pass, `limit`
+/// failing tables would starve the ones behind them.
+#[must_use]
+pub fn prefetch_keys_skipping<S: std::hash::BuildHasher>(
+    text: &str,
+    dialect: Dialect,
+    schema: &CatalogSchema,
+    limit: usize,
+    asked: &HashSet<CacheKey, S>,
+) -> Vec<CacheKey> {
     let mut seen: HashSet<DbObject> = HashSet::new();
     let mut keys = Vec::new();
     for segment in split(dialect, text) {
@@ -101,7 +116,10 @@ pub fn prefetch_keys(
             else {
                 continue;
             };
-            if !schema.needs_table(&object) || !seen.insert(object.clone()) {
+            if !schema.needs_table(&object)
+                || asked.contains(&CacheKey::Table(object.clone()))
+                || !seen.insert(object.clone())
+            {
                 continue;
             }
             if keys.len() >= limit {
@@ -278,6 +296,23 @@ mod tests {
         rt.block_on(load(&catalog, keys));
         let loaded = fresh(&catalog);
         assert_eq!(prefetch_keys(text, Dialect::Postgres, &loaded, 64).len(), 0);
+    }
+
+    #[test]
+    fn asked_tables_do_not_take_prefetch_slots() {
+        let rt = runtime();
+        let catalog = setup(&rt, 20);
+        let s = fresh(&catalog);
+        let text = "SELECT * FROM t_00001 a JOIN t_00002 b ON 1=1 JOIN t_00003 c ON 1=1 JOIN t_00004 d ON 1=1";
+        let first = prefetch_keys(text, Dialect::Postgres, &s, 2);
+        assert_eq!(first.len(), 2);
+        // The first two failed: they stay unloaded but asked. The next pass reaches the rest.
+        let asked: HashSet<CacheKey> = first.iter().cloned().collect();
+        let next = prefetch_keys_skipping(text, Dialect::Postgres, &s, 2, &asked);
+        assert_eq!(next.len(), 2);
+        assert!(next.iter().all(|k| !asked.contains(k)));
+        let obj = |n: &str| CacheKey::Table(s.object(None, n).expect("listed"));
+        assert_eq!(next, [obj("t_00003"), obj("t_00004")]);
     }
 
     #[test]

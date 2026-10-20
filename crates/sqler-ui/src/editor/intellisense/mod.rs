@@ -24,7 +24,7 @@ mod tab;
 use std::time::Duration;
 
 pub use hover::{code_name, hover_markdown};
-pub use keys::{bootstrap_keys, keys_for, load, prefetch_keys};
+pub use keys::{bootstrap_keys, keys_for, load, prefetch_keys, prefetch_keys_skipping};
 pub use popup::{
     Popup, PopupItem, complete_popup, flatten_snippet, highlight_ranges, is_completion_trigger,
 };

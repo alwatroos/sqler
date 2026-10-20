@@ -28,7 +28,7 @@ use sqler_sql::Dialect;
 
 use crate::editor::intellisense::{
     CatalogSchema, PREFETCH_LIMIT, TabIntel, code_name, complete_popup, hover_markdown,
-    is_completion_trigger, load, prefetch_keys,
+    is_completion_trigger, load, prefetch_keys_skipping,
 };
 
 /// What the providers of one editor read: the connection's catalog and dialect.
@@ -127,20 +127,35 @@ fn guarded<F: std::future::Future<Output = ()>>(
 /// task is dropped.
 fn spawn_owned_load(
     handle: &IntelHandle,
+    editor: &WeakEntity<EditorState>,
     catalog: &Catalog,
     keys: Vec<CacheKey>,
     window: &Window,
     cx: &App,
     then: impl FnOnce(&mut AsyncWindowContext) + 'static,
 ) {
-    let loading = load(catalog, keys.clone());
-    let handle = handle.clone();
+    // Built here, not in the task: a task dropped before its first poll still gives the keys back.
+    let owned = owned_load(handle, catalog, keys);
+    let editor = editor.clone();
     window
         .spawn(cx, async move |cx| {
-            guarded(handle, keys, loading).await;
+            owned.await;
             then(cx);
+            // The load bumped the snapshot generation; `sync_intellisense` runs on a render, so
+            // ask for one, or an unfocused editor keeps its stale underlines until the next input.
+            editor.update(cx, |_, cx| cx.notify()).ok();
+            cx.update(|window, _| window.refresh()).ok();
         })
         .detach();
+}
+
+/// The load of `keys` with its [`LoadGuard`] already on, so the guard exists from the call.
+fn owned_load(
+    handle: &IntelHandle,
+    catalog: &Catalog,
+    keys: Vec<CacheKey>,
+) -> impl std::future::Future<Output = ()> + 'static {
+    guarded(handle.clone(), keys.clone(), load(catalog, keys))
 }
 
 /// The shared state; it lives on the foreground thread only.
@@ -225,8 +240,9 @@ impl CompletionProvider for SqlProvider {
                 // load makes its own request, whose loads `fresh` swallowed, and it is that
                 // popup that has to be asked for again.
                 let owner = handle.clone();
+                let weak = editor.clone();
                 cx.update(|window, cx| {
-                    spawn_owned_load(&owner, &ctx.catalog, loads, window, cx, move |cx| {
+                    spawn_owned_load(&owner, &weak, &ctx.catalog, loads, window, cx, move |cx| {
                         reopen(&editor, &handle, cx);
                     });
                 })
@@ -347,12 +363,13 @@ struct Finding {
 /// Loads the bootstrap `keys` (just marked asked) in a task nothing cancels.
 pub(super) fn preload(
     handle: &IntelHandle,
+    editor: &WeakEntity<EditorState>,
     catalog: &Catalog,
     keys: Vec<CacheKey>,
     window: &Window,
     cx: &App,
 ) {
-    spawn_owned_load(handle, catalog, keys, window, cx, |_| {});
+    spawn_owned_load(handle, editor, catalog, keys, window, cx, |_| {});
 }
 
 /// Diagnoses the text of `state` after `delay`, underlines the findings, and loads the columns of
@@ -380,7 +397,7 @@ pub(super) fn diagnose_task(
             if let Some(catalog) = catalog {
                 let owner = handle.clone();
                 cx.update(|window, cx| {
-                    spawn_owned_load(&owner, &catalog, more, window, cx, |_| {});
+                    spawn_owned_load(&owner, &editor, &catalog, more, window, cx, |_| {});
                 })
                 .ok();
             }
@@ -404,6 +421,7 @@ async fn diagnose_once(
     let snapshot = ctx.catalog.snapshot();
     let dialect = ctx.dialect;
     let job_rope = rope.clone();
+    let asked = handle.borrow().intel.asked();
     let (findings, keys) = cx
         .background_spawn(async move {
             let source = job_rope.to_string();
@@ -424,7 +442,7 @@ async fn diagnose_once(
                     message: d.message,
                 })
                 .collect::<Vec<_>>();
-            let keys = prefetch_keys(&source, dialect, &schema, PREFETCH_LIMIT);
+            let keys = prefetch_keys_skipping(&source, dialect, &schema, PREFETCH_LIMIT, &asked);
             (findings, keys)
         })
         .await;
@@ -480,7 +498,8 @@ mod tests {
     use sqler_catalog::{CacheKey, NodeKey};
     use sqler_driver_api::sqler_core::{ObjectKind, ObjectPath};
 
-    use super::{IntelHandle, IntelState, Still, guarded, should_reopen};
+    use super::{IntelHandle, IntelState, Still, guarded, owned_load, should_reopen};
+    use crate::editor::intellisense::synthetic::synthetic_catalog_with;
 
     fn keys() -> Vec<CacheKey> {
         [ObjectKind::Table, ObjectKind::View]
@@ -523,6 +542,18 @@ mod tests {
         let h = handle();
         let asked = h.borrow_mut().intel.fresh(keys());
         drop(guarded(h.clone(), asked, ready(())));
+        assert_eq!(h.borrow_mut().intel.fresh(keys()), keys());
+    }
+
+    /// The construction `spawn_owned_load` uses: dropped unstarted, the load gives its keys back.
+    #[test]
+    fn an_unpolled_owned_load_is_requested_again() {
+        let h = handle();
+        let (catalog, _worker, _) = synthetic_catalog_with(3, 2);
+        let asked = h.borrow_mut().intel.fresh(keys());
+        let owned = owned_load(&h, &catalog, asked);
+        assert_eq!(h.borrow_mut().intel.fresh(keys()).len(), 0);
+        drop(owned);
         assert_eq!(h.borrow_mut().intel.fresh(keys()), keys());
     }
 

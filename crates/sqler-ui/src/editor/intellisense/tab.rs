@@ -40,6 +40,12 @@ impl TabIntel {
             .collect()
     }
 
+    /// The keys asked so far (a copy, for work on another thread).
+    #[must_use]
+    pub fn asked(&self) -> HashSet<CacheKey> {
+        self.asked.clone()
+    }
+
     /// Takes `keys` back out of the asked set, so a later [`TabIntel::fresh`] returns them again.
     ///
     /// For loads that never completed (their task was dropped). A load that completed, with an

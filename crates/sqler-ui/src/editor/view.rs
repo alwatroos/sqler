@@ -176,7 +176,14 @@ impl EditorViews {
             {
                 // Its own task: the keys are marked asked, so a diagnose pass that is replaced
                 // must not be the one that loses them.
-                provider::preload(&view.intel, catalog, preload, window, cx);
+                provider::preload(
+                    &view.intel,
+                    &view.state.downgrade(),
+                    catalog,
+                    preload,
+                    window,
+                    cx,
+                );
             }
             if changed || refreshed {
                 view.diagnose =
