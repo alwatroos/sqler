@@ -1,0 +1,13 @@
+[package]
+name = "sqler-ai-api"
+description = "The AiProvider trait, message and tool types, streaming and token accounting."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true

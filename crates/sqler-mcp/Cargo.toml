@@ -1,0 +1,13 @@
+[package]
+name = "sqler-mcp"
+description = "MCP server (rmcp) exposing the sqler-ai-tools tool set to external agents."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true

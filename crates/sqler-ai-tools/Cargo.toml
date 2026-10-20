@@ -1,0 +1,13 @@
+[package]
+name = "sqler-ai-tools"
+description = "The tool set exposed to models: list_schemas, describe_table, run_query (guarded), search_data, explain and more."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
