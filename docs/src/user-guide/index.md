@@ -5,6 +5,7 @@ The user guide is planned. SQLer has no released application yet (M0 bootstrap).
 Available now:
 
 - [Command-line interface](cli.md): run a statement on `SQLite` from a terminal
+- [Workspace](workspace.md): the desktop window with the connection sidebar and tabs
 - [Settings](settings.md): settings, keybindings and saved connections files
 
 Planned topics:

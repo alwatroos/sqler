@@ -16,3 +16,4 @@ consequences. SQLer uses the MADR format.
 | [0004](0004-driver-api.md) | Driver API: boxed futures, event stream, session cancellation | accepted |
 | [0005](0005-config-files-and-keybindings.md) | Config files and keybindings: TOML files, chord grammar, std-only directory lookup | accepted |
 | [0006](0006-grid-data-model-and-bench-harness.md) | Grid data model and bench harness | accepted |
+| [0007](0007-desktop-binary-and-ui-tokio-bridge.md) | Desktop binary and UI-thread/tokio bridge | accepted |
