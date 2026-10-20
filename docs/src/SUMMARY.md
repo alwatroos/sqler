@@ -40,6 +40,7 @@
   - [ADR-0015: DDL generation: dialects and quoting](adr/0015-ddl-generation-dialects-and-quoting.md)
   - [ADR-0016: Connect pipeline](adr/0016-connect-pipeline.md)
   - [ADR-0017: Object browser sessions and DROP confirmation](adr/0017-object-browser-sessions-and-drop-confirmation.md)
+  - [ADR-0019: TLS server name through a tunnel](adr/0019-tls-server-name-through-tunnel.md)
   - [ADR-0021: Query history and saved queries](adr/0021-query-history-and-saved-queries.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)

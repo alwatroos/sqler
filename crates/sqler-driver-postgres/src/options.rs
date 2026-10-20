@@ -103,6 +103,31 @@ pub(crate) fn connect_options(config: &ConnectionConfig) -> Result<PgConnectOpti
     Ok(opts)
 }
 
+/// The name to verify the certificate against, when it is not the dial host.
+///
+/// Only with `verify-full` on a TCP target: the explicit `TlsConfig::server_name`, unless it equals
+/// the dial host (ASCII case-insensitive, brackets trimmed). Every other case gives `None`.
+pub(crate) fn server_name_override(
+    config: &ConnectionConfig,
+    opts: &PgConnectOptions,
+) -> Option<String> {
+    let name = config.tls.as_ref()?.server_name.as_deref()?;
+    if !matches!(opts.get_ssl_mode(), PgSslMode::VerifyFull) {
+        return None;
+    }
+    let host = opts.get_host();
+    // A socket target (`socket` set, or a host that is a directory) is not TCP.
+    if opts.get_socket().is_some() || host.starts_with('/') {
+        return None;
+    }
+    let trim = |s: &str| s.trim_matches(['[', ']']).to_owned();
+    let name = trim(name);
+    if name.is_empty() || name.eq_ignore_ascii_case(&trim(host)) {
+        return None;
+    }
+    Some(name)
+}
+
 #[cfg(test)]
 mod tests {
     use sqler_driver_api::sqler_core::{DriverId, TlsConfig};
@@ -198,5 +223,65 @@ mod tests {
         let err = connect_options(&config("postgres://u:s3cret@host:notaport/x")).unwrap_err();
         assert!(matches!(err, DriverError::Connection(_)));
         assert!(!err.to_string().contains("s3cret"));
+    }
+
+    fn named(target: &str, mode: TlsMode, name: &str) -> (ConnectionConfig, PgConnectOptions) {
+        let cfg = config(target).with_tls(TlsConfig::new(mode).with_server_name(name));
+        let opts = connect_options(&cfg).unwrap();
+        (cfg, opts)
+    }
+
+    #[test]
+    fn server_name_applies_for_verify_full_and_a_different_name() {
+        let (cfg, opts) = named(
+            "postgres://u:p@127.0.0.1:5432/db",
+            TlsMode::VerifyFull,
+            "db.internal",
+        );
+        assert_eq!(
+            server_name_override(&cfg, &opts).as_deref(),
+            Some("db.internal")
+        );
+    }
+
+    #[test]
+    fn server_name_is_ignored_when_equal_or_not_verify_full() {
+        let (cfg, opts) = named(URL, TlsMode::VerifyFull, "LocalHost");
+        assert_eq!(server_name_override(&cfg, &opts), None);
+        let (cfg, opts) = named("postgres://u:p@[::1]:5432/db", TlsMode::VerifyFull, "[::1]");
+        assert_eq!(server_name_override(&cfg, &opts), None);
+        for mode in [
+            TlsMode::Disable,
+            TlsMode::Prefer,
+            TlsMode::Require,
+            TlsMode::VerifyCa,
+        ] {
+            let (cfg, opts) = named("postgres://u:p@127.0.0.1/db", mode, "db.internal");
+            assert_eq!(server_name_override(&cfg, &opts), None, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn server_name_is_ignored_without_a_name_or_for_sockets() {
+        let cfg =
+            config("postgres://u:p@127.0.0.1/db").with_tls(TlsConfig::new(TlsMode::VerifyFull));
+        let opts = connect_options(&cfg).unwrap();
+        assert_eq!(server_name_override(&cfg, &opts), None);
+        let cfg = config("postgres://u:p@127.0.0.1/db");
+        let opts = connect_options(&cfg).unwrap();
+        assert_eq!(server_name_override(&cfg, &opts), None);
+        let (cfg, opts) = named(
+            "postgres://u:p@127.0.0.1/db",
+            TlsMode::VerifyFull,
+            "db.internal",
+        );
+        let opts = opts.socket("/var/run/postgresql");
+        assert_eq!(server_name_override(&cfg, &opts), None);
+        let (cfg, opts) = named(
+            "postgres://u:p@%2Fvar%2Frun/db",
+            TlsMode::VerifyFull,
+            "db.internal",
+        );
+        assert_eq!(server_name_override(&cfg, &opts), None);
     }
 }

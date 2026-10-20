@@ -95,22 +95,28 @@ The history stores the SQL as you typed it. That can include literals such as na
 addresses or a password written inside a statement. It never stores bound parameter values, the
 passwords of your connections, or error messages.
 
-Before saving, SQLer hides credentials, and it errs on the side of hiding too much. A statement
-counts as sensitive if its text contains, anywhere and in any case, a marker such as `pass`
-(so `PASSWORD`, `passwd`), `pwd`, `secret`, `token`, `credential`, `apikey`, `api_key`, `auth`,
-`bearer`, `identified`, `key=`, `_key`, `ssl`, or a URL with user info (`scheme://...@`). The marker
-may even sit inside a comment, a quoted name or a text. In a sensitive statement every `'...'` text,
-every `"..."` text, every dollar-quoted text, every backtick name, and every comment (including
-`MySQL` `/*! ... */` comments, which run as SQL) is saved as `'<redacted>'`. Texts that hold JSON,
-YAML or `key=value` credentials go away with the rest. Because dialects read quotes, backslashes and
-comments differently, SQLer checks the statement under each reading, hides everything any reading
-would treat as quoted, and hides everything after a quote or comment that is never closed. Other
-statements, with their comments, are saved as typed.
+Before saving, SQLer hides credentials, and it errs on the side of hiding too much. This is a
+heuristic, not a guarantee. A statement counts as sensitive if its text contains, anywhere and in
+any case, a marker such as `passw` (so `PASSWORD`, `passwd`, `password_hash`), `pwd`, `secret`,
+`token`, `credential`, `apikey`, `api_key`, `authorization`, `oauth`, `bearer`, `identified`,
+`_key`, `salt`, `encrypt`, `decrypt`, the whole words `pw` and `key` (as in
+`pgp_sym_encrypt(x, key)` or SQLCipher `ATTACH ... KEY`, not `PRIMARY KEY`), `private key`, or a URL
+with user info (`scheme://...@`). The marker may even sit inside a comment, a quoted name or a
+text. Bare `auth`, `ssl`, `cert`, `otp` and `hash` are not markers, since they appear in harmless
+words such as `author`. In a sensitive statement every `'...'` text, every `"..."` text, every
+dollar-quoted text, every backtick name, and every comment (including `MySQL` `/*! ... */` comments,
+which run as SQL) is saved as `'<redacted>'`. Texts that hold JSON, YAML or `key=value` credentials
+go away with the rest. Because dialects read quotes, backslashes and comments differently, SQLer
+checks the statement under each reading, hides everything any reading would treat as quoted, and
+hides everything after a quote or comment that is never closed. Other statements, with their
+comments, are saved as typed. A statement longer than the size limit is cut first.
 
 Hiding more than needed is by design, for example a harmless `SELECT` that mentions a column named
-`token_count` loses its texts. What is not covered: a secret written without quotes, such as the
-Oracle form `IDENTIFIED BY pw`, and password hashes written as bare hex numbers (`MSSQL`). If that is
-a problem, switch the history off and clear it.
+`token_count` loses its texts. Known gaps: a secret written without quotes, such as the Oracle form
+`IDENTIFIED BY pw`; password hashes written as bare hex numbers (`MSSQL`); a secret behind a column
+or variable name that carries no marker; and an encryption key given as a text to a function whose
+name carries no marker (`encrypt`, `decrypt`). If that is a problem, switch the history off and
+clear it.
 
 The file is plain text. Do not put the config directory in a public dotfiles repository or another
 synced place without excluding `history.jsonl` and `queries.toml`.

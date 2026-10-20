@@ -2,16 +2,26 @@
 // SPDX-FileCopyrightText: The SQLer Authors
 
 //! Heuristic removal of credentials from SQL text before it is stored.
+//!
+//! Conservative by design, not a guarantee: see [`redact_credentials`] for the
+//! markers and the known gaps.
 
 use std::borrow::Cow;
 
 const PLACEHOLDER: &str = "'<redacted>'";
-/// Lowercase fragments that mark a statement as sensitive. They are searched as
-/// substrings in the raw text with whitespace removed, so no lexing is needed
-/// and a marker inside a comment, a literal or an identifier counts too.
-/// The list is deliberately broad: over-redaction is harmless.
-const MARKERS: [&str; 33] = [
-    "pass",
+
+/// Lowercase fragments that mark a statement as sensitive. They are searched
+/// as substrings of the lowercased raw text, token by token as written
+/// (whitespace is not removed), so no lexing is needed and a marker inside a
+/// comment, a literal or an identifier counts too. A fragment may sit inside
+/// a longer word (`passw` matches `password_hash`). The list is deliberately
+/// broad: over-redaction is harmless. Bare `auth`, `ssl`, `cert`, `otp` and
+/// `hash` are not markers: they match too many harmless words (`author`,
+/// `class`, `NOT price`).
+const MARKERS: [&str; 36] = [
+    "passw",
+    "passphrase",
+    "passcode",
     "pwd",
     "secret",
     "token",
@@ -19,44 +29,64 @@ const MARKERS: [&str; 33] = [
     "apikey",
     "api_key",
     "api-key",
-    "auth",
+    "authorization",
+    "auth_",
+    "authenticat",
+    "oauth",
     "bearer",
     "identified",
-    "privatekey",
     "private_key",
     "-----begin",
-    "key=",
-    "key:",
-    "key\"",
-    "key'",
-    "key`",
     "_key",
-    "ssl",
+    "key_id",
+    "keyid",
+    "access_key",
+    "accesskey",
+    "keyfile",
+    "sslkey",
+    "sslcert",
+    "ssl_cert",
     "salt",
-    "hash",
     "cookie",
     "signature",
     "jwt",
     "sessionid",
     "session_id",
-    "otp",
-    "access_key",
-    "accesskey",
-    "keyfile",
-    "cert",
+    "encrypt",
+    "decrypt",
+    "crypt(",
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    /// Plain SQL, including bare words.
-    Text,
-    /// A `'...'`, `"..."` or dollar-quoted literal.
-    Literal,
-    /// A backtick identifier, closed or not.
-    Ident,
-    /// A comment.
-    Comment,
-}
+/// Markers made of several words. They are searched in the lowercased text
+/// with all whitespace removed, so `private   key` and `API KEY` match.
+const MULTI_WORD_MARKERS: [&str; 5] = [
+    "privatekey",
+    "apikey",
+    "accesskey",
+    "sessionid",
+    "identifiedby",
+];
+
+/// Markers that count only as a whole word: `pw` (not `pwn`), and `key` as in
+/// `pgp_sym_encrypt(x, key)`, `AES_ENCRYPT(x, key)` or `SQLCipher`
+/// `ATTACH 'f' AS e KEY 'k'`.
+const WORD_MARKERS: [&str; 2] = ["pw", "key"];
+
+/// Words that make a following `key` a schema keyword, not a secret
+/// (`PRIMARY KEY`, `ON DUPLICATE KEY`, `PARTITION KEY`).
+const KEY_SCHEMA_WORDS: [&str; 11] = [
+    "primary",
+    "foreign",
+    "unique",
+    "partition",
+    "sort",
+    "duplicate",
+    "distribution",
+    "cluster",
+    "clustering",
+    "shard",
+    "sharding",
+];
 
 /// One reading of the ambiguous parts of SQL syntax. The redactor lexes the
 /// statement under every combination and acts on the union.
@@ -85,34 +115,25 @@ fn modes() -> impl Iterator<Item = Mode> {
     })
 }
 
-/// Splits `sql` into `(kind, start, end)` segments covering the whole text.
-fn lex(sql: &str, mode: Mode) -> Vec<(Kind, usize, usize)> {
+/// Lexes `sql` under `mode` and calls `mark(start, end)` for every segment
+/// that is not plain text. Nothing is collected.
+fn lex(sql: &str, mode: Mode, mut mark: impl FnMut(usize, usize)) {
     let b = sql.as_bytes();
-    let mut segs = Vec::new();
-    let mut text_start = 0;
     let mut i = 0;
     let mut prev_word = false;
     while i < b.len() {
         let c = b[i];
-        let found = match c {
-            b'-' if mode.dashes && b.get(i + 1) == Some(&b'-') => {
-                Some((Kind::Comment, line_end(sql, i)))
-            }
-            b'#' if mode.hash => Some((Kind::Comment, line_end(sql, i))),
-            b'/' if b.get(i + 1) == Some(&b'*') => {
-                Some((Kind::Comment, block_comment_end(b, i, mode.nesting)))
-            }
-            b'\'' | b'"' => Some((Kind::Literal, quoted_end(sql, i, c, mode.backslash).0)),
-            b'`' => Some((Kind::Ident, quoted_end(sql, i, c, false).0)),
-            b'$' if mode.dollar && !prev_word => dollar_end(sql, i).map(|end| (Kind::Literal, end)),
+        let end = match c {
+            b'-' if mode.dashes && b.get(i + 1) == Some(&b'-') => Some(line_end(sql, i)),
+            b'#' if mode.hash => Some(line_end(sql, i)),
+            b'/' if b.get(i + 1) == Some(&b'*') => Some(block_comment_end(b, i, mode.nesting)),
+            b'\'' | b'"' => Some(quoted_end(sql, i, c, mode.backslash).0),
+            b'`' => Some(quoted_end(sql, i, c, false).0),
+            b'$' if mode.dollar && !prev_word => dollar_end(sql, i),
             _ => None,
         };
-        if let Some((kind, end)) = found {
-            if text_start < i {
-                segs.push((Kind::Text, text_start, i));
-            }
-            segs.push((kind, i, end));
-            text_start = end;
+        if let Some(end) = end {
+            mark(i, end);
             i = end;
             prev_word = false;
         } else {
@@ -120,10 +141,6 @@ fn lex(sql: &str, mode: Mode) -> Vec<(Kind, usize, usize)> {
             i += 1;
         }
     }
-    if text_start < b.len() {
-        segs.push((Kind::Text, text_start, b.len()));
-    }
-    segs
 }
 
 fn is_word_byte(c: u8) -> bool {
@@ -186,7 +203,9 @@ fn quoted_end(sql: &str, start: usize, q: u8, backslash: bool) -> (usize, bool) 
 }
 
 /// End (exclusive) of a `$tag$ ... $tag$` literal starting at `start`, or
-/// `None` when `$` does not open one (for example `$1`).
+/// `None` when `$` does not open one (for example `$1`). As in `PostgreSQL`, a
+/// tag is empty or starts with a letter (any script) or `_` and continues with
+/// letters, digits and `_`.
 fn dollar_end(sql: &str, start: usize) -> Option<usize> {
     let rest = &sql[start + 1..];
     let tag_len = rest.find('$')?;
@@ -195,8 +214,7 @@ fn dollar_end(sql: &str, start: usize) -> Option<usize> {
     let tag_ok = match chars.next() {
         None => true,
         Some(f) => {
-            (f.is_ascii_alphabetic() || f == '_')
-                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+            (f.is_alphabetic() || f == '_') && chars.all(|c| c.is_alphanumeric() || c == '_')
         }
     };
     if !tag_ok {
@@ -211,26 +229,43 @@ fn dollar_end(sql: &str, start: usize) -> Option<usize> {
     )
 }
 
-/// Whether the raw text holds a credential marker anywhere.
+/// Whether the text holds a credential marker anywhere.
 fn is_sensitive(sql: &str) -> bool {
-    let squashed: String = sql
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .flat_map(char::to_lowercase)
-        .collect();
+    let lower: String = sql.chars().flat_map(char::to_lowercase).collect();
     // A URL with user info (`scheme://user:pw@host`) needs no marker word.
-    (squashed.contains("://") && squashed.contains('@'))
-        || MARKERS.iter().any(|m| squashed.contains(m))
+    if (lower.contains("://") && lower.contains('@')) || MARKERS.iter().any(|m| lower.contains(m)) {
+        return true;
+    }
+    let squashed: String = lower.chars().filter(|c| !c.is_whitespace()).collect();
+    if MULTI_WORD_MARKERS.iter().any(|m| squashed.contains(m)) {
+        return true;
+    }
+    let mut prev = "";
+    for word in lower.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+        if word.is_empty() {
+            continue;
+        }
+        if WORD_MARKERS.contains(&word) && !(word == "key" && KEY_SCHEMA_WORDS.contains(&prev)) {
+            return true;
+        }
+        prev = word;
+    }
+    false
 }
 
 /// Removes literal values from a statement that may carry a credential.
 ///
-/// Fail-safe by construction. A statement is sensitive when its raw text
-/// (whitespace removed, any case) contains one of a broad list of markers as a
-/// substring: `pass`, `pwd`, `secret`, `token`, `credential`, `apikey`,
-/// `api_key`, `auth`, `bearer`, `identified`, `key=`, `_key`, `ssl`, ...
+/// Conservative by design, not a guarantee. A statement is sensitive when its
+/// raw text (any case) contains one of a broad list of markers: as a
+/// substring, `passw`, `pwd`, `secret`, `token`, `credential`, `apikey`,
+/// `api_key`, `authorization`, `auth_`, `authenticat`, `oauth`, `bearer`,
+/// `identified`, `_key`, `salt`, `encrypt`, `decrypt` and similar; as a whole
+/// word, `pw` and `key` (but not `PRIMARY KEY` and similar); on
+/// whitespace-normalised text, `private key`, `api key` and `identified by`;
+/// or `://` together with `@` (a URL with user info). The marker may sit
 /// anywhere, including inside comments, identifiers and literals. No lexing is
-/// involved in that decision.
+/// involved in that decision. Bare `auth`, `ssl`, `cert`, `otp` and `hash` are
+/// not markers, because they match harmless words.
 ///
 /// In a sensitive statement every `'...'`, `"..."` and dollar-quoted literal,
 /// every comment (including `MySQL` `/*! ... */` executable comments) and every
@@ -243,44 +278,41 @@ fn is_sensitive(sql: &str) -> bool {
 /// whole because all literals are. Other statements are returned unchanged
 /// (`Cow::Borrowed`).
 ///
-/// It over-redacts by design. Not covered: an unquoted secret such as Oracle
-/// `IDENTIFIED BY pw`, and secrets that are not in a literal, comment or open
-/// identifier, such as hashes written as bare hex (`MSSQL` `0x...`).
+/// Known gaps:
+/// - an unquoted secret, such as Oracle `IDENTIFIED BY pw`;
+/// - password hashes written as bare hex (`MSSQL` `0x...`);
+/// - a secret behind a column or variable name that carries no marker;
+/// - an encryption key passed as a literal to a function whose name carries no
+///   marker (`encrypt`, `decrypt`, `crypt(`) and without a `key` word.
+///
+/// Memory is bounded by the input: a byte mask of the statement, no per-lexing
+/// collection. The history store cuts the text to its size cap before calling
+/// this.
 #[must_use]
 pub fn redact_credentials(sql: &str) -> Cow<'_, str> {
     if !is_sensitive(sql) {
         return Cow::Borrowed(sql);
     }
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut covered = vec![false; sql.len()];
     for mode in modes() {
-        for (kind, s, e) in lex(sql, mode) {
-            if kind != Kind::Text {
-                ranges.push((s, e));
-            }
-        }
+        lex(sql, mode, |s, e| covered[s..e].fill(true));
     }
-    ranges.sort_unstable();
     let mut out = String::with_capacity(sql.len());
-    let mut pos = 0;
-    let mut cur: Option<(usize, usize)> = None;
-    for (s, e) in ranges {
-        match cur {
-            Some((cs, ce)) if s <= ce => cur = Some((cs, ce.max(e))),
-            Some((cs, ce)) => {
-                out.push_str(&sql[pos..cs]);
-                out.push_str(PLACEHOLDER);
-                pos = ce;
-                cur = Some((s, e));
+    let mut i = 0;
+    while i < covered.len() {
+        if covered[i] {
+            while i < covered.len() && covered[i] {
+                i += 1;
             }
-            None => cur = Some((s, e)),
+            out.push_str(PLACEHOLDER);
+        } else {
+            let start = i;
+            while i < covered.len() && !covered[i] {
+                i += 1;
+            }
+            out.push_str(&sql[start..i]);
         }
     }
-    if let Some((cs, ce)) = cur {
-        out.push_str(&sql[pos..cs]);
-        out.push_str(PLACEHOLDER);
-        pos = ce;
-    }
-    out.push_str(&sql[pos..]);
     Cow::Owned(out)
 }
 
@@ -555,6 +587,103 @@ mod tests {
         }
     }
 
+    #[test]
+    fn non_ascii_dollar_tags_do_not_leak() {
+        for s in [
+            "ALTER ROLE u PASSWORD $é$hunter2$é$",
+            "ALTER ROLE u PASSWORD $ü_1$hunter2$ü_1$",
+            "ALTER ROLE u PASSWORD $日本$hunter2$日本$",
+            "ALTER ROLE u PASSWORD $é$ x $é$ || $é$hunter2$é$",
+            "ALTER ROLE u PASSWORD $é$hunter2",
+        ] {
+            let out = r(s);
+            assert!(!leaks(&out), "{s} -> {out}");
+        }
+    }
+
+    #[test]
+    fn bare_dollar_quote_does_not_leak() {
+        for s in [
+            "ALTER ROLE u PASSWORD $$hunter2$$",
+            "ALTER ROLE u PASSWORD $$it's hunter2$$",
+            "ALTER ROLE u PASSWORD $$hunter2",
+        ] {
+            let out = r(s);
+            assert!(!leaks(&out), "{s} -> {out}");
+        }
+        assert_eq!(
+            r("alter role u password $$hunter2$$"),
+            "alter role u password '<redacted>'"
+        );
+    }
+
+    #[test]
+    fn encryption_and_key_forms_are_sensitive() {
+        for s in [
+            "SELECT pgp_sym_encrypt('data', 'hunter2')",
+            "SELECT AES_ENCRYPT('data', 'hunter2')",
+            "SELECT aes_decrypt(c, 'hunter2') FROM t",
+            "ATTACH 'f.db' AS e KEY 'hunter2'",
+            "PRAGMA key = 'hunter2'",
+            "SET pw = 'hunter2'",
+            "SELECT f(x, 'hunter2') -- pw",
+        ] {
+            let out = r(s);
+            assert!(!leaks(&out), "{s} -> {out}");
+        }
+    }
+
+    #[test]
+    fn cross_token_and_harmless_words_are_not_markers() {
+        for s in [
+            "select 'a' from t where not price > 1",
+            "select 'a' from class l",
+            "select 'a' from author",
+            "select 'a', hash from t",
+            "select 'a' from t where pwn = 1",
+            "create table t (id int primary key, n text default 'x')",
+            "insert into t values ('a') on duplicate key update n = 'b'",
+            "select 'a' from monkey where x = 'b'",
+            "select 'a' from t -- cert, ssl, otp",
+        ] {
+            assert!(matches!(redact_credentials(s), Cow::Borrowed(_)), "{s}");
+        }
+    }
+
+    #[test]
+    fn multi_word_markers_ignore_whitespace() {
+        for s in [
+            "SET private   key = 'hunter2'",
+            "SET API\nKEY = 'hunter2'",
+            "create user u identified\tby 'hunter2'",
+        ] {
+            let out = r(s);
+            assert!(!leaks(&out), "{s} -> {out}");
+        }
+    }
+
+    #[test]
+    fn password_hash_column_is_sensitive() {
+        let out = r("insert into users (name, password_hash) values ('a', 'hunter2')");
+        assert!(!leaks(&out), "{out}");
+    }
+
+    #[test]
+    fn one_mebibyte_statement_is_redacted_in_bounded_time() {
+        let mut sql = String::from("insert into users (name, password_hash) values ");
+        while sql.len() < 1 << 20 {
+            sql.push_str("('alice', '$2b$12$abcdefghijklmnopqrstuv'),");
+        }
+        let t = std::time::Instant::now();
+        let out = redact_credentials(&sql);
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(10),
+            "{:?}",
+            t.elapsed()
+        );
+        assert!(!out.contains("alice"));
+    }
+
     const SECRET: &str = "S3cr3tXYZ";
 
     /// Small deterministic generator (xorshift); no extra dependency.
@@ -590,12 +719,12 @@ mod tests {
         "from t ",
     ];
     /// Anything, including the dangerous fragments.
-    const DANGER: [&str; 24] = [
+    const DANGER: [&str; 26] = [
         "'", "\"", "`", "\\", "/*", "*/", "--", "#", "$$", "$t$", "\n", " ", "E'", "/*!50000", ";",
-        "''", "\\'", "/* /*", "'a\\'", "password", "$1", "é", "--'", "`a``",
+        "''", "\\'", "/* /*", "'a\\'", "password", "$1", "é", "--'", "`a``", "$é$", "$ж$",
     ];
     /// Places for the secret.
-    const WRAPS: [&str; 15] = [
+    const WRAPS: [&str; 18] = [
         "'S'",
         "\"S\"",
         "`S`",
@@ -611,8 +740,15 @@ mod tests {
         "`S",
         "'{\"password\":\"S\"}'",
         "'u:p/ss@h S'",
+        "$é$S$é$",
+        "$ü_1$S$ü_1$",
+        "$日本$S$日本$",
     ];
-    const SENSITIVE: [&str; 10] = [
+    const SENSITIVE: [&str; 14] = [
+        "pw",
+        "pgp_sym_encrypt",
+        "AES_DECRYPT",
+        "attach x as e key",
         "PASSWORD",
         "identified by",
         "Access_Token",

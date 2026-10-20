@@ -148,3 +148,32 @@ fn huge_sql_is_truncated_on_record() {
     assert!(e.sql().len() <= MAX_HISTORY_SQL_BYTES && e.truncated());
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn megabyte_bulk_insert_is_cut_then_redacted() {
+    let dir = std::env::temp_dir().join(format!("sqler-hostile3-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let path = ConfigDir::new(&dir).history_path();
+    let store = HistoryStore::open(&path, HistoryOptions::default()).unwrap();
+    let mut sql = String::from("insert into users (name, password_hash) values ");
+    while sql.len() < 1 << 20 {
+        sql.push_str("('alice', '$2b$12$abcdefghijklmnopqrstuv'),");
+    }
+    let t = std::time::Instant::now();
+    store
+        .record(NewHistoryEntry {
+            sql,
+            connection: conn(),
+            started_at: SystemTime::now(),
+            duration: Duration::from_millis(1),
+            outcome: HistoryOutcome::Ok,
+            rows: None,
+        })
+        .unwrap();
+    assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+    let e = &store.search(&HistoryQuery::default())[0];
+    assert!(e.truncated());
+    assert!(e.sql().len() <= MAX_HISTORY_SQL_BYTES);
+    assert!(!e.sql().contains("alice"));
+    let _ = fs::remove_dir_all(&dir);
+}

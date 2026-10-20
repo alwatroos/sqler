@@ -7,9 +7,14 @@
 //! crate; everything that does I/O for a connection lives here.
 //!
 //! Order of one attempt: resolve the secrets (keychain reads on a blocking thread), build the
-//! `ConnectionConfig`, refuse `verify-full` through a tunnel before anything is opened, open the
-//! tunnel, point the target at its local port, put the database password into the in-memory
-//! target and connect through the registry. The password never reaches a stored or printed target.
+//! `ConnectionConfig`, open the tunnel, point the target at its local port, put the database
+//! password into the in-memory target and connect through the registry. The password never
+//! reaches a stored or printed target.
+//!
+//! Through a tunnel the driver dials `127.0.0.1:<port>`, so the original host goes into the
+//! config as `TlsConfig::server_name` and the driver verifies the certificate against it
+//! (ADR-0019). Where the drivers cannot do that (no Unix domain sockets, i.e. Windows),
+//! `verify-full` through a tunnel is still refused before anything is opened.
 
 mod session;
 mod target;
@@ -19,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use sqler_config::{ConnectionSpec, Secret, SecretKind, SecretStore, SshAuth, TlsMode};
-use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId};
+use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId, TlsConfig};
 use sqler_driver_api::{BoxFuture, DriverRegistry, Session};
 use sqler_tunnel::{Secret as TunnelSecret, SshAuth as TunnelAuth, TunnelConfig};
 use sqler_ui::connections::{
@@ -31,6 +36,10 @@ use self::session::{TunnelGuard, TunnelledSession};
 use self::target::UrlTarget;
 pub(crate) use self::tunnel::SshTunnels;
 use self::tunnel::{TunnelOpener, host_key_info, map_tunnel_error};
+
+/// Whether the drivers can verify a certificate against a name other than the dial host
+/// (ADR-0019). They need Unix domain sockets for that, which sqlx has only on Unix.
+const SERVER_NAME_SUPPORTED: bool = cfg!(unix);
 
 /// Connects saved or unsaved connections.
 pub(crate) struct Pipeline {
@@ -104,11 +113,12 @@ impl Connector for Pipeline {
                 Some(tls) => tls.mode == TlsMode::VerifyFull,
                 None => target.wants_verify_full(),
             };
-            if verify_full {
+            if verify_full && !SERVER_NAME_SUPPORTED {
                 return Err(ConnectFailure::TlsHostnameThroughTunnel {
                     host: target.host().to_owned(),
                 });
             }
+            config.tls = tunnel_tls(config.tls.take(), &target, verify_full);
             let auth = tunnel_auth(&ssh.auth, ssh_secret)?;
             let tunnel_config = TunnelConfig::new(
                 ssh.host.clone(),
@@ -176,6 +186,19 @@ fn core_config(spec: &ConnectionSpec) -> ConnectionConfig {
         config = config.with_tls(tls.to_core());
     }
     config
+}
+
+/// The TLS config for a tunnelled connection: the original host becomes the server name.
+///
+/// A profile config keeps its mode and files. A URL-only `verify-full` is lifted into an explicit
+/// config (the query's certificate files included) so the name has somewhere to live. Any other
+/// target without a profile config stays `None`.
+fn tunnel_tls(tls: Option<TlsConfig>, target: &UrlTarget, verify_full: bool) -> Option<TlsConfig> {
+    match tls {
+        Some(tls) => Some(tls.with_server_name(target.host())),
+        None if verify_full => Some(target.tls_from_query().with_server_name(target.host())),
+        None => None,
+    }
 }
 
 /// Maps the profile's SSH auth and the resolved secret to the tunnel's auth.

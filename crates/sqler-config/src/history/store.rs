@@ -55,6 +55,18 @@ impl std::fmt::Debug for HistoryStore {
     }
 }
 
+/// Cuts to the size cap first, so redaction works on a bounded text (a
+/// construct the cut leaves open is hidden to the end), then cuts again in case
+/// placeholders made the text longer.
+fn truncate_then_redact(sql: &str) -> (String, bool) {
+    let mut cut = sql.len().min(super::MAX_HISTORY_SQL_BYTES);
+    while !sql.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let (out, t2) = truncate_sql(redact_credentials(&sql[..cut]).into_owned());
+    (out, cut < sql.len() || t2)
+}
+
 impl HistoryStore {
     /// Opens the history at `path`; a missing file is an empty history.
     ///
@@ -136,7 +148,7 @@ impl HistoryStore {
         if !g.options.enabled {
             return Ok(false);
         }
-        let (sql, truncated) = truncate_sql(redact_credentials(&new.sql).into_owned());
+        let (sql, truncated) = truncate_then_redact(&new.sql);
         let entry = HistoryEntry {
             sql,
             connection: new.connection,

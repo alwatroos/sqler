@@ -134,6 +134,10 @@ pub struct TlsConfig {
     pub client_cert: Option<PathBuf>,
     /// Client private key file.
     pub client_key: Option<PathBuf>,
+    /// Name for certificate host-name verification and SNI when it differs from the dial host
+    /// (a tunnelled connection dials `127.0.0.1` but the certificate names the original host).
+    /// Drivers use it only for `verify-full`; in every other mode it is ignored. Not a secret.
+    pub server_name: Option<String>,
 }
 
 impl TlsConfig {
@@ -164,6 +168,14 @@ impl TlsConfig {
     #[must_use]
     pub fn with_client_key(mut self, path: impl Into<PathBuf>) -> Self {
         self.client_key = Some(path.into());
+        self
+    }
+
+    /// Sets the name to verify the server certificate against (and send as SNI) when it
+    /// differs from the dial host.
+    #[must_use]
+    pub fn with_server_name(mut self, name: impl Into<String>) -> Self {
+        self.server_name = Some(name.into());
         self
     }
 }
@@ -414,6 +426,7 @@ mod tests {
             (&t.ca_cert, &t.client_cert, &t.client_key),
             (&None, &None, &None)
         );
+        assert_eq!(t.server_name, None);
         assert_eq!(TlsConfig::default().mode, TlsMode::Prefer);
         let t = t
             .with_ca_cert("/ca.pem")
@@ -422,6 +435,8 @@ mod tests {
         assert_eq!(t.ca_cert, Some(PathBuf::from("/ca.pem")));
         assert_eq!(t.client_cert, Some(PathBuf::from("/c.pem")));
         assert_eq!(t.client_key, Some(PathBuf::from("/k.pem")));
+        let t = t.with_server_name("db.internal");
+        assert_eq!(t.server_name.as_deref(), Some("db.internal"));
     }
 
     #[test]
@@ -430,11 +445,14 @@ mod tests {
         let c = ConnectionConfig::new("p", d, "postgres://bob:hunter2@db/x");
         assert_eq!(c.tls, None);
         assert!(format!("{c:?}").contains("tls: None"));
-        let tls = TlsConfig::new(TlsMode::VerifyCa).with_ca_cert("/ca.pem");
+        let tls = TlsConfig::new(TlsMode::VerifyCa)
+            .with_ca_cert("/ca.pem")
+            .with_server_name("db.internal");
         let c = c.with_tls(tls.clone());
         assert_eq!(c.tls, Some(tls));
         let out = format!("{c:?}");
         assert!(out.contains("VerifyCa") && out.contains("/ca.pem"));
+        assert!(out.contains("db.internal"));
         assert!(!out.contains("hunter2") && !out.contains("bob"));
     }
 }
