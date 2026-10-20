@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- DDL and script generation for `PostgreSQL`, `MySQL`/`MariaDB` and `SQLite` (`sqler-sql`). ADR-0015 and the user guide page "DDL and scripts".
 - `sqler-driver-postgres`: `PostgreSQL` driver on sqlx (streaming, server-side cancel, TLS modes with CA and client certificate through rustls, typed values, introspection of all 13 object kinds); the `driver-postgres` feature (default) in `sqler-cli` and `sqler-app`.
 - CI `db` job: `PostgreSQL` in Docker with TLS, DB integration tests (`SQLER_TEST_<DB>_URL`, `SQLER_TEST_REQUIRE_DB`) and a CLI smoke test.
 - ADR-0009 (`PostgreSQL` driver, TLS backend, DB test convention) and the user guide page "PostgreSQL".

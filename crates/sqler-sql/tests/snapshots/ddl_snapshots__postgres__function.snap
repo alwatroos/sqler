@@ -1,0 +1,11 @@
+---
+source: crates/sqler-sql/tests/ddl_snapshots.rs
+expression: out
+---
+-- create
+CREATE FUNCTION f() RETURNS int AS 'SELECT 1';
+
+-- drop
+DROP FUNCTION "My Schema"."Some Name";
+
+-- copy name: "My Schema"."Some Name"

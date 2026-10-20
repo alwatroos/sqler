@@ -213,6 +213,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0012](docs/src/adr/0012-keychain-secrets.md) | Keychain secrets: `keyring` 4.x, reference scheme, failure policy | accepted |
 | [0013](docs/src/adr/0013-ssh-tunnel-crate.md) | SSH tunnel crate: russh, strict known_hosts, loopback-only forward | accepted |
 | [0014](docs/src/adr/0014-catalog-cache-and-background-refresh.md) | Catalog cache, worker concurrency and background refresh | accepted |
+| [0015](docs/src/adr/0015-ddl-generation-dialects-and-quoting.md) | DDL generation: dialects and quoting | accepted |
 
 ## 9. Roadmap status
 
