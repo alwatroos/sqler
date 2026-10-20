@@ -140,20 +140,21 @@ Apple M4 Pro (`Mac16,8`), 48 GB.
 
 ## Results
 
-"pending CI" means the cell can only be produced by `spike.yml` on a GitHub runner, which needs the
-branch to be pushed. Fill these from `gh run download <id>` (`results.txt`, `cold.json`) and replace
-`Run` with the Actions run URL. Policy for reading them: a target fails only if GPUI itself fails
+The CI rows come from `gh run download <id>` (`results.txt`, `cold.json`) of the final run, linked in `Run`. Policy for reading them: a target fails only if GPUI itself fails
 there. A failure caused only by the CI environment (for example no software Vulkan) is worked around
 where feasible, and otherwise reported as `inconclusive (environment)`, not as a failure. The manual
 macOS run weighs most.
 
 | Target | How obtained | Run | Build | Grid | Editor | Cold start ms (hyperfine mean) | first_frame_ms | rss_mb | Binary MB | Renderer | Notes |
 | ------ | ------------ | --- | ----- | ---- | ------ | ------------------------------ | -------------- | ------ | --------- | -------- | ----- |
-| macOS | manual (Apple M4 Pro, macOS 27.0.1, Xcode 27.0) | base 9b45788 + uncommitted W1 tree (replace with the commit hash) | pass | pass (smoke) | pass (smoke) | 157.8 (3 runs: 157.9, 158.4, 157.2) | 191.7 (3 runs: 178.6, 202.4, 194.2) | 151.4 (3 runs: 151.7, 151.7, 150.9) | 26.4 | metal | `scripts/measure.sh`, release `--locked`, unstripped. Peak RSS (`/usr/bin/time -l`, `--smoke`) 151.2 to 152.2 MB. The 2-minute interactive check (trackpad scroll, type and edit SQL, resize the split) is NOT done: an agent cannot do it. Pending the developer. |
-| Linux X11 | CI (ubuntu-latest, xvfb) | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | workflow written, never run: apt list and Vulkan (lavapipe) are untested |
-| Linux Wayland | CI (ubuntu-latest, headless weston) | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | workflow written, never run: weston flags are untested |
-| macOS | CI (macos-latest) | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | VM Metal; Metal toolchain step untested |
-| Windows | CI (windows-latest) | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | pending CI | WARP or no GPU; untested |
+| macOS | manual (Apple M4 Pro, macOS 27.0.1, Xcode 27.0) | commit 4d3d5d1 (same tree as measured, then uncommitted) | pass | pass (smoke) | pass (smoke) | 157.8 (3 runs: 157.9, 158.4, 157.2) | 191.7 (3 runs: 178.6, 202.4, 194.2) | 151.4 (3 runs: 151.7, 151.7, 150.9) | 26.4 | metal | `scripts/measure.sh`, release `--locked`, unstripped. Peak RSS (`/usr/bin/time -l`, `--smoke`) 151.2 to 152.2 MB. The 2-minute interactive check (trackpad scroll, type and edit SQL, resize the split) is NOT done: an agent cannot do it. Pending the developer. |
+| Linux X11 | CI (ubuntu-latest, xvfb) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) | pass | pass | pass | 200.7 | 515.0 (run 1: 1853.5) | 264.3 | 57.7 | llvmpipe (LLVM 20.1.2) / llvmpipe (software) | 4 vCPU VM, software Vulkan. Peak RSS 252.3 MB. 26 rows/frame max. Run 1 ([link](https://github.com/alwatroos/sqler/actions/runs/39416330360)) also passed: cold 204.4, rss 264.5. |
+| Linux Wayland | CI (ubuntu-latest, headless cage) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) | pass | pass | pass | 181.9 | 2285.1 | 267.5 | 57.7 | llvmpipe (LLVM 20.1.2) / llvmpipe (software) | Report says `display=wayland`. Peak RSS 259.6 MB. Run 1 with headless weston failed on environment only: `Wayland compositor does not provide wl_seat` (weston headless has no input device, so no seat); fixed by using cage. |
+| macOS | CI (macos-latest, arm64 VM) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) | pass | pass | pass | 203.8 (run 1: 494.7) | 933.9 (run 1: 2981.6) | 124.2 | 26.4 | metal | VM Metal, no Metal toolchain step needed. Peak RSS 124.3 MB. 21 rows/frame max. |
+| Windows | CI (windows-latest) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) | pass | pass | pass | 206.0 | 185.0 (run 1: 224.7) | 103.2 | 26.3 | Microsoft Basic Render Driver (WARP) | Software D3D. 24 rows/frame max. Run 1 cold start was `failed` (hyperfine launched through a shell with an unquoted path); fixed with `-N` and a quoted path. |
+
+CI first-frame numbers vary a lot between runs on shared VMs (macOS 934 vs 2982 ms, X11 515 vs 1853 ms); treat them as order of magnitude, cold start (hyperfine mean) is stable. CI VMs use software
+renderers (llvmpipe, WARP) or VM Metal, so they say nothing about GPU performance.
 
 Reading the macOS numbers: `first_frame_ms` is main() start to the first frame callback and leaves out
 exec and dynamic-loader time. Cold start is the hyperfine mean of the whole process
@@ -161,9 +162,10 @@ exec and dynamic-loader time. Cold start is the hyperfine mean of the whole proc
 1M rows loaded and the editor open, no database connections; it is not the "three connections"
 metric of `docs/src/benchmarks.md`.
 
-Verdict so far (AC5): not decidable. GPUI passes on the one target that could be run (macOS). The
-other three targets are `pending CI`; by the spec's rule the verdict needs Build, Grid and Editor to
-pass on all four targets.
+Outcome: GPUI + gpui-component passes Build, Grid and Editor on all four targets (Linux X11, Linux
+Wayland, macOS, Windows) in the CI smoke run, and on the manual macOS run. No target failed because of
+GPUI. Still owed: the developer's 2-minute interactive check on macOS (see the macOS row). The verdict
+itself belongs in the ADR.
 
 ## Quirks
 
@@ -185,7 +187,17 @@ pass on all four targets.
 - **Screenshots (macOS).** `screencapture` failed with "could not create image from display" in the
   agent's session, so the rendered pixels were never looked at; the pass rests on the SPIKE report
   (rows requested from the table delegate, highlight names from the component's highlighter).
-- **Linux packages (untested).** Starting list: `libfontconfig-dev libwayland-dev libxkbcommon-dev
+- **Linux packages (verified by CI).** `libfontconfig-dev libwayland-dev libxkbcommon-dev
   libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libvulkan1 mesa-vulkan-drivers vulkan-tools
-  fonts-dejavu-core xvfb xauth weston pkg-config`. Trim or extend after the first CI run and record
-  the final list here.
+  fonts-dejavu-core xvfb xauth cage pkg-config`. Software Vulkan comes from `mesa-vulkan-drivers`
+  (lavapipe); the renderer string is `llvmpipe` and GPUI ran on it with no extra setup.
+- **Headless Wayland needs a seat (Linux).** `weston --backend=headless` advertises no `wl_seat`, and
+  GPUI panics (`gpui-pre-linux .../platform.rs:366`: `Wayland compositor does not provide wl_seat`,
+  exit 101). `cage` (wlroots, `WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+  WLR_HEADLESS_OUTPUTS=1`, running `sleep` as its client, socket `wayland-0`) works. A real Wayland
+  session always has a seat; this is a CI-only constraint.
+- **Metal toolchain on CI (macOS).** The `macos-latest` image did not need the download step (the
+  `xcrun metal` check passed); the step stays as a guard.
+- **hyperfine on Windows.** Run through a shell with an unquoted path it failed; use `-N` and quote the
+  path (`measure.ps1`).
+- **macOS CI stall did not recur.** Both CI macOS runs finished the smoke test normally.
