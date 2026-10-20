@@ -6,6 +6,7 @@ Available now:
 
 - [Command-line interface](cli.md): run a statement on `SQLite` from a terminal
 - [Workspace](workspace.md): the desktop window with the connection sidebar and tabs
+- [Keybindings](keybindings.md): the command palette, default shortcuts and how to rebind them
 - [Settings](settings.md): settings, keybindings and saved connections files
 
 Planned topics:
@@ -16,4 +17,4 @@ Planned topics:
 - Results grid: planned (M4)
 - AI: planned (M5)
 - Plugins: planned (M6)
-- Keybindings: file format in [Settings](settings.md); the in-app editor is planned (M1)
+- Keybinding editor: planned; today you edit `keybindings.toml`, see [Keybindings](keybindings.md)

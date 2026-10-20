@@ -100,7 +100,7 @@ SQLer has a Settings tab, so you do not need to edit `settings.toml` by hand.
 
 - Click the **Settings** button at the right end of the tab strip.
 - Run the command `settings:open` ("Open Settings").
-- Press `mod+,` once keybindings are available.
+- Press `mod+,` (Cmd+, on macOS, Ctrl+, elsewhere), or pick it from the [command palette](keybindings.md).
 
 The Settings tab is one tab. While it is open, it replaces the tab body, and the Settings header in
 the tab strip has a **×** button that closes it (the command `tab:close` closes it as well). Your

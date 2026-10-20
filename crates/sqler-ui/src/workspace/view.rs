@@ -7,18 +7,25 @@
 
 use std::sync::Arc;
 
+use gpui::Focusable as _;
 use gpui::{
-    App, AppContext as _, Bounds, Context, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Window, WindowBounds, WindowOptions,
-    div, px, size,
+    App, AppContext as _, Bounds, Context, Entity, FocusHandle, InteractiveElement as _,
+    IntoElement, KeyDownEvent, ParentElement as _, Render, Styled as _, Subscription, Window,
+    WindowBounds, WindowOptions, div, px, size,
 };
-use gpui_component::{ActiveTheme as _, Root};
+use gpui_component::input::{InputEvent, InputState, MoveDown, MoveUp};
+use gpui_component::{ActiveTheme as _, Root, WindowExt as _};
+use sqler_config::{KeybindingOverrides, Platform};
 use sqler_driver_api::DriverRegistry;
 use sqler_driver_api::sqler_core::ConnectionConfig;
 
 use super::action::WorkspaceAction;
 use super::bridge::SessionBridge;
 use super::state::{Effect, Workspace};
+use crate::command::{CommandId, CommandRegistry};
+use crate::keymap::input::key_input;
+use crate::keymap::{KeyDispatcher, KeyOutcome, action_for, chord_from_input, route_key};
+use crate::palette::{self, OPEN_PALETTE, PaletteState};
 use crate::settings::{self, SettingsModel};
 use crate::sidebar::{self, SidebarModel};
 use crate::tabs;
@@ -37,6 +44,8 @@ pub struct Startup {
     pub exit_after_first_frame: bool,
     /// The user settings, loaded by the binary.
     pub settings: SettingsModel,
+    /// The user keybinding overrides, or why they could not be loaded.
+    pub keybindings: Result<KeybindingOverrides, String>,
 }
 
 impl std::fmt::Debug for Startup {
@@ -46,6 +55,7 @@ impl std::fmt::Debug for Startup {
             .field("registry", &self.registry)
             .field("exit_after_first_frame", &self.exit_after_first_frame)
             .field("settings", &self.settings)
+            .field("keybindings", &self.keybindings)
             .finish_non_exhaustive()
     }
 }
@@ -94,6 +104,11 @@ pub fn run(startup: Startup) {
 pub(crate) struct WorkspaceView {
     ws: Workspace,
     bridge: SessionBridge,
+    commands: CommandRegistry,
+    keys: KeyDispatcher,
+    palette: PaletteState,
+    palette_input: Entity<InputState>,
+    focus: FocusHandle,
     /// Keeps the OS appearance observer alive.
     _appearance: Subscription,
 }
@@ -125,11 +140,115 @@ impl WorkspaceView {
                 cx.notify();
             }
         });
+        let mut commands = CommandRegistry::new();
+        if let Err(err) = super::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the workspace commands: {err}");
+        }
+        if let Err(err) = palette::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the palette command: {err}");
+        }
+        let keys = KeyDispatcher::new(Platform::current(), startup.keybindings, &commands);
+        for notice in keys.notices() {
+            eprintln!("sqler: {notice}");
+        }
+        let notices = keys.notices().to_vec();
+        if !notices.is_empty() {
+            // The notification layer lives in `Root`, which does not exist yet.
+            window.defer(cx, move |window, cx| {
+                for notice in notices {
+                    window.push_notification(notice, cx);
+                }
+            });
+        }
+        let palette_input = cx.new(|cx| InputState::new(window, cx).placeholder("Type a command"));
+        cx.subscribe(&palette_input, |view, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                let text = input.read(cx).value();
+                view.palette.set_query(text.as_ref());
+                cx.notify();
+            }
+        })
+        .detach();
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
         Self {
             ws,
             bridge: SessionBridge::new(startup.registry, startup.runtime),
+            commands,
+            keys,
+            palette: PaletteState::default(),
+            palette_input,
+            focus,
             _appearance: appearance,
         }
+    }
+
+    /// Routes a key press before the focused element sees it.
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(chord) = chord_from_input(&key_input(&event.keystroke)) else {
+            return;
+        };
+        let was_open = self.palette.is_open();
+        let outcome = route_key(&chord, &mut self.palette, &self.keys, &self.commands);
+        if outcome != KeyOutcome::Ignored {
+            cx.stop_propagation();
+        }
+        if let KeyOutcome::Run(id) = outcome {
+            self.run_command(&id, window, cx);
+        }
+        self.sync_palette_focus(was_open, window, cx);
+        cx.notify();
+    }
+
+    /// Moves the palette selection for the arrow keys. The input binds `up` and `down` to its
+    /// own actions, which run before key-down listeners, so they are intercepted here.
+    fn move_palette_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if !self.palette.is_open() {
+            cx.propagate();
+            return;
+        }
+        let len = self.palette.items(&self.commands, &self.keys).len();
+        self.palette.move_selection(delta, len);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    /// Moves the focus to the palette input when it opens and back to the root when it closes.
+    fn sync_palette_focus(&mut self, was_open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self.palette.is_open();
+        if open && !was_open {
+            self.palette_input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            window.focus(&self.palette_input.focus_handle(cx), cx);
+        } else if !open && was_open {
+            window.focus(&self.focus, cx);
+        }
+    }
+
+    /// Carries out a command: the palette opener, a workspace action, or nothing known.
+    pub(crate) fn run_command(
+        &mut self,
+        id: &CommandId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_open = self.palette.is_open();
+        if id.as_str() == OPEN_PALETTE {
+            self.palette.open();
+            if was_open {
+                // Reopened from a click: the input still holds the old query.
+                self.palette_input
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+            }
+        } else if let Some(action) = action_for(id, &self.ws) {
+            self.palette.close();
+            self.dispatch(action, cx);
+        } else {
+            self.palette.close();
+            eprintln!("sqler: no handler for command {id}");
+        }
+        self.sync_palette_focus(was_open, window, cx);
+        cx.notify();
     }
 
     /// Runs an action through the workspace and carries out the effect.
@@ -183,8 +302,27 @@ impl Render for WorkspaceView {
         } else {
             tabs::view::tab_body(self.ws.tabs(), cx).into_any_element()
         };
+        let palette = self.palette.is_open().then(|| {
+            let items = self.palette.items(&self.commands, &self.keys);
+            palette::view::palette_overlay(
+                &self.palette,
+                &items,
+                &self.palette_input,
+                WorkspaceView::run_command,
+                cx,
+            )
+        });
         div()
             .id("workspace")
+            .track_focus(&self.focus)
+            .capture_key_down(cx.listener(Self::on_key))
+            .capture_action(
+                cx.listener(|this, _: &MoveUp, _, cx| this.move_palette_selection(-1, cx)),
+            )
+            .capture_action(
+                cx.listener(|this, _: &MoveDown, _, cx| this.move_palette_selection(1, cx)),
+            )
+            .relative()
             .size_full()
             .flex()
             .flex_row()
@@ -208,5 +346,6 @@ impl Render for WorkspaceView {
                     )
                     .child(body),
             )
+            .children(palette)
     }
 }
