@@ -39,10 +39,13 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/target"
           git worktree add ../base "$BASE_SHA"
           if [ -f ../base/crates/sqler-ui/benches/grid_viewport.rs ]; then
+            # Older base benches reject --reps (exit 2); pass it only if the base source knows it.
+            REPS=""
+            if grep -q -- '--reps' ../base/crates/sqler-ui/benches/grid_viewport.rs; then REPS="--reps 3"; fi
             cd ../base
             rustup toolchain install
             # Exit 1 means the base itself broke the 1 ms budget; the file is saved first.
-            cargo bench -p sqler-ui --bench grid_viewport -- --reps 3 --save "$GITHUB_WORKSPACE/target/bench-base.txt" || [ $? -eq 1 ]
+            cargo bench -p sqler-ui --bench grid_viewport -- $REPS --save "$GITHUB_WORKSPACE/target/bench-base.txt" || [ $? -eq 1 ]
           else
             echo "::notice::no baseline bench on base"
           fi
@@ -99,9 +102,12 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/target"
           if [ -f ../base/crates/sqler-ui/benches/browser_tree.rs ]; then
+            # Older base benches reject --reps (exit 2); pass it only if the base source knows it.
+            REPS=""
+            if grep -q -- '--reps' ../base/crates/sqler-ui/benches/browser_tree.rs; then REPS="--reps 3"; fi
             cd ../base
             # Exit 1 means the base itself broke a budget; the file is saved first.
-            cargo bench -p sqler-ui --bench browser_tree -- --reps 3 --save "$GITHUB_WORKSPACE/target/browser-base.txt" || [ $? -eq 1 ]
+            cargo bench -p sqler-ui --bench browser_tree -- $REPS --save "$GITHUB_WORKSPACE/target/browser-base.txt" || [ $? -eq 1 ]
           else
             echo "::notice::no browser tree baseline bench on base"
           fi
