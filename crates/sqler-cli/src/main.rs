@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod args;
+mod export;
 mod output;
 
 use std::io::{self, Write};
@@ -39,6 +40,13 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Ok(Command::Export(export_args)) => match export::run(&export_args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(failure) => {
+                eprintln!("error: {}", failure.message());
+                ExitCode::from(failure.exit_code())
+            }
+        },
         Err(UsageError(msg)) => {
             eprintln!("error: {msg}\n\n{USAGE}");
             ExitCode::from(2)
@@ -63,7 +71,7 @@ fn run(driver: &str, target: &str, sql: &str) -> Result<()> {
     )),
     allow(clippy::unnecessary_wraps)
 )]
-fn registry() -> Result<DriverRegistry> {
+pub(crate) fn registry() -> Result<DriverRegistry> {
     #[allow(unused_mut)]
     let mut registry = DriverRegistry::new();
     #[cfg(feature = "driver-sqlite")]
@@ -77,7 +85,7 @@ fn registry() -> Result<DriverRegistry> {
 
 /// The connection for a CLI target. The name is the driver id: the target (a URL can carry a
 /// password) must never end up in a name that errors or logs print.
-fn connection_config(driver: &str, target: &str) -> Result<ConnectionConfig> {
+pub(crate) fn connection_config(driver: &str, target: &str) -> Result<ConnectionConfig> {
     Ok(ConnectionConfig::new(
         driver,
         DriverId::new(driver)?,
