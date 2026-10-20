@@ -54,7 +54,7 @@ jobs:
     name: db
     runs-on: ubuntu-latest
     env:
-      SQLER_TEST_REQUIRE_DB: postgres
+      SQLER_TEST_REQUIRE_DB: postgres,mysql
     steps:
       - uses: actions/checkout@v7
       - name: Install toolchain from rust-toolchain.toml
@@ -67,6 +67,18 @@ jobs:
         run: sh crates/sqler-driver-postgres/tests/docker/start-postgres.sh "$RUNNER_TEMP/pg" >> "$GITHUB_ENV"
       - name: Database tests
         run: cargo nextest run -p sqler-driver-postgres --no-tests=fail
+      - name: Start MySQL 8.4 (TLS on)
+        run: sh crates/sqler-driver-mysql/tests/docker/start-mysql.sh "$RUNNER_TEMP/mysql" mysql >> "$GITHUB_ENV"
+      - name: Database tests (MySQL)
+        run: cargo nextest run -p sqler-driver-mysql --no-tests=fail
+      - name: CLI smoke test (MySQL)
+        run: cargo run -p sqler-cli -- run --driver mysql "$SQLER_TEST_MYSQL_URL" "select 1" | grep -qx 1
+      - name: Start MariaDB 11.8 (TLS on)
+        run: sh crates/sqler-driver-mysql/tests/docker/start-mysql.sh "$RUNNER_TEMP/mariadb" mariadb >> "$GITHUB_ENV"
+      - name: Database tests (MariaDB)
+        run: cargo nextest run -p sqler-driver-mysql --no-tests=fail
+      - name: CLI smoke test (MariaDB)
+        run: cargo run -p sqler-cli -- run --driver mysql "$SQLER_TEST_MYSQL_URL" "select 1" | grep -qx 1
       - name: CLI smoke test (PostgreSQL)
         run: cargo run -p sqler-cli -- run --driver postgres "$SQLER_TEST_POSTGRES_URL" "select 1" | grep -qx 1
 
