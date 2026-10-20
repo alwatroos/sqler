@@ -28,3 +28,4 @@ consequences. SQLer uses the MADR format.
 | [0016](0016-connect-pipeline.md) | Connect pipeline: `Connector` trait in `sqler-ui`, pipeline in `sqler-app` | accepted |
 | [0017](0017-object-browser-sessions-and-drop-confirmation.md) | Object browser: browser session per connection, short-lived action sessions, DROP confirmation | accepted |
 | [0019](0019-tls-server-name-through-tunnel.md) | TLS server name through a tunnel: `TlsConfig::server_name`, local Unix-socket bridge | accepted |
+| [0022](0022-catalog-snapshot-name-index.md) | Catalog snapshot, name index and on-demand column loading | accepted |
