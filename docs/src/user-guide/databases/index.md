@@ -5,6 +5,7 @@ describe one driver each.
 
 - [SQLite](sqlite.md)
 - [PostgreSQL](postgresql.md)
+- [MySQL and MariaDB](mysql.md)
 
 ## Object kinds
 
@@ -13,22 +14,23 @@ does not have is reported as unsupported, not as an error.
 
 | Kind | `SQLite` | `PostgreSQL` | `MySQL` |
 | ---- | -------- | ------------ | ------- |
-| Database | no | yes | planned |
-| Schema | yes (`main`, `temp`, attached) | yes | planned |
-| Table | yes | yes | planned |
-| View | yes | yes | planned |
+| Database | no | yes | no |
+| Schema | yes (`main`, `temp`, attached) | yes | yes (the databases) |
+| Table | yes | yes | yes |
+| View | yes | yes | yes |
 | Materialized view | no | yes | no |
-| Function | no | yes | planned |
-| Procedure | no | yes | planned |
-| Trigger | yes | yes | planned |
+| Function | no | yes | yes |
+| Procedure | no | yes | yes |
+| Trigger | yes | yes | yes |
 | Sequence | no | yes | no |
 | Type | no | yes | no |
-| Index | yes | yes | planned |
+| Index | yes | yes | yes |
 | Extension | no | yes | no |
-| Role | no | yes | planned |
+| Role | no | yes | yes (accounts) |
 
-The `MySQL` column shows the plan, not the current state: that driver is not available yet. The
-`PostgreSQL` driver lists only the current database; see [PostgreSQL](postgresql.md).
+The `MySQL` column also holds `MariaDB`; a `MySQL` database is a schema, so there is no database
+level. See [MySQL and MariaDB](mysql.md). The `PostgreSQL` driver lists only the current database;
+see [PostgreSQL](postgresql.md).
 
 ## How values display
 

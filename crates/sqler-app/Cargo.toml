@@ -17,9 +17,10 @@ path = "src/main.rs"
 workspace = true
 
 [features]
-default = ["driver-sqlite", "driver-postgres"]
+default = ["driver-sqlite", "driver-postgres", "driver-mysql"]
 driver-sqlite = ["dep:sqler-driver-sqlite"]
 driver-postgres = ["dep:sqler-driver-postgres"]
+driver-mysql = ["dep:sqler-driver-mysql"]
 
 [dependencies]
 sqler-ui = { workspace = true, features = ["gui"] }
@@ -27,4 +28,5 @@ sqler-config.workspace = true
 sqler-driver-api.workspace = true
 sqler-driver-sqlite = { workspace = true, optional = true }
 sqler-driver-postgres = { workspace = true, optional = true }
+sqler-driver-mysql = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }

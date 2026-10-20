@@ -80,7 +80,11 @@ fn start(exit_after_first_frame: bool) -> ExitCode {
 
 // Without any driver feature nothing can fail or be registered.
 #[cfg_attr(
-    not(any(feature = "driver-sqlite", feature = "driver-postgres")),
+    not(any(
+        feature = "driver-sqlite",
+        feature = "driver-postgres",
+        feature = "driver-mysql"
+    )),
     allow(clippy::unnecessary_wraps)
 )]
 fn registry() -> Result<DriverRegistry, DriverError> {
@@ -90,27 +94,41 @@ fn registry() -> Result<DriverRegistry, DriverError> {
     registry.register(Box::new(sqler_driver_sqlite::SqliteDriver::new()))?;
     #[cfg(feature = "driver-postgres")]
     registry.register(Box::new(sqler_driver_postgres::PostgresDriver::new()))?;
+    #[cfg(feature = "driver-mysql")]
+    registry.register(Box::new(sqler_driver_mysql::MySqlDriver::new()))?;
     Ok(registry)
 }
 
 #[cfg(test)]
 mod tests {
-    #[cfg(any(feature = "driver-sqlite", feature = "driver-postgres"))]
-    use super::*;
-
-    #[cfg(all(feature = "driver-sqlite", feature = "driver-postgres"))]
-    #[test]
-    fn registry_lists_sqlite_and_postgres() {
-        let registry = registry().unwrap();
-        let ids: Vec<_> = registry.ids().map(ToString::to_string).collect();
-        assert_eq!(ids, ["postgres", "sqlite"]);
+    #[cfg(any(
+        feature = "driver-sqlite",
+        feature = "driver-postgres",
+        feature = "driver-mysql"
+    ))]
+    fn ids() -> Vec<String> {
+        super::registry()
+            .unwrap()
+            .ids()
+            .map(ToString::to_string)
+            .collect()
     }
 
-    #[cfg(all(feature = "driver-sqlite", not(feature = "driver-postgres")))]
+    #[cfg(feature = "driver-sqlite")]
     #[test]
     fn registry_lists_sqlite() {
-        let registry = registry().unwrap();
-        let ids: Vec<_> = registry.ids().map(ToString::to_string).collect();
-        assert_eq!(ids, ["sqlite"]);
+        assert!(ids().contains(&"sqlite".to_string()));
+    }
+
+    #[cfg(feature = "driver-postgres")]
+    #[test]
+    fn registry_lists_postgres() {
+        assert!(ids().contains(&"postgres".to_string()));
+    }
+
+    #[cfg(feature = "driver-mysql")]
+    #[test]
+    fn registry_lists_mysql() {
+        assert!(ids().contains(&"mysql".to_string()));
     }
 }
