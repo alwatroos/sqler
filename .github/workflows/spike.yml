@@ -1,0 +1,153 @@
+name: UI framework spike
+
+# ADR-0001 spike: builds spikes/ui-framework (its own workspace) and runs the
+# scripted --smoke check plus the measurement script on four targets.
+# Software renderers (lavapipe, WARP, VM Metal) count; the report line
+# "SPIKE display=..." must match the matrix entry, so X11 cannot pass as Wayland.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "spikes/**"
+      - ".github/workflows/spike.yml"
+  push:
+    paths:
+      - "spikes/**"
+      - ".github/workflows/spike.yml"
+
+concurrency:
+  group: spike-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  spike:
+    name: spike (${{ matrix.display }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, display: x11 }
+          - { os: ubuntu-latest, display: wayland }
+          - { os: macos-latest, display: macos }
+          - { os: windows-latest, display: windows }
+    defaults:
+      run:
+        shell: bash
+        working-directory: spikes/ui-framework
+    env:
+      RESULTS_DIR: ${{ github.workspace }}/spikes/ui-framework/results
+    steps:
+      - uses: actions/checkout@v7
+      # rustup finds the repository-root rust-toolchain.toml by searching upward.
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spikes/ui-framework
+          shared-key: spike-${{ matrix.os }}
+          save-if: ${{ matrix.display != 'wayland' }}
+
+      - name: Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libx11-xcb-dev libxcb1-dev libvulkan1 mesa-vulkan-drivers vulkan-tools \
+            fonts-dejavu-core xvfb xauth weston pkg-config
+
+      # macOS 26 images may ship Xcode without the separately downloaded Metal toolchain.
+      - name: Metal toolchain
+        if: runner.os == 'macOS'
+        run: xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test
+      - name: Build (release, default profile)
+        run: cargo build --release --locked
+      - name: Dependency tree has exactly one GPUI
+        run: |
+          cargo tree -i gpui-pre | head -n 1
+          if cargo tree -i gpui-ce 2>/dev/null; then echo "gpui-ce is in the tree"; exit 1; fi
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: hyperfine@2.0.0
+
+      - name: Measure (X11, xvfb)
+        if: matrix.display == 'x11'
+        run: |
+          unset WAYLAND_DISPLAY
+          xvfb-run -a -s "-screen 0 1920x1080x24" \
+            sh scripts/measure.sh "$PWD/target/release/spike-gpui"
+
+      - name: Measure (Wayland, headless weston)
+        if: matrix.display == 'wayland'
+        run: |
+          weston --help | head -n 40 || true
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          start_weston() {
+            weston --backend=headless --socket=wayland-spike --idle-time=0 "$@" \
+              >"$RUNNER_TEMP/weston.log" 2>&1 &
+            for _ in $(seq 1 20); do
+              [ -S "$XDG_RUNTIME_DIR/wayland-spike" ] && return 0
+              sleep 0.5
+            done
+            return 1
+          }
+          # Flag sets differ between weston versions; try them in order, log what failed.
+          started=no
+          for extra in "--width=1920 --height=1080" "--width=1920 --height=1080 --renderer=pixman" ""; do
+            echo "starting weston with: ${extra:-<no extra flags>}"
+            # shellcheck disable=SC2086
+            if start_weston $extra; then started=yes; break; fi
+            cat "$RUNNER_TEMP/weston.log"
+            pkill weston || true
+          done
+          [ "$started" = yes ]
+          export WAYLAND_DISPLAY=wayland-spike
+          unset DISPLAY
+          sh scripts/measure.sh "$PWD/target/release/spike-gpui"
+
+      - name: Measure (macOS)
+        if: matrix.display == 'macos'
+        run: sh scripts/measure.sh "$PWD/target/release/spike-gpui"
+
+      - name: Measure (Windows)
+        if: matrix.display == 'windows'
+        shell: pwsh
+        run: ./scripts/measure.ps1 target/release/spike-gpui.exe
+
+      - name: Check the display server in the report
+        run: tr -d '\r' <results/results.txt | grep -qx "SPIKE display=${{ matrix.display }}"
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f results/results.txt ]; then
+            { echo '```'; cat results/results.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: spike-${{ matrix.display }}
+          path: |
+            spikes/ui-framework/results/results.txt
+            spikes/ui-framework/results/cold.json
+            spikes/ui-framework/results/smoke.err
+            spikes/ui-framework/results/hyperfine.out
+          if-no-files-found: warn

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "sqler-spike-gpui"
+description = "Throwaway GPUI + gpui-component spike (ADR-0001): 1M-row grid and SQL editor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "spike-gpui"
+path = "src/main.rs"
+
+[dependencies]
+gpui-component = { version = "0.8.0", features = ["tree-sitter-sql"] }
+gpui = { version = "=0.3.9", package = "gpui-pre" }
+gpui_platform = { version = "=0.3.9", package = "gpui-pre-platform", features = ["font-kit", "x11", "wayland"] }
+memory-stats = "1.2.0"
+
+[lints]
+workspace = true
