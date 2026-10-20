@@ -95,6 +95,57 @@ pub struct SidebarRow {
     pub kind: RowKind,
 }
 
+/// One line of the sidebar list: a group or connection row, or a row of a connection's object
+/// tree (`row_index` indexes the tree's `rows()`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SidebarItem {
+    /// A group or connection row.
+    Row(SidebarRow),
+    /// A visible row of the object tree of `conn`.
+    Object {
+        /// The connection that owns the tree.
+        conn: ConnectionId,
+        /// Index into the tree's `rows()`.
+        row_index: usize,
+    },
+}
+
+/// The range of `old` that must be replaced to get `new`, and how many items replace it.
+///
+/// It is the part between the common prefix and the common suffix, so a list that grew or shrank
+/// in the middle keeps the measured heights (and the scroll position) of everything else.
+#[must_use]
+pub fn changed_range<T: PartialEq>(old: &[T], new: &[T]) -> (std::ops::Range<usize>, usize) {
+    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    let suffix = old[prefix..]
+        .iter()
+        .rev()
+        .zip(new[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    (prefix..old.len() - suffix, new.len() - prefix - suffix)
+}
+
+/// The command a key runs while the sidebar has the focus, if any.
+///
+/// `key` is the canonical chord key (`up`, `f10`, `menu`, ...). Arrow keys and Enter take no
+/// modifier; the context menu opens on Shift+F10 or the Menu key.
+#[must_use]
+pub fn key_command(key: &str, shift: bool, other_modifiers: bool) -> Option<&'static str> {
+    if other_modifiers {
+        return None;
+    }
+    match (key, shift) {
+        ("up", false) => Some("object:select-previous"),
+        ("down", false) => Some("object:select-next"),
+        ("left", false) => Some("object:collapse"),
+        ("right", false) => Some("object:expand"),
+        ("enter", false) => Some("object:open-data"),
+        ("f10", true) | ("menu", _) => Some("object:show-menu"),
+        _ => None,
+    }
+}
+
 /// A group as a choice in a list: its path from the root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupOption {
@@ -288,6 +339,29 @@ impl SidebarModel {
                 });
             }
         }
+    }
+
+    /// The list the sidebar shows: [`rows`](Self::rows), each connection row followed by the
+    /// `object_rows(connection)` visible rows of its object tree.
+    #[must_use]
+    pub fn items(&self, object_rows: impl Fn(&ConnectionId) -> usize) -> Vec<SidebarItem> {
+        let mut items = Vec::new();
+        for row in self.rows() {
+            let conn = match &row.kind {
+                RowKind::Connection { index } => self.entries.get(*index).map(|e| e.id.clone()),
+                RowKind::Group { .. } => None,
+            };
+            items.push(SidebarItem::Row(row));
+            if let Some(conn) = conn {
+                for row_index in 0..object_rows(&conn) {
+                    items.push(SidebarItem::Object {
+                        conn: conn.clone(),
+                        row_index,
+                    });
+                }
+            }
+        }
+        items
     }
 
     /// Every group with its path, depth first (for pickers).
@@ -585,6 +659,75 @@ mod tests {
 
     fn model() -> SidebarModel {
         SidebarModel::from_connections(vec![cfg("b"), cfg("a")])
+    }
+
+    #[test]
+    fn items_put_object_rows_under_their_connection() {
+        let m = model();
+        let b = m.entries()[0].id().clone();
+        let items = m.items(|id| if *id == b { 3 } else { 0 });
+        assert_eq!(items.len(), 2 + 3);
+        assert!(matches!(
+            &items[0],
+            SidebarItem::Row(SidebarRow {
+                kind: RowKind::Connection { index: 0 },
+                ..
+            })
+        ));
+        for (i, item) in items[1..4].iter().enumerate() {
+            assert_eq!(
+                item,
+                &SidebarItem::Object {
+                    conn: b.clone(),
+                    row_index: i
+                }
+            );
+        }
+        assert!(matches!(
+            &items[4],
+            SidebarItem::Row(SidebarRow {
+                kind: RowKind::Connection { index: 1 },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn items_of_five_thousand_rows_are_small() {
+        let m = model();
+        let b = m.entries()[0].id().clone();
+        let items = m.items(|id| if *id == b { 5000 } else { 0 });
+        assert_eq!(items.len(), 5002);
+    }
+
+    #[test]
+    fn changed_range_keeps_the_common_ends() {
+        assert_eq!(changed_range(&[1, 2, 3], &[1, 2, 3]), (3..3, 0));
+        assert_eq!(changed_range(&[1, 2, 3], &[1, 9, 9, 3]), (1..2, 2));
+        assert_eq!(changed_range(&[1, 4, 5, 3], &[1, 3]), (1..3, 0));
+        assert_eq!(changed_range::<u8>(&[], &[1, 2]), (0..0, 2));
+        assert_eq!(changed_range(&[1, 2], &[]), (0..2, 0));
+        assert_eq!(changed_range(&[1, 1], &[1, 1, 1]), (2..2, 1));
+    }
+
+    #[test]
+    fn sidebar_keys_map_to_object_commands() {
+        let cases = [
+            ("up", false, "object:select-previous"),
+            ("down", false, "object:select-next"),
+            ("left", false, "object:collapse"),
+            ("right", false, "object:expand"),
+            ("enter", false, "object:open-data"),
+            ("f10", true, "object:show-menu"),
+            ("menu", false, "object:show-menu"),
+        ];
+        for (key, shift, id) in cases {
+            assert_eq!(key_command(key, shift, false), Some(id), "{key}");
+        }
+        assert_eq!(key_command("f10", false, false), None);
+        assert_eq!(key_command("up", true, false), None);
+        assert_eq!(key_command("up", false, true), None);
+        assert_eq!(key_command("a", false, false), None);
     }
 
     #[test]

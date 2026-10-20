@@ -6,17 +6,91 @@
 //! header, the root) moves it.
 
 use gpui::{
-    AppContext as _, Context, ElementId, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Window, div, px, rgb,
+    AnyElement, AppContext as _, ClickEvent, Context, ElementId, Hsla, InteractiveElement as _,
+    IntoElement, ListAlignment, ListState, MouseButton, MouseDownEvent, ParentElement as _, Render,
+    StatefulInteractiveElement as _, Styled as _, Window, div, list, px, rgb,
 };
 use gpui_component::ActiveTheme as _;
+use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
 use sqler_config::{ConnectionId, GroupId};
 use sqler_driver_api::sqler_core::Environment;
 
-use super::{ConnectionStatus, RowKind, Selection, SidebarEntry, SidebarModel};
+use super::{
+    ConnectionStatus, RowKind, Selection, SidebarEntry, SidebarItem, SidebarRow, changed_range,
+};
+use crate::browser::{BrowserAction, LoadState, MenuEntry, TreeNodeId};
 use crate::connections::ConnectionAction;
 use crate::tabs::{Rgb, env_badge};
-use crate::workspace::{WorkspaceAction, WorkspaceView};
+use crate::workspace::{BrowserNote, Workspace, WorkspaceAction, WorkspaceView};
+
+/// Pixels rendered above and below the visible part of the list.
+const OVERDRAW: f32 = 240.;
+
+/// One line of the list with what decides its height, so a change remeasures only that line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListEntry {
+    item: SidebarItem,
+    /// The indentation level of an object row's top level: the connection's depth plus one.
+    depth: usize,
+    selected: bool,
+    note: Option<String>,
+}
+
+/// The list state to start with.
+pub(crate) fn new_list_state() -> ListState {
+    ListState::new(0, ListAlignment::Top, px(OVERDRAW))
+}
+
+/// The lines of the list for the workspace as it is now.
+pub(crate) fn build_entries(ws: &Workspace) -> Vec<ListEntry> {
+    let model = ws.sidebar();
+    let mut base = 0;
+    ws.sidebar_items()
+        .into_iter()
+        .map(|item| match &item {
+            SidebarItem::Row(row) => {
+                let depth = row.depth;
+                base = depth + 1;
+                let (selected, note) = match &row.kind {
+                    RowKind::Group { id, .. } => (
+                        model.selection() == Some(&Selection::Group(id.clone())),
+                        None,
+                    ),
+                    RowKind::Connection { index } => {
+                        let entry = &model.entries()[*index];
+                        let browser = ws.browser_note(entry.id());
+                        (
+                            model.selected() == Some(*index),
+                            Some(format!("{:?}/{browser:?}", entry.status())),
+                        )
+                    }
+                };
+                ListEntry {
+                    item,
+                    depth,
+                    selected,
+                    note,
+                }
+            }
+            SidebarItem::Object { .. } => ListEntry {
+                item,
+                depth: base,
+                selected: false,
+                note: None,
+            },
+        })
+        .collect()
+}
+
+/// Replaces `entries` by `new` and tells the list which lines changed, keeping the scroll
+/// position and the measured heights of the rest.
+pub(crate) fn sync_list(entries: &mut Vec<ListEntry>, state: &ListState, new: Vec<ListEntry>) {
+    let (range, count) = changed_range(entries, &new);
+    if !range.is_empty() || count > 0 {
+        state.splice(range, count);
+    }
+    *entries = new;
+}
 
 /// Shown when there are no saved connections and no load error.
 pub(crate) const EMPTY_TEXT: &str = "No saved connections. Use New connection above, or run connection:new from the command palette.";
@@ -89,27 +163,37 @@ fn text_button(
         }))
 }
 
-/// Renders the sidebar.
+/// The colours of the current theme, as the rows need them.
+fn palette_of(cx: &Context<WorkspaceView>) -> Palette {
+    let theme = cx.theme();
+    Palette {
+        border: theme.sidebar_border,
+        muted: theme.muted_foreground,
+        danger: theme.danger,
+        selected_bg: theme.sidebar_accent,
+    }
+}
+
+/// Renders the sidebar: a fixed header and the virtualized list of groups, connections and
+/// object rows (only the rows in view are built).
 #[allow(clippy::too_many_lines)] // one declarative element tree
 pub(crate) fn sidebar(
-    model: &SidebarModel,
+    view: &WorkspaceView,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement + use<> {
+    let model = view.workspace().sidebar();
     let theme = cx.theme();
     let (bg, fg, border) = (
         theme.sidebar,
         theme.sidebar_foreground,
         theme.sidebar_border,
     );
-    let muted = theme.muted_foreground;
-    let danger = theme.danger;
-    let selected_bg = theme.sidebar_accent;
-    let palette = Palette {
-        border,
+    let Palette {
         muted,
         danger,
         selected_bg,
-    };
+        ..
+    } = palette_of(cx);
     let new_group_parent = model.selected_group().cloned();
 
     // The header is the drop target for "move to the root".
@@ -156,37 +240,30 @@ pub(crate) fn sidebar(
             cx,
         ));
 
-    let mut list = div()
-        .id("sidebar")
-        .w(px(260.))
-        .h_full()
+    let mut top = div()
+        .id("sidebar-top")
         .flex()
         .flex_col()
         .flex_none()
         .gap_1()
         .p_2()
-        .overflow_y_scroll()
-        .bg(bg)
-        .text_color(fg)
-        .border_r_1()
-        .border_color(border)
         .child(header);
 
     if let Some(error) = model.load_error() {
-        list = list.child(
+        top = top.child(
             div()
                 .text_sm()
                 .text_color(danger)
                 .child(format!("Could not load connections: {error}")),
         );
-        list = list.child(div().text_xs().text_color(muted).child(
+        top = top.child(div().text_xs().text_color(muted).child(
             "Changes are not saved while the file cannot be loaded. Fix connections.toml and restart.",
         ));
     } else if model.entries().is_empty() && model.store().groups().is_empty() {
-        list = list.child(div().text_sm().text_color(muted).child(EMPTY_TEXT));
+        top = top.child(div().text_sm().text_color(muted).child(EMPTY_TEXT));
     }
     if let Some(error) = model.save_error() {
-        list = list.child(
+        top = top.child(
             div()
                 .text_xs()
                 .text_color(danger)
@@ -194,28 +271,238 @@ pub(crate) fn sidebar(
         );
     }
 
-    for row in model.rows() {
-        let depth = row.depth;
-        match row.kind {
+    let rows = list(
+        view.sidebar_list().clone(),
+        cx.processor(|view, ix: usize, _window, cx| item(view, ix, cx)),
+    )
+    .size_full();
+
+    div()
+        .id("sidebar")
+        .track_focus(view.sidebar_focus())
+        .w(px(260.))
+        .h_full()
+        .flex()
+        .flex_col()
+        .flex_none()
+        .bg(bg)
+        .text_color(fg)
+        .border_r_1()
+        .border_color(border)
+        .child(top)
+        .child(div().flex_1().min_h_0().px_2().pb_2().child(rows))
+}
+
+/// Builds the element of one line of the list.
+fn item(view: &WorkspaceView, ix: usize, cx: &mut Context<WorkspaceView>) -> AnyElement {
+    let Some(entry) = view.list_entries().get(ix) else {
+        return div().into_any_element();
+    };
+    let palette = palette_of(cx);
+    let ws = view.workspace();
+    let model = ws.sidebar();
+    match &entry.item {
+        SidebarItem::Row(SidebarRow { depth, kind }) => match kind {
             RowKind::Group {
                 id,
                 name,
                 expanded,
                 empty,
-            } => {
-                let selected = model.selection() == Some(&Selection::Group(id.clone()));
-                list = list.child(group_row(
-                    &id, &name, depth, expanded, empty, selected, palette, cx,
-                ));
-            }
+            } => group_row(
+                id,
+                name,
+                *depth,
+                *expanded,
+                *empty,
+                entry.selected,
+                palette,
+                cx,
+            )
+            .into_any_element(),
             RowKind::Connection { index } => {
-                let entry = &model.entries()[index];
-                let selected = model.selected() == Some(index);
-                list = list.child(connection_row(index, depth, entry, selected, palette, cx));
+                let sidebar_entry = &model.entries()[*index];
+                let conn = sidebar_entry.id();
+                let browser = ws.browser(conn).map(|tree| ConnectionBrowser {
+                    conn: conn.clone(),
+                    root: tree.root(),
+                    expanded: tree.is_expanded(tree.root()),
+                    note: ws.browser_note(conn),
+                    menu: ws.menu_entries(conn, tree.root()),
+                    // The connection row is the highlighted one while no object is selected.
+                    root_selected: tree.selected().is_none_or(|n| n == tree.root()),
+                });
+                let selected = entry.selected && browser.as_ref().is_none_or(|b| b.root_selected);
+                connection_row(
+                    *index,
+                    *depth,
+                    sidebar_entry,
+                    selected,
+                    palette,
+                    browser,
+                    cx,
+                )
             }
+        },
+        SidebarItem::Object { conn, row_index } => {
+            object_row(view, conn, *row_index, entry.depth, palette, cx)
         }
     }
-    list
+}
+
+/// What a connection row needs from its object browser.
+struct ConnectionBrowser {
+    conn: ConnectionId,
+    root: TreeNodeId,
+    expanded: bool,
+    note: Option<BrowserNote>,
+    menu: Vec<MenuEntry>,
+    root_selected: bool,
+}
+
+/// A context menu with the given entries; each runs its command on `node` of `conn`.
+fn with_menu(
+    row: gpui::Stateful<gpui::Div>,
+    conn: &ConnectionId,
+    node: TreeNodeId,
+    entries: Vec<MenuEntry>,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    if entries.is_empty() {
+        return row.into_any_element();
+    }
+    let weak = cx.weak_entity();
+    let conn = conn.clone();
+    row.context_menu(move |mut menu, _, _| {
+        for entry in &entries {
+            let (weak, conn, entry) = (weak.clone(), conn.clone(), *entry);
+            menu = menu.item(PopupMenuItem::new(entry.label()).on_click(move |_, _, cx| {
+                weak.update(cx, |view, cx| {
+                    view.dispatch_object(&conn, node, BrowserAction::Entry(entry), cx);
+                })
+                .ok();
+            }));
+        }
+        menu
+    })
+    .into_any_element()
+}
+
+#[allow(clippy::too_many_lines)] // one declarative element tree
+fn object_row(
+    view: &WorkspaceView,
+    conn: &ConnectionId,
+    row_index: usize,
+    base: usize,
+    palette: Palette,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    let Palette {
+        muted,
+        danger,
+        selected_bg,
+        ..
+    } = palette;
+    let ws = view.workspace();
+    let Some(tree) = ws.browser(conn) else {
+        return div().into_any_element();
+    };
+    let Some(row) = tree.rows().get(row_index) else {
+        return div().into_any_element();
+    };
+    let node = row.id;
+    let selected = ws.sidebar().selected_id() == Some(conn) && tree.selected() == Some(node);
+    let key = format!("object-{conn}-{node:?}");
+    let click_conn = conn.clone();
+    let toggle_conn = conn.clone();
+    let press_conn = conn.clone();
+    let mut line = div()
+        .id(ElementId::Name(key.clone().into()))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .h(px(24.))
+        .pl(px(8. + indent(base + row.depth)))
+        .pr_2()
+        .rounded_md()
+        .cursor_pointer()
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |view, _: &MouseDownEvent, window, cx| {
+                view.select_object(&press_conn, node, window, cx);
+            }),
+        )
+        .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
+            view.click_object(&click_conn, node, event.click_count() >= 2, window, cx);
+        }));
+    if selected {
+        line = line.bg(selected_bg);
+    }
+    let chevron = div()
+        .id(ElementId::Name(format!("{key}-toggle").into()))
+        .w(px(14.))
+        .flex_none()
+        .text_color(muted)
+        .child(match (row.expandable, row.expanded) {
+            (false, _) => "",
+            (true, true) => "▾",
+            (true, false) => "▸",
+        });
+    let chevron = if row.expandable {
+        chevron
+            .cursor_pointer()
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                view.dispatch_object(&toggle_conn, node, BrowserAction::Toggle, cx);
+                cx.stop_propagation();
+            }))
+    } else {
+        chevron
+    };
+    line = line
+        .child(chevron)
+        .child(div().flex_1().min_w_0().truncate().child(row.label.clone()));
+    if let Some(kind) = row.kind {
+        line = line.child(div().text_xs().text_color(muted).child(kind.as_str()));
+    }
+    match &row.state {
+        LoadState::Loading => {
+            line = line.child(div().text_xs().text_color(muted).child("loading…"));
+        }
+        LoadState::Failed(message) => {
+            line = line.child(
+                div()
+                    .text_xs()
+                    .text_color(danger)
+                    .max_w(px(110.))
+                    .truncate()
+                    .child(message.clone()),
+            );
+        }
+        LoadState::NotLoaded | LoadState::Loaded => {}
+    }
+    if let Some((done, total)) = row.progress {
+        let cancel_conn = conn.clone();
+        line = line
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("{done}/{total}")),
+            )
+            .child(
+                div()
+                    .id(ElementId::Name(format!("{key}-cancel").into()))
+                    .text_xs()
+                    .text_color(danger)
+                    .cursor_pointer()
+                    .child("cancel")
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.dispatch_object(&cancel_conn, node, BrowserAction::CancelRefresh, cx);
+                        cx.stop_propagation();
+                    })),
+            );
+    }
+    with_menu(line, conn, node, ws.menu_entries(conn, node), cx)
 }
 
 #[allow(clippy::too_many_arguments)] // theme colours are bundled in `Palette`; the rest is row data
@@ -328,8 +615,9 @@ fn connection_row(
     entry: &SidebarEntry,
     selected: bool,
     palette: Palette,
+    browser: Option<ConnectionBrowser>,
     cx: &mut Context<WorkspaceView>,
-) -> impl IntoElement + use<> {
+) -> AnyElement {
     let Palette {
         border,
         muted,
@@ -361,14 +649,17 @@ fn connection_row(
         .border_color(if is_prod { danger } else { border.opacity(0.) })
         .cursor_pointer()
         .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
-        .on_click(cx.listener(move |view, event: &gpui::ClickEvent, _, cx| {
-            let action = if event.click_count() >= 2 {
-                WorkspaceAction::OpenConnection(index)
-            } else {
-                WorkspaceAction::SelectConnection(index)
-            };
-            view.dispatch(action, cx);
-        }));
+        .on_click(
+            cx.listener(move |view, event: &gpui::ClickEvent, window, cx| {
+                view.focus_sidebar(window, cx);
+                let action = if event.click_count() >= 2 {
+                    WorkspaceAction::OpenConnection(index)
+                } else {
+                    WorkspaceAction::SelectConnection(index)
+                };
+                view.dispatch(action, cx);
+            }),
+        );
     if is_prod {
         row = row.bg(danger.opacity(0.12));
     }
@@ -379,11 +670,24 @@ fn connection_row(
             selected_bg
         });
     }
-    let mut title = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_2()
+    let mut title = div().flex().flex_row().items_center().gap_2();
+    if let Some(browser) = &browser {
+        let (conn, root) = (browser.conn.clone(), browser.root);
+        title = title.child(
+            div()
+                .id(("connection-toggle", index))
+                .w(px(14.))
+                .flex_none()
+                .text_color(muted)
+                .cursor_pointer()
+                .child(if browser.expanded { "▾" } else { "▸" })
+                .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
+                    view.dispatch_object(&conn, root, BrowserAction::Toggle, cx);
+                    cx.stop_propagation();
+                })),
+        );
+    }
+    title = title
         .child(div().size(px(8.)).flex_none().rounded_full().bg(dot))
         .child(div().flex_1().truncate().child(config.name.clone()));
     if let Some(badge) = env_badge(config.environment) {
@@ -408,6 +712,20 @@ fn connection_row(
         ConnectionStatus::Failed(message) => {
             row = row.child(div().text_xs().text_color(danger).child(message.clone()));
         }
+    }
+    match browser.as_ref().and_then(|b| b.note.as_ref()) {
+        Some(BrowserNote::Busy(text)) => {
+            row = row.child(div().text_xs().text_color(muted).child(*text));
+        }
+        Some(BrowserNote::Failed(message)) => {
+            row = row.child(
+                div()
+                    .text_xs()
+                    .text_color(danger)
+                    .child(format!("Browser: {message}")),
+            );
+        }
+        None => {}
     }
     if selected {
         let id = entry.id().clone();
@@ -451,5 +769,11 @@ fn connection_row(
                 )),
         );
     }
-    row
+    match browser {
+        Some(b) => {
+            let conn = b.conn.clone();
+            with_menu(row, &conn, b.root, b.menu, cx)
+        }
+        None => row.into_any_element(),
+    }
 }

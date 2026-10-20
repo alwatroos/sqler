@@ -8,6 +8,9 @@
 
 mod action;
 mod bridge;
+mod browser;
+#[cfg(feature = "gui")]
+mod drop_dialog;
 mod state;
 #[cfg(test)]
 mod testing;
@@ -16,6 +19,7 @@ mod view;
 
 pub use action::{WorkspaceAction, register_commands};
 pub use bridge::{PendingConnect, PendingTrust, SessionBridge};
+pub use browser::{BrowserJob, BrowserJobResult, BrowserNote, CatalogResult, OpenDataJob};
 pub use state::{Effect, Purpose, RequestId, SecretOp, Workspace};
 #[cfg(feature = "gui")]
 pub(crate) use view::WorkspaceView;

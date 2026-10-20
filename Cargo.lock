@@ -7135,9 +7135,11 @@ dependencies = [
  "gpui-component",
  "gpui-pre",
  "gpui-pre-platform",
+ "sqler-catalog",
  "sqler-config",
  "sqler-driver-api",
  "sqler-driver-sqlite",
+ "sqler-sql",
  "thiserror 2.0.21",
  "tokio",
 ]

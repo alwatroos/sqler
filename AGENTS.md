@@ -101,6 +101,7 @@ cargo tree --workspace -i gpui-pre
 cargo run -p xtask
 cargo bench -p sqler-ui --bench grid_viewport
 cargo bench -p sqler-catalog --bench catalog_tree
+cargo bench -p sqler-ui --bench browser_tree
 ```
 
 - CI (`.github/workflows/ci.yml`) runs this subset of the commands above: fmt, clippy, nextest on Linux/macOS/Windows; deny, docs (`cargo doc` and `mdbook build docs`), spdx on Linux. Since T5 the Linux `check` and `docs` jobs install the GPUI build packages with apt, and the macOS `check` job guards the Metal toolchain; the `deny` job also runs the "Dependency rules" step.
@@ -112,6 +113,7 @@ cargo bench -p sqler-catalog --bench catalog_tree
 - `.github/workflows/pages.yml` publishes the book (`target/book/`) to GitHub Pages on push to `main`.
 - Bench: `cargo bench -p sqler-ui --bench grid_viewport -- [--rows N --columns N --batch N --viewport N --samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-p95-ns B]`. Rule: p95 more than 25 % + 50 ns above the base branch, or p95 above 1 ms, fails `bench.yml`. Method and results: `docs/src/benchmarks.md`. The release CLI is still measured by hand as described there.
 - Catalog bench: `cargo bench -p sqler-catalog --bench catalog_tree -- [--tables N --columns N --samples N --hit-samples N --source fake|sqlite --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-hit-p95-ns B --budget-expand-p95-ns B]`. Defaults: 5000 tables, 8 columns, `fake`. Budgets (`fake` only): cached-read p95 10 us, cold expand of 5,000 tables p95 16 ms. `--compare` checks `hit_p95_ns` (25 % + 50 ns). Exit 0 pass, 1 regression or budget, 2 usage error. Wired into `bench.yml`.
+- Browser tree bench: `cargo bench -p sqler-ui --bench browser_tree -- [--tables N --samples N --select-samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-expand-p95-ns B --budget-select-p95-ns B]`. Defaults: 5000 tables. Budgets: expand of a 5,000-table schema p95 16 ms (`expand_p95_ns`), selection change p95 1 ms (`select_p95_ns`). `--compare` checks `expand_p95_ns` (25 % + 50 ns). Exit 0 pass, 1 regression or budget, 2 usage error. Wired into `bench.yml`.
 
 ## 4. Coding standards
 
@@ -216,6 +218,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0014](docs/src/adr/0014-catalog-cache-and-background-refresh.md) | Catalog cache, worker concurrency and background refresh | accepted |
 | [0015](docs/src/adr/0015-ddl-generation-dialects-and-quoting.md) | DDL generation: dialects and quoting | accepted |
 | [0016](docs/src/adr/0016-connect-pipeline.md) | Connect pipeline: `Connector` trait in `sqler-ui`, pipeline in `sqler-app` | accepted |
+| [0017](docs/src/adr/0017-object-browser-sessions-and-drop-confirmation.md) | Object browser: browser session per connection, short-lived action sessions, DROP confirmation | accepted |
 
 ## 9. Roadmap status
 
@@ -264,3 +267,4 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build j
 - A DB test that skips is green: without `SQLER_TEST_REQUIRE_DB` a missing variable only prints a skip line. CI sets it so the `db` job cannot pass without running. An unreachable server always fails.
 - `sqler-tunnel` (ADR-0013): `russh` is built with `ring` only. RSA private keys are unsupported (`TunnelError::UnsupportedKeyType`) until the owner decides on RUSTSEC-2023-0071; re-enabling is the `rsa` feature on `russh` plus an advisory ignore in `deny.toml`. Host keys are never accepted silently: use `trust_host_key` after the user confirms the fingerprint. Tests use an in-process `russh` server, no Docker.
 - Connect pipeline (ADR-0016): `verify-full` TLS through an SSH tunnel is refused (`TlsHostnameThroughTunnel`; an explicit TLS mode overrides the URL `sslmode`/`ssl-mode`, and a URL verify-full counts only without an explicit mode) because the driver would verify `127.0.0.1`; lifting it needs a server-name field on core `TlsConfig` plus driver support. A `Tunnel` must not be dropped outside a tokio runtime: `TunnelledSession` closes it on the runtime handle. A stored target never has user info; the database user is `?user=` and the password is injected at connect time (a password with a target that has no user is refused). `sqler-ui` talks to the pipeline only through the `Connector` trait.
+- Object browser (ADR-0017): `ObjectTree` never calls the catalog; `expand` and `*_loaded` return `CacheKey`s and the workspace turns them into `Effect::LoadCatalog`. Tokio work still goes only through `SessionBridge`. DROP SQL comes only from `DropFlow::confirm` (once, twice on `prod`); nothing else may build a `RunJob(Drop)`. `gpui-component` 0.8.0 `ContextMenuExt` cannot open a menu from code, so `object:show-menu` (Shift+F10, Menu) opens the palette filtered to `Object: `. The sidebar is a `gpui::list` with a `ListState` that is diffed in `settle`; do not rebuild rows per frame. `Up`/`Down` walk groups, connections and tree rows through `Workspace::move_selection`.

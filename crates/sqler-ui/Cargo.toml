@@ -17,8 +17,10 @@ workspace = true
 gui = ["dep:gpui-component", "dep:gpui", "dep:gpui_platform"]
 
 [dependencies]
+sqler-catalog.workspace = true
 sqler-config.workspace = true
 sqler-driver-api.workspace = true
+sqler-sql.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 gpui-component = { workspace = true, optional = true }
@@ -31,4 +33,8 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
 [[bench]]
 name = "grid_viewport"
+harness = false
+
+[[bench]]
+name = "browser_tree"
 harness = false

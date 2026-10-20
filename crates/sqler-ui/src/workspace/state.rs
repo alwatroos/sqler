@@ -5,11 +5,14 @@
 
 use std::collections::HashMap;
 
+use sqler_catalog::{CacheKey, CatalogWorker, RefreshHandle};
 use sqler_config::{ConnectionId, ConnectionProfile, Secret, SecretRef};
 use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId};
 use sqler_driver_api::{CancelFlag, Session};
 
 use super::action::WorkspaceAction;
+use super::browser::{BrowserJob, BrowserState, OpenDataJob};
+use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
 use crate::connections::{
     ConnectFailure, ConnectRequest, ConnectionAction, ConnectionForm, Dialog, FieldError, FormMode,
     GroupPurpose, HostKeyPrompt, SecretField, TestStatus, from_profile_secret,
@@ -29,6 +32,8 @@ pub struct RequestId(u64);
 pub enum Purpose {
     /// Open a tab on this saved connection.
     Open(ConnectionId),
+    /// The browser session of this connection (it becomes the catalog's session).
+    Browse(ConnectionId),
     /// "Test connection" from the form; the session is closed again.
     Test,
 }
@@ -84,6 +89,54 @@ pub enum Effect {
     Quit,
     /// The settings changed: save them and re-apply the theme and font size.
     ApplySettings,
+    /// Carry out these effects in order.
+    Batch(Vec<Effect>),
+    /// Run the catalog worker of a connection's browser (it owns the browser session).
+    StartCatalog {
+        /// The connection.
+        conn: ConnectionId,
+        /// The browser generation the worker belongs to.
+        generation: u64,
+        /// The worker; run it with `SessionBridge::run_catalog`.
+        worker: CatalogWorker,
+    },
+    /// Load these keys through the catalog and report each with [`Workspace::catalog_loaded`].
+    LoadCatalog {
+        /// The connection.
+        conn: ConnectionId,
+        /// The browser generation to report back with.
+        generation: u64,
+        /// What to load.
+        keys: Vec<CacheKey>,
+    },
+    /// Follow a refresh and report each event with [`Workspace::refresh_event`].
+    WatchRefresh {
+        /// The connection.
+        conn: ConnectionId,
+        /// The browser generation to report back with.
+        generation: u64,
+        /// The node the progress shows on.
+        node: TreeNodeId,
+        /// Tells this refresh from an earlier one on the same node.
+        run: u64,
+        /// The refresh to follow.
+        handle: RefreshHandle,
+    },
+    /// Run a job on tokio and report it with [`Workspace::job_finished`].
+    RunJob(BrowserJob),
+    /// Show this grid in the already opened grid tab and fill it from the database.
+    OpenData {
+        /// The grid tab.
+        tab: TabId,
+        /// The tab state; the view owns it from now on.
+        grid: GridTab,
+        /// The query that feeds the grid.
+        job: OpenDataJob,
+    },
+    /// Put this text on the clipboard.
+    Copy(String),
+    /// Show the commands of the selected object (the context menu cannot open from a key).
+    ShowObjectMenu,
 }
 
 impl std::fmt::Debug for Effect {
@@ -110,6 +163,41 @@ impl std::fmt::Debug for Effect {
             Self::OpenGrid { tab, .. } => f.debug_struct("OpenGrid").field("tab", tab).finish(),
             Self::Quit => f.write_str("Quit"),
             Self::ApplySettings => f.write_str("ApplySettings"),
+            Self::Batch(effects) => f.debug_tuple("Batch").field(effects).finish(),
+            Self::StartCatalog {
+                conn, generation, ..
+            } => f
+                .debug_struct("StartCatalog")
+                .field("conn", conn)
+                .field("generation", generation)
+                .finish_non_exhaustive(),
+            Self::LoadCatalog {
+                conn,
+                generation,
+                keys,
+            } => f
+                .debug_struct("LoadCatalog")
+                .field("conn", conn)
+                .field("generation", generation)
+                .field("keys", &keys.len())
+                .finish(),
+            Self::WatchRefresh {
+                conn,
+                generation,
+                node,
+                run,
+                ..
+            } => f
+                .debug_struct("WatchRefresh")
+                .field("conn", conn)
+                .field("generation", generation)
+                .field("node", node)
+                .field("run", run)
+                .finish_non_exhaustive(),
+            Self::RunJob(job) => f.debug_tuple("RunJob").field(job).finish(),
+            Self::OpenData { tab, .. } => f.debug_struct("OpenData").field("tab", tab).finish(),
+            Self::Copy(text) => write!(f, "Copy({} bytes)", text.len()),
+            Self::ShowObjectMenu => f.write_str("ShowObjectMenu"),
         }
     }
 }
@@ -127,28 +215,40 @@ enum SettingsTab {
 
 /// The workspace state. Holds no UI types.
 pub struct Workspace {
-    sidebar: SidebarModel,
-    tabs: TabStrip,
+    pub(super) sidebar: SidebarModel,
+    pub(super) tabs: TabStrip,
     sessions: HashMap<TabId, Box<dyn Session>>,
-    requests: HashMap<RequestId, Purpose>,
+    pub(super) requests: HashMap<RequestId, Purpose>,
     next_request: u64,
     /// The drivers offered by the connection form.
     drivers: Vec<DriverId>,
     /// The dialog on screen.
-    dialog: Option<Dialog>,
+    pub(super) dialog: Option<Dialog>,
     /// The form hidden behind a host-key prompt.
     parked: Option<Dialog>,
     /// Counts the dialogs opened, so a view can tell a new dialog from the same one.
     dialog_generation: u64,
     /// A message for the user that no dialog shows (a failed move, a delete of a full group).
-    notice: Option<String>,
+    pub(super) notice: Option<String>,
     settings: SettingsModel,
     settings_tab: SettingsTab,
     system_appearance: Appearance,
     /// Cancel flags of the grid tabs' ingestion threads.
-    grid_cancels: HashMap<TabId, CancelFlag>,
+    pub(super) grid_cancels: HashMap<TabId, CancelFlag>,
     /// Rows of the synthetic grid; a field so tests can use a small result.
     synthetic_rows: usize,
+    /// The object browser of every connection that was opened.
+    pub(super) browsers: HashMap<ConnectionId, BrowserState>,
+    /// The last browser generation handed out.
+    pub(super) next_generation: u64,
+    /// The last refresh id handed out.
+    pub(super) next_refresh: u64,
+    /// The content of the DDL and properties tabs.
+    pub(super) object_tabs: HashMap<TabId, ObjectTab>,
+    /// The DROP confirmation on screen.
+    pub(super) drop_flow: Option<DropFlow>,
+    /// The folder to refresh once the DROP has run, with the browser generation it belongs to.
+    pub(super) drop_parent: Option<(u64, TreeNodeId)>,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -161,6 +261,7 @@ impl std::fmt::Debug for Workspace {
             .field("dialog", &self.dialog)
             .field("settings_tab", &self.settings_tab)
             .field("grids", &self.grid_cancels.len())
+            .field("browsers", &self.browsers.len())
             .finish_non_exhaustive()
     }
 }
@@ -185,6 +286,12 @@ impl Workspace {
             system_appearance: Appearance::Light,
             grid_cancels: HashMap::new(),
             synthetic_rows: SYNTHETIC_ROWS,
+            browsers: HashMap::new(),
+            next_generation: 0,
+            object_tabs: HashMap::new(),
+            drop_flow: None,
+            drop_parent: None,
+            next_refresh: 0,
         }
     }
 
@@ -326,7 +433,7 @@ impl Workspace {
     pub fn dispatch(&mut self, action: WorkspaceAction) -> Effect {
         match action {
             WorkspaceAction::SelectConnection(index) => {
-                self.sidebar.select(index);
+                self.select_connection_row(index);
                 Effect::None
             }
             WorkspaceAction::OpenConnection(index) => self.open_connection(index),
@@ -358,7 +465,8 @@ impl Workspace {
             WorkspaceAction::OpenSyntheticGrid => self.open_synthetic_grid(),
             WorkspaceAction::Quit => {
                 let sessions = self.take_all_sessions();
-                if sessions.is_empty() {
+                let browsers = self.shutdown_browsers();
+                if sessions.is_empty() && !browsers {
                     Effect::Quit
                 } else {
                     Effect::CloseSessions(sessions)
@@ -466,7 +574,14 @@ impl Workspace {
         Effect::Connect { request, connect }
     }
 
-    fn new_request(&mut self, purpose: Purpose) -> RequestId {
+    /// Shows the connection tabs when the settings tab was in front.
+    pub(super) fn show_connection_tabs(&mut self) {
+        if self.settings_tab == SettingsTab::Active {
+            self.settings_tab = SettingsTab::Background;
+        }
+    }
+
+    pub(super) fn new_request(&mut self, purpose: Purpose) -> RequestId {
         let request = RequestId(self.next_request);
         self.next_request += 1;
         self.requests.insert(request, purpose);
@@ -480,6 +595,7 @@ impl Workspace {
         if let Some(cancel) = self.grid_cancels.remove(&id) {
             cancel.cancel();
         }
+        self.close_object_tab(id);
         if self.tabs.is_empty() && self.settings_tab == SettingsTab::Background {
             self.settings_tab = SettingsTab::Active;
         }
@@ -508,6 +624,7 @@ impl Workspace {
         };
         match purpose {
             Purpose::Open(id) => self.open_finished(&id, result),
+            Purpose::Browse(id) => self.browse_finished(&id, result),
             Purpose::Test => self.test_finished(request, result),
         }
     }
@@ -530,9 +647,8 @@ impl Workspace {
                 let connection = tab_connection(self.sidebar.entries()[index].config());
                 let tab = self.tabs.open(connection, TabKind::Query);
                 self.sessions.insert(tab, session);
-                if self.settings_tab == SettingsTab::Active {
-                    self.settings_tab = SettingsTab::Background;
-                }
+                self.show_connection_tabs();
+                return self.ensure_browser(id);
             }
             Err(failure) => {
                 self.sidebar.finish_connect(index, Err(failure.to_string()));
@@ -623,7 +739,13 @@ impl Workspace {
                 None => Effect::None,
             },
             (Purpose::Test, Ok(())) => self.dispatch_connection(ConnectionAction::Test),
-            (Purpose::Open(_), Err(failure)) => {
+            (Purpose::Browse(id), Ok(())) => {
+                // A host key is trusted before the first tab opens, so this is not expected;
+                // opening the connection again starts the browser.
+                self.browsers.remove(&id);
+                Effect::None
+            }
+            (Purpose::Open(_) | Purpose::Browse(_), Err(failure)) => {
                 self.notice = Some(failure.to_string());
                 Effect::None
             }
@@ -766,6 +888,11 @@ impl Workspace {
 
     /// Shows a dialog in place of the current one.
     fn open_dialog(&mut self, dialog: Dialog) -> Effect {
+        // A DROP confirmation that has not started is dropped; two dialogs never overlap.
+        if self.drop_flow.as_ref().is_some_and(DropFlow::can_cancel) {
+            self.drop_flow = None;
+            self.drop_parent = None;
+        }
         let effect = self.stop_running_test();
         self.parked = None;
         self.dialog_generation += 1;
@@ -855,6 +982,10 @@ impl Workspace {
                 return Effect::None;
             }
         };
+        if matches!(mode, FormMode::Edit(_)) {
+            // The settings may have changed: the next open starts a browser on the new ones.
+            self.end_browser(&id);
+        }
         let secrets = match self.sidebar.profile(&id) {
             Some(new) => secret_ops(old.as_ref(), new, &valid.db_password, &valid.ssh_secret),
             None => Vec::new(),
@@ -890,6 +1021,7 @@ impl Workspace {
         self.dialog = None;
         match self.sidebar.delete_connection(&id) {
             Ok(profile) => {
+                self.end_browser(&id);
                 let secrets = profile
                     .secret_refs()
                     .iter()
@@ -1016,7 +1148,7 @@ fn secret_ops(
 }
 
 /// The tab header data of a connection.
-fn tab_connection(config: &ConnectionConfig) -> TabConnection {
+pub(super) fn tab_connection(config: &ConnectionConfig) -> TabConnection {
     TabConnection {
         name: config.name.clone(),
         driver: config.driver.clone(),
@@ -1049,9 +1181,10 @@ mod tests {
     /// Reports a successful connect and returns the tab it opened.
     fn finish_ok(w: &mut Workspace, request: RequestId) -> TabId {
         let (session, _) = FakeSession::boxed();
+        // The first successful open also asks for the browser session.
         assert!(matches!(
             w.connect_finished(request, Ok(session)),
-            Effect::None
+            Effect::None | Effect::Connect { .. }
         ));
         w.tabs().active().map(crate::tabs::Tab::id).unwrap()
     }
@@ -1144,7 +1277,7 @@ mod tests {
         let (session, closed) = FakeSession::boxed();
         assert!(matches!(
             w.connect_finished(request, Ok(session)),
-            Effect::None
+            Effect::Connect { .. }
         ));
         let tab = w.tabs().active().map(crate::tabs::Tab::id).unwrap();
         let Effect::CloseSession(session) = w.dispatch(WorkspaceAction::CloseTab(tab)) else {
