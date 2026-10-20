@@ -29,9 +29,13 @@ const POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 /// The grid action a command ID stands for, if it is one.
 pub(crate) fn action_for_command(id: &crate::command::CommandId) -> Option<GridAction> {
-    [GridAction::ScrollToTop, GridAction::ScrollToEnd]
-        .into_iter()
-        .find(|a| a.command_id() == *id)
+    [
+        GridAction::ScrollToTop,
+        GridAction::ScrollToEnd,
+        GridAction::FetchMore,
+    ]
+    .into_iter()
+    .find(|a| a.command_id() == *id)
 }
 
 /// The width of a column of this type, in pixels.
@@ -62,6 +66,11 @@ impl GridDelegate {
     /// The grid the table shows.
     pub(crate) fn grid(&self) -> &GridTab {
         &self.tab
+    }
+
+    /// The grid the table shows, for actions that change it.
+    pub(crate) fn grid_mut(&mut self) -> &mut GridTab {
+        &mut self.tab
     }
 
     /// Rebuilds the column list from the tab's headers.
@@ -194,20 +203,31 @@ impl GridViews {
         }
     }
 
-    /// Runs a grid action on the grid of a tab: scrolls to the top or the end.
+    /// Runs a grid action on the grid of a tab: scrolls to the top or the end, or fetches the next
+    /// page of a paused result. Returns whether it did anything.
     pub(crate) fn run_action(
         &self,
         tab: TabId,
         action: GridAction,
         cx: &mut Context<WorkspaceView>,
-    ) {
+    ) -> bool {
         let Some(table) = self.tables.get(&tab) else {
-            return;
+            return false;
         };
+        if action == GridAction::FetchMore {
+            return table.update(cx, |state, cx| {
+                let fetched = state.delegate_mut().grid_mut().fetch_more();
+                if fetched {
+                    cx.notify();
+                }
+                fetched
+            });
+        }
         let Some(row) = table.read(cx).delegate().tab.jump_target(action) else {
-            return;
+            return false;
         };
         table.update(cx, |state, cx| state.scroll_to_row(row, cx));
+        true
     }
 
     /// The body of a grid tab: toolbar above the table.
@@ -222,9 +242,13 @@ impl GridViews {
                 .text_color(muted)
                 .child("Preparing the results…");
         };
-        let (status, range) = {
+        let (status, range, paused) = {
             let grid = &table.read(cx).delegate().tab;
-            (grid.status_text(), grid.range_text())
+            (
+                grid.status_text(),
+                grid.range_text(),
+                matches!(grid.state(), IngestState::Paused),
+            )
         };
         let toolbar = div()
             .id("grid-toolbar")
@@ -241,6 +265,14 @@ impl GridViews {
             .child(div().text_sm().child(status))
             .children(range.map(|r| div().text_sm().text_color(muted).child(r)))
             .child(div().flex_1())
+            .children(paused.then(|| {
+                Button::new("grid-fetch-more")
+                    .label("Fetch more")
+                    .small()
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.grids.run_action(tab, GridAction::FetchMore, cx);
+                    }))
+            }))
             .child(
                 Button::new("grid-top")
                     .label("Top")

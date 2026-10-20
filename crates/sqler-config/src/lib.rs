@@ -41,4 +41,6 @@ pub use secrets::{
     KEYCHAIN_SERVICE, KeychainStore, MemoryStore, Secret, SecretError, SecretKind, SecretRef,
     SecretStore,
 };
-pub use settings::{FONT_SIZE_RANGE, Settings, ThemePreference};
+pub use settings::{
+    DEFAULT_RESULT_PAGE_ROWS, FONT_SIZE_RANGE, RESULT_PAGE_ROWS_RANGE, Settings, ThemePreference,
+};

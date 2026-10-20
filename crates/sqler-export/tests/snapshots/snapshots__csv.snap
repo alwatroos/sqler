@@ -1,0 +1,44 @@
+---
+source: crates/sqler-export/tests/snapshots.rs
+expression: "render(&CsvFormat, &ExportOptions::default())"
+---
+label,value,value,"odd ""name"" `x` | ,"<CR>
+null,,,x<CR>
+true,true,,x<CR>
+false,false,,x<CR>
+int zero,0,,x<CR>
+int min,-9223372036854775808,,x<CR>
+int max,9223372036854775807,,x<CR>
+float,1.5,,x<CR>
+float neg zero,-0,,x<CR>
+float large,1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,,x<CR>
+float nan,NaN,,x<CR>
+float +inf,Infinity,,x<CR>
+float -inf,-Infinity,,x<CR>
+text empty,"",,x<CR>
+text plain,plain,,x<CR>
+text quote,it's,,x<CR>
+text dquote,"say ""hi""",,x<CR>
+text backslash,back\slash,,x<CR>
+text pipe,a|b,,x<CR>
+text comma,"a,b",,x<CR>
+text crlf,"line1<CR>
+line2",,x<CR>
+text lf,"line1
+line2",,x<CR>
+text nul,nul<NUL>byte,,x<CR>
+text unicode,héllo 名前,,x<CR>
+text comment,x'; DROP TABLE t; --,,x<CR>
+text formula,=1+1,,x<CR>
+text null word,NULL,,x<CR>
+bytes empty,0x,,x<CR>
+bytes,0x00abff,,x<CR>
+decimal,-12.50,,x<CR>
+date,2024-01-02,,x<CR>
+date far,+12345-06-07,,x<CR>
+date neg,-0044-03-15,,x<CR>
+time,03:04:05.123456789,,x<CR>
+timestamp,2024-01-02 03:04:05,,x<CR>
+timestamptz,2024-01-02 03:04:05-08:30,,x<CR>
+json ok,"{""a"": [1, 2, {""b"": null}]}",,x<CR>
+json bad,{not json,,x<CR>

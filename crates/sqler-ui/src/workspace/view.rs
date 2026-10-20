@@ -35,6 +35,7 @@ use crate::connections::FormField;
 use crate::connections::view::{DialogInputs, dialog_overlay};
 use crate::connections::{self, ConnectionAction, Connector, Dialog};
 use crate::editor::{self, EditorAction, view::EditorViews};
+use crate::grid::GridAction;
 use crate::grid::view::{GridProbe, GridViews, action_for_command as grid_action_for};
 use crate::history::view::HistoryViews;
 use crate::history::{self, HistoryCommand, HistoryService};
@@ -304,6 +305,15 @@ impl WorkspaceView {
             .map(crate::tabs::Tab::id)
     }
 
+    /// The active tab, if it is a query tab.
+    fn ws_active_query(&self) -> Option<crate::tabs::TabId> {
+        self.ws
+            .tabs()
+            .active()
+            .filter(|t| t.kind() == crate::tabs::TabKind::Query)
+            .map(crate::tabs::Tab::id)
+    }
+
     /// The active tab, if it is a SQL editor with an editor on screen.
     fn ws_active_editor(&self) -> Option<crate::tabs::TabId> {
         self.ws
@@ -501,9 +511,25 @@ impl WorkspaceView {
             self.history_command(command, cx);
         } else if let Some(grid_action) = grid_action_for(id) {
             self.palette.close();
-            match self.ws_active_grid() {
-                Some(tab) => self.grids.run_action(tab, grid_action, cx),
-                None => window.push_notification("Open a results grid first.", cx),
+            if grid_action == GridAction::FetchMore {
+                let fetched = match (self.ws_active_grid(), self.ws_active_query()) {
+                    (Some(tab), _) => self.grids.run_action(tab, grid_action, cx),
+                    (None, Some(tab)) => self.queries.fetch_more(tab, cx),
+                    (None, None) => {
+                        window.push_notification("Open a results grid first.", cx);
+                        true
+                    }
+                };
+                if !fetched {
+                    window.push_notification("No more rows to fetch.", cx);
+                }
+            } else {
+                match self.ws_active_grid() {
+                    Some(tab) => {
+                        self.grids.run_action(tab, grid_action, cx);
+                    }
+                    None => window.push_notification("Open a results grid first.", cx),
+                }
             }
         } else if id.as_str() == "connection:open" {
             // `action_for` found no selected connection to open.

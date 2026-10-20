@@ -13,12 +13,15 @@ pub enum GridAction {
     ScrollToTop,
     /// Scroll to the last row.
     ScrollToEnd,
+    /// Load the next page of a result that stopped at its page limit.
+    FetchMore,
 }
 
 /// The commands: ID and title.
 const COMMANDS: &[(&str, &str)] = &[
     ("grid:scroll-to-top", "Scroll Results to Top"),
     ("grid:scroll-to-end", "Scroll Results to End"),
+    ("grid:fetch-more", "Fetch More Rows"),
 ];
 
 impl GridAction {
@@ -33,6 +36,7 @@ impl GridAction {
         let id = match self {
             Self::ScrollToTop => "grid:scroll-to-top",
             Self::ScrollToEnd => "grid:scroll-to-end",
+            Self::FetchMore => "grid:fetch-more",
         };
         CommandId::new(id).expect("constant command ID is valid")
     }
@@ -54,7 +58,11 @@ pub fn register_commands(registry: &mut CommandRegistry) -> Result<(), CommandEr
 mod tests {
     use super::*;
 
-    const ALL: [GridAction; 2] = [GridAction::ScrollToTop, GridAction::ScrollToEnd];
+    const ALL: [GridAction; 3] = [
+        GridAction::ScrollToTop,
+        GridAction::ScrollToEnd,
+        GridAction::FetchMore,
+    ];
 
     #[test]
     fn ids_are_valid() {
@@ -73,6 +81,7 @@ mod tests {
         }
         assert_eq!(ALL[0].command_id().to_string(), "grid:scroll-to-top");
         assert_eq!(ALL[1].command_id().to_string(), "grid:scroll-to-end");
+        assert_eq!(ALL[2].command_id().to_string(), "grid:fetch-more");
     }
 
     #[test]
