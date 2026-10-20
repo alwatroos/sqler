@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `sqler-config` secrets API: `SecretStore` with `KeychainStore` (macOS Keychain, Windows Credential Manager, Linux Secret Service through `keyring` 4.2.0) and `MemoryStore`, `SecretRef`, `SecretKind`, a redacting `Secret` and a typed `SecretError`. ADR-0012 and the user guide page "Secrets".
 - Cargo workspace skeleton: 24 `crates/sqler-*` stubs plus `xtask`, with shared lints and metadata.
 - `AGENTS.md` v1 (project handbook) and `CLAUDE.md` pointer.
 - Dependency version survey and version policy in `docs/src/dependencies.md`.
