@@ -30,6 +30,29 @@ Source commands (all rows):
 | keyring | `keyring` | 4.2.0 | 2026-08-29 | Source: API |
 | cargo-dist | `cargo-dist` | 0.32.0 | 2026-05-22 | The tool was renamed `dist`, but the `dist` crate on crates.io is an unrelated 2016 crate (0.0.0), so the crate is still `cargo-dist`. GitHub `axodotdev/cargo-dist` latest release is v0.33.0 (2026-09-10), newer than crates.io; verify the install channel in M7. Source: API for `cargo-dist` and `dist`; `cargo info cargo-dist`; GitHub releases API |
 
+## CI tools and actions
+
+Checked on: 2026-10-20
+
+Actions are referenced by their latest major tag; Cargo tools are pinned to an exact version.
+
+Source commands:
+
+- Actions: `gh api repos/<owner>/<repo>/releases/latest --jq '"\(.tag_name) \(.published_at)"'`
+- Tools: `curl -s -A "sqler-ci (github.com/sqler)" https://crates.io/api/v1/crates/<name> | jq -r '.crate.max_stable_version, .crate.updated_at'`
+
+| Component | Source | Pinned | Released | Notes |
+| --------- | ------ | ------ | -------- | ----- |
+| `actions/checkout` | GitHub release | `v7` (v7.0.1) | 2026-07-20 | Repository checkout |
+| `Swatinem/rust-cache` | GitHub release | `v2` (v2.9.2) | 2026-08-06 | Cargo cache |
+| `taiki-e/install-action` | GitHub release | `v2` (v2.87.29) | 2026-10-16 | Prebuilt tool binaries |
+| `actions/configure-pages` | GitHub release | `v6` (v6.0.0) | 2026-03-25 | Pages setup |
+| `actions/upload-pages-artifact` | GitHub release | `v5` (v5.0.0) | 2026-04-10 | Book artifact |
+| `actions/deploy-pages` | GitHub release | `v5` (v5.0.1) | 2026-09-01 | Pages deploy |
+| `cargo-nextest` | crates.io | 0.9.148 | 2026-10-08 | Test runner |
+| `cargo-deny` | crates.io | 0.20.2 | 2026-07-09 | License, ban, source and advisory checks |
+| `mdbook` | crates.io | 0.5.4 | 2026-07-06 | Book builder |
+
 ## Version policy
 
 - Verify the latest stable version on crates.io (and read the release notes) before adding or bumping
@@ -43,3 +66,8 @@ Source commands (all rows):
 ## Rationale
 
 Per-dependency rationale is added by the PR that introduces it.
+
+- `cargo-nextest`: faster, per-test-process runner used by CI and the local commands.
+- `cargo-deny`: enforces the Apache-2.0-compatible license allow-list in `deny.toml`, plus bans, sources and advisories.
+- `mdbook`: builds the documentation book in CI and for GitHub Pages.
+- `taiki-e/install-action`: installs the pinned tools as prebuilt binaries instead of compiling them in every run.

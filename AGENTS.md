@@ -86,12 +86,18 @@ cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
 cargo test --workspace
 cargo nextest run --workspace --no-tests=pass
+cargo deny check
+mdbook build docs
+sh .github/scripts/check-spdx.sh
 cargo tree --workspace -i sqler-ui
 cargo run -p sqler-cli
 cargo run -p xtask
 ```
 
-- SPDX check (prints nothing when every file has a header): `grep -L SPDX-License-Identifier $(git ls-files '*.rs')`
+- CI (`.github/workflows/ci.yml`) runs this subset of the commands above: fmt, clippy, nextest on Linux/macOS/Windows; deny, docs (`cargo doc` and `mdbook build docs`), spdx on Linux.
+- SPDX check (`sh .github/scripts/check-spdx.sh`) prints the offending paths and exits 1 when a tracked `*.rs` file lacks the header on line 1; it prints nothing otherwise.
+- CI tools (pinned, see `docs/src/dependencies.md`): `cargo install --locked cargo-nextest@0.9.148 cargo-deny@0.20.2 mdbook@0.5.4`.
+- `.github/workflows/pages.yml` publishes the book (`target/book/`) to GitHub Pages on push to `main`.
 - Bench: none yet.
 
 ## 4. Coding standards
@@ -195,6 +201,8 @@ Later milestones: M1 UI foundation, M2 connections and drivers, M3 editor and in
 M4 results and editing, M5 AI, M6 plugins, M7 release 1.0. Do not start a milestone before the
 previous one's Definition of Done is met.
 
+M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build and benchmark-regression jobs, which are deferred (see Gotchas).
+
 ## 10. Gotchas
 
 - `clippy::doc_markdown` (pedantic) flags product names such as `SQLite`, `DuckDB` and `PostgreSQL` in docs; put them in backticks.
@@ -205,3 +213,6 @@ previous one's Definition of Done is met.
 - Never pin a version from memory; check crates.io. Check `max_stable_version`, not `max_version` (it can be a pre-release).
 - The `cargo-dist` tool was renamed `dist`, but the `dist` crate on crates.io is unrelated; the crate is still `cargo-dist`.
 - `clippy::unwrap_used`/`clippy::expect_used` are denied everywhere except tests; there is no exemption for `main`, so add an `allow` attribute there if needed.
+- GitHub Pages must be enabled once by hand (Settings > Pages > Source: GitHub Actions) before `pages.yml` can deploy.
+- The plugin-build and benchmark-regression CI jobs are deferred until `plugins/` (M6) and benchmarks exist.
+- CI installs the toolchain with a bare `rustup toolchain install`, which reads `rust-toolchain.toml` (rustup 1.28 or newer), so the Rust version is pinned in one place only.
