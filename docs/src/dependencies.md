@@ -21,7 +21,11 @@ Source commands (all rows):
 | GPUI platform (chosen) | `gpui-pre-platform` | =0.3.9 | 2026-10-12 | Chosen (ADR-0001). Zed's `gpui_platform`; creates the application on each OS, not re-exported by `gpui-component`. Root workspace dependency (optional, through `sqler-ui/gui`, T5). Verified 2026-10-20. Source: API |
 | gpui-component | `gpui-component` | 0.8.0 | 2026-10-19 | Chosen (ADR-0001). Repository `longbridge/gpui-kit`, Apache-2.0. Feature `tree-sitter-sql` for SQL highlighting. Root workspace dependency (optional, through `sqler-ui/gui`, T5). Verified 2026-10-20, no newer stable version than 0.8.0. Source: API; `cargo info gpui-component@0.8.0` |
 | iced | `iced` | 0.14.0 | 2025-12-07 | Not chosen: GPUI passed the spike, iced was not built (ADR-0001). Source: API |
-| sqlx | `sqlx` | 0.9.0 | 2026-05-21 | PostgreSQL, MySQL, `SQLite`. Used by `sqler-driver-sqlite` with `default-features = false` and `sqlite-bundled`, `runtime-tokio`. Checked 2026-10-20. Source: API; `cargo info sqlx` |
+| sqlx | `sqlx` | 0.9.0 | 2026-05-21 | PostgreSQL, MySQL, `SQLite`. Used by `sqler-driver-sqlite` with `default-features = false` and `sqlite-bundled`, `runtime-tokio`, and by `sqler-driver-postgres` with the added crate-level features `postgres` and `tls-rustls-ring-native-roots` (ADR-0009). `max_stable_version` is still 0.9.0, so the workspace line is unchanged. Checked 2026-10-20. Source: API; `cargo info sqlx` |
+| rustls | `rustls` | 0.23.46 | 2026-10-14 | TLS for `sqlx` through `tls-rustls-ring-native-roots`; transitive, version from `Cargo.lock`. No OpenSSL, no `aws-lc`. Checked 2026-10-20. Source: API |
+| ring | `ring` | 0.17.14 | 2025-03-11 | Crypto provider of `rustls` in that feature (needs no cmake or NASM). Transitive. Checked 2026-10-20. Source: API |
+| rustls-native-certs | `rustls-native-certs` | 0.8.5 | 2026-10-13 | Loads the OS trust roots; no bundled root list, so no `webpki-roots` (CDLA) licence. Transitive. Checked 2026-10-20. Source: API |
+| postgres (Docker image) | `postgres:18-alpine` | 18 | 2026-10-20 | Server for the DB tests (`tests/docker/start-postgres.sh`); newest major with an `-alpine` tag, `19*` are only `rc`/`beta`. Source: `curl -s 'https://hub.docker.com/v2/repositories/library/postgres/tags?page_size=100&name=-alpine' \| jq -r '.results[].name'` |
 | tiberius | `tiberius` | 0.13.0 | 2026-09-25 | TDS (MSSQL) driver. Source: API |
 | duckdb | `duckdb` | 1.10506.1 | 2026-10-16 | `duckdb-rs`; version number follows the bundled DuckDB release. Source: API |
 | sqlparser | `sqlparser` | 0.63.0 | 2026-09-13 | Apache DataFusion `sqlparser-rs`. Source: API |
@@ -89,11 +93,18 @@ Per-dependency rationale is added by the PR that introduces it.
 - `thiserror` 2.0.21: typed library errors without hand-written `Display`/`Error` impls (AGENTS.md
   §6). Used by `sqler-core` (`CoreError`) and `sqler-driver-api` (`DriverError`). Its `rust-version`
   (1.77) is below the workspace's 1.99.
-- `sqlx` 0.9.0: SQLite backend of `sqler-driver-sqlite` (AGENTS.md §6). Features are limited to
-  `sqlite-bundled` (compiles SQLite from source, so Windows and macOS CI need no system library) and
-  `runtime-tokio`; no `macros`, `migrate`, `json`, `any` or TLS. The plain `sqlite` feature was not
-  used because it also enables `deserialize`, `load-extension` and `unlock-notify`. The first build is
-  slower because it compiles C.
+- `sqlx` 0.9.0: database backend of `sqler-driver-sqlite` and `sqler-driver-postgres` (AGENTS.md §6).
+  The workspace line carries only `sqlite-bundled` (compiles SQLite from source, so Windows and macOS
+  CI need no system library) and `runtime-tokio`; no `macros`, `migrate`, `json`, `any` or TLS. The
+  plain `sqlite` feature was not used because it also enables `deserialize`, `load-extension` and
+  `unlock-notify`. The first build is slower because it compiles C. `sqler-driver-postgres` adds
+  `postgres` and `tls-rustls-ring-native-roots` on its own dependency line, so a build with only
+  `driver-sqlite` pulls no TLS. `rustls` runs on the `ring` provider (no `aws-lc`, which needs cmake
+  and NASM on Windows) and reads the OS trust roots through `rustls-native-certs` (no `webpki-roots`,
+  whose CDLA licence is not on the allow-list). `openssl-sys`, `native-tls` and `aws-lc-sys` are not in
+  the tree. The MySQL RSA feature (`mysql-rsa`, RUSTSEC-2023-0071) is not enabled. Versions of the TLS
+  crates are those in `Cargo.lock`: `rustls` 0.23.46, `ring` 0.17.14, `rustls-native-certs` 0.8.5.
+  The DB tests use the `postgres:18-alpine` image (ADR-0009).
 - `tokio` 1.54.0: required by sqlx `runtime-tokio`. Declared with `default-features = false`; the
   CLI and the driver tests add only `rt`. The CLI runs a current-thread runtime. `sqler-ui` adds `rt` and
   `sync` (`oneshot`, ADR-0007); `sqler-app` adds `rt-multi-thread` for the two-worker database runtime.

@@ -94,6 +94,8 @@ mdbook build docs
 sh .github/scripts/check-spdx.sh
 cargo tree --workspace -i sqler-ui
 cargo run -p sqler-cli -- run :memory: "select 1"
+cargo run -p sqler-cli -- run --driver postgres "$SQLER_TEST_POSTGRES_URL" "select 1"
+cargo nextest run --workspace -E 'binary(/^db_/)' --no-tests=pass
 cargo run -p sqler-app
 cargo tree --workspace -i gpui-pre
 cargo run -p xtask
@@ -101,6 +103,8 @@ cargo bench -p sqler-ui --bench grid_viewport
 ```
 
 - CI (`.github/workflows/ci.yml`) runs this subset of the commands above: fmt, clippy, nextest on Linux/macOS/Windows; deny, docs (`cargo doc` and `mdbook build docs`), spdx on Linux. Since T5 the Linux `check` and `docs` jobs install the GPUI build packages with apt, and the macOS `check` job guards the Metal toolchain; the `deny` job also runs the "Dependency rules" step.
+- DB tests (ADR-0009): `crates/sqler-driver-postgres/tests/docker/start-postgres.sh <outdir>` starts `PostgreSQL` with TLS in Docker (container `sqler-test-postgres`, `127.0.0.1:54329`) and prints `KEY=value` lines; locally use `eval "$(sh crates/sqler-driver-postgres/tests/docker/start-postgres.sh /tmp/pg | sed 's/^/export /')"`. The tests read `SQLER_TEST_POSTGRES_URL` and `SQLER_TEST_POSTGRES_CA` (the pattern is `SQLER_TEST_<DB>_URL`/`_CA`); when the URL is unset they print `skipped: <VAR> is not set (see AGENTS.md §3)` and pass. `SQLER_TEST_REQUIRE_DB=postgres` (a comma list of ids) turns a missing variable into a panic. Test files are `tests/db_<db>*.rs`, so the filter above selects them. Remove the local container with `docker rm -f sqler-test-postgres`.
+- CI has a Linux `db` job (no GPUI apt packages) that starts the server with the script, sets `SQLER_TEST_REQUIRE_DB=postgres`, runs `cargo nextest run -p sqler-driver-postgres --no-tests=fail` and a CLI smoke test with `--driver postgres`.
 - SPDX check (`sh .github/scripts/check-spdx.sh`) prints the offending paths and exits 1 when a tracked `*.rs` file lacks the header on line 1; it prints nothing otherwise.
 - CI tools (pinned, see `docs/src/dependencies.md`): `cargo install --locked cargo-nextest@0.9.148 cargo-deny@0.20.2 mdbook@0.5.4`.
 - `.github/workflows/bench.yml` runs the grid viewport benchmark on Linux for pull requests (base vs PR in one job).
@@ -202,6 +206,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0006](docs/src/adr/0006-grid-data-model-and-bench-harness.md) | Grid data model and bench harness | accepted |
 | [0007](docs/src/adr/0007-desktop-binary-and-ui-tokio-bridge.md) | Desktop binary and UI-thread/tokio bridge | accepted |
 | [0008](docs/src/adr/0008-object-model-lazy-introspection-value-types-tls.md) | Object model, lazy introspection, typed values and TLS options | accepted |
+| [0009](docs/src/adr/0009-postgres-driver-tls-db-tests.md) | `PostgreSQL` driver: sqlx, server-side cancel, rustls TLS, DB test convention | accepted |
 | [0011](docs/src/adr/0011-connection-store-format.md) | Connection store format: versioned TOML, groups, derived secret references | accepted |
 | [0012](docs/src/adr/0012-keychain-secrets.md) | Keychain secrets: `keyring` 4.x, reference scheme, failure policy | accepted |
 | [0013](docs/src/adr/0013-ssh-tunnel-crate.md) | SSH tunnel crate: russh, strict known_hosts, loopback-only forward | accepted |
@@ -247,4 +252,7 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build j
 - `sqler --exit-after-first-frame` exits with code 0 after the first frame (cold-start measurement). On quit, open sessions are dropped, not closed; M2 must close them.
 - Measuring the desktop app on macOS: the config directory is `$HOME/Library/Application Support/SQLer`, so run `sqler` with `HOME` pointed at a scratch directory to get a known `connections.toml` and leave the real config alone. `hyperfine` is at `/opt/homebrew/bin`, `mdbook` and `cargo-nextest` are in `~/.cargo/bin` and may be off `PATH`.
 - Secrets (T5, ADR-0012): headless Linux CI has no Secret Service, so tests use `MemoryStore`; `KeychainStore` is only checked by hand with `cargo test -p sqler-config -- --ignored keychain_round_trip` on a desktop session. `keyring` 4.x has no native-backend features of its own: enable `v1`, which turns on the Keychain, Credential Manager and `zbus` Secret Service (`crypto-rust`, `async-io`) stores per target. Never use keyutils, `vendored` `libdbus`, OpenSSL crypto, a `tokio` runtime feature or a mock store. `SecretStore` calls block; async callers use `spawn_blocking`.
+- `PostgreSQL` test server (ADR-0009): the server rejects a TLS key it does not own or that is group/world readable, so the script copies the key inside the container, runs `chown postgres` and `chmod 600`, then starts the server. GitHub `services:` cannot pass server arguments (`-c ssl=on`), hence the `docker run` script. The image's init server listens on the socket only; wait with `pg_isready -h 127.0.0.1`, not the socket.
+- `PgConnectOptions` has a `Debug` that prints the password: never derive `Debug` on a struct that holds it and never log it (`PgCanceller` has a hand-written `Debug`). Driver errors must not echo the target.
+- A DB test that skips is green: without `SQLER_TEST_REQUIRE_DB` a missing variable only prints a skip line. CI sets it so the `db` job cannot pass without running. An unreachable server always fails.
 - `sqler-tunnel` (ADR-0013): `russh` is built with `ring` only. RSA private keys are unsupported (`TunnelError::UnsupportedKeyType`) until the owner decides on RUSTSEC-2023-0071; re-enabling is the `rsa` feature on `russh` plus an advisory ignore in `deny.toml`. Host keys are never accepted silently: use `trust_host_key` after the user confirms the fingerprint. Tests use an in-process `russh` server, no Docker.

@@ -1,6 +1,6 @@
 [package]
 name = "sqler-driver-postgres"
-description = "PostgreSQL driver implementation built on sqlx or tokio-postgres."
+description = "PostgreSQL driver implementation built on sqlx."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,3 +11,12 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-driver-api.workspace = true
+futures-core.workspace = true
+sqlx = { workspace = true, features = ["postgres", "tls-rustls-ring-native-roots"] }
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt"] }

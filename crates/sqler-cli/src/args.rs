@@ -19,13 +19,14 @@ Commands:
   run         Run one SQL statement and print the result as TSV
 
 Options:
-  --driver <ID>   Driver id (default: sqlite)
+  --driver <ID>   Driver id: sqlite, postgres (default: sqlite)
   -h, --help      Print this help
   -V, --version   Print the version
 
 Examples:
   sqler-cli run :memory: \"select 1 as a\"
   sqler-cli run ./data.db \"select * from users\"
+  sqler-cli run --driver postgres postgres://user@localhost/db \"select 1\"
 ";
 
 /// A parsed command line.
@@ -134,6 +135,21 @@ mod tests {
             p(&["run", "t", "s", "--driver=pg"]),
             Ok(run("pg", "t", "s"))
         );
+    }
+
+    #[test]
+    fn run_postgres_url() {
+        assert_eq!(
+            p(&[
+                "run",
+                "--driver",
+                "postgres",
+                "postgres://user@localhost/db",
+                "select 1"
+            ]),
+            Ok(run("postgres", "postgres://user@localhost/db", "select 1"))
+        );
+        assert!(USAGE.contains("sqler-cli run --driver postgres postgres://user@localhost/db"));
     }
 
     #[test]

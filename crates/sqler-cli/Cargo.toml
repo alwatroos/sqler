@@ -17,11 +17,13 @@ path = "src/main.rs"
 workspace = true
 
 [features]
-default = ["driver-sqlite"]
+default = ["driver-sqlite", "driver-postgres"]
 driver-sqlite = ["dep:sqler-driver-sqlite"]
+driver-postgres = ["dep:sqler-driver-postgres"]
 
 [dependencies]
 sqler-driver-api.workspace = true
 sqler-driver-sqlite = { workspace = true, optional = true }
+sqler-driver-postgres = { workspace = true, optional = true }
 anyhow.workspace = true
 tokio = { workspace = true, features = ["rt"] }

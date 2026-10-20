@@ -79,20 +79,34 @@ fn start(exit_after_first_frame: bool) -> ExitCode {
 }
 
 // Without any driver feature nothing can fail or be registered.
-#[cfg_attr(not(feature = "driver-sqlite"), allow(clippy::unnecessary_wraps))]
+#[cfg_attr(
+    not(any(feature = "driver-sqlite", feature = "driver-postgres")),
+    allow(clippy::unnecessary_wraps)
+)]
 fn registry() -> Result<DriverRegistry, DriverError> {
     #[allow(unused_mut)]
     let mut registry = DriverRegistry::new();
     #[cfg(feature = "driver-sqlite")]
     registry.register(Box::new(sqler_driver_sqlite::SqliteDriver::new()))?;
+    #[cfg(feature = "driver-postgres")]
+    registry.register(Box::new(sqler_driver_postgres::PostgresDriver::new()))?;
     Ok(registry)
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(feature = "driver-sqlite", feature = "driver-postgres"))]
     use super::*;
 
-    #[cfg(feature = "driver-sqlite")]
+    #[cfg(all(feature = "driver-sqlite", feature = "driver-postgres"))]
+    #[test]
+    fn registry_lists_sqlite_and_postgres() {
+        let registry = registry().unwrap();
+        let ids: Vec<_> = registry.ids().map(ToString::to_string).collect();
+        assert_eq!(ids, ["postgres", "sqlite"]);
+    }
+
+    #[cfg(all(feature = "driver-sqlite", not(feature = "driver-postgres")))]
     #[test]
     fn registry_lists_sqlite() {
         let registry = registry().unwrap();

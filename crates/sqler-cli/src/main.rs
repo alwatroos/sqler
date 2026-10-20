@@ -55,18 +55,33 @@ fn run(driver: &str, target: &str, sql: &str) -> Result<()> {
 }
 
 // Without any driver feature nothing can fail or be registered.
-#[cfg_attr(not(feature = "driver-sqlite"), allow(clippy::unnecessary_wraps))]
+#[cfg_attr(
+    not(any(feature = "driver-sqlite", feature = "driver-postgres")),
+    allow(clippy::unnecessary_wraps)
+)]
 fn registry() -> Result<DriverRegistry> {
     #[allow(unused_mut)]
     let mut registry = DriverRegistry::new();
     #[cfg(feature = "driver-sqlite")]
     registry.register(Box::new(sqler_driver_sqlite::SqliteDriver::new()))?;
+    #[cfg(feature = "driver-postgres")]
+    registry.register(Box::new(sqler_driver_postgres::PostgresDriver::new()))?;
     Ok(registry)
+}
+
+/// The connection for a CLI target. The name is the driver id: the target (a URL can carry a
+/// password) must never end up in a name that errors or logs print.
+fn connection_config(driver: &str, target: &str) -> Result<ConnectionConfig> {
+    Ok(ConnectionConfig::new(
+        driver,
+        DriverId::new(driver)?,
+        target,
+    ))
 }
 
 async fn run_query(driver: &str, target: &str, sql: &str) -> Result<()> {
     let registry = registry()?;
-    let config = ConnectionConfig::new(target, DriverId::new(driver)?, target);
+    let config = connection_config(driver, target)?;
     let mut session = registry.connect(&config).await?;
 
     let query = Query::new(sql);
@@ -105,4 +120,16 @@ async fn run_query(driver: &str, target: &str, sql: &str) -> Result<()> {
 
     session.close().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_debug_hides_the_url_password() {
+        let config = connection_config("postgres", "postgres://u:s3cret@host/db").unwrap();
+        assert!(!format!("{config:?}").contains("s3cret"));
+        assert_eq!(config.name, "postgres");
+    }
 }
