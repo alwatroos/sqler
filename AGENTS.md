@@ -203,7 +203,9 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 
 ## 9. Roadmap status
 
-Current: **M0 done** (bootstrap). Next: **M1** (UI foundation). See `docs/reports/iteration-001.md`.
+Current: **M1 done** (UI foundation), with maintainer verification pending. Next: **M2** (connections and drivers). See `docs/reports/iteration-002.md`.
+
+M1 delivered the command registry, config files, GPUI (ADR-0001 accepted), the desktop shell, settings and themes, the command palette and keybindings, and the 1M-row results grid with benchmarks. Not yet met, by explicit list: the interactive macOS checks of the shell, settings and themes, palette and keybindings, and grid scrolling (listed in the iteration-002 report), and idle RSS with three sessions actually opened (98 MiB measured with three connections configured but not opened). Record the maintainer results in `docs/reports/` before M2 is called complete.
 
 M0 covers the workspace skeleton, this handbook, the mdBook skeleton, CI on three OSes, `cargo-deny`,
 license headers, ADR-0000 to ADR-0004, and a `sqler-cli` that runs a query on `SQLite`.
@@ -238,3 +240,4 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build j
 - `cargo test -p sqler-ui` is GPUI-free (the views need the `gui` feature, which only `sqler-app` enables). `cargo clippy --workspace --all-features` and `--workspace` builds do compile GPUI.
 - Never call `tokio::spawn` on the GPUI thread: there is no runtime context. Use `SessionBridge` (`Handle::spawn` plus a `oneshot` awaited with `cx.spawn`), see ADR-0007.
 - `sqler --exit-after-first-frame` exits with code 0 after the first frame (cold-start measurement). On quit, open sessions are dropped, not closed; M2 must close them.
+- Measuring the desktop app on macOS: the config directory is `$HOME/Library/Application Support/SQLer`, so run `sqler` with `HOME` pointed at a scratch directory to get a known `connections.toml` and leave the real config alone. `hyperfine` is at `/opt/homebrew/bin`, `mdbook` and `cargo-nextest` are in `~/.cargo/bin` and may be off `PATH`.

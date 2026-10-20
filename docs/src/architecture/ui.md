@@ -61,12 +61,12 @@ cx.spawn awaits it
 
 Dropping a `PendingConnect` aborts the task and closes a session that was already produced. `SessionBridge::close` closes a session on the runtime. A result for an unknown `RequestId` is dropped (the session is not closed).
 
-## Hook points for later tasks
+## Hook points
 
 - Themes (T7): the shell paints only with `gpui_component` theme tokens (`cx.theme()`), with no second palette. `theme::apply` (gui only) calls `Theme::change` and sets `Theme::font_size`. `workspace::run` applies the startup settings, `WorkspaceView::new` observes the OS appearance, and `Effect::ApplySettings` saves and re-applies. The prod tint uses the theme's `danger` token.
 - Settings tab (T7): `settings::view::{strip_end, page}` are drawn by the `workspace/view.rs` render (strip row and body switch). `tabs::view::tab_strip` takes `highlight_active`, which is false while the Settings tab is active. `Startup.settings` carries the `SettingsModel`.
 - Keymap (T6): done. One `capture_key_down` listener on the workspace root converts the key press to a `KeyChord` and calls `keymap::route_key`; the views use no GPUI `actions!`, because bindings are runtime data. `WorkspaceView::run_command` carries out the result. See [Keybindings](../user-guide/keybindings.md).
-- Grid (T8): add a `TabKind` variant (it is `#[non_exhaustive]`) and render it in the tab body.
+- Grid (T8): done. The grid is a `TabKind` variant (it is `#[non_exhaustive]`) rendered in the tab body, over the 1M-row model of [ADR-0006](../adr/0006-grid-data-model-and-bench-harness.md). See [Results grid](../user-guide/results-grid.md) and the [benchmarks](../benchmarks.md).
 
 ## Startup
 
