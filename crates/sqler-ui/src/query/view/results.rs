@@ -16,8 +16,8 @@ use gpui_component::input::InputState;
 use gpui_component::table::{DataTable, TableState};
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
-use crate::grid::GridTab;
 use crate::grid::view::{GridDelegate, Table, start_polling};
+use crate::grid::{GridTab, IngestState};
 use crate::query::{Phase, QueryTab, StatementStatus};
 use crate::tabs::{TabId, TabKind, TabStrip};
 use crate::workspace::{Workspace, WorkspaceView};
@@ -106,6 +106,28 @@ impl QueryViews {
         if let Some(results) = self.results.get_mut(&tab) {
             results.chosen = Some(index);
         }
+    }
+
+    /// Fetches the next page of the paused table of a tab. A script holds at its paused statement,
+    /// so at most one table is paused. Returns `false` when none is.
+    pub(crate) fn fetch_more(&self, tab: TabId, cx: &mut Context<WorkspaceView>) -> bool {
+        let Some(results) = self.results.get(&tab) else {
+            return false;
+        };
+        let paused = results
+            .tables
+            .iter()
+            .find(|t| matches!(t.read(cx).delegate().grid().state(), IngestState::Paused));
+        let Some(table) = paused else {
+            return false;
+        };
+        table.update(cx, |state, cx| {
+            let fetched = state.delegate_mut().grid_mut().fetch_more();
+            if fetched {
+                cx.notify();
+            }
+            fetched
+        })
     }
 
     fn table(&self, tab: TabId, index: usize) -> Option<&Table> {
@@ -319,6 +341,26 @@ pub(super) fn results_area(
         );
     }
 
+    // The shown table stopped at its page limit: say so, and offer the next page.
+    let paused_text = view
+        .queries
+        .table(tab, index)
+        .map(|t| t.read(cx).delegate().grid())
+        .filter(|g| matches!(g.state(), IngestState::Paused))
+        .map(GridTab::status_text);
+    if paused_text.is_some() {
+        strip = strip.child(
+            Button::new("query-fetch-more")
+                .label("Fetch more")
+                .small()
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    if view.queries.fetch_more(tab, cx) {
+                        cx.notify();
+                    }
+                })),
+        );
+    }
+
     let status_color = if matches!(entry.status, StatementStatus::Failed { .. }) {
         danger
     } else {
@@ -334,7 +376,7 @@ pub(super) fn results_area(
         .text_color(status_color)
         .border_b_1()
         .border_color(border)
-        .child(entry.status_text());
+        .child(paused_text.unwrap_or_else(|| entry.status_text()));
 
     let table = view
         .queries

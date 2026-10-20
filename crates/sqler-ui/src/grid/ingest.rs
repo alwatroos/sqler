@@ -6,10 +6,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 
-use sqler_driver_api::sqler_core::CoreError;
+use sqler_driver_api::sqler_core::{CoreError, Row};
 use sqler_driver_api::{DriverError, QueryEvent, QueryStream};
 
 use super::model::{GridSink, Msg};
+use super::store::{Chunk, packed_cost};
 
 /// What a finished ingestion read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,7 +25,14 @@ pub struct IngestSummary {
 /// Reads `stream` to its end into `sink`, enforcing the stream protocol like
 /// `sqler_driver_api::collect`. Sends never block, and the function does not depend on a runtime.
 ///
-/// The cancel flag is checked before each event. On any error the model is told (`Cancelled` for
+/// Rows are sent only against the page credit of the channel (see `GridLimits`). When the page is
+/// full and the stream has yielded one more batch, the model is told (`Paused`) and this future
+/// waits without polling the stream, until `GridModel::fetch_more` grants the next page. At most
+/// one batch beyond the page is held in memory. A stream that ends exactly at the page limit
+/// finishes with `Done`, not `Paused`.
+///
+/// The cancel flag is checked before each event. A paused wait ends when the model is dropped or
+/// cancelled, or when a `GridCancel` fires. On any error the model is told (`Cancelled` for
 /// cancellation, `Failed` otherwise) and the error is returned. Returning drops the borrow of the
 /// stream; dropping the stream stops fetching.
 ///
@@ -57,48 +65,85 @@ async fn run(
 ) -> Result<IngestSummary, DriverError> {
     let mut width: Option<usize> = None;
     let mut rows = 0;
+    // The one batch pulled but not yet sent, because the page filled up.
+    let mut held: Vec<Row> = Vec::new();
     loop {
-        if sink.is_cancelled() {
-            return Err(DriverError::Cancelled);
-        }
-        match stream.next_event().await {
-            None => return Err(DriverError::Protocol("stream ended before Done".to_owned())),
-            Some(Err(e)) => return Err(e),
-            Some(Ok(QueryEvent::Columns(columns))) => {
-                if width.is_some() {
-                    return Err(DriverError::Protocol("second Columns event".to_owned()));
-                }
-                width = Some(columns.len());
-                deliver(sink, Msg::Columns(columns))?;
+        if held.is_empty() {
+            if sink.is_cancelled() {
+                return Err(DriverError::Cancelled);
             }
-            Some(Ok(QueryEvent::Rows(batch))) => {
-                let Some(expected) = width else {
-                    return Err(DriverError::Protocol("Rows before Columns".to_owned()));
-                };
-                if let Some(bad) = batch.iter().find(|r| r.len() != expected) {
-                    return Err(CoreError::RowWidth {
-                        expected,
-                        actual: bad.len(),
+            match stream.next_event().await {
+                None => return Err(DriverError::Protocol("stream ended before Done".to_owned())),
+                Some(Err(e)) => return Err(e),
+                Some(Ok(QueryEvent::Columns(columns))) => {
+                    if width.is_some() {
+                        return Err(DriverError::Protocol("second Columns event".to_owned()));
                     }
-                    .into());
+                    width = Some(columns.len());
+                    deliver(sink, Msg::Columns(columns))?;
                 }
-                rows += batch.len();
-                deliver(sink, Msg::Rows(batch))?;
-            }
-            Some(Ok(QueryEvent::Done { rows_affected })) => {
-                if width.is_none() {
-                    return Err(DriverError::Protocol("Done before Columns".to_owned()));
+                Some(Ok(QueryEvent::Rows(batch))) => {
+                    let Some(expected) = width else {
+                        return Err(DriverError::Protocol("Rows before Columns".to_owned()));
+                    };
+                    if let Some(bad) = batch.iter().find(|r| r.len() != expected) {
+                        return Err(CoreError::RowWidth {
+                            expected,
+                            actual: bad.len(),
+                        }
+                        .into());
+                    }
+                    held = batch;
                 }
-                deliver(sink, Msg::Done(rows_affected))?;
-                return Ok(IngestSummary {
-                    rows,
-                    rows_affected,
-                });
+                Some(Ok(QueryEvent::Done { rows_affected })) => {
+                    if width.is_none() {
+                        return Err(DriverError::Protocol("Done before Columns".to_owned()));
+                    }
+                    deliver(sink, Msg::Done(rows_affected))?;
+                    return Ok(IngestSummary {
+                        rows,
+                        rows_affected,
+                    });
+                }
+                Some(Ok(_)) => {
+                    return Err(DriverError::Protocol("unknown event".to_owned()));
+                }
             }
-            Some(Ok(_)) => {
-                return Err(DriverError::Protocol("unknown event".to_owned()));
+            continue;
+        }
+
+        // Rows in hand: send them against credit, or tell the model the page is full and wait.
+        let remaining = if let Some(credit) = sink.try_credit() {
+            credit?
+        } else {
+            if sink.is_cancelled() {
+                return Err(DriverError::Cancelled);
+            }
+            deliver(sink, Msg::Paused)?;
+            sink.credit().await?
+        };
+        // Stop at the row that reaches the byte cap; the rest waits for the next page, so a batch
+        // of huge rows overshoots the cap by at most one row.
+        let mut take = remaining.min(held.len());
+        let width = width.unwrap_or_default();
+        // `None` for an unbounded sink: no cost pass at all.
+        if let Some(room) = sink.byte_room() {
+            let mut cost = 0usize;
+            for (n, row) in held.iter().take(take).enumerate() {
+                cost = cost.saturating_add(packed_cost(row, width));
+                if cost >= room {
+                    take = n + 1;
+                    break;
+                }
             }
         }
+        let rest = held.split_off(take);
+        let batch = std::mem::replace(&mut held, rest);
+        let chunk = Chunk::from_rows(batch, width);
+        let (count, bytes) = (chunk.rows(), chunk.heap_bytes());
+        deliver(sink, Msg::Rows(chunk))?;
+        sink.record(count, bytes);
+        rows += count;
     }
 }
 
@@ -154,17 +199,20 @@ fn block_on<F: Future>(fut: F) -> F::Output {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     use sqler_driver_api::sqler_core::{Column, DataType, Row, Value};
     use sqler_driver_api::{BoxFuture, CancelFlag};
 
-    use super::super::model::{IngestState, grid_channel};
+    use super::super::model::{GridLimits, IngestState, grid_channel, grid_channel_with};
     use super::super::synthetic::SyntheticSource;
     use super::*;
 
     struct VecStream {
         events: std::vec::IntoIter<Result<QueryEvent, DriverError>>,
+        /// How often `next_event` was called.
+        polls: Arc<AtomicUsize>,
         /// Cancels this flag after yielding the first `Rows` event.
         cancel_after_rows: Option<CancelFlag>,
         yielded_rows: bool,
@@ -174,6 +222,7 @@ mod tests {
         fn new(events: Vec<Result<QueryEvent, DriverError>>) -> Self {
             Self {
                 events: events.into_iter(),
+                polls: Arc::default(),
                 cancel_after_rows: None,
                 yielded_rows: false,
             }
@@ -182,6 +231,7 @@ mod tests {
 
     impl QueryStream for VecStream {
         fn next_event(&mut self) -> BoxFuture<'_, Option<Result<QueryEvent, DriverError>>> {
+            self.polls.fetch_add(1, Ordering::SeqCst);
             let next = self.events.next();
             if matches!(next, Some(Ok(QueryEvent::Rows(_)))) && !self.yielded_rows {
                 self.yielded_rows = true;
@@ -211,7 +261,14 @@ mod tests {
     fn run(
         events: Vec<Result<QueryEvent, DriverError>>,
     ) -> (Result<IngestSummary, DriverError>, super::super::GridModel) {
-        let (mut model, sink) = grid_channel();
+        run_with(GridLimits::default(), events)
+    }
+
+    fn run_with(
+        limits: GridLimits,
+        events: Vec<Result<QueryEvent, DriverError>>,
+    ) -> (Result<IngestSummary, DriverError>, super::super::GridModel) {
+        let (mut model, sink) = grid_channel_with(limits);
         let res = block_on(ingest(&mut VecStream::new(events), sink));
         model.poll(usize::MAX);
         (res, model)
@@ -370,5 +427,195 @@ mod tests {
             }
         }
         block_on(Flag(Arc::default(), None));
+    }
+
+    fn wait_for(model: &mut super::super::GridModel, want: &IngestState) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while model.state() != want {
+            assert!(Instant::now() < deadline, "stuck in {:?}", model.state());
+            if model.poll(usize::MAX) == 0 {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+
+    #[test]
+    fn pauses_at_the_page_without_polling_the_stream_further() {
+        let (mut model, sink) = grid_channel_with(GridLimits::rows(4));
+        let stream = VecStream::new(vec![
+            Ok(cols()),
+            Ok(rows(0, 3)),
+            Ok(rows(3, 3)),
+            Ok(rows(6, 3)),
+            Ok(done()),
+        ]);
+        let polls = Arc::clone(&stream.polls);
+        let handle = spawn_ingest(stream, sink).unwrap();
+        wait_for(&mut model, &IngestState::Paused);
+        assert_eq!(model.row_count(), 4);
+        // Columns and two batches were pulled; nothing more while paused.
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(polls.load(Ordering::SeqCst), 3);
+        assert!(!handle.is_finished());
+
+        assert!(model.fetch_more());
+        wait_for(&mut model, &IngestState::Paused);
+        assert_eq!(model.row_count(), 8);
+        assert_eq!(polls.load(Ordering::SeqCst), 4);
+
+        assert!(model.fetch_more());
+        wait_for(
+            &mut model,
+            &IngestState::Done {
+                rows_affected: None,
+            },
+        );
+        assert_eq!(model.row_count(), 9);
+        let summary = handle.join().unwrap().unwrap();
+        assert_eq!(summary.rows, 9);
+        let got: Vec<String> = model
+            .viewport(0, 9)
+            .iter()
+            .map(|r| r.get(0).unwrap().to_string())
+            .collect();
+        assert_eq!(got, ["0", "1", "2", "3", "4", "5", "6", "7", "8"]);
+    }
+
+    #[test]
+    fn the_byte_cap_applies_inside_a_batch() {
+        // One batch of ten rows of 400 bytes (416 bytes packed) against a cap of 1,000 bytes.
+        let big = |i: i64| Row(vec![Value::Text(format!("{i:0>400}"))]);
+        let batch = QueryEvent::Rows((0..10).map(big).collect());
+        let (mut model, sink) = grid_channel_with(GridLimits {
+            page_rows: 1_000,
+            page_bytes: 1_000,
+        });
+        let stream = VecStream::new(vec![
+            Ok(QueryEvent::Columns(vec![Column::new("a", DataType::Text)])),
+            Ok(batch),
+            Ok(done()),
+        ]);
+        let handle = spawn_ingest(stream, sink).unwrap();
+        wait_for(&mut model, &IngestState::Paused);
+        // The third row reaches the cap; the other seven wait as a partial batch.
+        assert_eq!(model.row_count(), 3);
+        assert!(model.fetch_more());
+        wait_for(&mut model, &IngestState::Paused);
+        assert_eq!(model.row_count(), 6);
+        assert!(model.fetch_more());
+        wait_for(&mut model, &IngestState::Paused);
+        assert_eq!(model.row_count(), 9);
+        assert!(model.fetch_more());
+        wait_for(
+            &mut model,
+            &IngestState::Done {
+                rows_affected: None,
+            },
+        );
+        assert_eq!(model.row_count(), 10);
+        assert_eq!(handle.join().unwrap().unwrap().rows, 10);
+        let first = model.row(0).unwrap().get(0).unwrap().to_string();
+        let last = model.row(9).unwrap().get(0).unwrap().to_string();
+        assert!(first.ends_with('0') && last.ends_with('9'));
+    }
+
+    #[test]
+    fn one_row_over_the_cap_still_makes_progress() {
+        let huge = Row(vec![Value::Text("x".repeat(5_000))]);
+        let (mut model, sink) = grid_channel_with(GridLimits {
+            page_rows: 1_000,
+            page_bytes: 100,
+        });
+        let stream = VecStream::new(vec![
+            Ok(QueryEvent::Columns(vec![Column::new("a", DataType::Text)])),
+            Ok(QueryEvent::Rows(vec![huge.clone(), huge])),
+            Ok(done()),
+        ]);
+        let handle = spawn_ingest(stream, sink).unwrap();
+        wait_for(&mut model, &IngestState::Paused);
+        assert_eq!(model.row_count(), 1);
+        assert!(model.fetch_more());
+        wait_for(
+            &mut model,
+            &IngestState::Done {
+                rows_affected: None,
+            },
+        );
+        assert_eq!(model.row_count(), 2);
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn exact_page_then_done_is_done() {
+        let (res, model) = run_with(
+            GridLimits::rows(4),
+            vec![Ok(cols()), Ok(rows(0, 4)), Ok(done())],
+        );
+        assert_eq!(res.unwrap().rows, 4);
+        assert_eq!(model.row_count(), 4);
+        assert!(matches!(model.state(), IngestState::Done { .. }));
+    }
+
+    #[test]
+    fn grid_cancel_while_paused_ends_the_job() {
+        let (mut model, sink) = grid_channel_with(GridLimits::rows(2));
+        let canceller = sink.canceller();
+        let stream = VecStream::new(vec![Ok(cols()), Ok(rows(0, 5)), Ok(done())]);
+        let handle = spawn_ingest(stream, sink).unwrap();
+        wait_for(&mut model, &IngestState::Paused);
+        canceller.cancel();
+        let res = handle.join().unwrap();
+        assert!(matches!(res, Err(DriverError::Cancelled)));
+        model.poll(usize::MAX);
+        assert_eq!(model.state(), &IngestState::Cancelled);
+        assert_eq!(model.row_count(), 2);
+    }
+
+    #[test]
+    fn dropping_the_model_while_paused_ends_the_job() {
+        let (mut model, sink) = grid_channel_with(GridLimits::rows(2));
+        let stream = VecStream::new(vec![Ok(cols()), Ok(rows(0, 5)), Ok(done())]);
+        let handle = spawn_ingest(stream, sink).unwrap();
+        wait_for(&mut model, &IngestState::Paused);
+        drop(model);
+        let res = handle.join().unwrap();
+        assert!(matches!(res, Err(DriverError::Cancelled)));
+    }
+
+    #[test]
+    fn model_cancel_while_paused_ends_the_job() {
+        let (mut model, sink) = grid_channel_with(GridLimits::rows(2));
+        let stream = VecStream::new(vec![Ok(cols()), Ok(rows(0, 5)), Ok(done())]);
+        let handle = spawn_ingest(stream, sink).unwrap();
+        wait_for(&mut model, &IngestState::Paused);
+        model.cancel();
+        assert!(matches!(
+            handle.join().unwrap(),
+            Err(DriverError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn a_tiny_byte_cap_pauses_after_every_row() {
+        let limits = GridLimits {
+            page_rows: 1_000_000,
+            page_bytes: 1,
+        };
+        let (mut model, sink) = grid_channel_with(limits);
+        let stream = VecStream::new(vec![Ok(cols()), Ok(rows(0, 3)), Ok(rows(3, 3)), Ok(done())]);
+        let handle = spawn_ingest(stream, sink).unwrap();
+        for expected in 1..=5 {
+            wait_for(&mut model, &IngestState::Paused);
+            assert_eq!(model.row_count(), expected);
+            assert!(model.fetch_more());
+        }
+        wait_for(
+            &mut model,
+            &IngestState::Done {
+                rows_affected: None,
+            },
+        );
+        assert_eq!(model.row_count(), 6);
+        handle.join().unwrap().unwrap();
     }
 }

@@ -11,7 +11,7 @@ use sqler_config::{
     ConnectionId, ConnectionProfile, NewHistoryEntry, SavedQueries, Secret, SecretRef,
 };
 use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId};
-use sqler_driver_api::{CancelFlag, CancelHandle, Session};
+use sqler_driver_api::{CancelHandle, Session};
 use sqler_sql::Dialect;
 
 use super::action::WorkspaceAction;
@@ -24,7 +24,7 @@ use crate::connections::{
     GroupPurpose, HostKeyPrompt, SecretField, TestStatus, from_profile_secret,
 };
 use crate::editor::{EditorDocs, EditorKey, TextEdit};
-use crate::grid::{GridTab, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS};
+use crate::grid::{GridCancel, GridTab, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS};
 use crate::history::HistorySearch;
 use crate::query::{QueryJob, QueryTab, RunEvent};
 use crate::settings::SettingsModel;
@@ -347,7 +347,7 @@ pub struct Workspace {
     settings_tab: SettingsTab,
     system_appearance: Appearance,
     /// Cancel flags of the grid tabs' ingestion threads.
-    pub(super) grid_cancels: HashMap<TabId, CancelFlag>,
+    pub(super) grid_cancels: HashMap<TabId, GridCancel>,
     /// Rows of the synthetic grid; a field so tests can use a small result.
     synthetic_rows: usize,
     /// The object browser of every connection that was opened.
@@ -602,6 +602,10 @@ impl Workspace {
             WorkspaceAction::OpenSyntheticGrid => self.open_synthetic_grid(),
             WorkspaceAction::Quit => {
                 let cancels = self.cancel_all_queries();
+                // Ends every grid ingestion, waking one that is paused on a full page.
+                for (_, grid) in self.grid_cancels.drain() {
+                    grid.cancel();
+                }
                 let sessions = self.take_all_sessions();
                 let browsers = self.shutdown_browsers();
                 if sessions.is_empty() && !browsers && cancels.is_empty() {

@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-20
+- Note: storage and backpressure are superseded by [ADR-0027](0027-bounded-result-model.md) (bounded model, compact cells); the rest stands.
 
 ## Context and problem statement
 
@@ -50,7 +51,7 @@ CI gate (`.github/workflows/bench.yml`): on pull requests the same Linux job ben
 - Good: the UI never blocks; no lock is shared between threads; no copy of the full result on growth.
 - Good: no new dependency; the bench adds no transitive crates.
 - Good: synthetic and driver rows take the same code path.
-- Bad: the unbounded channel can hold a whole result in flight; accepted, since every row ends up in the model anyway.
+- Bad: the unbounded channel can hold a whole result in flight; accepted at the time, replaced by the bounded credit gate in [ADR-0027](0027-bounded-result-model.md).
 - Bad: a hand-written harness has no statistics beyond p50/p95 and no outlier analysis.
 - Bad: `bench.yml` is not a required check, so a flaky run is a signal, not a block.
 - Neutral: sort, filter, pin and edit (M4) will need their own index structures on top of the chunks.

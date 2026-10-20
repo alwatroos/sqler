@@ -3,15 +3,16 @@
 
 use std::fmt::Write as _;
 
-use sqler_driver_api::sqler_core::{Column, DataType, Value};
+use sqler_driver_api::sqler_core::{Column, DataType};
 
 /// Longest cell text in characters; longer text is cut and ends with `…`.
 pub const MAX_CELL_CHARS: usize = 256;
 
-/// The display text of a cell: the value's `Display`, with line breaks and tabs turned into
+/// The display text of a cell: the `Display` of a `Value` or a
+/// `CellRef`, with line breaks and tabs turned into
 /// spaces and at most [`MAX_CELL_CHARS`] characters.
 #[must_use]
-pub fn cell_text(v: &Value) -> String {
+pub fn cell_text(v: &(impl std::fmt::Display + ?Sized)) -> String {
     let mut w = Bounded {
         out: String::new(),
         chars: 0,
@@ -105,7 +106,7 @@ pub fn group_thousands(n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use sqler_driver_api::sqler_core::{Date, Decimal, Time, Timestamp, TimestampTz};
+    use sqler_driver_api::sqler_core::{Date, Decimal, Time, Timestamp, TimestampTz, Value};
 
     use super::*;
 

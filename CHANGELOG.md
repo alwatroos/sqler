@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Result grids are bounded (ADR-0027): a result loads one page at a time (`result_page_rows` in `settings.toml`, default 100,000, range 1,000 to 10,000,000, or 64 MiB of cells) and then pauses with `N rows loaded; more rows available`. The new **Fetch more** button and `grid:fetch-more` command load the next page; Cancel or closing the tab ends a paused result. A paused statement holds the tab session, so later statements of a script stay pending until fetch-all or cancel. Rows are stored in a compact per-batch layout (new `GridLimits`, `GridCancel`, `RowRef`, `CellRef`; the read API no longer returns `&Row`); the synthetic grid, the `grid_viewport` bench and `grid_scroll` stay unbounded. Figures in `docs/src/benchmarks.md`.
 - `grid_viewport` and `browser_tree` benchmarks gate on the minimum over `--reps` (3) repetitions with an absolute `--slack-ns` (100 ns and 250 us), so noise on shared CI runners no longer fails unrelated pull requests; a 2x slowdown still fails. `bench.yml` and `docs/src/benchmarks.md` updated.
 
 ### Fixed
