@@ -233,6 +233,9 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("tab:next", &["ctrl+tab"]),
     ("tab:previous", &["ctrl+shift+tab"]),
     ("app:quit", &["mod+q"]),
+    ("editor:new", &["mod+n"]),
+    ("editor:format-sql", &["shift+alt+f"]),
+    ("editor:add-next-occurrence", &["mod+d"]),
 ];
 
 fn dedup(chords: Vec<KeyChord>) -> Vec<KeyChord> {

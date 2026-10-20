@@ -33,6 +33,7 @@ use crate::command::{CommandId, CommandRegistry};
 use crate::connections::FormField;
 use crate::connections::view::{DialogInputs, dialog_overlay};
 use crate::connections::{self, ConnectionAction, Connector, Dialog};
+use crate::editor::{self, EditorAction, view::EditorViews};
 use crate::grid::view::{GridProbe, GridViews, action_for_command as grid_action_for};
 use crate::keymap::input::key_input;
 use crate::keymap::{KeyDispatcher, KeyOutcome, action_for, chord_from_input, route_key};
@@ -132,6 +133,8 @@ pub(crate) struct WorkspaceView {
     focus: FocusHandle,
     /// The table of every open results-grid tab.
     pub(crate) grids: GridViews,
+    /// The editor of every open SQL editor tab.
+    pub(crate) editors: EditorViews,
     /// The running connect attempts; dropping a task cancels the attempt.
     tasks: HashMap<RequestId, Task<()>>,
     /// The text inputs of the dialog on screen.
@@ -196,6 +199,9 @@ impl WorkspaceView {
         if let Err(err) = browser::register_commands(&mut commands) {
             eprintln!("sqler: could not register the object browser commands: {err}");
         }
+        if let Err(err) = editor::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the editor commands: {err}");
+        }
         let keys = KeyDispatcher::new(Platform::current(), startup.keybindings, &commands);
         for notice in keys.notices() {
             eprintln!("sqler: {notice}");
@@ -241,6 +247,7 @@ impl WorkspaceView {
             palette_input,
             focus,
             grids: GridViews::default(),
+            editors: EditorViews::default(),
             tasks: HashMap::new(),
             inputs: None,
             sidebar_focus: cx.focus_handle(),
@@ -263,6 +270,32 @@ impl WorkspaceView {
             .active()
             .filter(|t| t.kind() == crate::tabs::TabKind::Grid)
             .map(crate::tabs::Tab::id)
+    }
+
+    /// The active tab, if it is a SQL editor with an editor on screen.
+    fn ws_active_editor(&self) -> Option<crate::tabs::TabId> {
+        self.ws
+            .tabs()
+            .active()
+            .map(crate::tabs::Tab::id)
+            .filter(|tab| self.editors.contains(*tab))
+    }
+
+    /// Runs an editor command with a copy of the active editor's text, and carries out the effect.
+    fn dispatch_editor(
+        &mut self,
+        action: EditorAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let buffer = self
+            .ws_active_editor()
+            .and_then(|tab| self.editors.buffer(tab, cx));
+        let effect = self.ws.dispatch_editor(action, buffer);
+        if let Some(effect) = self.editors.apply(effect, window, cx) {
+            self.apply(effect, cx);
+        }
+        self.settle(cx);
     }
 
     /// Routes a key press before the focused element sees it.
@@ -376,6 +409,7 @@ impl WorkspaceView {
     ) {
         let was_open = self.palette.is_open();
         let mut reopen_with = None;
+        let mut editor_focus = false;
         if id.as_str() == OPEN_PALETTE {
             self.palette.open();
             if was_open {
@@ -397,6 +431,10 @@ impl WorkspaceView {
                 self.dispatch_browser(action, cx);
                 self.reveal_selection();
             }
+        } else if let Some(action) = editor::action_for(id) {
+            self.palette.close();
+            self.dispatch_editor(action, window, cx);
+            editor_focus = true;
         } else if let Some(grid_action) = grid_action_for(id) {
             self.palette.close();
             match self.ws_active_grid() {
@@ -419,6 +457,10 @@ impl WorkspaceView {
             eprintln!("sqler: no handler for command {id}");
         }
         self.sync_palette_focus(was_open, window, cx);
+        if editor_focus && let Some(tab) = self.ws_active_editor() {
+            // The palette gave the focus back to the root; the editor takes it.
+            self.editors.focus(tab, window, cx);
+        }
         if let Some(query) = reopen_with {
             self.palette_input
                 .update(cx, |input, cx| input.set_value(query, window, cx));
@@ -572,6 +614,7 @@ impl WorkspaceView {
             self.notices.push(notice);
         }
         self.grids.retain(self.ws.tabs());
+        self.editors.retain(&self.ws);
         self.sync_sidebar();
         cx.notify();
     }
@@ -788,6 +831,7 @@ impl WorkspaceView {
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.grids.materialize(window, cx);
+        self.editors.materialize(&mut self.ws, window, cx);
         self.sync_dialog_inputs(window, cx);
         if !self.notices.is_empty() {
             let notices = std::mem::take(&mut self.notices);
@@ -807,6 +851,11 @@ impl Render for WorkspaceView {
             settings::view::page(&self.ws, cx).into_any_element()
         } else if let Some(grid) = self.ws_active_grid() {
             self.grids.body(grid, cx).into_any_element()
+        } else if let Some(editor) = self
+            .ws_active_editor()
+            .and_then(|tab| self.editors.body(tab))
+        {
+            editor.into_any_element()
         } else if let Some(tab) = self
             .ws
             .tabs()

@@ -26,8 +26,37 @@ The palette lists commands that need no argument. `connection:select`, `tab:acti
 | `tab:previous` | Ctrl+Shift+Tab | Ctrl+Shift+Tab |
 | `app:quit` | Cmd+Q | Ctrl+Q |
 | `settings:open` | Cmd+, | Ctrl+, |
+| `editor:new` | Cmd+N | Ctrl+N |
+| `editor:format-sql` | Shift+Alt+F | Shift+Alt+F |
+| `editor:add-next-occurrence` | Cmd+D | Ctrl+D |
 
 `theme:toggle-mode` has no default shortcut; run it from the palette or bind it yourself.
+
+## SQL editor
+
+The editor commands are in the palette under `Editor:`. The three above have default shortcuts; `editor:add-cursor-above`, `editor:add-cursor-below` and `editor:go-to-matching-bracket` have none, so run them from the palette or bind them in `keybindings.toml`.
+
+| Command | Title |
+| ------- | ----- |
+| `editor:new` | Editor: New SQL Editor |
+| `editor:format-sql` | Editor: Format SQL |
+| `editor:add-next-occurrence` | Editor: Add Next Occurrence |
+| `editor:add-cursor-above` | Editor: Add Cursor Above |
+| `editor:add-cursor-below` | Editor: Add Cursor Below |
+| `editor:go-to-matching-bracket` | Editor: Go to Matching Bracket |
+| `dev:open-large-sql-script` | Open Synthetic 10,000-Line SQL Script |
+
+While the editor has focus, the editor component also handles its own keys. These are not SQLer commands and cannot be rebound in `keybindings.toml`:
+
+| Action | macOS | Windows | Linux |
+| ------ | ----- | ------- | ----- |
+| Add a cursor | Alt-click | Alt-click | Alt-click |
+| Add cursor above | Cmd+Alt+Up | Ctrl+Alt+Up | Shift+Alt+Up |
+| Add cursor below | Cmd+Alt+Down | Ctrl+Alt+Down | Shift+Alt+Down |
+| Undo | Cmd+Z | Ctrl+Z | Ctrl+Z |
+| Redo | Cmd+Shift+Z | Ctrl+Y | Ctrl+Y |
+
+Chords bound by SQLer are taken first, so a chord you bind in `keybindings.toml` wins over the editor's own key. See [SQL editor](sql-editor.md).
 
 ## Rebind a shortcut
 

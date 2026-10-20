@@ -30,12 +30,13 @@ Right-click a row. Entries that do not apply are left out.
 | Node | Entries |
 | ---- | ------- |
 | Connection, folder, `Columns` | Refresh |
-| Table, view and other objects | Open Data, Generate CREATE, Generate SELECT, Generate INSERT, Generate DROP, Drop, Copy Name, Refresh, Properties |
+| Table, view and other objects | Open Data, Open in SQL Editor, Generate CREATE, Generate SELECT, Generate INSERT, Generate DROP, Drop, Copy Name, Refresh, Properties |
 | Column | Copy Name, Properties |
 
 The script entries follow the object kind and the dialect, see [DDL and scripts](ddl.md): `INSERT` is for tables, `SELECT` for tables and views. A driver without a SQL dialect has no scripts, no Open Data and no Copy Name.
 
 - **Open Data** opens a [results grid](results-grid.md) tab, titled `Results: <object>`, with `SELECT * ... LIMIT 1000`. It runs on its own short-lived session; closing the tab cancels it.
+- **Open in SQL Editor** opens a new [SQL editor](sql-editor.md) on the object's connection, filled with `SELECT * ...` for the object. It is offered for the same objects as Generate SELECT.
 - **Generate CREATE, SELECT, INSERT, DROP** opens a read-only `DDL: <object>` tab with the script and a Copy button. Nothing runs against the server, except Generate CREATE for a view, function, index and the like: it opens a short-lived session to read the definition.
 - **Properties** opens a read-only `Properties: <object>` tab with a two-column table of the fields SQLer knows (kind, path, owner, comment, columns and so on).
 - **Copy Name** puts the fully quoted, qualified name on the clipboard.
@@ -69,6 +70,7 @@ All of them can be bound in `keybindings.toml`; none has a default shortcut.
 | Command ID | Title |
 | ---------- | ----- |
 | `object:open-data` | Object: Open Data |
+| `object:open-in-editor` | Object: Open in SQL Editor |
 | `object:generate-create` | Object: Generate CREATE |
 | `object:generate-select` | Object: Generate SELECT |
 | `object:generate-insert` | Object: Generate INSERT |

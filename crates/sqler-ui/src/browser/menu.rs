@@ -13,6 +13,8 @@ use super::tree::TreeNodeKind;
 pub enum MenuEntry {
     /// Open the rows of the object in a grid tab (`SELECT *` with a limit).
     OpenData,
+    /// Open a SQL editor that starts with the `SELECT *` of the object.
+    OpenInEditor,
     /// Show the `CREATE` script.
     GenerateCreate,
     /// Show the `SELECT *` script.
@@ -37,6 +39,7 @@ impl MenuEntry {
     pub fn label(self) -> &'static str {
         match self {
             Self::OpenData => "Open Data",
+            Self::OpenInEditor => "Open in SQL Editor",
             Self::GenerateCreate => "Generate CREATE",
             Self::GenerateSelect => "Generate SELECT",
             Self::GenerateInsert => "Generate INSERT",
@@ -65,6 +68,7 @@ pub fn menu_for(node: &TreeNodeKind, dialect: Option<Dialect>) -> Vec<MenuEntry>
                 let has = |script| supports(d, obj.kind, script);
                 let scripts = [
                     (MenuEntry::OpenData, Script::SelectStar),
+                    (MenuEntry::OpenInEditor, Script::SelectStar),
                     (MenuEntry::GenerateCreate, Script::Create),
                     (MenuEntry::GenerateSelect, Script::SelectStar),
                     (MenuEntry::GenerateInsert, Script::InsertTemplate),
@@ -122,6 +126,7 @@ mod tests {
             menu_for(&object(ObjectKind::Table), Some(Dialect::Postgres)),
             vec![
                 MenuEntry::OpenData,
+                MenuEntry::OpenInEditor,
                 MenuEntry::GenerateCreate,
                 MenuEntry::GenerateSelect,
                 MenuEntry::GenerateInsert,
@@ -141,6 +146,10 @@ mod tests {
                 let menu = menu_for(&object(kind), Some(dialect));
                 assert_eq!(
                     menu.contains(&MenuEntry::OpenData),
+                    supports(dialect, kind, Script::SelectStar)
+                );
+                assert_eq!(
+                    menu.contains(&MenuEntry::OpenInEditor),
                     supports(dialect, kind, Script::SelectStar)
                 );
                 assert_eq!(
@@ -170,6 +179,7 @@ mod tests {
     fn a_function_has_no_open_data_or_insert() {
         let menu = menu_for(&object(ObjectKind::Function), Some(Dialect::Postgres));
         assert!(!menu.contains(&MenuEntry::OpenData));
+        assert!(!menu.contains(&MenuEntry::OpenInEditor));
         assert!(!menu.contains(&MenuEntry::GenerateInsert));
         assert!(menu.contains(&MenuEntry::Drop));
     }
@@ -199,6 +209,7 @@ mod tests {
     fn labels_are_unique() {
         let all = [
             MenuEntry::OpenData,
+            MenuEntry::OpenInEditor,
             MenuEntry::GenerateCreate,
             MenuEntry::GenerateSelect,
             MenuEntry::GenerateInsert,

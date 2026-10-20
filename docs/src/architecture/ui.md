@@ -106,6 +106,18 @@ Effects added: `StartCatalog`, `LoadCatalog`, `WatchRefresh`, `RunJob` (DDL, pro
 
 Benchmark: [Object browser tree](../benchmarks.md#object-browser-tree).
 
+## SQL editor
+
+The `TabKind::Query` tab is the SQL editor. Its text lives in a `gpui-component` `EditorState` (code editor, language `sql`, tree-sitter highlighting that follows `Theme::change`). The logic is headless in `sqler_ui::editor`; only `editor/view.rs` (`EditorViews`, one editor view per tab, like `GridViews`) uses GPUI.
+
+- `EditorBuffer` (text, selection, cursor; byte offsets) is a snapshot the view copies out of the `EditorState` when a command runs. The logic works on it and returns an `Effect` (`EditorEdit`, `EditorSelect`, `EditorAddSelection`, `EditorKey`) that the view applies. A format edit is applied with `EditorState::replace`, one undo step.
+- `EditorDocs` (owned by `Workspace`) keeps per-tab headless state: the dialect, a seed text for a new editor (from "Open in SQL Editor" or a DDL tab) and the chain of added occurrences.
+- Modules: `action` (command IDs, `action_for`), `format`, `brackets` (`BracketIndex`, built only when the text changed and the cursor touches a bracket), `occurrence`, `run` and `synthetic`. The workspace side is `Workspace::dispatch_editor`, `run_editor` and `cancel_editor_run`; user messages go through `notice`.
+- `RunPort` is the seam to query execution: `run(workspace, tab, RunMode, EditorBuffer)` and `cancel`. Tests use a fake. The adapter over the T8 run commands is separate.
+- Benchmark: `cargo bench -p sqler-ui --bench editor_buffer` (10,000-line script; bracket build and format p95 under 16 ms).
+
+Decision and the gaps in `gpui-component` (no add-next-occurrence, no bracket matching): [ADR-0025](../adr/0025-sql-editor-component.md). User view: [SQL editor](../user-guide/sql-editor.md).
+
 ## Hook points
 
 - Themes (T7): the shell paints only with `gpui_component` theme tokens (`cx.theme()`), with no second palette. `theme::apply` (gui only) calls `Theme::change` and sets `Theme::font_size`. `workspace::run` applies the startup settings, `WorkspaceView::new` observes the OS appearance, and `Effect::ApplySettings` saves and re-applies. The prod tint uses the theme's `danger` token.
