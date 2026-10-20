@@ -201,6 +201,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0006](docs/src/adr/0006-grid-data-model-and-bench-harness.md) | Grid data model and bench harness | accepted |
 | [0007](docs/src/adr/0007-desktop-binary-and-ui-tokio-bridge.md) | Desktop binary and UI-thread/tokio bridge | accepted |
 | [0008](docs/src/adr/0008-object-model-lazy-introspection-value-types-tls.md) | Object model, lazy introspection, typed values and TLS options | accepted |
+| [0011](docs/src/adr/0011-connection-store-format.md) | Connection store format: versioned TOML, groups, derived secret references | accepted |
 | [0012](docs/src/adr/0012-keychain-secrets.md) | Keychain secrets: `keyring` 4.x, reference scheme, failure policy | accepted |
 | [0015](docs/src/adr/0015-ddl-generation-dialects-and-quoting.md) | DDL generation: dialects and quoting | accepted |
 

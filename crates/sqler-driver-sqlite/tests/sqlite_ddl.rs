@@ -61,6 +61,7 @@ fn on_table(kind: ObjectKind, name: &str, table: &str) -> DbObject {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one linear scenario
 fn generated_scripts_run() {
     run(async {
         let mut s = memory().await;

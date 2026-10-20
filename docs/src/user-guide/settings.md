@@ -65,32 +65,7 @@ conflict is a warning and does not stop SQLer from starting.
 
 ## connections.toml
 
-SQLer only reads this file in this version; editing connections in the app arrives in a later release.
-
-```toml
-[[connection]]
-name = "local"
-driver = "sqlite"
-target = "app.db"
-color = "#22aa66"
-environment = "dev"
-```
-
-| Key | Required | Rule |
-| --- | -------- | ---- |
-| `name` | yes | not empty, unique |
-| `driver` | yes | a driver ID such as `sqlite` |
-| `target` | yes | file path or connection string, without a password |
-| `color` | no | `#rrggbb` |
-| `environment` | no | `dev`, `staging` or `prod` |
-
-A target that contains a secret is rejected, and the error does not repeat the target. This covers
-any user part in a `scheme://` URL (`user@` as well as `user:password@`) and any `password`, `pwd`,
-`secret` or `token` `key=value` parameter, in any letter case. Drop the user part from the target;
-user names and passwords are not stored in config files, and the system keychain and connection
-settings arrive in M2.
-
-See [ADR-0005](../adr/0005-config-files-and-keybindings.md) for the design.
+The saved connections, their groups, TLS and SSH settings are described in [Connections](connections.md).
 
 ## Settings tab and themes
 
