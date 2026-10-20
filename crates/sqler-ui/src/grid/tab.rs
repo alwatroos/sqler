@@ -176,6 +176,7 @@ impl GridTab {
         Some(match a {
             GridAction::ScrollToTop => 0,
             GridAction::ScrollToEnd => rows - 1,
+            _ => return None,
         })
     }
 
