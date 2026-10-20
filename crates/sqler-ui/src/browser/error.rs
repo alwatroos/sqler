@@ -35,6 +35,9 @@ pub enum BrowserError {
     /// The job was cancelled.
     #[error("operation cancelled")]
     Cancelled,
+    /// The task that ran the job ended without an answer (it panicked or was dropped).
+    #[error("the background task ended unexpectedly")]
+    JobLost,
 }
 
 impl From<DriverError> for BrowserError {

@@ -14,14 +14,13 @@ use super::WorkspaceView;
 use crate::browser::{BrowserAction, DropDialog};
 
 /// The buttons: Cancel and the confirm button of the current step.
-fn footer(label: Option<&'static str>, cx: &mut Context<WorkspaceView>) -> Div {
+fn footer(label: Option<&'static str>, prod: bool, cx: &mut Context<WorkspaceView>) -> Div {
     let theme = cx.theme();
     let (border, danger, danger_fg) = (theme.border, theme.danger, theme.danger_foreground);
     let mut footer = div().flex().flex_row().justify_end().gap_2().p_4();
     if let Some(label) = label {
         // The production step has its own element id and sits left of Cancel, so the click
         // that passed the first step can not land on it, and a double click is ignored.
-        let prod = label != "Drop";
         let confirm = div()
             .id(if prod {
                 "drop-confirm-prod"
@@ -79,7 +78,7 @@ pub(crate) fn drop_overlay(
     let mono = theme.mono_font_family.clone();
     let code_bg = theme.muted;
 
-    let footer = footer(dialog.confirm_label, cx);
+    let footer = footer(dialog.confirm_label, dialog.prod_step, cx);
 
     Some(
         div()

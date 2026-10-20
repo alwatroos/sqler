@@ -40,6 +40,8 @@ pub struct DropDialog {
     pub sql: String,
     /// The label of the confirm button; `None` while running (no buttons).
     pub confirm_label: Option<&'static str>,
+    /// Whether this is the production step (its button sits apart and has its own id).
+    pub prod_step: bool,
 }
 
 /// One DROP in progress: the object, the statement and the confirmation step.
@@ -141,6 +143,7 @@ impl DropFlow {
             body,
             sql: self.sql.clone(),
             confirm_label,
+            prod_step: self.step == DropStep::ConfirmProd,
         }
     }
 
@@ -277,6 +280,23 @@ mod tests {
         assert_eq!(f.confirm(), None);
         assert_eq!(f.confirm(), None);
         assert_eq!(f.step(), DropStep::Running);
+    }
+
+    #[test]
+    fn prod_step_follows_the_step_not_the_label() {
+        let mut f = flow(true);
+        assert!(!f.dialog().prod_step);
+        let t0 = Instant::now();
+        f.confirm_at(t0);
+        assert_eq!(f.step(), DropStep::ConfirmProd);
+        assert!(f.dialog().prod_step);
+        f.confirm_at(t0 + PROD_GUARD);
+        assert_eq!(f.step(), DropStep::Running);
+        assert!(!f.dialog().prod_step);
+        // A flow on a non-production connection never reaches the production step.
+        let mut dev = flow(false);
+        dev.confirm_at(t0);
+        assert!(!dev.dialog().prod_step);
     }
 
     #[test]

@@ -702,16 +702,18 @@ impl WorkspaceView {
                 .detach();
             }
             Effect::RunJob(job) => {
+                let lost = job.lost();
                 let done = self.bridge.spawn(job.run(self.bridge.connector()));
                 cx.spawn(async move |this, cx| {
-                    if let Ok(result) = done.await {
-                        this.update(cx, |view, cx| {
-                            let effect = view.ws.job_finished(result);
-                            view.apply(effect, cx);
-                            view.settle(cx);
-                        })
-                        .ok();
-                    }
+                    // A panicked task drops the sender; the job still has to end, or a
+                    // DROP overlay would stay up for good.
+                    let result = done.await.unwrap_or(lost);
+                    this.update(cx, |view, cx| {
+                        let effect = view.ws.job_finished(result);
+                        view.apply(effect, cx);
+                        view.settle(cx);
+                    })
+                    .ok();
                 })
                 .detach();
             }

@@ -183,6 +183,27 @@ pub enum BrowserJobResult {
 }
 
 impl BrowserJob {
+    /// The result to report when the task that runs this job is lost (it panicked, or its
+    /// answer channel was dropped), so no tab or dialog waits for it forever.
+    #[must_use]
+    pub fn lost(&self) -> BrowserJobResult {
+        let err = BrowserError::JobLost;
+        match self {
+            Self::Script { tab, .. } => BrowserJobResult::Script {
+                tab: *tab,
+                result: Err(err),
+            },
+            Self::Properties { tab, .. } => BrowserJobResult::Properties {
+                tab: *tab,
+                result: Err(err),
+            },
+            Self::Drop { conn, .. } => BrowserJobResult::Drop {
+                conn: conn.clone(),
+                result: Err(err),
+            },
+        }
+    }
+
     /// Runs the job. Only `Drop` and the `CREATE` of some kinds open a session, through
     /// `connector`; it is closed on every path.
     pub fn run(self, connector: Arc<dyn Connector>) -> BoxFuture<'static, BrowserJobResult> {
@@ -1562,6 +1583,25 @@ mod tests {
         assert_eq!(h.connector.sql(), ["DROP TABLE \"main\".\"users\";\n"]);
         // The parent folder is refreshed afterwards.
         assert_eq!(h.seen.watches.len(), 1);
+    }
+
+    #[test]
+    fn a_lost_drop_job_ends_the_flow_with_a_notice() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        table_row(&mut h);
+        h.click("users", BrowserAction::Entry(MenuEntry::Drop));
+        let effect = h.w.dispatch_browser(BrowserAction::ConfirmDrop);
+        let Effect::RunJob(job) = effect else {
+            panic!("expected the Drop job");
+        };
+        assert!(h.w.drop_dialog().unwrap().confirm_label.is_none());
+        // The task panicked: the view feeds `lost()` back instead of waiting for ever.
+        let next = h.w.job_finished(job.lost());
+        h.apply(next);
+        assert!(h.w.drop_dialog().is_none());
+        let notice = h.w.take_notice().unwrap();
+        assert!(notice.contains("Drop failed"), "{notice}");
+        assert!(notice.contains("unexpectedly"), "{notice}");
     }
 
     #[test]
