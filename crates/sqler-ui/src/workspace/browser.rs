@@ -27,7 +27,7 @@ use crate::browser::{
     generate_script, load_properties, menu_for, open_data, run_drop,
 };
 use crate::connections::{ConnectFailure, ConnectRequest, Connector};
-use crate::grid::{GridSink, GridTab, grid_channel};
+use crate::grid::{GridLimits, GridSink, GridTab, grid_channel_with};
 use crate::sidebar::{RowKind, Selection, SidebarItem, SidebarRow};
 use crate::tabs::{TabId, TabKind};
 
@@ -707,8 +707,9 @@ impl Workspace {
         let Some(tab) = self.open_object_tab(conn, TabKind::Grid, &name) else {
             return Effect::None;
         };
-        let (model, sink) = grid_channel();
-        self.grid_cancels.insert(tab, sink.cancel_flag());
+        let limits = GridLimits::from_settings(self.settings().settings());
+        let (model, sink) = grid_channel_with(limits);
+        self.grid_cancels.insert(tab, sink.canceller());
         Effect::OpenData {
             tab,
             grid: GridTab::new(model),
@@ -1200,6 +1201,7 @@ mod tests {
         copies: Vec<String>,
         watches: Vec<(ConnectionId, u64, TreeNodeId, u64, RefreshHandle)>,
         grids: Vec<(TabId, OpenDataJob)>,
+        models: Vec<crate::grid::GridTab>,
         closed: usize,
         menus: usize,
     }
@@ -1280,7 +1282,10 @@ mod tests {
                     .watches
                     .push((conn, generation, node, run, handle)),
                 Effect::RunJob(job) => self.seen.jobs.push(job),
-                Effect::OpenData { tab, job, .. } => self.seen.grids.push((tab, job)),
+                Effect::OpenData { tab, job, grid } => {
+                    self.seen.grids.push((tab, job));
+                    self.seen.models.push(grid);
+                }
                 Effect::Copy(text) => self.seen.copies.push(text),
                 Effect::CloseSession(session) => {
                     self.seen.closed += 1;
@@ -1486,6 +1491,75 @@ mod tests {
         let tab = h.w.tabs().get(tab).unwrap();
         assert_eq!(tab.kind(), TabKind::Grid);
         assert_eq!(tab.title(), "Results: \"main\".\"users\"");
+    }
+
+    /// Opens a grid on `users`, starts a synthetic ingestion on its sink that outgrows the default
+    /// page, and waits until it is paused. Returns the model so the sink stays connected.
+    fn paused_open_data(
+        h: &mut Harness,
+    ) -> (
+        TabId,
+        crate::grid::GridTab,
+        std::thread::JoinHandle<Result<crate::grid::IngestSummary, sqler_driver_api::DriverError>>,
+    ) {
+        h.open();
+        h.click("Schemas (1)", BrowserAction::Expand);
+        h.click("main", BrowserAction::Expand);
+        h.click("Tables (2)", BrowserAction::Expand);
+        h.click("users", BrowserAction::Entry(MenuEntry::OpenData));
+        let (tab, job) = h.seen.grids.remove(0);
+        let mut grid = h.seen.models.remove(0);
+        let rows = sqler_config::DEFAULT_RESULT_PAGE_ROWS as usize + 50_000;
+        let handle =
+            crate::grid::spawn_ingest(crate::grid::SyntheticSource::new(rows, 2, 1024), job.sink)
+                .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !matches!(grid.state(), crate::grid::IngestState::Paused) {
+            assert!(std::time::Instant::now() < deadline, "never paused");
+            grid.poll(usize::MAX);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        (tab, grid, handle)
+    }
+
+    fn assert_cancelled(
+        mut grid: crate::grid::GridTab,
+        handle: std::thread::JoinHandle<
+            Result<crate::grid::IngestSummary, sqler_driver_api::DriverError>,
+        >,
+    ) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !handle.is_finished() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the paused job stayed parked"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(matches!(
+            handle.join().unwrap(),
+            Err(sqler_driver_api::DriverError::Cancelled)
+        ));
+        grid.poll(usize::MAX);
+        assert_eq!(grid.state(), &crate::grid::IngestState::Cancelled);
+    }
+
+    #[test]
+    fn closing_an_open_data_tab_wakes_its_paused_job() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        let (tab, grid, handle) = paused_open_data(&mut h);
+        // The model stays alive here, so only the stored canceller can end the pause.
+        let effect = h.w.dispatch(WorkspaceAction::CloseTab(tab));
+        h.apply(effect);
+        assert_cancelled(grid, handle);
+    }
+
+    #[test]
+    fn quit_wakes_a_paused_open_data_job() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        let (_tab, grid, handle) = paused_open_data(&mut h);
+        drop(h.w.dispatch(WorkspaceAction::Quit));
+        assert_cancelled(grid, handle);
     }
 
     #[test]

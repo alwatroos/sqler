@@ -16,7 +16,7 @@ use crate::keymap::KeyInput;
 
 /// A cell by model row and model column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CellRef {
+pub struct CellPos {
     /// The model row.
     pub row: usize,
     /// The model column.
@@ -81,15 +81,15 @@ pub struct DisplayMap<'a> {
 impl DisplayMap<'_> {
     /// The cell at a display position.
     #[must_use]
-    pub fn cell_at(&self, display_row: usize, display_col: usize) -> Option<CellRef> {
-        Some(CellRef {
+    pub fn cell_at(&self, display_row: usize, display_col: usize) -> Option<CellPos> {
+        Some(CellPos {
             row: self.rows.model_row(display_row)?,
             col: self.columns.model_column(display_col)?,
         })
     }
 
     /// The display position of a cell.
-    fn position(&self, cell: CellRef) -> Option<(usize, usize)> {
+    fn position(&self, cell: CellPos) -> Option<(usize, usize)> {
         Some((
             self.rows.display_row(cell.row)?,
             self.columns.display_column(cell.col)?,
@@ -134,21 +134,21 @@ pub enum Motion {
 /// The active cell, the anchor of the range and what the range covers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Selection {
-    anchor: Option<CellRef>,
-    active: Option<CellRef>,
+    anchor: Option<CellPos>,
+    active: Option<CellPos>,
     kind: SelectionKind,
 }
 
 impl Selection {
     /// The active cell (the one the keyboard moves).
     #[must_use]
-    pub fn active(&self) -> Option<CellRef> {
+    pub fn active(&self) -> Option<CellPos> {
         self.active
     }
 
     /// The fixed end of the range.
     #[must_use]
-    pub fn anchor(&self) -> Option<CellRef> {
+    pub fn anchor(&self) -> Option<CellPos> {
         self.anchor
     }
 
@@ -159,7 +159,7 @@ impl Selection {
     }
 
     /// Selects one cell, or with `extend` and an anchor extends the range to it.
-    pub fn click(&mut self, cell: CellRef, extend: bool) {
+    pub fn click(&mut self, cell: CellPos, extend: bool) {
         if extend && self.anchor.is_some() {
             self.active = Some(cell);
         } else {
@@ -176,7 +176,7 @@ impl Selection {
             && self.anchor.is_some()
             && let Some(c) = self.active
         {
-            self.active = Some(CellRef {
+            self.active = Some(CellPos {
                 row: c.row,
                 col: model_col,
             });
@@ -190,7 +190,7 @@ impl Selection {
                 None => return,
             },
         };
-        let cell = CellRef {
+        let cell = CellPos {
             row,
             col: model_col,
         };
@@ -376,8 +376,8 @@ mod tests {
         }
     }
 
-    fn cell(row: usize, col: usize) -> CellRef {
-        CellRef { row, col }
+    fn cell(row: usize, col: usize) -> CellPos {
+        CellPos { row, col }
     }
 
     fn key(mods: &str, key: &str) -> KeyInput {

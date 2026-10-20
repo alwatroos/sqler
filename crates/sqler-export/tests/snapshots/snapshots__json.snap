@@ -1,0 +1,43 @@
+---
+source: crates/sqler-export/tests/snapshots.rs
+expression: "render(&JsonFormat, &ExportOptions::default())"
+---
+[
+{"label":"null","value":null,"value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"true","value":true,"value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"false","value":false,"value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"int zero","value":0,"value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"int min","value":-9223372036854775808,"value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"int max","value":9223372036854775807,"value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"float","value":1.5,"value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"float neg zero","value":-0.0,"value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"float large","value":1e+300,"value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"float nan","value":"NaN","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"float +inf","value":"Infinity","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"float -inf","value":"-Infinity","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text empty","value":"","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text plain","value":"plain","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text quote","value":"it's","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text dquote","value":"say \"hi\"","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text backslash","value":"back\\slash","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text pipe","value":"a|b","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text comma","value":"a,b","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text crlf","value":"line1\r\nline2","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text lf","value":"line1\nline2","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text nul","value":"nul\u0000byte","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text unicode","value":"héllo 名前","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text comment","value":"x'; DROP TABLE t; --","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text formula","value":"=1+1","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"text null word","value":"NULL","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"bytes empty","value":"0x","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"bytes","value":"0x00abff","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"decimal","value":"-12.50","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"date","value":"2024-01-02","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"date far","value":"+12345-06-07","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"date neg","value":"-0044-03-15","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"time","value":"03:04:05.123456789","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"timestamp","value":"2024-01-02 03:04:05","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"timestamptz","value":"2024-01-02 03:04:05-08:30","value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"json ok","value":{"a": [1, 2, {"b": null}]},"value_2":null,"odd \"name\" `x` | ,":"x"},
+{"label":"json bad","value":"{not json","value_2":null,"odd \"name\" `x` | ,":"x"}
+]

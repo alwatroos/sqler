@@ -39,6 +39,8 @@ pub enum GridAction {
     AutofitColumn,
     /// Restore column order, widths and pinning.
     ResetLayout,
+    /// Load the next page of a result that stopped at its page limit.
+    FetchMore,
 }
 
 const fn mv(to: Motion) -> GridAction {
@@ -51,7 +53,7 @@ const fn ext(to: Motion) -> GridAction {
 
 impl GridAction {
     /// Every action, in palette order.
-    pub const ALL: [GridAction; 31] = [
+    pub const ALL: [GridAction; 32] = [
         Self::ScrollToTop,
         Self::ScrollToEnd,
         mv(Motion::Up),
@@ -83,6 +85,7 @@ impl GridAction {
         Self::MoveColumnRight,
         Self::AutofitColumn,
         Self::ResetLayout,
+        Self::FetchMore,
     ];
 
     /// The ID string of the command this action runs.
@@ -123,6 +126,7 @@ impl GridAction {
             Self::MoveColumnRight => "grid:move-column-right",
             Self::AutofitColumn => "grid:autofit-column",
             Self::ResetLayout => "grid:reset-layout",
+            Self::FetchMore => "grid:fetch-more",
         }
     }
 
@@ -165,6 +169,7 @@ impl GridAction {
             Self::MoveColumnRight => "Results: Move Column Right",
             Self::AutofitColumn => "Results: Autofit Column",
             Self::ResetLayout => "Results: Reset Column Layout",
+            Self::FetchMore => "Fetch More Rows",
         }
     }
 
@@ -212,7 +217,7 @@ mod tests {
             assert!(id.to_string().starts_with("grid:"), "{a:?}");
             assert!(seen.insert(id), "duplicate ID for {a:?}");
         }
-        assert_eq!(seen.len(), 31);
+        assert_eq!(seen.len(), 32);
     }
 
     #[test]
@@ -242,6 +247,10 @@ mod tests {
         assert_eq!(
             GridAction::ScrollToEnd.command_id().to_string(),
             "grid:scroll-to-end"
+        );
+        assert_eq!(
+            GridAction::FetchMore.command_id().to_string(),
+            "grid:fetch-more"
         );
         assert_eq!(
             GridAction::PinColumn.command_id().to_string(),

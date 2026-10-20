@@ -11,7 +11,7 @@ use std::ops::Range;
 use super::action::GridAction;
 use super::cell::ColumnHeader;
 use super::layout::{ColumnLayout, default_width};
-use super::selection::{CellRef, DisplayMap, IdentityRows, Selection, scroll_row};
+use super::selection::{CellPos, DisplayMap, IdentityRows, Selection, scroll_row};
 
 /// What the view has to do after an action. Columns are display indices.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -110,7 +110,7 @@ impl GridControls {
             | GridAction::UnpinColumn
             | GridAction::MoveColumnLeft
             | GridAction::MoveColumnRight => {
-                if let Some(CellRef { col, .. }) = self.selection.active() {
+                if let Some(CellPos { col, .. }) = self.selection.active() {
                     let changed = match a {
                         GridAction::PinColumn => self.layout.pin(col),
                         GridAction::UnpinColumn => self.layout.unpin(col),
@@ -127,6 +127,8 @@ impl GridControls {
                 out.relayout = true;
                 out.repaint = true;
             }
+            // Handled by the tab: it owns the model and the fetch.
+            GridAction::FetchMore => {}
         }
         out
     }
@@ -276,7 +278,7 @@ mod tests {
         );
         // Page down from row 1: page = 9, lands on row 10, just below the view.
         let a = c.apply(mv(Motion::PageDown), 100, 0..10);
-        assert_eq!(c.selection().active(), Some(CellRef { row: 10, col: 0 }));
+        assert_eq!(c.selection().active(), Some(CellPos { row: 10, col: 0 }));
         assert_eq!(a.scroll_row, Some(1));
         assert!(a.repaint);
         // Up above the view scrolls to the row itself.
@@ -307,7 +309,7 @@ mod tests {
     fn move_without_an_active_cell_starts_at_the_origin() {
         let mut c = controls(3);
         let a = c.apply(mv(Motion::Down), 10, 0..5);
-        assert_eq!(c.selection().active(), Some(CellRef { row: 1, col: 0 }));
+        assert_eq!(c.selection().active(), Some(CellPos { row: 1, col: 0 }));
         assert!(a.repaint);
         assert_eq!(a.scroll_col, Some(0));
         let mut empty = controls(3);
@@ -390,7 +392,7 @@ mod tests {
         assert_eq!(c.layout().display_column(2), Some(0));
         assert_eq!(
             c.selection().active(),
-            Some(CellRef { row: 0, col: 2 }),
+            Some(CellPos { row: 0, col: 2 }),
             "model cell kept"
         );
     }
@@ -452,7 +454,7 @@ mod tests {
         let mut c = controls(3);
         assert!(c.move_display(2, 0)); // display: model 2, 0, 1
         assert!(c.click_cell(0, 0, 5, false));
-        assert_eq!(c.selection().active(), Some(CellRef { row: 0, col: 2 }));
+        assert_eq!(c.selection().active(), Some(CellPos { row: 0, col: 2 }));
         assert!(c.click_header(1, 5, false));
         assert_eq!(c.selection().active().map(|a| a.col), Some(0));
         assert!(!c.move_display(1, 1));

@@ -53,7 +53,7 @@ pub(crate) mod view;
 
 pub use action::{COMMANDS, QueryCommand, action_for, register_commands};
 pub use buffer::{BufferSnapshot, RunMode};
-pub use job::{QueryJob, QueryJobDone};
+pub use job::{QueryJob, QueryJobDone, RunStop};
 pub use params::{
     BoundStatement, ParamError, ParamForm, ParamInput, ParamKey, ParamKind, ParamRow, bind,
     parse_value,

@@ -17,6 +17,9 @@
 //! [`split()`] a script into statements with exact byte ranges, find the [`statement_at`] a
 //! cursor offset, find parameter [`placeholders`], [`classify()`] statements as read, write,
 //! DDL or unknown (anything not proven read-only is not read) and [`format()`] SQL.
+//!
+//! [`sql_literal`] renders a `sqler-core` value as a SQL literal that cannot end its string, and
+//! the lexer is public ([`tokenize`], [`Token`], [`TokenKind`]) so callers can re-lex generated SQL.
 
 #![forbid(unsafe_code)]
 
@@ -34,8 +37,11 @@ pub use ddl::{
     DEFAULT_ROW_LIMIT, Script, create_script, create_table, drop_script, insert_template,
     select_star, supports,
 };
-pub use dialect::{Dialect, qualified_name, quote_identifier};
+pub use dialect::{
+    Dialect, push_literal, qualified_name, quote_identifier, sql_literal, string_literal,
+};
 pub use error::{DdlError, FormatError};
 pub use format::{FormatOptions, format};
+pub use lexer::{Token, TokenKind, tokenize};
 pub use placeholder::{Placeholder, PlaceholderKind, placeholders};
 pub use split::{Segment, SegmentKind, split, statement_at};

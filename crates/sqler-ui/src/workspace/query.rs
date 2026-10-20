@@ -9,16 +9,16 @@
 //! decisions (parameter prompt, production confirmation, event bookkeeping) live in
 //! [`QueryTab`].
 
+use sqler_driver_api::CancelHandle;
 use sqler_driver_api::sqler_core::Environment;
-use sqler_driver_api::{CancelFlag, CancelHandle};
 use sqler_sql::Dialect;
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::state::{Effect, Workspace};
-use crate::grid::{GridTab, grid_channel};
+use crate::grid::{GridLimits, GridTab, grid_channel_with};
 use crate::query::{
     BoundStatement, BufferSnapshot, ParamInput, ParamKind, Phase, QueryJob, QueryJobDone, QueryTab,
-    RunError, RunEvent, RunId, RunMode, Step, plan,
+    RunError, RunEvent, RunId, RunMode, RunStop, Step, plan,
 };
 use crate::tabs::{TabId, TabKind};
 
@@ -26,17 +26,14 @@ use crate::tabs::{TabId, TabKind};
 pub(super) struct ActiveRun {
     run: RunId,
     handle: CancelHandle,
-    stop: CancelFlag,
-    sinks: Vec<CancelFlag>,
+    stop: RunStop,
 }
 
 impl ActiveRun {
-    /// Stops the run between statements and ends the ingestion of every grid.
+    /// Stops the run between statements and ends the ingestion of every grid, waking one that is
+    /// paused on a full page.
     fn raise_flags(&self) {
         self.stop.cancel();
-        for flag in &self.sinks {
-            flag.cancel();
-        }
     }
 }
 
@@ -146,21 +143,18 @@ impl Workspace {
         };
         let run = RunId::new(self.next_run);
         self.next_run += 1;
+        let limits = GridLimits::from_settings(self.settings().settings());
         let mut sinks = Vec::with_capacity(statements.len());
         let mut grids = Vec::with_capacity(statements.len());
         for _ in statements {
-            let (model, sink) = grid_channel();
+            let (model, sink) = grid_channel_with(limits);
             grids.push(GridTab::new(model));
             sinks.push(sink);
         }
         let active = ActiveRun {
             run,
             handle: session.cancel_handle(),
-            stop: CancelFlag::new(),
-            sinks: sinks
-                .iter()
-                .map(crate::grid::GridSink::cancel_flag)
-                .collect(),
+            stop: RunStop::new(&sinks),
         };
         let (events, receiver) = unbounded_channel();
         let job = QueryJob {
@@ -498,5 +492,40 @@ mod tests {
         assert_eq!(*w.query_tab(tab).unwrap().phase(), Phase::Idle);
         assert!(w.take_notice().is_some());
         assert!(!w.has_session(tab));
+    }
+
+    #[test]
+    fn cancel_wakes_a_paused_job_and_the_page_comes_from_settings() {
+        use crate::grid::{IngestState, SyntheticSource, spawn_ingest};
+        use crate::settings::SettingsModel;
+
+        let dir = std::env::temp_dir().join(format!("sqler-ui-query-page-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.toml"), "result_page_rows = 1000\n").unwrap();
+        let settings = SettingsModel::load(Ok(sqler_config::ConfigDir::new(&dir)));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(settings.settings().result_page_rows, 1000);
+
+        let mut w = ws().with_settings(settings);
+        let (tab, _) = open(&mut w, 0);
+        let (mut job, mut grids) = start(&mut w, tab, "select 1");
+        // Feed the sink with a source bigger than one page, on its own thread.
+        let sink = job.sinks.remove(0);
+        let handle = spawn_ingest(SyntheticSource::new(5_000, 2, 256), sink).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !matches!(grids[0].state(), IngestState::Paused) {
+            assert!(std::time::Instant::now() < deadline, "never paused");
+            grids[0].poll(usize::MAX);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(grids[0].row_count(), 1000);
+        assert!(!handle.is_finished());
+        // Cancel raises the GridCancel, which wakes the paused ingestion.
+        assert!(matches!(w.cancel_query(tab), Effect::CancelQuery(_)));
+        assert!(matches!(
+            handle.join().unwrap(),
+            Err(sqler_driver_api::DriverError::Cancelled)
+        ));
     }
 }

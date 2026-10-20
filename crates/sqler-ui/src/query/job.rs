@@ -10,7 +10,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::params::BoundStatement;
 use super::run::{RunEvent, RunId};
-use crate::grid::{GridSink, ingest};
+use crate::grid::{GridCancel, GridSink, ingest};
 use crate::tabs::TabId;
 
 /// Runs the statements of one run, in order, on the session lent to it.
@@ -27,8 +27,8 @@ pub struct QueryJob {
     pub statements: Vec<BoundStatement>,
     /// The grid sink of each statement.
     pub sinks: Vec<GridSink>,
-    /// Set to stop the run before the next statement starts.
-    pub stop: CancelFlag,
+    /// Set to stop the run; it also wakes a statement paused on a full page.
+    pub stop: RunStop,
     /// Where progress is reported; a closed receiver is ignored.
     pub events: UnboundedSender<RunEvent>,
 }
@@ -62,6 +62,43 @@ impl std::fmt::Debug for QueryJobDone {
     }
 }
 
+/// The stop switch of a run: one flag for the job plus the cancellers of its grid sinks.
+///
+/// [`RunStop::cancel`] sets the flag and cancels every sink, which wakes an ingestion that is
+/// paused on a full page. No path that stops a run can leave a paused job parked. Cloneable; all
+/// clones share the flag.
+#[derive(Debug, Clone, Default)]
+pub struct RunStop {
+    flag: CancelFlag,
+    sinks: Vec<GridCancel>,
+}
+
+impl RunStop {
+    /// A switch that also cancels (and wakes) each of `sinks`.
+    #[must_use]
+    pub fn new(sinks: &[GridSink]) -> Self {
+        Self {
+            flag: CancelFlag::new(),
+            sinks: sinks.iter().map(GridSink::canceller).collect(),
+        }
+    }
+
+    /// Stops the run before the next statement and ends every grid's ingestion, waking a paused
+    /// one.
+    pub fn cancel(&self) {
+        self.flag.cancel();
+        for sink in &self.sinks {
+            sink.cancel();
+        }
+    }
+
+    /// Whether [`RunStop::cancel`] was called on this switch or a clone.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.flag.is_cancelled()
+    }
+}
+
 /// A stream that fails at once; it tells a grid sink why no rows will come.
 struct FailedStream(Option<DriverError>);
 
@@ -87,6 +124,11 @@ impl QueryJob {
     /// follows success; a cancellation reports `Cancelled` and stops; any other error reports
     /// `Failed` (the sink gets it too) and stops. The sinks of statements that did not run are
     /// dropped. The session is always returned; the job never panics.
+    ///
+    /// A statement whose grid fills its page pauses inside `ingest` and holds the run, and the
+    /// session, until the user fetches more rows, cancels, or drops the grid model (each ends
+    /// the pause). In a script the later statements stay pending meanwhile; a cancel or a dropped
+    /// model ends the run at that statement.
     pub fn run(self) -> BoxFuture<'static, QueryJobDone> {
         Box::pin(async move {
             let Self {

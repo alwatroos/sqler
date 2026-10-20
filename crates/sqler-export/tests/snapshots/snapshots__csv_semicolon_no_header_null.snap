@@ -1,0 +1,43 @@
+---
+source: crates/sqler-export/tests/snapshots.rs
+expression: "render(&CsvFormat, &o)"
+---
+null;NULL;NULL;x
+true;true;NULL;x
+false;false;NULL;x
+int zero;0;NULL;x
+int min;-9223372036854775808;NULL;x
+int max;9223372036854775807;NULL;x
+float;1.5;NULL;x
+float neg zero;-0;NULL;x
+float large;1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000;NULL;x
+float nan;NaN;NULL;x
+float +inf;Infinity;NULL;x
+float -inf;-Infinity;NULL;x
+text empty;;NULL;x
+text plain;plain;NULL;x
+text quote;it's;NULL;x
+text dquote;"say ""hi""";NULL;x
+text backslash;back\slash;NULL;x
+text pipe;a|b;NULL;x
+text comma;a,b;NULL;x
+text crlf;"line1<CR>
+line2";NULL;x
+text lf;"line1
+line2";NULL;x
+text nul;nul<NUL>byte;NULL;x
+text unicode;héllo 名前;NULL;x
+text comment;"x'; DROP TABLE t; --";NULL;x
+text formula;=1+1;NULL;x
+text null word;"NULL";NULL;x
+bytes empty;0x;NULL;x
+bytes;0x00abff;NULL;x
+decimal;-12.50;NULL;x
+date;2024-01-02;NULL;x
+date far;+12345-06-07;NULL;x
+date neg;-0044-03-15;NULL;x
+time;03:04:05.123456789;NULL;x
+timestamp;2024-01-02 03:04:05;NULL;x
+timestamptz;2024-01-02 03:04:05-08:30;NULL;x
+json ok;"{""a"": [1, 2, {""b"": null}]}";NULL;x
+json bad;{not json;NULL;x

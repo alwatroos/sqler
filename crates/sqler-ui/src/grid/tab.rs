@@ -5,12 +5,13 @@
 
 use std::ops::Range;
 
-use sqler_driver_api::CancelFlag;
-
 use super::action::GridAction;
 use super::cell::{self, ColumnHeader, group_thousands};
 use super::stats::RenderStats;
-use super::{GridModel, IngestState, SyntheticSource, grid_channel, spawn_ingest};
+use super::{
+    GridCancel, GridLimits, GridModel, IngestState, SyntheticSource, grid_channel_with,
+    spawn_ingest,
+};
 
 /// Rows of the synthetic result opened by `dev:open-synthetic-grid`.
 pub const SYNTHETIC_ROWS: usize = 1_000_000;
@@ -56,11 +57,12 @@ impl GridTab {
     }
 
     /// A tab fed by a [`SyntheticSource`] on its own ingestion thread, plus the flag that cancels
-    /// it. If the thread cannot start, the sink is dropped and the tab ends up `Failed`.
+    /// it. The synthetic result is unbounded (the dev probe waits for `Done`). If the thread cannot
+    /// start, the sink is dropped and the tab ends up `Failed`.
     #[must_use]
-    pub fn spawn_synthetic(rows: usize, columns: usize, batch: usize) -> (Self, CancelFlag) {
-        let (model, sink) = grid_channel();
-        let cancel = sink.cancel_flag();
+    pub fn spawn_synthetic(rows: usize, columns: usize, batch: usize) -> (Self, GridCancel) {
+        let (model, sink) = grid_channel_with(GridLimits::UNBOUNDED);
+        let cancel = sink.canceller();
         // On error the closure's sink is already dropped, so the model reports `Failed`.
         drop(spawn_ingest(
             SyntheticSource::new(rows, columns, batch),
@@ -88,7 +90,7 @@ impl GridTab {
             rows_changed: self.model.row_count() != rows_before,
             terminal: !matches!(
                 self.model.state(),
-                IngestState::Waiting | IngestState::Streaming
+                IngestState::Waiting | IngestState::Streaming | IngestState::Paused
             ),
         }
     }
@@ -122,8 +124,8 @@ impl GridTab {
     pub fn cell_text(&self, row: usize, col: usize) -> String {
         self.model
             .row(row)
-            .and_then(|r| r.0.get(col))
-            .map(cell::cell_text)
+            .and_then(|r| r.get(col))
+            .map(|c| cell::cell_text(&c))
             .unwrap_or_default()
     }
 
@@ -145,6 +147,7 @@ impl GridTab {
         match self.model.state() {
             IngestState::Waiting => "Waiting for columns…".to_owned(),
             IngestState::Streaming => format!("Loading… {n} rows"),
+            IngestState::Paused => format!("{n} rows loaded; more rows available"),
             IngestState::Cancelled => format!("{n} rows (loading cancelled)"),
             IngestState::Failed(m) => format!("{n} rows (failed: {m})"),
             _ => format!("{n} rows"),
@@ -166,7 +169,7 @@ impl GridTab {
         ))
     }
 
-    /// The row an action scrolls to; `None` when there are no rows.
+    /// The row an action scrolls to; `None` when there are no rows or the action does not scroll.
     #[must_use]
     pub fn jump_target(&self, a: GridAction) -> Option<usize> {
         let rows = self.row_count();
@@ -184,6 +187,11 @@ impl GridTab {
     #[must_use]
     pub fn heap_bytes(&self) -> usize {
         self.model.heap_bytes()
+    }
+
+    /// Loads the next page of a paused result; `false` when nothing is paused.
+    pub fn fetch_more(&mut self) -> bool {
+        self.model.fetch_more()
     }
 
     /// Cancels ingestion.
@@ -207,6 +215,7 @@ impl GridTab {
 mod tests {
     use std::time::{Duration, Instant};
 
+    use super::super::grid_channel;
     use super::super::viewport::{ROW_HEIGHT_PX, ScrollViewport};
     use super::*;
 
@@ -317,6 +326,7 @@ mod tests {
         assert_eq!(tab.range_text(), None);
         assert_eq!(tab.jump_target(GridAction::ScrollToTop), Some(0));
         assert_eq!(tab.jump_target(GridAction::ScrollToEnd), Some(2_499));
+        assert_eq!(tab.jump_target(GridAction::FetchMore), None);
     }
 
     #[test]
@@ -330,6 +340,51 @@ mod tests {
             tab.status_text(),
             "0 rows (failed: ingestion ended unexpectedly)"
         );
+    }
+
+    #[test]
+    fn paused_status_text_and_fetch_more() {
+        let (model, sink) = grid_channel_with(GridLimits::rows(1_000));
+        let mut tab = GridTab::new(model);
+        let handle = spawn_ingest(SyntheticSource::new(2_500, 3, 256), sink).unwrap();
+        let start = Instant::now();
+        while !matches!(tab.state(), IngestState::Paused) {
+            assert!(start.elapsed() < Duration::from_secs(20), "never paused");
+            tab.poll(POLL_BUDGET);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(tab.row_count(), 1_000);
+        assert_eq!(tab.status_text(), "1,000 rows loaded; more rows available");
+        assert!(!tab.poll(POLL_BUDGET).terminal);
+        assert!(tab.fetch_more());
+        assert!(!tab.fetch_more());
+        assert_eq!(tab.status_text(), "Loading… 1,000 rows");
+        while !matches!(tab.state(), IngestState::Paused) {
+            assert!(start.elapsed() < Duration::from_secs(20), "never paused");
+            tab.poll(POLL_BUDGET);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(tab.row_count(), 2_000);
+        assert!(tab.fetch_more());
+        wait_done(&mut tab);
+        assert_eq!(tab.row_count(), 2_500);
+        assert_eq!(tab.status_text(), "2,500 rows");
+        assert!(!tab.fetch_more());
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn synthetic_tab_never_pauses() {
+        // Larger than the default page.
+        let (mut tab, _) = GridTab::spawn_synthetic(150_000, 2, 1024);
+        let start = Instant::now();
+        while !matches!(tab.state(), IngestState::Done { .. }) {
+            assert!(start.elapsed() < Duration::from_secs(60), "ingest stalled");
+            assert!(!matches!(tab.state(), IngestState::Paused));
+            tab.poll(POLL_BUDGET);
+            std::thread::sleep(Duration::from_micros(100));
+        }
+        assert_eq!(tab.row_count(), 150_000);
     }
 
     #[test]
