@@ -18,3 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sqler-driver-api`: `Driver`, `Session`, `QueryStream` and introspection API with cancellation, plus `DriverRegistry`.
 - ADR-0004 (driver API) and the core and driver API architecture page.
 - `thiserror` dependency for typed library errors.
+- GitHub Actions CI on Linux, macOS and Windows: `cargo fmt`, `cargo clippy -D warnings` and `cargo nextest`.
+- `cargo-deny` license policy (`deny.toml`, Apache-2.0-compatible allow-list), checked in CI.
+- CI docs build (`cargo doc` with `-D warnings`, `mdbook build docs`) and an SPDX header check for Rust files.
+- GitHub Pages workflow that publishes the mdBook from `main`.
