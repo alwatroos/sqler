@@ -123,7 +123,7 @@ impl UrlTarget {
     /// (key `sslmode` or `ssl-mode`, value `verify-full` or `verify_identity`, in any driver,
     /// case-insensitive, also percent-encoded).
     pub(crate) fn wants_verify_full(&self) -> bool {
-        query_pairs(&self.rest).any(|(key, value)| {
+        query_pairs(&self.rest, decode_query).any(|(key, value)| {
             let key = key.to_ascii_lowercase();
             let value = value.to_ascii_lowercase();
             matches!(key.as_str(), "sslmode" | "ssl-mode")
@@ -148,7 +148,7 @@ impl UrlTarget {
             &["sslca", "ssl-ca"]
         };
         let last = |keys: &[&str]| {
-            query_pairs(&self.rest)
+            query_pairs(&self.rest, decode_query)
                 .filter(|(key, _)| keys.contains(&key.as_str()))
                 .last()
                 .map(|(_, value)| value)
@@ -172,7 +172,7 @@ impl UrlTarget {
     /// already in the userinfo wins; a `user` parameter is dropped from the query either way. A
     /// target that names no user is returned unchanged.
     pub(crate) fn with_query_user(mut self) -> Self {
-        let from_query = query_pairs(&self.rest)
+        let from_query = query_pairs(&self.rest, decode)
             .find(|(key, _)| key.eq_ignore_ascii_case("user"))
             .map(|(_, value)| value)
             .filter(|value| !value.is_empty());
@@ -261,14 +261,18 @@ fn split_host_port(hostport: &str) -> Result<(String, Option<u16>), ConnectFailu
     Ok((host.to_owned(), port))
 }
 
-/// The `key=value` pairs of the query in `rest` (values percent-decoded).
-fn query_pairs(rest: &str) -> impl Iterator<Item = (String, String)> + '_ {
+/// The `key=value` pairs of the query in `rest`, keys and values run through `decoder`: plain
+/// [`decode`] or the form-decoding [`decode_query`] (only the TLS keys sqlx form-decodes).
+fn query_pairs(
+    rest: &str,
+    decoder: fn(&str) -> String,
+) -> impl Iterator<Item = (String, String)> + '_ {
     let query = rest
         .split_once('?')
         .map_or("", |(_, q)| q.split('#').next().unwrap_or(""));
-    query.split('&').filter(|p| !p.is_empty()).map(|pair| {
+    query.split('&').filter(|p| !p.is_empty()).map(move |pair| {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        (decode_query(key), decode_query(value))
+        (decoder(key), decoder(value))
     })
 }
 
@@ -546,6 +550,14 @@ mod tests {
             parse("postgres://h/d?sslrootcert=/a+b/ca.pem&sslcert=/c%2Bd.pem").tls_from_query();
         assert_eq!(tls.ca_cert, Some("/a b/ca.pem".into()));
         assert_eq!(tls.client_cert, Some("/c+d.pem".into()));
+    }
+
+    #[test]
+    fn query_user_keeps_plus_literal_and_decodes_percent_2b() {
+        let t = parse("mysql://db/app?user=ci+bot").with_query_user();
+        assert_eq!(t.render(), "mysql://ci%2Bbot@db/app");
+        let t = parse("mysql://db/app?user=ci%2Bbot").with_query_user();
+        assert_eq!(t.render(), "mysql://ci%2Bbot@db/app");
     }
 
     #[test]
