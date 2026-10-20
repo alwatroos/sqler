@@ -30,3 +30,4 @@ consequences. SQLer uses the MADR format.
 | [0019](0019-tls-server-name-through-tunnel.md) | TLS server name through a tunnel: `TlsConfig::server_name`, local Unix-socket bridge | accepted |
 | [0021](0021-query-history-and-saved-queries.md) | Query history and saved queries: JSON Lines history, versioned TOML saved queries | accepted |
 | [0022](0022-catalog-snapshot-name-index.md) | Catalog snapshot, name index and on-demand column loading | accepted |
+| [0023](0023-completion-engine.md) | Completion engine: own lexer, schema source trait, ranking | accepted |

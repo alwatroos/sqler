@@ -1,0 +1,14 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT x.| FROM nothing_here x\", 6)"
+---
+sql: SELECT x.| FROM nothing_here x
+
+== postgres ==
+context: Qualified, replace: 9..9 "", items: 0
+
+== mysql ==
+context: Qualified, replace: 9..9 "", items: 0
+
+== sqlite ==
+context: Qualified, replace: 9..9 "", items: 0

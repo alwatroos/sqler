@@ -1,0 +1,38 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT * FROM users u JOIN |\", 8)"
+---
+sql: SELECT * FROM users u JOIN |
+
+== postgres ==
+context: Relation, replace: 27..27 "", items: 12
+ 1. "users" [Table] insert="users" detail="public · table"
+ 2. "orders" [Table] insert="orders" detail="public · table"
+ 3. "pending" [Table] insert="pending" detail="public · table"
+ 4. "Order Items" [Table] insert="\"Order Items\"" detail="public · table"
+ 5. "order_items" [Table] insert="order_items" detail="public · table"
+ 6. "active_users" [View] insert="active_users" detail="public · view"
+ 7. "audit" [Schema] insert="audit" detail="schema"
+ 8. "public" [Schema] insert="public" detail="schema"
+
+== mysql ==
+context: Relation, replace: 27..27 "", items: 12
+ 1. "users" [Table] insert="users" detail="shop · table"
+ 2. "orders" [Table] insert="orders" detail="shop · table"
+ 3. "pending" [Table] insert="pending" detail="shop · table"
+ 4. "Order Items" [Table] insert="`Order Items`" detail="shop · table"
+ 5. "order_items" [Table] insert="order_items" detail="shop · table"
+ 6. "active_users" [View] insert="active_users" detail="shop · view"
+ 7. "shop" [Schema] insert="shop" detail="schema"
+ 8. "audit" [Schema] insert="audit" detail="schema"
+
+== sqlite ==
+context: Relation, replace: 27..27 "", items: 12
+ 1. "users" [Table] insert="users" detail="main · table"
+ 2. "orders" [Table] insert="orders" detail="main · table"
+ 3. "pending" [Table] insert="pending" detail="main · table"
+ 4. "Order Items" [Table] insert="\"Order Items\"" detail="main · table"
+ 5. "order_items" [Table] insert="order_items" detail="main · table"
+ 6. "active_users" [View] insert="active_users" detail="main · view"
+ 7. "main" [Schema] insert="main" detail="schema"
+ 8. "audit" [Schema] insert="audit" detail="schema"

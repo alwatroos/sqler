@@ -1,0 +1,20 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"upd|\", 6)"
+---
+sql: upd|
+
+== postgres ==
+context: StatementStart, replace: 0..3 "upd", items: 2
+ 1. "upd" [Snippet] insert="update ${1:table}\nset ${2:column} = ${3:value}\nwhere ${4:condition}$0" snippet detail="UPDATE ... SET ... WHERE"
+ 2. "update" [Keyword] insert="update" detail="-"
+
+== mysql ==
+context: StatementStart, replace: 0..3 "upd", items: 2
+ 1. "upd" [Snippet] insert="update ${1:table}\nset ${2:column} = ${3:value}\nwhere ${4:condition}$0" snippet detail="UPDATE ... SET ... WHERE"
+ 2. "update" [Keyword] insert="update" detail="-"
+
+== sqlite ==
+context: StatementStart, replace: 0..3 "upd", items: 2
+ 1. "upd" [Snippet] insert="update ${1:table}\nset ${2:column} = ${3:value}\nwhere ${4:condition}$0" snippet detail="UPDATE ... SET ... WHERE"
+ 2. "update" [Keyword] insert="update" detail="-"

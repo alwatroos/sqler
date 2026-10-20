@@ -1,0 +1,20 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT oi.| FROM {q}Order Items{q} oi\", 6)"
+---
+sql: SELECT oi.| FROM "Order Items" oi
+
+== postgres ==
+context: Qualified, replace: 10..10 "", items: 2
+ 1. "Label" [Column] insert="\"Label\"" detail="oi · text"
+ 2. "Item Id" [Column] insert="\"Item Id\"" detail="oi · integer"
+
+== mysql ==
+context: Qualified, replace: 10..10 "", items: 2
+ 1. "Label" [Column] insert="Label" detail="oi · text"
+ 2. "Item Id" [Column] insert="`Item Id`" detail="oi · integer"
+
+== sqlite ==
+context: Qualified, replace: 10..10 "", items: 2
+ 1. "Label" [Column] insert="Label" detail="oi · text"
+ 2. "Item Id" [Column] insert="\"Item Id\"" detail="oi · integer"

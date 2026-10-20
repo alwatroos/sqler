@@ -18,6 +18,7 @@ Pages:
 
 - [Core and driver API](core-and-driver-api.md): domain types, the `Driver` and `Introspect` traits
 - [Catalog](catalog.md): the lazy schema cache and its background refresh
+- [Completion](completion.md): the pure intellisense engine and its `SchemaSource`
 - [UI](ui.md): workspace state, the tokio bridge, the connect pipeline and the object browser
 
 Planned topics:

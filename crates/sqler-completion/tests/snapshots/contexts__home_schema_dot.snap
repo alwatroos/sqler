@@ -1,0 +1,20 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT * FROM public.|\", 10)"
+---
+sql: SELECT * FROM public.|
+
+== postgres ==
+context: Qualified, replace: 21..21 "", items: 6
+ 1. "users" [Table] insert="users" detail="public · table"
+ 2. "orders" [Table] insert="orders" detail="public · table"
+ 3. "pending" [Table] insert="pending" detail="public · table"
+ 4. "Order Items" [Table] insert="\"Order Items\"" detail="public · table"
+ 5. "order_items" [Table] insert="order_items" detail="public · table"
+ 6. "active_users" [View] insert="active_users" detail="public · view"
+
+== mysql ==
+context: Qualified, replace: 21..21 "", items: 0
+
+== sqlite ==
+context: Qualified, replace: 21..21 "", items: 0

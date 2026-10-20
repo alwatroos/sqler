@@ -1,0 +1,6 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: out
+---
+context: Qualified, replace: 9..9 "", items: 1
+ 1. "tenant_col" [Column] insert="tenant_col" detail="t · Text"

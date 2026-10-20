@@ -1,0 +1,21 @@
+---
+source: crates/sqler-completion/tests/contexts.rs
+expression: "render(\"SELECT * FROM orders WHERE created_at > no|\", 6)"
+---
+sql: SELECT * FROM orders WHERE created_at > no|
+
+== postgres ==
+context: Expression, replace: 40..42 "no", items: 3
+ 1. "now" [Function] insert="now()" detail="now() -> timestamptz"
+ 2. "not" [Keyword] insert="not" detail="-"
+ 3. "nothing" [Keyword] insert="nothing" detail="-"
+
+== mysql ==
+context: Expression, replace: 40..42 "no", items: 2
+ 1. "now" [Function] insert="now()" detail="now() -> datetime"
+ 2. "not" [Keyword] insert="not" detail="-"
+
+== sqlite ==
+context: Expression, replace: 40..42 "no", items: 2
+ 1. "not" [Keyword] insert="not" detail="-"
+ 2. "nothing" [Keyword] insert="nothing" detail="-"
