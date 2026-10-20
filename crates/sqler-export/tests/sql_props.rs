@@ -2,13 +2,13 @@
 // SPDX-FileCopyrightText: The SQLer Authors
 
 //! AC4: a rendered `INSERT` re-lexes with the `sqler-sql` lexer into the expected tokens, for
-//! arbitrary text including quotes, backslashes and NUL, and every literal decodes back to the
-//! input.
+//! arbitrary text including quotes, backslashes and NUL, for floats (finite, NaN, infinities,
+//! negative zero), decimals and temporals, and every literal decodes back to the input.
 
 use std::num::NonZeroUsize;
 
 use proptest::prelude::*;
-use sqler_core::{Column, DataType, Row, Value};
+use sqler_core::{Column, DataType, Date, Decimal, Row, Time, Timestamp, TimestampTz, Value};
 use sqler_export::{ExportOptions, SqlFormat, export_to_vec};
 use sqler_sql::{Dialect, Token, TokenKind, tokenize};
 
@@ -24,8 +24,65 @@ fn text_strategy() -> impl Strategy<Value = String> {
     ]
 }
 
+fn float_strategy() -> impl Strategy<Value = f64> {
+    prop_oneof![
+        4 => any::<f64>(),
+        1 => Just(-0.0),
+        1 => Just(0.0),
+        1 => Just(f64::NAN),
+        1 => Just(f64::INFINITY),
+        1 => Just(f64::NEG_INFINITY),
+        1 => (-1000_i32..1000, -30_i32..30).prop_map(|(m, e)| f64::from(m) * 10_f64.powi(e)),
+    ]
+}
+
+fn decimal_strategy() -> impl Strategy<Value = Decimal> {
+    (
+        any::<bool>(),
+        "[0-9]{1,30}",
+        prop::option::of("[0-9]{1,30}"),
+    )
+        .prop_filter_map("valid decimal", |(neg, int, frac)| {
+            let mut text = String::from(if neg { "-" } else { "" });
+            text.push_str(&int);
+            if let Some(f) = frac {
+                text.push('.');
+                text.push_str(&f);
+            }
+            text.parse().ok()
+        })
+}
+
+fn date_strategy() -> impl Strategy<Value = Date> {
+    (1_i32..=9999, 1_u8..=12, 1_u8..=28)
+        .prop_filter_map("date", |(y, m, d)| Date::new(y, m, d).ok())
+}
+
+fn time_strategy() -> impl Strategy<Value = Time> {
+    (0_u8..24, 0_u8..60, 0_u8..60, 0_u32..1_000_000_000)
+        .prop_filter_map("time", |(h, m, s, n)| Time::new(h, m, s, n).ok())
+}
+
+fn timestamp_strategy() -> impl Strategy<Value = Timestamp> {
+    (date_strategy(), time_strategy()).prop_map(|(d, t)| Timestamp::new(d, t))
+}
+
+fn temporal_strategy() -> impl Strategy<Value = Value> {
+    prop_oneof![
+        date_strategy().prop_map(Value::Date),
+        time_strategy().prop_map(Value::Time),
+        timestamp_strategy().prop_map(Value::Timestamp),
+        (timestamp_strategy(), -64_800_i32..=64_800)
+            .prop_filter_map("offset", |(t, o)| TimestampTz::new(t, o).ok())
+            .prop_map(Value::TimestampTz),
+    ]
+}
+
 fn value_strategy() -> impl Strategy<Value = Value> {
     prop_oneof![
+        2 => float_strategy().prop_map(Value::Float),
+        1 => decimal_strategy().prop_map(Value::Decimal),
+        2 => temporal_strategy(),
         3 => text_strategy().prop_map(Value::Text),
         1 => Just(Value::Null),
         1 => any::<i64>().prop_map(Value::Int),
@@ -48,14 +105,24 @@ enum Expect {
     Str,
     Number,
     Minus,
+    /// An operator token with exactly this text (`::`).
+    Op(&'static str),
 }
 
 fn expected_literal(dialect: Dialect, value: &Value) -> Vec<Expect> {
     use Expect::{Punct, Str, Word};
     match (dialect, value) {
         (_, Value::Null) => vec![Word("NULL")],
+        (_, Value::Decimal(d)) if d.as_str().starts_with('-') => {
+            vec![Expect::Minus, Expect::Number]
+        }
         (_, Value::Int(i)) if *i < 0 => vec![Expect::Minus, Expect::Number],
-        (_, Value::Int(_)) => vec![Expect::Number],
+        (_, Value::Int(_) | Value::Decimal(_)) => vec![Expect::Number],
+        (_, Value::Float(x)) => expected_float(dialect, *x),
+        (Dialect::Postgres, Value::Date(_)) => vec![Word("DATE"), Str],
+        (Dialect::Postgres, Value::Time(_)) => vec![Word("TIME"), Str],
+        (Dialect::Postgres, Value::Timestamp(_)) => vec![Word("TIMESTAMP"), Str],
+        (Dialect::Postgres, Value::TimestampTz(_)) => vec![Word("TIMESTAMPTZ"), Str],
         (Dialect::Postgres, Value::Bytes(_)) => {
             vec![Word("decode"), Punct('('), Str, Punct(','), Str, Punct(')')]
         }
@@ -74,6 +141,21 @@ fn expected_literal(dialect: Dialect, value: &Value) -> Vec<Expect> {
     }
 }
 
+fn expected_float(dialect: Dialect, x: f64) -> Vec<Expect> {
+    use Expect::{Minus, Number, Op, Str, Word};
+    match dialect {
+        Dialect::Postgres
+            if x.is_nan() || x.is_infinite() || (x == 0.0 && x.is_sign_negative()) =>
+        {
+            vec![Str, Op("::"), Word("float8")]
+        }
+        Dialect::MySql if x.is_nan() || x.is_infinite() => vec![Word("NULL")],
+        Dialect::Sqlite if x.is_nan() => vec![Word("NULL")],
+        _ if x.is_sign_negative() => vec![Minus, Number],
+        _ => vec![Number],
+    }
+}
+
 fn matches_expect(token: &Token, src: &str, expect: &Expect) -> bool {
     let text = token.text(src);
     match expect {
@@ -83,6 +165,7 @@ fn matches_expect(token: &Token, src: &str, expect: &Expect) -> bool {
         Expect::Str => token.kind == (TokenKind::Str { terminated: true }),
         Expect::Number => token.kind == TokenKind::Number,
         Expect::Minus => token.kind == TokenKind::Op && text == "-",
+        Expect::Op(o) => token.kind == TokenKind::Op && text == *o,
     }
 }
 
@@ -126,8 +209,63 @@ fn unescape_e(s: &str) -> Option<String> {
 }
 
 /// Decodes the string tokens of one literal back to the value.
-fn decode_check(dialect: Dialect, value: &Value, strs: &[String]) -> Result<(), String> {
+fn decode_check(
+    dialect: Dialect,
+    value: &Value,
+    strs: &[String],
+    texts: &[String],
+) -> Result<(), String> {
     match value {
+        Value::Float(x) => {
+            let joined = texts.concat();
+            let want_null = (x.is_nan() && dialect != Dialect::Postgres)
+                || (x.is_infinite() && dialect == Dialect::MySql);
+            if want_null {
+                return if joined == "NULL" {
+                    Ok(())
+                } else {
+                    Err(format!("{joined:?}"))
+                };
+            }
+            let back = match joined.as_str() {
+                "'NaN'::float8" => f64::NAN,
+                "'Infinity'::float8" => f64::INFINITY,
+                "'-Infinity'::float8" => f64::NEG_INFINITY,
+                "'-0'::float8" => -0.0,
+                other => {
+                    let (neg, digits) = other
+                        .strip_prefix('-')
+                        .map_or((false, other), |rest| (true, rest));
+                    // SQLite writes an overflowing literal for infinity.
+                    let magnitude: f64 = digits.parse().map_err(|e| format!("{other}: {e}"))?;
+                    if neg { -magnitude } else { magnitude }
+                }
+            };
+            if back.to_bits() == x.to_bits() || (back.is_nan() && x.is_nan()) {
+                Ok(())
+            } else {
+                Err(format!("{joined} reads as {back:?}, wanted {x:?}"))
+            }
+        }
+        Value::Decimal(d) => {
+            let joined = texts.concat();
+            if joined == d.as_str() {
+                Ok(())
+            } else {
+                Err(format!("{joined} is not {d}"))
+            }
+        }
+        Value::Date(_) | Value::Time(_) | Value::Timestamp(_) | Value::TimestampTz(_) => {
+            let (prefix, body) = unquote(&strs[0]).ok_or("not a string token")?;
+            if !prefix.is_empty() {
+                return Err(format!("temporal prefix {prefix:?}"));
+            }
+            if body == value.to_string() {
+                Ok(())
+            } else {
+                Err(format!("{body:?} is not {value}"))
+            }
+        }
         Value::Text(t) => {
             let (prefix, body) = unquote(&strs[0]).ok_or("not a string token")?;
             let decoded = match (dialect, prefix) {
@@ -263,12 +401,16 @@ fn check(
 
     for (start, value) in literal_slots {
         let len = expected_literal(dialect, value).len();
+        let texts: Vec<String> = sig[start..start + len]
+            .iter()
+            .map(|t| t.text(&src).to_owned())
+            .collect();
         let strs: Vec<String> = sig[start..start + len]
             .iter()
             .filter(|t| t.kind == (TokenKind::Str { terminated: true }))
             .map(|t| t.text(&src).to_owned())
             .collect();
-        decode_check(dialect, value, &strs).map_err(|e| format!("{e}\n{src}"))?;
+        decode_check(dialect, value, &strs, &texts).map_err(|e| format!("{e}\n{src}"))?;
     }
     Ok(())
 }

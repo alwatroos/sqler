@@ -7112,6 +7112,7 @@ dependencies = [
  "aws-lc-sys",
  "futures-core",
  "sqler-driver-api",
+ "sqler-sql",
  "sqlx",
  "sqlx-mysql",
  "tokio",
@@ -7123,6 +7124,7 @@ version = "0.1.0"
 dependencies = [
  "futures-core",
  "sqler-driver-api",
+ "sqler-sql",
  "sqlx",
  "tokio",
 ]

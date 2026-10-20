@@ -15,8 +15,8 @@ Registry: id --> Format --> create(options, sink)
 A `RowWriter` has `begin(columns)`, `write_batch(rows)` and `finish`. It keeps no rows, so memory is
 the same for ten rows and for a million. The `Exporter` checks the call order (`State`), the width of
 every row (`RowWidth`) and the `CancelToken` before every chunk of 1,024 rows and in `finish`
-(`Cancelled`, no trailer). It reports `Progress { rows, bytes }` after each batch and once in
-`finish`; `bytes` is what reached the sink. `export_to_vec` is the one-call form for copy-as.
+(`Cancelled`, no trailer). It reports `Progress { rows, bytes }` after each chunk (so a large batch reports as it goes) and
+once in `finish`; `bytes` is what reached the sink. `export_to_vec` is the one-call form for copy-as.
 
 ```rust,ignore
 use sqler_export::{ExportControl, ExportOptions, Exporter, Registry};
@@ -68,16 +68,19 @@ breaks become `<br>`. There is no width padding, because output is streamed.
 | Null | `null_text` | `null` | `NULL` |
 | Bool | `true`, `false` | `true`, `false` | per dialect (`TRUE`, `1`) |
 | Int | digits | number | digits |
-| Float | `Display`; `NaN`, `Infinity`, `-Infinity` | number; the strings `"NaN"`, `"Infinity"`, `"-Infinity"` | `{:?}` (`-0.0e0` for negative zero); per dialect for NaN and infinity |
+| Float | `Display`; `NaN`, `Infinity`, `-Infinity` | number; the strings `"NaN"`, `"Infinity"`, `"-Infinity"` | `{:?}`; negative zero is `'-0'::float8` (`PostgreSQL`) or `-0.0e0`; per dialect for NaN and infinity |
 | Text | as is | string | string literal per dialect |
 | Bytes | `0x` + lowercase hex | string `"0x.."` | `decode(.., 'hex')` or `X'..'` |
 | Decimal | as is | string (keeps the scale) | digits |
 | Date, Time, Timestamp, TimestampTz | `Display` | string | `DATE '..'` etc. on `PostgreSQL`, `'..'` elsewhere |
 | Json | raw text | embedded when valid, else a string | string literal |
 
-The full literal table is in the ADR. Limits: a year outside 0..=9999, `NaN` and NUL on
+The full literal table is in the ADR. A cancelled or failed export leaves the partial file (or
+whatever the sink received) behind: the caller (the export UI, the CLI, copy-as) must delete it.
+`XLSX` (T3) needs a streaming zip writer with data descriptors, since writers get no `Seek`; the
+alternative, buffering the whole workbook, breaks the memory goal. Limits: a year outside 0..=9999, `NaN` and NUL on
 `PostgreSQL` may be rejected by the server (a loud failure, never an injection); on `MySQL`, `NaN`
-and infinity become `NULL`; Markdown cells are not HTML-escaped.
+and infinity become `NULL`; negative zero is stored as `+0.0` by `MariaDB` and by a `SQLite` `REAL` column; Markdown cells are not HTML-escaped.
 
 ## Registry and later formats
 
@@ -91,8 +94,8 @@ rejects a duplicate id. `Parquet` and `XLSX` (T3) are added behind features with
 through every format into a counting sink, from one reused `Vec<Row>`, and checks that the output
 grows while rows are written. `cargo bench -p sqler-export --bench export_throughput [-- --rows N
 --batch N]` prints `<id>_rows_per_sec=` and `<id>_mib_per_sec=`. On the development machine (macOS,
-release, 1,000,000 rows, row generation included): `csv` 3.6 M rows/s, `json` 4.6 M, `sql` 3.5 M,
-`markdown` 3.8 M. The figures go in the PR body; the bench is not in `bench.yml`.
+release, 1,000,000 rows, row generation included): `csv` 4.1 M rows/s, `json` 5.7 M, `sql` 4.1 M,
+`markdown` 4.2 M. The bench is not in `bench.yml`.
 
 ## Tests
 

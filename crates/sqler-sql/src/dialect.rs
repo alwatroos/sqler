@@ -150,9 +150,14 @@ fn push_hex(out: &mut String, bytes: &[u8]) {
 fn push_float(out: &mut String, dialect: Dialect, x: f64) {
     if x.is_finite() {
         if x == 0.0 && x.is_sign_negative() {
-            // The exponent makes it a float literal, so the unary minus keeps the sign of zero on
-            // PostgreSQL (float8), MySQL (double) and SQLite (real).
-            out.push_str("-0.0e0");
+            // Checked on real servers (tests/db_*_float.rs): PostgreSQL types `-0.0e0` as numeric,
+            // which has no negative zero, so it needs the quoted cast; MySQL 8.4 keeps the sign
+            // of the double literal `-0.0e0`; SQLite keeps it in the expression but a REAL column
+            // stores +0.0; MariaDB 11.8 stores +0.0 for every literal form.
+            out.push_str(match dialect {
+                Dialect::Postgres => "'-0'::float8",
+                Dialect::MySql | Dialect::Sqlite => "-0.0e0",
+            });
         } else {
             let _ = write!(out, "{x:?}");
         }
@@ -424,7 +429,6 @@ mod tests {
                 assert_eq!(lit(d, &Value::Int(i64::MIN)), "-9223372036854775808");
                 assert_eq!(lit(d, &Value::Decimal("-1.50".parse().unwrap())), "-1.50");
                 assert_eq!(lit(d, &Value::Float(1.0)), "1.0");
-                assert_eq!(lit(d, &Value::Float(-0.0)), "-0.0e0");
                 assert_eq!(lit(d, &Value::Float(1e300)), "1e300");
             }
             assert_eq!(lit(PG, &Value::Bool(true)), "TRUE");
@@ -434,19 +438,12 @@ mod tests {
         }
 
         #[test]
-        fn negative_zero_round_trips() {
+        fn negative_zero_literal_text() {
+            assert_eq!(lit(Dialect::Postgres, &Value::Float(-0.0)), "'-0'::float8");
+            assert_eq!(lit(Dialect::MySql, &Value::Float(-0.0)), "-0.0e0");
+            assert_eq!(lit(Dialect::Sqlite, &Value::Float(-0.0)), "-0.0e0");
             for d in Dialect::ALL {
-                for x in [-0.0_f64, 0.0] {
-                    let text = lit(d, &Value::Float(x));
-                    // Read the literal the way a server does: a float literal, then the unary minus.
-                    let (negated, digits) = match text.strip_prefix('-') {
-                        Some(rest) => (true, rest),
-                        None => (false, text.as_str()),
-                    };
-                    let magnitude: f64 = digits.parse().unwrap();
-                    let back = if negated { -magnitude } else { magnitude };
-                    assert_eq!(back.to_bits(), x.to_bits(), "{d:?} {text}");
-                }
+                assert_eq!(lit(d, &Value::Float(0.0)), "0.0", "{d:?}");
             }
         }
 

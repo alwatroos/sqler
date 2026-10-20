@@ -204,8 +204,8 @@ impl<'a> Exporter<'a> {
             self.check_cancel()?;
             self.writer.write_batch(chunk)?;
             self.rows += chunk.len() as u64;
+            self.report();
         }
-        self.report();
         Ok(())
     }
 
@@ -425,11 +425,10 @@ mod tests {
         e.write_batch(&rows(10, 1)).unwrap();
         let summary = e.finish().unwrap();
         let calls = calls.lock().unwrap();
-        assert_eq!(calls.len(), 3);
-        assert_eq!(calls[0].rows, 1500);
-        assert_eq!(calls[1].rows, 1510);
-        assert_eq!(calls[2].rows, 1510);
-        assert_eq!(calls[2].bytes, summary.bytes);
+        // One call per 1,024-row chunk (1,024 + 476, then 10), then one in `finish`.
+        let reported: Vec<u64> = calls.iter().map(|c| c.rows).collect();
+        assert_eq!(reported, [1024, 1500, 1510, 1510]);
+        assert_eq!(calls[3].bytes, summary.bytes);
         assert_eq!(summary.rows, 1510);
         assert_eq!(summary.bytes, sink.0.lock().unwrap().len() as u64);
         assert!(summary.bytes > 0);
