@@ -11,6 +11,13 @@
 //! with `tls: Some` those four keys are dropped from the URL and the explicit settings win. TLS
 //! uses `rustls` with the `ring` provider and the OS trust roots.
 //!
+//! `TlsConfig::server_name` names the host the certificate is checked against (and sent as SNI)
+//! when it differs from the dial host, as through an SSH tunnel. It only applies with
+//! `verify-full` on a TCP target. `sqlx` always dials the host it verifies, so on Unix the driver
+//! starts a private local bridge (a Unix socket in a `0700` directory, removed when the session
+//! and its cancel handles are gone) that forwards to the dial address; verification is never
+//! weakened. On other platforms such a connect fails with `DriverError::Unsupported`.
+//!
 //! The session also implements [`sqler_driver_api::Introspect`] from `pg_catalog` for all 13
 //! object kinds. Only the database the session is connected to can be browsed.
 //!
@@ -36,6 +43,8 @@ mod introspect;
 mod options;
 mod session;
 mod stream;
+#[cfg(unix)]
+mod tls_bridge;
 
 use sqler_driver_api::sqler_core::ConnectionConfig;
 use sqler_driver_api::{BoxFuture, Driver, DriverError, Session};

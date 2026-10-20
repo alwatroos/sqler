@@ -51,6 +51,8 @@ An unknown host key is `ConnectFailure::UnknownHostKey(HostKeyPrompt)`. The work
 
 ### Known limitation: verify-full through a tunnel
 
+*Superseded by [ADR-0019](0019-tls-server-name-through-tunnel.md): on Unix the refusal is lifted; on Windows it stays.*
+
 With a tunnel the driver connects to `127.0.0.1:<port>`. A TLS check in `verify-full` mode would verify the certificate against `127.0.0.1`, not against the database host, and fail for every real certificate. The correct fix is a server-name override: a field on core `TlsConfig` that a driver passes to its TLS library. That is a change in `sqler-core` and in each driver. The pipeline therefore fails closed: an explicit `TlsMode::VerifyFull`, or (when the profile has no explicit TLS mode) a target with `sslmode` or `ssl-mode` set to `verify-full` or `verify_identity` (any driver, case-insensitive, also percent-encoded), together with an SSH tunnel is refused with `TlsHostnameThroughTunnel` before anything is opened. An explicit TLS mode overrides the URL parameter, so only an explicit `verify-full` or a URL verify-full without an explicit mode is refused. `verify-ca` and the weaker modes work through a tunnel. Follow-up: add the server-name field to `TlsConfig` and support it in the drivers, then lift the refusal.
 
 ### Close on quit
