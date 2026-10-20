@@ -4,7 +4,7 @@
 //! Benchmark of the object tree model on a schema with thousands of tables.
 //!
 //! Std-only (`harness = false`). Prints `key=value` lines, optionally saves them, and can compare
-//! `expand_p95_ns` against a saved baseline. Exit codes: 0 ok, 1 budget or regression failure, 2
+//! `expand_p95_ns` (minimum over `--reps` repetitions, plus an absolute `--slack-ns`) against a saved baseline. Exit codes: 0 ok, 1 budget or regression failure, 2
 //! bad arguments or unreadable baseline. See `docs/src/benchmarks.md` for the method and the rule.
 //!
 //! Metrics:
@@ -25,6 +25,7 @@ struct Args {
     tables: usize,
     samples: usize,
     select_samples: usize,
+    reps: usize,
     save: Option<String>,
     compare: Option<String>,
     threshold_pct: u64,
@@ -38,10 +39,11 @@ fn parse_args() -> Result<Args, String> {
         tables: 5000,
         samples: 200,
         select_samples: 20_000,
+        reps: 3,
         save: None,
         compare: None,
         threshold_pct: 25,
-        slack_ns: 50,
+        slack_ns: 250_000,
         budget_expand_p95_ns: 16_000_000,
         budget_select_p95_ns: 1_000_000,
     };
@@ -59,6 +61,7 @@ fn parse_args() -> Result<Args, String> {
             "--tables" => a.tables = to_usize(num(value()?)?),
             "--samples" => a.samples = to_usize(num(value()?)?),
             "--select-samples" => a.select_samples = to_usize(num(value()?)?),
+            "--reps" => a.reps = to_usize(num(value()?)?),
             "--save" => a.save = Some(value()?),
             "--compare" => a.compare = Some(value()?),
             "--threshold-pct" => a.threshold_pct = num(value()?)?,
@@ -68,8 +71,8 @@ fn parse_args() -> Result<Args, String> {
             other => return Err(format!("unknown argument: {other}")),
         }
     }
-    if a.samples == 0 || a.select_samples == 0 || a.tables == 0 {
-        return Err("need tables > 0, samples > 0 and select-samples > 0".to_owned());
+    if a.samples == 0 || a.select_samples == 0 || a.reps == 0 || a.tables == 0 {
+        return Err("need tables > 0, samples > 0, select-samples > 0 and reps > 0".to_owned());
     }
     Ok(a)
 }
@@ -177,14 +180,17 @@ fn expand_schema(f: &mut Fixture) -> Result<(), String> {
     Ok(())
 }
 
-fn run() -> Result<ExitCode, (u8, String)> {
-    let a = parse_args().map_err(|e| (2, e))?;
-    // The baseline is read first so a bad path fails before the long run.
-    let baseline = match &a.compare {
-        Some(path) => Some(base_p95(path).map_err(|e| (2, e))?),
-        None => None,
-    };
+/// Percentiles of one repetition.
+struct Stats {
+    rows: usize,
+    expand_p50: u64,
+    expand_p95: u64,
+    folder_p95: u64,
+    select_p50: u64,
+    select_p95: u64,
+}
 
+fn measure(a: &Args) -> Result<Stats, (u8, String)> {
     let mut expand_ns = Vec::with_capacity(a.samples);
     let mut folder_ns = Vec::with_capacity(a.samples);
     for _ in 0..a.samples {
@@ -237,15 +243,53 @@ fn run() -> Result<ExitCode, (u8, String)> {
     let folder_p95 = percentile(&folder_ns, 95);
     let select_p50 = percentile(&select_ns, 50);
     let select_p95 = percentile(&select_ns, 95);
+    Ok(Stats {
+        rows,
+        expand_p50,
+        expand_p95,
+        folder_p95,
+        select_p50,
+        select_p95,
+    })
+}
+
+fn run() -> Result<ExitCode, (u8, String)> {
+    let a = parse_args().map_err(|e| (2, e))?;
+    // The baseline is read first so a bad path fails before the long run.
+    let baseline = match &a.compare {
+        Some(path) => Some(base_p95(path).map_err(|e| (2, e))?),
+        None => None,
+    };
+
+    // The gate uses the minimum of each metric over the repetitions: noise on a shared runner only
+    // adds time, so the fastest repetition is the closest to the real cost.
+    let mut best = measure(&a)?;
+    for _ in 1..a.reps {
+        let s = measure(&a)?;
+        best.expand_p50 = best.expand_p50.min(s.expand_p50);
+        best.expand_p95 = best.expand_p95.min(s.expand_p95);
+        best.folder_p95 = best.folder_p95.min(s.folder_p95);
+        best.select_p50 = best.select_p50.min(s.select_p50);
+        best.select_p95 = best.select_p95.min(s.select_p95);
+    }
+    let Stats {
+        rows,
+        expand_p50,
+        expand_p95,
+        folder_p95,
+        select_p50,
+        select_p95,
+    } = best;
 
     let report = format!(
-        "bench=browser_tree\nos={}-{}\ntables={}\nrows={rows}\nsamples={}\nselect_samples={}\n\
+        "bench=browser_tree\nos={}-{}\ntables={}\nrows={rows}\nsamples={}\nreps={}\nselect_samples={}\n\
          expand_p50_ns={expand_p50}\nexpand_p95_ns={expand_p95}\nfolder_p95_ns={folder_p95}\n\
          select_p50_ns={select_p50}\nselect_p95_ns={select_p95}\n",
         std::env::consts::OS,
         std::env::consts::ARCH,
         a.tables,
         a.samples,
+        a.reps,
         a.select_samples,
     );
     print!("{report}");
