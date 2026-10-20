@@ -6,7 +6,7 @@
 //!
 //! A [`NameIndex`] is built once per cached listing or table, by the worker, before the data is
 //! published. A prefix lookup is a binary search; a fuzzy lookup is one linear scan that stops
-//! early inside each name. Matching runs on case-folded `char`s (`str::to_lowercase`).
+//! early inside each name. Matching runs on case-folded `char`s (per-`char` lowercase).
 
 use std::cmp::Ordering;
 
@@ -133,8 +133,14 @@ impl NameHit {
 }
 
 /// Case-folds text for matching.
+///
+/// Lowercases per `char` so the result of a prefix never depends on what follows it
+/// (`str::to_lowercase` maps a word-final `Σ` to `ς` but a mid-word one to `σ`).
 pub(crate) fn fold(s: &str) -> String {
-    s.to_lowercase()
+    if s.is_ascii() {
+        return s.to_ascii_lowercase();
+    }
+    s.chars().flat_map(char::to_lowercase).collect()
 }
 
 #[derive(Debug, Clone)]
@@ -394,6 +400,22 @@ mod tests {
         // Penalty counts chars, not bytes.
         let got = hits(&NameIndex::build(["éé_x"]), "x", MatchMode::Fuzzy);
         assert_eq!(got, vec![(0, MatchQuality::Substring, 3)]);
+    }
+
+    #[test]
+    fn greek_sigma_folds_consistently() {
+        assert_eq!(
+            fold("ΟΔΟΣ"),
+            fold("ΟΔΟΣΑ").chars().take(4).collect::<String>()
+        );
+        let index = NameIndex::build(["ΟΔΟΣΑ", "οδοσα"]);
+        assert_eq!(
+            hits(&index, "ΟΔΟΣ", MatchMode::Prefix),
+            vec![(0, MatchQuality::Prefix, 0), (1, MatchQuality::Prefix, 0)]
+        );
+        let got = hits(&index, "ΟΔΣΑ", MatchMode::Fuzzy);
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().all(|h| h.1 == MatchQuality::Fuzzy));
     }
 
     fn ranked<'a>(
