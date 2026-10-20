@@ -4,12 +4,13 @@
 //! The tab strip and tab body views: render `TabStrip`; clicks become `WorkspaceAction`s.
 
 use gpui::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _,
+    AnyElement, ClickEvent, Context, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, div, px, rgb,
 };
 use gpui_component::ActiveTheme as _;
 
 use super::TabStrip;
+use crate::browser::{BrowserAction, ObjectTab, ObjectTabContent};
 use crate::workspace::{WorkspaceAction, WorkspaceView};
 
 /// Renders the tab strip.
@@ -130,4 +131,133 @@ pub(crate) fn tab_body(
         .justify_center()
         .text_color(muted)
         .child(text)
+}
+
+#[allow(clippy::too_many_lines)] // one declarative element tree
+/// Renders the body of a DDL or properties tab: read-only monospace text, or a two-column table
+/// of fields, with a Copy button; or the loading or failure message.
+pub(crate) fn object_tab_body(
+    tab: &ObjectTab,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement + use<> {
+    let theme = cx.theme();
+    let (muted, danger, border, mono) = (
+        theme.muted_foreground,
+        theme.danger,
+        theme.border,
+        theme.mono_font_family.clone(),
+    );
+    let message = |text: String, color| -> AnyElement {
+        div()
+            .id("object-tab-message")
+            .flex_1()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(color)
+            .child(text)
+            .into_any_element()
+    };
+    let copy = |label: &'static str, cx: &mut Context<WorkspaceView>| {
+        div()
+            .id("object-tab-copy")
+            .px_2()
+            .py_0p5()
+            .rounded_md()
+            .border_1()
+            .border_color(border)
+            .text_sm()
+            .cursor_pointer()
+            .child(label)
+            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                view.dispatch_browser(BrowserAction::CopyTabText, cx);
+            }))
+    };
+    let body = match &tab.content {
+        ObjectTabContent::Loading => message(format!("{}…", tab.title), muted),
+        ObjectTabContent::Failed(error) => message(error.clone(), danger),
+        ObjectTabContent::Script(text) => div()
+            .id("object-tab-text")
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_end()
+                    .p_1()
+                    .child(copy("Copy", cx)),
+            )
+            .child(
+                div()
+                    .id("object-tab-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_3()
+                    .pb_3()
+                    .font_family(mono)
+                    .text_sm()
+                    .child(text.clone()),
+            )
+            .into_any_element(),
+        ObjectTabContent::Properties(fields) => {
+            let rows = fields.iter().map(|field| {
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_3()
+                    .py_0p5()
+                    .border_b_1()
+                    .border_color(border)
+                    .child(
+                        div()
+                            .w(px(180.))
+                            .flex_none()
+                            .text_color(muted)
+                            .child(field.label.clone()),
+                    )
+                    .child(div().flex_1().min_w_0().child(field.value.clone()))
+            });
+            div()
+                .id("object-tab-properties")
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                        .p_1()
+                        .child(copy("Copy", cx)),
+                )
+                .child(
+                    div()
+                        .id("object-tab-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .px_3()
+                        .pb_3()
+                        .text_sm()
+                        .children(rows),
+                )
+                .into_any_element()
+        }
+    };
+    div()
+        .id("object-tab")
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .flex()
+        .flex_col()
+        .child(body)
 }

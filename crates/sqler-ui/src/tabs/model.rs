@@ -29,6 +29,10 @@ pub enum TabKind {
     Query,
     /// A results grid.
     Grid,
+    /// The generated DDL or script of a database object (read-only text).
+    Ddl,
+    /// The properties of a database object or column (read-only table).
+    Properties,
 }
 
 /// The connection data a tab needs to render its header.
@@ -51,6 +55,8 @@ pub struct Tab {
     connection: TabConnection,
     kind: TabKind,
     ordinal: u32,
+    /// The database object an object tab shows (for the title).
+    object: Option<String>,
 }
 
 /// The badge text for an environment, shared by the sidebar and tab headers.
@@ -83,9 +89,18 @@ impl Tab {
     }
 
     /// The connection name, plus ` (n)` for the n-th tab opened for that name (n >= 2). Grid tabs
-    /// are prefixed with `Results: `.
+    /// are prefixed with `Results: `. A tab opened for a database object shows the object name
+    /// instead: `DDL: <object>`, `Properties: <object>`, `Results: <object>`.
     #[must_use]
     pub fn title(&self) -> String {
+        if let Some(object) = &self.object {
+            return match self.kind {
+                TabKind::Ddl => format!("DDL: {object}"),
+                TabKind::Properties => format!("Properties: {object}"),
+                TabKind::Grid => format!("Results: {object}"),
+                TabKind::Query => object.clone(),
+            };
+        }
         let base = if self.ordinal >= 2 {
             format!("{} ({})", self.connection.name, self.ordinal)
         } else {
@@ -93,7 +108,7 @@ impl Tab {
         };
         match self.kind {
             TabKind::Grid => format!("Results: {base}"),
-            TabKind::Query => base,
+            TabKind::Query | TabKind::Ddl | TabKind::Properties => base,
         }
     }
 
@@ -122,6 +137,25 @@ pub struct TabStrip {
 impl TabStrip {
     /// Opens a tab at the end and activates it.
     pub fn open(&mut self, connection: TabConnection, kind: TabKind) -> TabId {
+        self.open_tab(connection, kind, None)
+    }
+
+    /// Opens a tab for a database object at the end and activates it; the title names the object.
+    pub fn open_object(
+        &mut self,
+        connection: TabConnection,
+        kind: TabKind,
+        object: impl Into<String>,
+    ) -> TabId {
+        self.open_tab(connection, kind, Some(object.into()))
+    }
+
+    fn open_tab(
+        &mut self,
+        connection: TabConnection,
+        kind: TabKind,
+        object: Option<String>,
+    ) -> TabId {
         let id = TabId(self.next_id);
         self.next_id += 1;
         let counter = self
@@ -134,6 +168,7 @@ impl TabStrip {
             connection,
             kind,
             ordinal: *counter,
+            object,
         });
         self.active = Some(id);
         id
@@ -252,6 +287,20 @@ mod tests {
         assert!(s.activate(a));
         assert_eq!(s.active().map(Tab::id), Some(a));
         assert_eq!(s.get(b).map(Tab::kind), Some(TabKind::Query));
+    }
+
+    #[test]
+    fn object_tabs_are_titled_after_the_object() {
+        let mut s = TabStrip::default();
+        let ddl = s.open_object(conn("a"), TabKind::Ddl, "\"main\".\"users\"");
+        let props = s.open_object(conn("a"), TabKind::Properties, "users");
+        let data = s.open_object(conn("a"), TabKind::Grid, "users");
+        assert_eq!(s.get(ddl).unwrap().title(), "DDL: \"main\".\"users\"");
+        assert_eq!(s.get(props).unwrap().title(), "Properties: users");
+        assert_eq!(s.get(data).unwrap().title(), "Results: users");
+        assert_eq!(s.get(ddl).map(Tab::kind), Some(TabKind::Ddl));
+        // The header carries the connection's colour and badge, as for every tab.
+        assert_eq!(s.get(props).unwrap().header().title, "Properties: users");
     }
 
     #[test]

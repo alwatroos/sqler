@@ -8,5 +8,6 @@ mod model;
 pub(crate) mod view;
 
 pub use model::{
-    ConnectionStatus, GroupOption, RowKind, Selection, SidebarEntry, SidebarModel, SidebarRow,
+    ConnectionStatus, GroupOption, RowKind, Selection, SidebarEntry, SidebarItem, SidebarModel,
+    SidebarRow, changed_range, key_command,
 };

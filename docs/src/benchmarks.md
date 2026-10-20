@@ -110,6 +110,27 @@ Run from the repository root on the commit being recorded:
 
 `bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `hit_p95_ns` is more than 25 % plus 50 ns above the base, or if a budget is exceeded. Without a baseline on the base branch only the budgets apply.
 
+## Object browser tree
+
+`sqler_ui::browser::ObjectTree` on a synthetic schema of 5,000 tables, driven the way the workspace does: expand the schema, answer the listing, rebuild `rows()`. The bench uses no catalog or database, so it measures the tree model only. The catalog cost is in [Catalog tree](#catalog-tree).
+
+| Date | Commit | OS | Expand 5,000 tables p50 / p95 (ns) | Expand folder p95 (ns) | Select p50 / p95 (ns) | Notes |
+| ---- | ------ | -- | ---------------------------------- | ---------------------- | --------------------- | ----- |
+| 2026-10-20 | 5672fc0 plus this PR | macOS arm64 | 627,125 / 1,037,708 | 188,750 | 1,000 / 1,959 | run 1; 200 samples, 20,000 select samples; budgets: expand p95 16 ms, select p95 1 ms |
+| 2026-10-20 | 5672fc0 plus this PR | macOS arm64 | 649,459 / 1,115,375 | 192,541 | 1,291 / 3,208 | run 2, same setup |
+
+Expand p95 is about 1.1 ms against the 16 ms budget (one frame at 60 Hz), and select p95 is 2 to 3 us against 1 ms. The rendered sidebar is a virtualized list, so the cost of drawing does not grow with the 5,000 rows; that part is checked by eye (see the PR checklist), not by this bench.
+
+### Method
+
+1. `cargo bench -p sqler-ui --bench browser_tree` (release profile). Flags: `--tables` (5000), `--samples` (200), `--select-samples` (20000), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--slack-ns` (50), `--budget-expand-p95-ns` (16000000), `--budget-select-p95-ns` (1000000).
+2. `expand_*`: expand the schema, load the 5,000-table listing, rebuild the rows. `folder_p95_ns`: expand the `Tables` folder under it. `select_*`: change the selection. p50 and p95 are nearest-rank percentiles.
+3. Exit code 0 passes, 1 is a regression or budget failure, 2 is a usage error.
+
+### Regression rule
+
+`bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `expand_p95_ns` is more than 25 % plus 50 ns above the base, or if a budget is exceeded.
+
 ## UI framework spike
 
 Data, not pass/fail; spike build, not the product. Measured on `spikes/ui-framework` (ADR-0001), release profile

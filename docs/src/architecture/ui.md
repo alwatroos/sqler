@@ -15,6 +15,7 @@ State is plain Rust and has no GPUI types:
 | `settings` | `SettingsModel` | the `Settings` of `sqler-config`: checked changes (theme, font size 8 to 48), saved only through `ConfigDir::save_settings`; defaults and no writes when loading failed |
 | `keymap` | `KeyInput`, `KeyDispatcher`, `KeyOutcome`, `route_key`, `action_for` | key press to `KeyChord`, chord to command (default keymap plus `keybindings.toml`), command to `WorkspaceAction`; conflict winner and notices |
 | `palette` | `PaletteState`, `PaletteItem` | open/closed, query and selection; lists `CommandRegistry::query` results with each command's shortcut |
+| `browser` | `ObjectTree`, `TreeNodeId`, `TreeNodeKind`, `LoadState`, `MenuEntry`, `menu_for`, `BrowserAction`, `DropFlow`, `ObjectTab`, `BrowserError`, jobs | the object browser: lazy tree per connection, menus, commands `object:*`, DROP confirmation, DDL and properties tab content, async jobs |
 | `workspace` | `Workspace`, `WorkspaceAction`, `Effect`, `RequestId`, `Purpose`, `SecretOp`, `SessionBridge` | owns sidebar, tabs and sessions; dispatches actions |
 
 `cargo test -p sqler-ui` runs these on default features without GPUI. The views (`sidebar/view.rs`, `tabs/view.rs`, `connections/view.rs`, `workspace/view.rs`) exist only with the `gui` feature, which `sqler-app` enables. They only render state; CI builds them but no test opens a window.
@@ -79,6 +80,31 @@ cx.spawn awaits it
 ```
 
 The bridge holds a `dyn Connector` and a `dyn SecretStore`; it never sees a driver or `sqler-tunnel`. `sqler-app` supplies `Pipeline` (secret, tunnel, TLS and target mapping, driver registry, session wrapper that closes the tunnel), see [ADR-0016](../adr/0016-connect-pipeline.md). Dropping a `PendingConnect` aborts the task and closes a session that was already produced. `SessionBridge::close` and `close_all` close sessions on the runtime. A result for a request nobody waits for any more closes its session (`Effect::CloseSession`).
+
+## Object browser
+
+[ADR-0017](../adr/0017-object-browser-sessions-and-drop-confirmation.md). `sqler_ui::browser` is pure (no GPUI) and has all the logic; `workspace/browser.rs` wires it in and the views only draw it.
+
+```text
+click / key -> object:* command -> Workspace::dispatch_object -> ObjectTree::expand -> Vec<CacheKey>
+  Effect::LoadCatalog -> cx.spawn: Catalog::children / table (the catalog worker, off the UI thread)
+  Workspace::catalog_loaded -> ObjectTree::children_loaded / table_loaded -> rows() rebuilt
+```
+
+The tree never calls the catalog. `expand` and the `*_loaded` methods return the `CacheKey`s that still need loading, and the workspace turns them into effects. `rows()` is cached in the tree, so a frame does not rebuild it; the sidebar turns connection rows and tree rows into `SidebarItem`s and the view keeps a GPUI `list` / `ListState` in step with them by splicing the changed range, so only visible rows build elements.
+
+Sessions:
+
+| Session | Owner | Used for |
+| ------- | ----- | -------- |
+| Browser session | one `CatalogWorker` per connected connection (`Purpose::Browse` connect, started after the first successful open) | `Catalog::children`, `table`, refresh with progress and cancel |
+| Short-lived session | `Connector::connect` per job, closed when the job ends | open data (`select_star` into a grid tab), `Introspect::definition` for CREATE text, DROP |
+
+Effects added: `StartCatalog`, `LoadCatalog`, `WatchRefresh`, `RunJob` (DDL, properties, DROP), `OpenData`, `Copy`, `ShowObjectMenu` and `Batch`. The only way to a DROP job is `DropFlow::confirm`: once, twice on a `prod` connection. A DROP that has not started is discarded when a connection dialog opens. Closing a DDL, properties or data tab cancels its job. On quit the bridge closes the catalog workers within a bound (`SessionBridge::wait_all`).
+
+`object:show-menu` (Shift+F10, Menu) opens the palette filtered to `Object: `, because `gpui-component` 0.8.0 cannot open a context menu from code. Right-click uses `ContextMenuExt` with the entries of `menu_for`. Up, Down, Left, Right and Enter on the focused sidebar go through `sidebar::key_command` to `object:*` commands. `TabKind::Ddl` and `TabKind::Properties` are read-only text and property-table bodies.
+
+Benchmark: [Object browser tree](../benchmarks.md#object-browser-tree).
 
 ## Hook points
 

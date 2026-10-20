@@ -11,19 +11,24 @@ use std::time::Duration;
 
 use gpui::Focusable as _;
 use gpui::{
-    App, AppContext as _, Bounds, Context, Entity, FocusHandle, InteractiveElement as _,
-    IntoElement, KeyDownEvent, ParentElement as _, Render, Styled as _, Subscription, Task, Window,
-    WindowBounds, WindowOptions, div, px, size,
+    App, AppContext as _, Bounds, ClipboardItem, Context, Entity, FocusHandle,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ListState, ParentElement as _, Render,
+    Styled as _, Subscription, Task, Window, WindowBounds, WindowOptions, div, px, size,
 };
 use gpui_component::input::{InputEvent, InputState, MoveDown, MoveUp};
 use gpui_component::{ActiveTheme as _, Root, WindowExt as _};
+use sqler_catalog::{CacheKey, RefreshEvent};
 use sqler_config::{
-    ConfigDir, ConnectionStore, KeybindingOverrides, Modifiers, Platform, SecretStore,
+    ConfigDir, ConnectionId, ConnectionStore, KeybindingOverrides, Modifiers, Platform, SecretStore,
 };
+use tokio::sync::oneshot;
 
 use super::action::WorkspaceAction;
 use super::bridge::SessionBridge;
+use super::browser::CatalogResult;
+use super::drop_dialog::drop_overlay;
 use super::state::{Effect, RequestId, Workspace};
+use crate::browser::{self, BrowserAction, TreeNodeId};
 use crate::command::{CommandId, CommandRegistry};
 use crate::connections::FormField;
 use crate::connections::view::{DialogInputs, dialog_overlay};
@@ -33,7 +38,8 @@ use crate::keymap::input::key_input;
 use crate::keymap::{KeyDispatcher, KeyOutcome, action_for, chord_from_input, route_key};
 use crate::palette::{self, OPEN_PALETTE, PaletteState};
 use crate::settings::{self, SettingsModel};
-use crate::sidebar::{self, SidebarModel};
+use crate::sidebar::view::{ListEntry, build_entries, new_list_state, sync_list};
+use crate::sidebar::{self, SidebarModel, key_command};
 use crate::tabs;
 use crate::theme::apply::{appearance_of, apply};
 use crate::theme::resolve;
@@ -130,6 +136,13 @@ pub(crate) struct WorkspaceView {
     tasks: HashMap<RequestId, Task<()>>,
     /// The text inputs of the dialog on screen.
     inputs: Option<DialogInputs>,
+    /// Takes the keys while the sidebar has the focus.
+    sidebar_focus: FocusHandle,
+    /// The virtualized sidebar list and the lines it shows.
+    sidebar_list: ListState,
+    list_entries: Vec<ListEntry>,
+    /// The running catalog workers; quitting waits for them (they close the browser sessions).
+    catalog_runs: Vec<oneshot::Receiver<()>>,
     /// Messages to show as notifications at the next render.
     notices: Vec<String>,
     /// Keeps the OS appearance observer alive.
@@ -180,6 +193,9 @@ impl WorkspaceView {
         if let Err(err) = connections::register_commands(&mut commands) {
             eprintln!("sqler: could not register the connection commands: {err}");
         }
+        if let Err(err) = browser::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the object browser commands: {err}");
+        }
         let keys = KeyDispatcher::new(Platform::current(), startup.keybindings, &commands);
         for notice in keys.notices() {
             eprintln!("sqler: {notice}");
@@ -208,12 +224,15 @@ impl WorkspaceView {
         // short time the platform allows. The `app:quit` command waits longer (`CLOSE_LIMIT`).
         let quit = cx.on_app_quit(|view, _| {
             let sessions = view.ws.take_all_sessions();
+            view.ws.shutdown_browsers();
             let closed = view.bridge.close_all(sessions, QUIT_HOOK_LIMIT);
+            let runs = view.take_catalog_runs(QUIT_HOOK_LIMIT);
             async move {
                 let _ = closed.await;
+                let _ = runs.await;
             }
         });
-        let view = Self {
+        let mut view = Self {
             ws,
             bridge: SessionBridge::new(startup.connector, startup.secrets, startup.runtime),
             commands,
@@ -224,11 +243,16 @@ impl WorkspaceView {
             grids: GridViews::default(),
             tasks: HashMap::new(),
             inputs: None,
+            sidebar_focus: cx.focus_handle(),
+            sidebar_list: new_list_state(),
+            list_entries: Vec::new(),
+            catalog_runs: Vec::new(),
             notices: Vec::new(),
             _appearance: appearance,
             _quit: quit,
         };
         GridProbe::start_if_requested(window, cx);
+        view.sync_sidebar();
         view
     }
 
@@ -243,6 +267,16 @@ impl WorkspaceView {
 
     /// Routes a key press before the focused element sees it.
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.is_held && self.ws.drop_dialog().is_some() {
+            // A held key (auto-repeat) must never confirm or cancel a DROP step.
+            cx.stop_propagation();
+            return;
+        }
+        if event.keystroke.key == "menu" && self.sidebar_key(event, window, cx) {
+            // The Menu key is not in the chord grammar.
+            cx.stop_propagation();
+            return;
+        }
         let Some(chord) = chord_from_input(&key_input(&event.keystroke)) else {
             return;
         };
@@ -257,6 +291,20 @@ impl WorkspaceView {
             self.dispatch_connection(ConnectionAction::Cancel, cx);
             return;
         }
+        if !was_open
+            && self.ws.drop_dialog().is_some()
+            && chord.key() == "escape"
+            && chord.modifiers() == Modifiers::default()
+        {
+            // Escape cancels the DROP confirmation (refused once the statement runs).
+            cx.stop_propagation();
+            self.dispatch_browser(BrowserAction::CancelDrop, cx);
+            return;
+        }
+        if self.sidebar_key(event, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let outcome = route_key(&chord, &mut self.palette, &self.keys, &self.commands);
         if outcome != KeyOutcome::Ignored {
             cx.stop_propagation();
@@ -266,6 +314,32 @@ impl WorkspaceView {
         }
         self.sync_palette_focus(was_open, window, cx);
         cx.notify();
+    }
+
+    /// Runs the object command a key stands for while the sidebar has the focus. `true` if the
+    /// key was used.
+    fn sidebar_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.palette.is_open()
+            || self.ws.dialog().is_some()
+            || self.ws.drop_dialog().is_some()
+            || !self.sidebar_focus.contains_focused(window, cx)
+        {
+            return false;
+        }
+        let input = key_input(&event.keystroke);
+        let other = input.ctrl || input.alt || input.cmd;
+        let Some(id) =
+            key_command(&input.key, input.shift, other).and_then(|id| CommandId::new(id).ok())
+        else {
+            return false;
+        };
+        self.run_command(&id, window, cx);
+        true
     }
 
     /// Moves the palette selection for the arrow keys. The input binds `up` and `down` to its
@@ -301,6 +375,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         let was_open = self.palette.is_open();
+        let mut reopen_with = None;
         if id.as_str() == OPEN_PALETTE {
             self.palette.open();
             if was_open {
@@ -314,6 +389,14 @@ impl WorkspaceView {
         } else if let Some(action) = connections::action_for(id, &self.ws) {
             self.palette.close();
             self.dispatch_connection(action, cx);
+        } else if let Some(action) = browser::action_for(id) {
+            self.palette.close();
+            if action == BrowserAction::ShowMenu {
+                reopen_with = self.show_object_menu(window, cx);
+            } else {
+                self.dispatch_browser(action, cx);
+                self.reveal_selection();
+            }
         } else if let Some(grid_action) = grid_action_for(id) {
             self.palette.close();
             match self.ws_active_grid() {
@@ -336,7 +419,34 @@ impl WorkspaceView {
             eprintln!("sqler: no handler for command {id}");
         }
         self.sync_palette_focus(was_open, window, cx);
+        if let Some(query) = reopen_with {
+            self.palette_input
+                .update(cx, |input, cx| input.set_value(query, window, cx));
+        }
         cx.notify();
+    }
+
+    /// The context menu cannot open from a key press, so the palette opens on the object
+    /// commands instead. Returns the text to put in its input.
+    fn show_object_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<&'static str> {
+        if self.ws.sidebar().selected_id().is_none() {
+            window.push_notification("Select an object in the sidebar first.", cx);
+            return None;
+        }
+        self.palette.open();
+        Some("Object: ")
+    }
+
+    /// Scrolls the sidebar so that the selected line is in view.
+    fn reveal_selection(&self) {
+        let items = self.ws.sidebar_items();
+        if let Some(ix) = self.ws.selected_item(&items) {
+            self.sidebar_list.scroll_to_reveal_item(ix);
+        }
     }
 
     /// Runs an action through the workspace and carries out the effect.
@@ -351,6 +461,93 @@ impl WorkspaceView {
         let effect = self.ws.dispatch_connection(action);
         self.apply(effect, cx);
         self.settle(cx);
+    }
+
+    /// Runs an object-browser command on the selected node and carries out the effect.
+    pub(crate) fn dispatch_browser(&mut self, action: BrowserAction, cx: &mut Context<Self>) {
+        let effect = self.ws.dispatch_browser(action);
+        self.apply(effect, cx);
+        self.settle(cx);
+    }
+
+    /// Runs an object-browser action on a node of a connection's tree.
+    pub(crate) fn dispatch_object(
+        &mut self,
+        conn: &ConnectionId,
+        node: TreeNodeId,
+        action: BrowserAction,
+        cx: &mut Context<Self>,
+    ) {
+        let effect = self.ws.dispatch_object(conn, node, action);
+        self.apply(effect, cx);
+        self.settle(cx);
+    }
+
+    /// Selects a tree node and gives the sidebar the focus.
+    pub(crate) fn select_object(
+        &mut self,
+        conn: &ConnectionId,
+        node: TreeNodeId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.sidebar_focus, cx);
+        self.ws.select_object(conn, node);
+        self.settle(cx);
+    }
+
+    /// A click on a tree row: selects it; a double click opens the data or toggles the node.
+    pub(crate) fn click_object(
+        &mut self,
+        conn: &ConnectionId,
+        node: TreeNodeId,
+        double: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_object(conn, node, window, cx);
+        if double {
+            let action = self.ws.default_action(conn, node);
+            self.dispatch_object(conn, node, action, cx);
+        }
+    }
+
+    /// Gives the sidebar the focus, so the arrow keys move its selection.
+    pub(crate) fn focus_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.sidebar_focus, cx);
+    }
+
+    /// The workspace state, for the views.
+    pub(crate) fn workspace(&self) -> &Workspace {
+        &self.ws
+    }
+
+    /// The focus handle of the sidebar.
+    pub(crate) fn sidebar_focus(&self) -> &FocusHandle {
+        &self.sidebar_focus
+    }
+
+    /// The state of the virtualized sidebar list.
+    pub(crate) fn sidebar_list(&self) -> &ListState {
+        &self.sidebar_list
+    }
+
+    /// The lines the sidebar list shows.
+    pub(crate) fn list_entries(&self) -> &[ListEntry] {
+        &self.list_entries
+    }
+
+    /// Makes the list match the workspace; only the lines that changed are remeasured.
+    fn sync_sidebar(&mut self) {
+        let entries = build_entries(&self.ws);
+        sync_list(&mut self.list_entries, &self.sidebar_list, entries);
+    }
+
+    /// Stops waiting for the catalog workers after `limit`; the receiver fires when they are
+    /// done.
+    fn take_catalog_runs(&mut self, limit: Duration) -> oneshot::Receiver<()> {
+        let runs = std::mem::take(&mut self.catalog_runs);
+        self.bridge.wait_all(runs, limit)
     }
 
     /// Sets the text of a form input from outside (a colour swatch was clicked).
@@ -375,6 +572,7 @@ impl WorkspaceView {
             self.notices.push(notice);
         }
         self.grids.retain(self.ws.tabs());
+        self.sync_sidebar();
         cx.notify();
     }
 
@@ -398,7 +596,8 @@ impl WorkspaceView {
 
     fn apply(&mut self, effect: Effect, cx: &mut Context<Self>) {
         match effect {
-            Effect::None => {}
+            // `run_command` opens the palette for the object menu; it needs the window.
+            Effect::None | Effect::ShowObjectMenu => {}
             Effect::Connect { request, connect } => {
                 // The attempt runs on tokio; the UI thread only awaits the oneshot. Keeping
                 // the task is what keeps the attempt alive: dropping it cancels.
@@ -435,8 +634,10 @@ impl WorkspaceView {
             Effect::CloseSession(session) => self.bridge.close(session),
             Effect::CloseSessions(sessions) => {
                 let closed = self.bridge.close_all(sessions, CLOSE_LIMIT);
+                let runs = self.take_catalog_runs(CLOSE_LIMIT);
                 cx.spawn(async move |_, cx| {
                     let _ = closed.await;
+                    let _ = runs.await;
                     cx.update(|cx| cx.quit());
                 })
                 .detach();
@@ -450,6 +651,110 @@ impl WorkspaceView {
                     cx,
                 );
             }
+            other => self.apply_browser(other, cx),
+        }
+    }
+
+    /// Carries out the effects of the object browser.
+    fn apply_browser(&mut self, effect: Effect, cx: &mut Context<Self>) {
+        match effect {
+            Effect::Batch(effects) => {
+                for effect in effects {
+                    self.apply(effect, cx);
+                }
+            }
+            Effect::StartCatalog { worker, .. } => {
+                let done = self.bridge.run_catalog(worker);
+                // Forget the workers that already stopped, so the list does not grow.
+                self.catalog_runs.retain_mut(|run| {
+                    matches!(run.try_recv(), Err(oneshot::error::TryRecvError::Empty))
+                });
+                self.catalog_runs.push(done);
+            }
+            Effect::LoadCatalog {
+                conn,
+                generation,
+                keys,
+            } => self.load_catalog(&conn, generation, keys, cx),
+            Effect::WatchRefresh {
+                conn,
+                generation,
+                node,
+                run,
+                mut handle,
+            } => {
+                cx.spawn(async move |this, cx| {
+                    while let Some(event) = handle.next_event().await {
+                        let last = matches!(event, RefreshEvent::Finished(_));
+                        let alive = this
+                            .update(cx, |view, cx| {
+                                let effect =
+                                    view.ws.refresh_event(&conn, generation, node, run, event);
+                                view.apply(effect, cx);
+                                view.settle(cx);
+                            })
+                            .is_ok();
+                        if last || !alive {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
+            Effect::RunJob(job) => {
+                let done = self.bridge.spawn(job.run(self.bridge.connector()));
+                cx.spawn(async move |this, cx| {
+                    if let Ok(result) = done.await {
+                        this.update(cx, |view, cx| {
+                            let effect = view.ws.job_finished(result);
+                            view.apply(effect, cx);
+                            view.settle(cx);
+                        })
+                        .ok();
+                    }
+                })
+                .detach();
+            }
+            Effect::OpenData { tab, grid, job } => {
+                self.grids.insert(tab, grid);
+                // The job reports failures to the grid itself; nobody waits for it.
+                drop(self.bridge.spawn(job.run(self.bridge.connector())));
+            }
+            Effect::Copy(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
+            // `run_command` opens the palette, which needs the window.
+            _ => {}
+        }
+    }
+
+    /// Loads the keys through the catalog; each answer goes back to the workspace.
+    fn load_catalog(
+        &mut self,
+        conn: &ConnectionId,
+        generation: u64,
+        keys: Vec<CacheKey>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(catalog) = self.ws.catalog(conn, generation) else {
+            return;
+        };
+        for key in keys {
+            let (catalog, conn) = (catalog.clone(), conn.clone());
+            cx.spawn(async move |this, cx| {
+                let result = match &key {
+                    CacheKey::Children(node) => {
+                        CatalogResult::Children(catalog.children(node.clone()).await)
+                    }
+                    CacheKey::Table(obj) => CatalogResult::Table(catalog.table(obj.clone()).await),
+                    _ => return,
+                };
+                this.update(cx, |view, cx| {
+                    let effect = view.ws.catalog_loaded(&conn, generation, key, result);
+                    view.apply(effect, cx);
+                    view.settle(cx);
+                })
+                .ok();
+            })
+            .detach();
         }
     }
 
@@ -492,7 +797,7 @@ impl Render for WorkspaceView {
         }
         let theme = cx.theme();
         let (bg, fg) = (theme.background, theme.foreground);
-        let sidebar = sidebar::view::sidebar(self.ws.sidebar(), cx);
+        let sidebar = sidebar::view::sidebar(self, cx);
         let settings_active = self.ws.settings_tab_active();
         let strip = tabs::view::tab_strip(self.ws.tabs(), !settings_active, cx);
         let strip_end = settings::view::strip_end(&self.ws, cx);
@@ -500,10 +805,18 @@ impl Render for WorkspaceView {
             settings::view::page(&self.ws, cx).into_any_element()
         } else if let Some(grid) = self.ws_active_grid() {
             self.grids.body(grid, cx).into_any_element()
+        } else if let Some(tab) = self
+            .ws
+            .tabs()
+            .active()
+            .and_then(|tab| self.ws.object_tab(tab.id()))
+        {
+            tabs::view::object_tab_body(tab, cx).into_any_element()
         } else {
             tabs::view::tab_body(self.ws.tabs(), cx).into_any_element()
         };
         let dialog = dialog_overlay(&self.ws, self.inputs.as_ref(), cx);
+        let drop_dialog = drop_overlay(self.ws.drop_dialog(), cx);
         let palette = self.palette.is_open().then(|| {
             let items = self.palette.items(&self.commands, &self.keys);
             palette::view::palette_overlay(
@@ -549,6 +862,7 @@ impl Render for WorkspaceView {
                     .child(body),
             )
             .children(dialog)
+            .children(drop_dialog)
             .children(palette)
     }
 }

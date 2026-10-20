@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use sqler_catalog::{CatalogWorker, IntrospectSource};
 use sqler_config::{SecretError, SecretStore};
 use sqler_driver_api::Session;
 use tokio::runtime::Handle;
@@ -99,6 +100,59 @@ impl SessionBridge {
             let _ = tx.send(failures);
         });
         rx
+    }
+
+    /// Runs a future on tokio and hands its output back on a oneshot. Dropping the receiver does
+    /// not stop the future.
+    #[must_use]
+    pub fn spawn<T: Send + 'static>(
+        &self,
+        fut: impl Future<Output = T> + Send + 'static,
+    ) -> oneshot::Receiver<T> {
+        let (tx, rx) = oneshot::channel();
+        self.handle.spawn(async move {
+            // A dropped receiver only means nobody needs the output.
+            let _ = tx.send(fut.await);
+        });
+        rx
+    }
+
+    /// The connector, for jobs that open a short-lived session.
+    #[must_use]
+    pub fn connector(&self) -> Arc<dyn Connector> {
+        Arc::clone(&self.connector)
+    }
+
+    /// Runs a catalog worker. When the worker stops (`Catalog::shutdown`), the session it owned
+    /// is closed, and then the receiver fires.
+    #[must_use]
+    pub fn run_catalog(&self, worker: CatalogWorker) -> oneshot::Receiver<()> {
+        self.spawn(async move {
+            if let IntrospectSource::Session(session) = worker.run().await {
+                close_logged(session).await;
+            }
+        })
+    }
+
+    /// Waits for all receivers, at most `limit`. The receiver fires when they have fired (or
+    /// dropped their sender) or the limit is over.
+    #[must_use]
+    pub fn wait_all(
+        &self,
+        waits: Vec<oneshot::Receiver<()>>,
+        limit: Duration,
+    ) -> oneshot::Receiver<()> {
+        self.spawn(async move {
+            let all = async {
+                for wait in waits {
+                    // A closed channel means the task is gone, which is also "done".
+                    let _ = wait.await;
+                }
+            };
+            if tokio::time::timeout(limit, all).await.is_err() {
+                eprintln!("sqler: some catalog workers did not stop in time");
+            }
+        })
     }
 
     /// Closes a session in the background; a failure is reported on stderr.
@@ -409,5 +463,49 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(4));
         assert!(slow_called.load(Ordering::SeqCst));
         assert!(fast_closed.load(Ordering::SeqCst));
+    }
+    #[test]
+    fn spawn_returns_the_output_and_connector_is_shared() {
+        let rt = runtime();
+        let connector = Arc::new(FakeConnector::new());
+        let bridge = bridge(&rt, connector.clone());
+        assert_eq!(rt.block_on(bridge.spawn(async { 7 })).unwrap(), 7);
+        let shared = bridge.connector();
+        let session = rt.block_on(shared.connect(request())).unwrap();
+        assert_eq!(connector.requests.lock().unwrap().len(), 1);
+        bridge.close(session);
+    }
+
+    #[test]
+    fn run_catalog_closes_its_session_after_shutdown() {
+        use crate::browser::testing::{FakeIntrospect, SessionConnector};
+        use sqler_catalog::Catalog;
+        let rt = runtime();
+        let scripted = SessionConnector::new(FakeIntrospect::new());
+        let session = rt
+            .block_on(Connector::connect(&scripted, request()))
+            .unwrap();
+        let (catalog, worker) = Catalog::new(session);
+        let bridge = bridge(&rt, Arc::new(FakeConnector::new()));
+        let done = bridge.run_catalog(worker);
+        assert_eq!(scripted.closed(), 0);
+        catalog.shutdown();
+        rt.block_on(done).unwrap();
+        assert_eq!(scripted.closed(), 1);
+    }
+
+    #[test]
+    fn wait_all_gives_up_after_the_limit() {
+        let rt = runtime();
+        let bridge = bridge(&rt, Arc::new(FakeConnector::new()));
+        let (_keep, never) = oneshot::channel::<()>();
+        let (done_tx, done) = oneshot::channel::<()>();
+        done_tx.send(()).unwrap();
+        let started = Instant::now();
+        rt.block_on(bridge.wait_all(vec![done, never], Duration::from_millis(100)))
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(4));
+        rt.block_on(bridge.wait_all(Vec::new(), Duration::from_secs(5)))
+            .unwrap();
     }
 }
