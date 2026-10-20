@@ -11,3 +11,16 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-driver-api.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+sqler-driver-sqlite.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+[[bench]]
+name = "catalog_tree"
+harness = false

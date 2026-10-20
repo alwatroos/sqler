@@ -98,14 +98,16 @@ cargo run -p sqler-app
 cargo tree --workspace -i gpui-pre
 cargo run -p xtask
 cargo bench -p sqler-ui --bench grid_viewport
+cargo bench -p sqler-catalog --bench catalog_tree
 ```
 
 - CI (`.github/workflows/ci.yml`) runs this subset of the commands above: fmt, clippy, nextest on Linux/macOS/Windows; deny, docs (`cargo doc` and `mdbook build docs`), spdx on Linux. Since T5 the Linux `check` and `docs` jobs install the GPUI build packages with apt, and the macOS `check` job guards the Metal toolchain; the `deny` job also runs the "Dependency rules" step.
 - SPDX check (`sh .github/scripts/check-spdx.sh`) prints the offending paths and exits 1 when a tracked `*.rs` file lacks the header on line 1; it prints nothing otherwise.
 - CI tools (pinned, see `docs/src/dependencies.md`): `cargo install --locked cargo-nextest@0.9.148 cargo-deny@0.20.2 mdbook@0.5.4`.
-- `.github/workflows/bench.yml` runs the grid viewport benchmark on Linux for pull requests (base vs PR in one job).
+- `.github/workflows/bench.yml` runs the grid viewport and catalog tree benchmarks on Linux for pull requests (base vs PR in one job).
 - `.github/workflows/pages.yml` publishes the book (`target/book/`) to GitHub Pages on push to `main`.
 - Bench: `cargo bench -p sqler-ui --bench grid_viewport -- [--rows N --columns N --batch N --viewport N --samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-p95-ns B]`. Rule: p95 more than 25 % + 50 ns above the base branch, or p95 above 1 ms, fails `bench.yml`. Method and results: `docs/src/benchmarks.md`. The release CLI is still measured by hand as described there.
+- Catalog bench: `cargo bench -p sqler-catalog --bench catalog_tree -- [--tables N --columns N --samples N --hit-samples N --source fake|sqlite --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-hit-p95-ns B --budget-expand-p95-ns B]`. Defaults: 5000 tables, 8 columns, `fake`. Budgets (`fake` only): cached-read p95 10 us, cold expand of 5,000 tables p95 16 ms. `--compare` checks `hit_p95_ns` (25 % + 50 ns). Exit 0 pass, 1 regression or budget, 2 usage error. Wired into `bench.yml`.
 
 ## 4. Coding standards
 
@@ -205,6 +207,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0011](docs/src/adr/0011-connection-store-format.md) | Connection store format: versioned TOML, groups, derived secret references | accepted |
 | [0012](docs/src/adr/0012-keychain-secrets.md) | Keychain secrets: `keyring` 4.x, reference scheme, failure policy | accepted |
 | [0013](docs/src/adr/0013-ssh-tunnel-crate.md) | SSH tunnel crate: russh, strict known_hosts, loopback-only forward | accepted |
+| [0014](docs/src/adr/0014-catalog-cache-and-background-refresh.md) | Catalog cache, worker concurrency and background refresh | accepted |
 
 ## 9. Roadmap status
 
