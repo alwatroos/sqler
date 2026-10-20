@@ -61,9 +61,21 @@ a backslash or NUL uses `E'..'` (`PostgreSQL`), a hex string with `_utf8mb4` (`M
 [ADR-0028](../adr/0028-export-writer-api.md); `sqler-export` uses them for `INSERT` files, and
 its `proptest` re-lexes the output with the public lexer.
 
+## DML generation
+
+`dml` builds the statements for staged grid edits (`UPDATE`, `INSERT`, `DELETE`) as `Query` values:
+identifiers are quoted, the dialect's native positional markers are written directly (`$k`,
+`?k`, `?`) and every value travels in `Query::params`, so no value text reaches the SQL. An empty
+filter is an error, so an unfiltered write cannot be generated. `PostgreSQL` text-bound kinds get a
+`CAST` to the column type without its length or precision, so the server's assignment check still rejects a value that does not fit. `single_table_source` accepts only a plain `SELECT` of `*` or plain
+columns from one table, which is how a query result is proven to come from a single table. The
+editability rules, the apply transaction and the row-count checks are in
+[ADR-0030](../adr/0030-staged-edits-and-dml.md).
+
 ## Tests
 
 Unit tests sit next to the lexer, the splitter and the placeholder scanner. Case tables per
 dialect and `proptest` properties (spans tile the input, nothing panics, a write keyword never
 classifies as read, formatting is idempotent) are in `crates/sqler-sql/tests/`, together with
 MiB-sized hostile inputs.
+DML generation has per-dialect exact-SQL unit tests and `proptest` properties that no value text appears in the SQL and that placeholders match `params`.

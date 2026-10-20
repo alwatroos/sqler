@@ -38,3 +38,4 @@ consequences. SQLer uses the MADR format.
 | [0026](0026-editor-intellisense.md) | Editor intellisense: completion, hover and diagnostics in the SQL editor | accepted |
 | [0027](0027-bounded-result-model.md) | Bounded result model: credit gate, fetch more and compact rows | accepted |
 | [0028](0028-export-writer-api.md) | Export writer API: push-style row writers, a format registry and SQL literals | accepted |
+| [0030](0030-staged-edits-and-dml.md) | Staged edits and DML: bound statements, single-table editability, one-transaction apply | accepted |
