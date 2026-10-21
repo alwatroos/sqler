@@ -104,6 +104,12 @@ impl GridTab {
         }
     }
 
+    /// The model behind the tab.
+    #[must_use]
+    pub fn model(&self) -> &GridModel {
+        &self.model
+    }
+
     /// The ingestion state.
     #[must_use]
     pub fn state(&self) -> &IngestState {
