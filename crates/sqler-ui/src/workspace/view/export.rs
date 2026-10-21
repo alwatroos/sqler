@@ -102,9 +102,20 @@ fn copy_slice(
     tx: &mpsc::Sender<Feed>,
     model: &GridModel,
 ) -> bool {
+    copy_slice_within(cursor, pending, tx, model, COPY_TICK_BUDGET)
+}
+
+/// [`copy_slice`] with the tick's time budget given, so a test can take the clock out.
+fn copy_slice_within(
+    cursor: &mut LoadedCursor,
+    pending: &mut Option<Feed>,
+    tx: &mpsc::Sender<Feed>,
+    model: &GridModel,
+    budget: Duration,
+) -> bool {
     let started = Instant::now();
     let mut sent = 0;
-    while sent < COPY_BATCHES_PER_TICK && started.elapsed() < COPY_TICK_BUDGET {
+    while sent < COPY_BATCHES_PER_TICK && started.elapsed() < budget {
         let feed = match pending.take() {
             Some(feed) => feed,
             None => match cursor.next_feed(model, COPY_BATCH_ROWS) {
@@ -458,7 +469,15 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(2);
         let mut pending = None;
         // Columns + one rows batch fill the channel; the third message waits.
-        assert!(!copy_slice(&mut cursor, &mut pending, &tx, &model));
+        // No clock: a slow runner must not end the tick before the channel is full.
+        let unlimited = Duration::MAX;
+        assert!(!copy_slice_within(
+            &mut cursor,
+            &mut pending,
+            &tx,
+            &model,
+            unlimited
+        ));
         assert!(pending.is_some());
         assert!(matches!(rx.try_recv(), Ok(Feed::Columns(_))));
         assert!(rx.try_recv().is_ok());
