@@ -3,9 +3,10 @@
 
 //! The plain-text rendering shared by `CSV` and Markdown.
 
+use std::collections::HashSet;
 use std::fmt::Write as _;
 
-use sqler_core::Value;
+use sqler_core::{Column, Value};
 
 /// Appends the plain text of `value` to `out`.
 ///
@@ -21,6 +22,23 @@ pub(crate) fn plain(out: &mut String, value: &Value, null_text: &str) {
             let _ = write!(out, "{other}");
         }
     }
+}
+
+/// Column names made unique: a repeat gets `_2`, `_3`, ... appended.
+pub(crate) fn unique_names(columns: &[Column]) -> Vec<String> {
+    let mut used: HashSet<String> = HashSet::new();
+    let mut names = Vec::with_capacity(columns.len());
+    for column in columns {
+        let mut name = column.name.clone();
+        let mut n = 2_u32;
+        while used.contains(&name) {
+            name = format!("{}_{n}", column.name);
+            n += 1;
+        }
+        used.insert(name.clone());
+        names.push(name);
+    }
+    names
 }
 
 /// Whether the value is text that a spreadsheet might read as a formula.

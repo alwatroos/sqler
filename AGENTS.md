@@ -47,7 +47,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-ai-mistral` | L2 | Mistral provider |
 | `sqler-catalog` | L2 | Schema cache, incremental refresh, search index, dependency graph |
 | `sqler-completion` | L2 | Intellisense engine: scope analysis, alias resolution, ranking; pure functions, heavily tested |
-| `sqler-export` | L2 | CSV, JSON, SQL `INSERT` and Markdown writers behind a push-style `RowWriter` API and a format registry (ADR-0028); Parquet and XLSX follow |
+| `sqler-export` | L2 | CSV, JSON, SQL `INSERT`, Markdown, Parquet and XLSX writers behind a push-style `RowWriter` API and a format registry (ADR-0028); Parquet and XLSX sit behind the cargo features `parquet` and `xlsx` (ADR-0029) |
 | `sqler-ai-tools` | L3 | Tool set exposed to models: list_schemas, describe_table, run_query (guarded), search_data, explain |
 | `sqler-plugin-host` | L3 | Plugin loading, sandboxing, capability grants, lifecycle |
 | `sqler-mcp` | L4 | MCP server (rmcp) exposing `sqler-ai-tools` to external agents |
@@ -127,7 +127,7 @@ cargo bench -p sqler-export --bench export_throughput
 - Editor bench: `cargo bench -p sqler-ui --bench editor_buffer -- [--lines N --samples N --budget-p95-ns B]`. Defaults: 10000 lines, budget 16 ms. Prints `bracket_build_p95_ns`, `bracket_lookup_p95_ns`, `format_p95_ns`, `occurrence_p95_ns`. Exit 0 pass, 1 when the bracket build or format p95 exceeds the budget, 2 usage error. Not in `bench.yml`; put the numbers in the PR body.
 - Intellisense bench: `cargo bench -p sqler-ui --bench editor_intellisense -- [--tables N --columns N --samples N --budget-p95-ns B]`. Defaults: 5000 tables, 8 columns, 2000 samples, budget 16 ms. Prints `statement_start_p95_ns`, `from_prefix_p95_ns`, `qualified_column_p95_ns`, `alias_join_p95_ns`, `hover_p95_ns`, `diagnose_p95_ns`, `worst_p95_ns` (headless, from a fresh snapshot to items ready). Exit 0 pass, 1 when `worst_p95_ns` exceeds the budget, 2 usage error. Not in `bench.yml`; put the numbers in the PR body.
 - Browser tree bench: `cargo bench -p sqler-ui --bench browser_tree -- [--tables N --samples N --select-samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-expand-p95-ns B --budget-select-p95-ns B]`. Defaults: 5000 tables. Budgets: expand of a 5,000-table schema p95 16 ms (`expand_p95_ns`), selection change p95 1 ms (`select_p95_ns`). `--compare` checks `expand_p95_ns` (25 % + 50 ns). Exit 0 pass, 1 regression or budget, 2 usage error. Wired into `bench.yml`.
-- Export bench: `cargo bench -p sqler-export --bench export_throughput -- [--rows N --batch N]`. Defaults: 1,000,000 rows of five columns, batches of 1,000. Prints `<id>_rows_per_sec=` and `<id>_mib_per_sec=` for `csv`, `json`, `sql` and `markdown`; a `--bench` argument is ignored. Exit 0 ok, 1 writer error, 2 usage error. Not in `bench.yml`; put the numbers in the PR body.
+- Export bench: `cargo bench -p sqler-export --bench export_throughput -- [--rows N --batch N --format ID]`. Defaults: 1,000,000 rows of five columns, batches of 1,000. Prints `<id>_rows_per_sec=` and `<id>_mib_per_sec=` for every format the enabled features compile (`csv`, `json`, `sql`, `markdown`, `parquet`, `xlsx`); `--format ID` runs one; a `--bench` argument is ignored. Exit 0 ok, 1 writer error, 2 usage error. Not in `bench.yml`; put the numbers in the PR body.
 
 ## 4. Coding standards
 
@@ -244,6 +244,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0026](docs/src/adr/0026-editor-intellisense.md) | Editor intellisense: completion, hover and diagnostics in the SQL editor | accepted |
 | [0027](docs/src/adr/0027-bounded-result-model.md) | Bounded result model: credit gate, fetch more and compact rows | accepted |
 | [0028](docs/src/adr/0028-export-writer-api.md) | Export writer API: push-style row writers, a format registry and SQL literals | accepted |
+| [0029](docs/src/adr/0029-parquet-and-xlsx-writers.md) | Parquet and XLSX writers: own streaming zip, low-level Parquet API, two cargo features | accepted |
 | [0030](docs/src/adr/0030-staged-edits-and-dml.md) | Staged edits and DML: bound statements, single-table editability, one-transaction apply | accepted |
 
 ## 9. Roadmap status

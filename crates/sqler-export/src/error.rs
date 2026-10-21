@@ -37,6 +37,20 @@ pub enum ExportError {
     /// The calls came in the wrong order (for example a batch before `begin`).
     #[error("{0}")]
     State(&'static str),
+    /// A limit of the format was passed (for example the row count of a worksheet).
+    #[error("{0}")]
+    Limit(String),
+    /// A value cannot be stored in its column.
+    #[error("column {column:?}: {reason}")]
+    Unsupported {
+        /// The column name.
+        column: String,
+        /// Why the value does not fit.
+        reason: String,
+    },
+    /// The encoder failed (`Parquet`).
+    #[error("encoding failed: {0}")]
+    Encode(String),
     /// An identifier could not be quoted.
     #[error(transparent)]
     Sql(#[from] DdlError),

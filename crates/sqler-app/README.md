@@ -24,4 +24,6 @@ Exit codes: `0` normal exit, `1` startup failure (runtime or driver registry), `
 
 The `driver-sqlite` feature (on by default) registers the `SQLite` driver.
 
+The `export-xlsx` feature (on by default) and the `export-parquet` feature (off: the Linux release binary is over the size budget until T14, see ADR-0029) link the `XLSX` and `Parquet` writers of `sqler-export`.
+
 See [AGENTS.md](../../AGENTS.md) for the project handbook.
