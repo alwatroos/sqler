@@ -439,3 +439,16 @@ fn key_over_plain_http_to_a_remote_host_is_refused() {
     assert!(!format!("{e}{e:?}").contains(KEY));
     assert!(!format!("{e}{e:?}").contains("example.com"));
 }
+
+#[tokio::test]
+async fn silent_stream_times_out() {
+    let server = MockServer::start(chat_route(Reply::sse("", 64, Finish::Hold))).await;
+    let p = provider(&server)
+        .with_read_timeout(Duration::from_millis(200))
+        .unwrap();
+    let mut s = p.stream(request());
+    assert_eq!(
+        s.next_event().await.unwrap().unwrap_err(),
+        AiError::Network("timed out".into())
+    );
+}

@@ -52,7 +52,15 @@ pub(crate) fn stream_error(v: &Value, key: Option<&str>) -> AiError {
     }
 }
 
+/// The longest `Retry-After` reported; a hostile header must not make
+/// `Instant::now() + retry_after` overflow.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(3600);
+
 fn retry_after(headers: &HeaderMap) -> Option<Duration> {
+    retry_after_raw(headers).map(|d| d.min(MAX_RETRY_AFTER))
+}
+
+fn retry_after_raw(headers: &HeaderMap) -> Option<Duration> {
     let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
     // `try_from_secs_f64` rejects negative, NaN and out-of-range values
     // instead of panicking; the header comes from the server.
@@ -213,6 +221,26 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn huge_retry_after_is_clamped() {
+        let max = AiError::RateLimited {
+            retry_after: Some(MAX_RETRY_AFTER),
+        };
+        assert_eq!(
+            st(429, &[("retry-after", "18446744073709551615")], "{}"),
+            max
+        );
+        assert_eq!(st(429, &[("retry-after-ms", "1e17")], "{}"), max);
+        assert_eq!(
+            st(429, &[("retry-after", "7")], "{}"),
+            AiError::RateLimited {
+                retry_after: Some(Duration::from_secs(7))
+            }
+        );
+        let now = std::time::Instant::now();
+        assert!(now.checked_add(MAX_RETRY_AFTER).is_some());
     }
 
     #[test]

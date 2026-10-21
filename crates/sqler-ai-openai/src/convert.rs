@@ -305,6 +305,19 @@ impl ChunkMapper {
 
     /// Emits the collected tool calls in index order.
     fn flush(&mut self, out: &mut VecDeque<Result<ChatEvent, AiError>>) -> Result<(), AiError> {
+        // A response cut by the token cap (or without a finish reason) may end
+        // in half-written arguments; never hand those to the tool layer.
+        if matches!(self.finish.as_deref(), None | Some("length"))
+            && self
+                .partials
+                .values()
+                .any(|p| serde_json::from_str::<Value>(&p.args).map_or(true, |v| !v.is_object()))
+        {
+            self.partials.clear();
+            return Err(AiError::Protocol(
+                "tool call cut off by the token limit".to_owned(),
+            ));
+        }
         for (index, p) in std::mem::take(&mut self.partials) {
             let name = p
                 .name
@@ -655,6 +668,36 @@ mod tests {
             panic!("expected Other");
         };
         assert_eq!(s.len(), 200);
+    }
+
+    #[test]
+    fn tool_call_cut_by_length_is_an_error() {
+        let got = run(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"q","arguments":"{\"sql\":\"SEL"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"length"}]}"#,
+        ]);
+        assert_eq!(
+            got,
+            vec![Err(AiError::Protocol(
+                "tool call cut off by the token limit".into()
+            ))]
+        );
+    }
+
+    #[test]
+    fn complete_tool_call_followed_by_length_is_delivered() {
+        let got = run(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"q","arguments":"{\"a\":1}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"length"}]}"#,
+            "[DONE]",
+        ]);
+        assert!(matches!(got[0], Ok(ChatEvent::ToolCall(_))), "{got:?}");
+        assert!(matches!(
+            got.last(),
+            Some(Ok(ChatEvent::Done {
+                stop: StopReason::MaxTokens
+            }))
+        ));
     }
 
     #[test]

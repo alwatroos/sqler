@@ -23,6 +23,7 @@ use crate::wire::Models;
 pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const READ_TIMEOUT: Duration = Duration::from_secs(120);
 const MODELS_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_JSON_BODY: usize = 16 * 1024 * 1024;
 const OPENAI_HOST: &str = "api.openai.com";
@@ -83,6 +84,20 @@ pub struct OpenAiProvider {
     flavor: Flavor,
     local: bool,
     caps: Option<Capabilities>,
+}
+
+fn build_client(local: bool, read_timeout: Duration) -> Result<Client, AiError> {
+    let mut builder = Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(read_timeout)
+        .redirect(Policy::none());
+    if local {
+        // A loopback server must not be reached through an environment proxy.
+        builder = builder.no_proxy();
+    }
+    builder
+        .build()
+        .map_err(|_| AiError::Provider("cannot build the HTTP client".to_owned()))
 }
 
 impl OpenAiProvider {
@@ -151,16 +166,7 @@ impl OpenAiProvider {
                 Some(value)
             }
         };
-        let mut builder = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .redirect(Policy::none());
-        if local {
-            // A loopback server must not be reached through an environment proxy.
-            builder = builder.no_proxy();
-        }
-        let client = builder
-            .build()
-            .map_err(|_| AiError::Provider("cannot build the HTTP client".to_owned()))?;
+        let client = build_client(local, READ_TIMEOUT)?;
         Ok(Self {
             client,
             base: raw.trim_end_matches('/').to_owned(),
@@ -177,6 +183,17 @@ impl OpenAiProvider {
     pub fn with_capabilities(mut self, caps: Capabilities) -> Self {
         self.caps = Some(caps);
         self
+    }
+
+    /// Sets how long a response may stay silent (no byte received) before the
+    /// request fails with `Network("timed out")`. The default is 120 seconds.
+    ///
+    /// # Errors
+    ///
+    /// [`AiError::Provider`] when the HTTP client cannot be rebuilt.
+    pub fn with_read_timeout(mut self, timeout: Duration) -> Result<Self, AiError> {
+        self.client = build_client(self.local, timeout)?;
+        Ok(self)
     }
 
     /// The base URL as configured, without a trailing `/`.
