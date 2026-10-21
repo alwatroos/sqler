@@ -1,0 +1,7 @@
+: Hand-written from the OpenAI Chat Completions streaming reference, not captured from a live server.
+data: {"id":"chatcmpl-3","object":"chat.completion.chunk","created":3,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"It is 11 degrees."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-3","object":"chat.completion.chunk","created":3,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
