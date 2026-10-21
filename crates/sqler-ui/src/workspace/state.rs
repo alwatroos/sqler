@@ -10,7 +10,7 @@ use sqler_catalog::{CacheKey, CatalogWorker, RefreshHandle};
 use sqler_config::{
     ConnectionId, ConnectionProfile, NewHistoryEntry, SavedQueries, Secret, SecretRef,
 };
-use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId};
+use sqler_driver_api::sqler_core::{ConnectionConfig, DbObject, DriverId};
 use sqler_driver_api::{CancelHandle, Session};
 use sqler_sql::Dialect;
 
@@ -24,7 +24,9 @@ use crate::connections::{
     GroupPurpose, HostKeyPrompt, SecretField, TestStatus, from_profile_secret,
 };
 use crate::editor::{EditorDocs, EditorKey, TextEdit};
-use crate::grid::{GridCancel, GridTab, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS};
+use crate::grid::{
+    GridCancel, GridTab, InsertTarget, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS,
+};
 use crate::history::HistorySearch;
 use crate::query::{QueryJob, QueryTab, RunEvent};
 use crate::settings::SettingsModel;
@@ -348,6 +350,8 @@ pub struct Workspace {
     system_appearance: Appearance,
     /// Cancel flags of the grid tabs' ingestion threads.
     pub(super) grid_cancels: HashMap<TabId, GridCancel>,
+    /// The table or view behind each open-data tab.
+    pub(super) grid_objects: HashMap<TabId, DbObject>,
     /// Rows of the synthetic grid; a field so tests can use a small result.
     synthetic_rows: usize,
     /// The object browser of every connection that was opened.
@@ -414,6 +418,7 @@ impl Workspace {
             settings_tab: SettingsTab::Closed,
             system_appearance: Appearance::Light,
             grid_cancels: HashMap::new(),
+            grid_objects: HashMap::new(),
             synthetic_rows: SYNTHETIC_ROWS,
             browsers: HashMap::new(),
             next_generation: 0,
@@ -456,6 +461,19 @@ impl Workspace {
     #[must_use]
     pub fn dialog_generation(&self) -> u64 {
         self.dialog_generation
+    }
+
+    /// Where a copy as SQL `INSERT` of this tab's grid points: the real table for an open-data
+    /// tab, else the placeholder table. The dialect is the tab connection's. `None` if the tab
+    /// is gone.
+    #[must_use]
+    pub fn insert_target(&self, tab: TabId) -> Option<InsertTarget> {
+        let connection = self.tabs.get(tab)?.connection();
+        let dialect = Dialect::from_driver_id(connection.driver.as_str());
+        Some(match self.grid_objects.get(&tab) {
+            Some(object) => InsertTarget::for_object(dialect, object),
+            None => InsertTarget::placeholder(dialect),
+        })
     }
 
     /// Takes the pending message for the user, if any.
@@ -743,6 +761,7 @@ impl Workspace {
         if let Some(cancel) = self.grid_cancels.remove(&id) {
             cancel.cancel();
         }
+        self.grid_objects.remove(&id);
         self.close_object_tab(id);
         self.editors.remove(id);
         self.tab_conns.remove(&id);

@@ -20,6 +20,7 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::select::{Select, SelectState};
 use gpui_component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
@@ -28,8 +29,9 @@ use gpui_component::{ActiveTheme as _, IndexPath, Sizable as _};
 use super::detail_view::{self, CellDetailView, CopyCellValue};
 use super::layout::{MIN_COLUMN_PX, widest_text};
 use super::{
-    CellPos, Collation, ColumnHeader, Condition, FilterOp, FilterSpec, GridAction, GridControls,
-    GridTab, IngestState, OrderProgress, POLL_BUDGET, ProbeReport, QuickFilter,
+    CellPos, Collation, ColumnHeader, Condition, CopyError, CopyFormat, CopyJob, CopyLimits,
+    DisplayMap, FilterOp, FilterSpec, GridAction, GridControls, GridTab, IngestState, InsertTarget,
+    OrderProgress, POLL_BUDGET, ProbeReport, QuickFilter,
 };
 use crate::command::CommandId;
 use crate::tabs::{TabId, TabStrip};
@@ -113,12 +115,17 @@ pub(crate) struct GridDelegate {
     controls: GridControls,
     columns: Vec<Column>,
     detail: Option<Entity<CellDetailView>>,
+    /// Runs a copy of the selection; set by the owner, which holds the clipboard path.
+    on_copy: Option<CopyHook>,
     /// The workspace to repaint while the sort and filter job runs.
     workspace: WeakEntity<WorkspaceView>,
     /// Whether a pump task is running for the sort and filter job.
     pumping: bool,
     bar: Option<FilterBar>,
 }
+
+/// What a copy-menu item does: starts the copy of the selection in the given format.
+pub(crate) type CopyHook = std::rc::Rc<dyn Fn(CopyFormat, &mut Window, &mut App)>;
 
 impl GridDelegate {
     pub(crate) fn new(tab: GridTab, workspace: WeakEntity<WorkspaceView>) -> Self {
@@ -127,6 +134,7 @@ impl GridDelegate {
             controls: GridControls::default(),
             columns: Vec::new(),
             detail: None,
+            on_copy: None,
             workspace,
             pumping: false,
             bar: None,
@@ -143,6 +151,11 @@ impl GridDelegate {
         self.detail.as_ref()
     }
 
+    /// Sets what the copy menu items do.
+    pub(crate) fn set_copy_hook(&mut self, hook: CopyHook) {
+        self.on_copy = Some(hook);
+    }
+
     /// The grid the table shows.
     pub(crate) fn grid(&self) -> &GridTab {
         &self.tab
@@ -151,6 +164,33 @@ impl GridDelegate {
     /// The grid the table shows, for actions that change it.
     pub(crate) fn grid_mut(&mut self) -> &mut GridTab {
         &mut self.tab
+    }
+
+    /// Plans the copy of the selection in display order.
+    pub(crate) fn copy_job(
+        &self,
+        format: CopyFormat,
+        target: InsertTarget,
+    ) -> Result<CopyJob, CopyError> {
+        // The grid's own row order, so a sort and a filter apply to the copy.
+        let rows = self.tab.rows();
+        let map = DisplayMap {
+            rows: &rows,
+            columns: self.controls.layout(),
+        };
+        CopyJob::new(
+            self.tab.model(),
+            &map,
+            self.controls.selection(),
+            format,
+            target,
+            CopyLimits::DEFAULT,
+        )
+    }
+
+    /// Reads the next rows of a copy from the model. `true` once every row is in.
+    pub(crate) fn gather_copy(&self, job: &mut CopyJob, max_cells: usize) -> bool {
+        job.gather(self.tab.model(), max_cells)
     }
 
     /// Whether the motion would change the active cell.
@@ -193,6 +233,27 @@ impl GridDelegate {
 }
 
 impl TableDelegate for GridDelegate {
+    /// The copy menu of a right click. The click does not change the selection.
+    fn context_menu(
+        &mut self,
+        _row_ix: usize,
+        mut menu: PopupMenu,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        let Some(hook) = self.on_copy.clone() else {
+            return menu;
+        };
+        for format in CopyFormat::ALL {
+            let hook = hook.clone();
+            menu = menu.item(
+                PopupMenuItem::new(format.menu_label())
+                    .on_click(move |_, window, cx| hook(format, window, cx)),
+            );
+        }
+        menu
+    }
+
     fn columns_count(&self, _: &App) -> usize {
         self.columns.len()
     }
@@ -509,9 +570,18 @@ pub(crate) fn new_table(
     window: &mut Window,
     cx: &mut Context<WorkspaceView>,
 ) -> Table {
+    let owner = cx.weak_entity();
     let workspace = cx.entity().downgrade();
     let table = cx.new(|cx| {
-        TableState::new(GridDelegate::new(grid, workspace), window, cx)
+        let mut delegate = GridDelegate::new(grid, workspace);
+        delegate.set_copy_hook(std::rc::Rc::new(move |format, window, cx| {
+            owner
+                .update(cx, |view, cx| {
+                    view.run_command(&format.command_id(), window, cx);
+                })
+                .ok();
+        }));
+        TableState::new(delegate, window, cx)
             .col_movable(true)
             .col_resizable(true)
             .sortable(false)
@@ -619,7 +689,9 @@ pub(crate) fn apply_action(
 
 /// The table under its filter bar, with the cell detail pane to its right. Its keys are routed
 /// by the workspace (`WorkspaceView::grid_key`), before the global chord router, because that
-/// router would otherwise take Ctrl+Space for completion.
+/// router would otherwise take Ctrl+Space for completion. The right-click copy menu is the delegate's
+/// `context_menu`: the table has its own trigger that takes every right click, so a menu on a
+/// wrapper would never open.
 pub(crate) fn grid_table(table: &Table, cx: &mut Context<WorkspaceView>) -> Div {
     let data = DataTable::new(table).stripe(true).bordered(true);
     let pane = table.read(cx).delegate().detail().cloned();
@@ -1275,4 +1347,133 @@ fn rss_mb() -> Option<f64> {
         return None;
     };
     Some(kb / 1024.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use gpui::{
+        ClipboardItem, IntoElement, Modifiers, Render, TestAppContext, VisualTestContext,
+        WeakEntity, point,
+    };
+    use sqler_sql::Dialect;
+
+    use super::*;
+
+    /// A window with only the table in it.
+    struct Root(Table);
+
+    impl Render for Root {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(DataTable::new(&self.0))
+        }
+    }
+
+    /// A synthetic grid in a table whose copy hook copies like the workspace does (plan, read,
+    /// render, clipboard) and records the format. The whole result is selected.
+    fn open(
+        cx: &mut TestAppContext,
+    ) -> (Table, Rc<RefCell<Vec<CopyFormat>>>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+        });
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let slot: Rc<RefCell<Option<WeakEntity<TableState<GridDelegate>>>>> = Rc::default();
+        let (root, cx) = cx.add_window_view({
+            let (seen, slot) = (seen.clone(), slot.clone());
+            move |window, cx| {
+                let (mut tab, _cancel) = GridTab::spawn_synthetic(6, 3, 6);
+                while tab.row_count() < 6 {
+                    tab.poll(usize::MAX);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let mut delegate = GridDelegate::new(tab, WeakEntity::new_invalid());
+                delegate.rebuild_columns();
+                let rows = delegate.tab.row_count();
+                let order = delegate.tab.rows();
+                delegate
+                    .controls
+                    .apply(GridAction::SelectAll, &order, 0..rows);
+                let hook_slot = slot.clone();
+                delegate.set_copy_hook(Rc::new(move |format, _, cx| {
+                    seen.borrow_mut().push(format);
+                    let table = hook_slot
+                        .borrow()
+                        .as_ref()
+                        .and_then(WeakEntity::upgrade)
+                        .unwrap();
+                    let target = InsertTarget::placeholder(Some(Dialect::Postgres));
+                    let mut job = table.read(cx).delegate().copy_job(format, target).unwrap();
+                    table.read(cx).delegate().gather_copy(&mut job, usize::MAX);
+                    let text = job.render().unwrap().text;
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }));
+                let table = cx.new(|cx| {
+                    TableState::new(delegate, window, cx)
+                        .row_selectable(false)
+                        .col_selectable(false)
+                        .cell_selectable(false)
+                });
+                *slot.borrow_mut() = Some(table.downgrade());
+                Root(table)
+            }
+        });
+        let table = root.read_with(cx, |root, _| root.0.clone());
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        (table, seen, cx)
+    }
+
+    /// Right-clicks the first row and clicks the menu item `index` (0 based).
+    fn pick(cx: &mut VisualTestContext, index: usize) {
+        let press = point(px(40.), px(40.));
+        cx.simulate_mouse_down(press, MouseButton::Right, Modifiers::default());
+        cx.simulate_mouse_up(press, MouseButton::Right, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let item = point(
+            press.x + px(30.),
+            press.y + px(17. + 28. * f32::from(u16::try_from(index).unwrap())),
+        );
+        cx.simulate_mouse_move(item, None, Modifiers::default());
+        cx.simulate_click(item, Modifiers::default());
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn a_right_click_on_a_row_opens_the_five_copy_items(cx: &mut TestAppContext) {
+        let (table, seen, cx) = open(cx);
+        let selection = table.read_with(cx, |t, _| t.delegate().controls.selection().clone());
+        for index in 0..CopyFormat::ALL.len() {
+            pick(cx, index);
+        }
+        assert_eq!(
+            *seen.borrow(),
+            CopyFormat::ALL,
+            "one click per item, in order"
+        );
+        // A right click leaves the selection as it was.
+        let after = table.read_with(cx, |t, _| t.delegate().controls.selection().clone());
+        assert_eq!(after, selection);
+    }
+
+    #[gpui::test]
+    fn clicking_an_item_puts_the_text_on_the_clipboard(cx: &mut TestAppContext) {
+        let (table, _, cx) = open(cx);
+        pick(cx, 2);
+        let want = table.read_with(cx, |t, cx| {
+            let target = InsertTarget::placeholder(Some(Dialect::Postgres));
+            let mut job = t.delegate().copy_job(CopyFormat::ALL[2], target).unwrap();
+            t.delegate().gather_copy(&mut job, usize::MAX);
+            let _ = cx;
+            job.render().unwrap().text
+        });
+        let got = cx.read_from_clipboard().and_then(|item| item.text());
+        assert_eq!(got.as_deref(), Some(want.as_str()));
+        assert!(want.starts_with('|'), "the third item is Markdown: {want}");
+    }
 }
