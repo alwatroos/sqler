@@ -56,3 +56,5 @@ Defaults come from `ai.toml` (1000 rows, 30 seconds; see [AI configuration](../u
 Query tools return `{connection, limits, not_run, statements:[...]}`; each statement has `index`, `sql`, `class`, `approved`, `columns`, `rows`, `row_count`, `rows_affected`, `truncated`, `notice` and `error`. Binary values are `"0x"` plus hex; non-finite floats are the strings `"NaN"`, `"Infinity"`, `"-Infinity"`.
 
 A failed call returns an error result `{"error":{"code":"...","message":"..."}}` with one of: `unknown_tool`, `invalid_arguments`, `unknown_connection`, `not_available`, `unsupported`, `not_found`, `no_approver`, `denied`, `read_only`, `catalog`, `driver`, `host`.
+
+Results are wrapped in an untrusted-data envelope and redacted before they reach the model (ADR-0037, [Safety](safety.md)). The result text is `NOTICE`, `<untrusted-data>`, the JSON with `<` and `>` escaped, `</untrusted-data>`, each on its own line; `sqler_ai_tools::unwrap_untrusted(content)` returns the inner JSON text, which parses to the same value. Statements that are touched by redaction carry a `redaction` object.

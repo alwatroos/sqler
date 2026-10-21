@@ -32,6 +32,10 @@ async fn run_sql(
     ran: &mut Ran,
 ) -> Result<Value, ToolError> {
     let plan = guard::plan(info, sql, force)?;
+    ran.planned = plan
+        .iter()
+        .map(|p| (p.sql.clone(), p.class, p.requires_approval()))
+        .collect();
     let approved = guard::approve_all(tool, ts.approver.as_deref(), info, &plan).await?;
     let caps = ts.limits.effective(info.environment);
     let row_cap = caps.rows_for(requested_rows);
@@ -88,6 +92,7 @@ async fn run_sql(
             approved,
             rows: row_count as u64,
             truncated: out.truncated,
+            failed: out.error.is_some(),
         });
         rendered.push(json!({
             "index": out.index,
@@ -217,24 +222,22 @@ pub(crate) async fn explain_query(
 
 pub(crate) async fn open_in_editor(
     ts: &Inner,
+    info: Option<&ConnectionInfo>,
     args: &OpenInEditorArgs,
 ) -> Result<Value, ToolError> {
     let ui = ts.ui()?;
-    let connection = match &args.connection {
-        Some(name) => Some(ts.resolve(name)?.id),
-        None => None,
-    };
-    ui.open_in_editor(connection.as_deref(), &args.sql).await?;
+    ui.open_in_editor(info.map(|i| i.id.as_str()), &args.sql)
+        .await?;
     Ok(json!({"opened": true}))
 }
 
 pub(crate) async fn open_results_tab(
     ts: &Inner,
+    info: &ConnectionInfo,
     args: &OpenResultsTabArgs,
 ) -> Result<Value, ToolError> {
     let ui = ts.ui()?;
-    let info = ts.resolve(&args.connection)?;
-    let plan = guard::plan(&info, &args.sql, None)?;
+    let plan = guard::plan(info, &args.sql, None)?;
     guard::require_unapproved_free(crate::schema::names::OPEN_RESULTS_TAB, &plan)?;
     ui.open_results_tab(&info.id, &args.sql, args.title.as_deref())
         .await?;

@@ -1,1 +1,4 @@
 crates/sqler-sql/tests/snapshots/* -text
+
+# Test fixtures are compared and split byte-exactly (SSE/NDJSON "\n\n" framing); never convert line endings.
+crates/*/tests/fixtures/** text eol=lf

@@ -7289,6 +7289,16 @@ version = "0.1.0"
 [[package]]
 name = "sqler-ai-anthropic"
 version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqler-ai-api",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "sqler-ai-api"
@@ -7317,6 +7327,14 @@ dependencies = [
 [[package]]
 name = "sqler-ai-openai"
 version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqler-ai-api",
+ "tokio",
+]
 
 [[package]]
 name = "sqler-ai-tools"

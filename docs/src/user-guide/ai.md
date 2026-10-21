@@ -179,3 +179,9 @@ keeps these settings.
 | `ai:toggle-connection` | AI: Turn On or Off for This Connection |
 
 Only `workbench:show-ai` has a default shortcut. See the [placement decisions](../adr/0050-ai-surfaces-in-the-workbench.md).
+
+## Audit log and redaction
+
+Every AI tool call is recorded in `ai-audit.jsonl` in the config directory (cell values are never stored), and listed columns are hidden from the model. See [Safety](../ai/safety.md).
+
+Redaction works on names. It does not catch a flagged column that is renamed before the model sees it: through a view (`create view v as select password as p ...`), a `union` behind a dummy first select, a CTE column list, or a Postgres whole-row reference such as `row_to_json(c)`. It also does not look inside cells, so JSON text with a `password` key is sent as it is. Use `send_rows = false` on connections where this matters. On Unix the audit file is readable by you only (0600); on Windows it relies on your profile's permissions.

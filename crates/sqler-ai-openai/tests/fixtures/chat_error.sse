@@ -1,0 +1,7 @@
+: Hand-written from the OpenAI Chat Completions streaming reference, not captured from a live server.
+data: {"id":"chatcmpl-4","object":"chat.completion.chunk","created":4,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"Par"},"finish_reason":null}]}
+
+data: {"error":{"message":"The server had an error while processing your request. Sorry about that!","type":"server_error","param":null,"code":null}}
+
+data: {"id":"chatcmpl-4","object":"chat.completion.chunk","created":4,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"never seen"},"finish_reason":null}]}
+
