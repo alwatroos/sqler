@@ -29,7 +29,7 @@ Option 1. Details are in [Workbench design](../architecture/workbench.md), secti
 - **Shortcut display.** Labels use platform glyphs (`display_chord`; for example `⌘⇧P` on macOS, `Ctrl+Shift+P` elsewhere) in tooltips, menus and the palette.
 - **Palette recents.** An empty query lists "Recently used" (up to 10 commands run from the palette, persisted per ADR-0045) before all commands. A typed query keeps today's ranking.
 - **Explain.** `query:explain` wraps the statement at the cursor: `EXPLAIN ` for PostgreSQL, MySQL and DuckDB, `EXPLAIN QUERY PLAN ` for SQLite, a notice for SQL Server. It never adds `ANALYZE`. The text runs through the normal run pipeline, so the production gate classifies `EXPLAIN <write>` as the write and still confirms (ADR-0024).
-- **Unsaved text (Q3, default taken; owner may overrule by follow-up).** Closing an editor with unsaved text does not prompt (decision: no prompt, unchanged behaviour); the pending-edits prompt stays. A prompt waits until tab restore exists.
+- **Unsaved text (Q3, default taken; owner may overrule by follow-up).** Closing an editor with unsaved text does not prompt (decision: no prompt, unchanged behaviour); the pending-edits prompt stays. A prompt waits until tab restore exists. Refinement: the batch commands (Close Others, Close to the Right, Close All) do treat an editor with unsaved text as pending changes: they prompt for it like staged grid edits, stop at the first prompt, and Confirm closes only the prompted tab while Keep open stops the batch.
 
 Rejected: multi-stroke chords. They change the chord grammar and the keybinding file shape (ADR-0005), for no need the single-stroke defaults do not meet.
 

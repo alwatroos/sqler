@@ -9,7 +9,8 @@ use std::path::PathBuf;
 
 use sqler_catalog::{CacheKey, CatalogWorker, RefreshHandle};
 use sqler_config::{
-    ConnectionId, ConnectionProfile, NewHistoryEntry, SavedQueries, Secret, SecretRef,
+    ConnectionId, ConnectionProfile, NewHistoryEntry, PanelState, SavedQueries, Secret, SecretRef,
+    WINDOW_SIZE_RANGE, WORKBENCH_VERSION, WindowState, WorkbenchLoad, WorkbenchState,
 };
 use sqler_driver_api::sqler_core::{ConnectionConfig, DbObject, DriverId};
 use sqler_driver_api::{CancelHandle, Session};
@@ -33,11 +34,15 @@ use crate::grid::{
     GridCancel, GridTab, InsertTarget, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS,
 };
 use crate::history::HistorySearch;
-use crate::query::{QueryJob, QueryTab, RunEvent};
+use crate::query::{Phase, QueryJob, QueryTab, RunEvent, StatementStatus};
 use crate::settings::SettingsModel;
 use crate::sidebar::SidebarModel;
-use crate::tabs::{TabConnection, TabId, TabKind, TabStrip};
+use crate::tabs::{TabConnection, TabDecor, TabId, TabKind, TabStrip};
 use crate::theme::{self, Appearance};
+use crate::workbench::{
+    RecentCommands, RecentConnections, RowInfo, RunIndicator, StatusBarModel, WorkbenchAction,
+    WorkbenchLayout, database_label, format_duration, format_rows,
+};
 
 /// Identifies one connect attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -416,6 +421,12 @@ pub struct Workspace {
     pub(super) edit: EditFlow,
     /// The export dialog and the exports in progress.
     pub(super) exports: ExportCenter,
+    /// Panel visibility, sizes and views.
+    pub(super) layout: WorkbenchLayout,
+    /// `workbench.toml` is from a newer `SQLer`: keep it as it is.
+    workbench_newer: bool,
+    /// The connections opened last, most recent first.
+    recent_connections: RecentConnections,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -470,7 +481,209 @@ impl Workspace {
             history: HistoryWorkspace::new(),
             edit: EditFlow::default(),
             exports: ExportCenter::default(),
+            layout: WorkbenchLayout::default(),
+            workbench_newer: false,
+            recent_connections: RecentConnections::default(),
         }
+    }
+
+    /// Applies what `workbench.toml` held: the layout and the recent connections. A file from a
+    /// newer `SQLer` keeps the default layout and is never overwritten; a file that cannot be read
+    /// gives the default layout and a notice.
+    #[must_use]
+    pub fn with_workbench(mut self, load: &WorkbenchLoad) -> Self {
+        match load {
+            WorkbenchLoad::Missing => {}
+            WorkbenchLoad::Loaded(state) => {
+                self.layout = WorkbenchLayout::from_state(state);
+                self.recent_connections =
+                    RecentConnections::from_strings(&state.recent_connections, &self.sidebar);
+            }
+            WorkbenchLoad::Newer(_) => self.workbench_newer = true,
+            WorkbenchLoad::Invalid(message) => {
+                self.notice = Some(format!(
+                    "Could not read workbench.toml, using the default layout \
+                     (the file is copied to workbench.toml.bak before it is replaced): {message}"
+                ));
+            }
+        }
+        self
+    }
+
+    /// The panel layout.
+    #[must_use]
+    pub fn layout(&self) -> &WorkbenchLayout {
+        &self.layout
+    }
+
+    /// Applies a layout action. The layout needs no I/O, so the effect is always none.
+    pub fn dispatch_workbench(&mut self, action: WorkbenchAction) -> Effect {
+        self.layout.apply(action);
+        Effect::None
+    }
+
+    /// The connections opened last, most recent first.
+    #[must_use]
+    pub fn recent_connections(&self) -> &RecentConnections {
+        &self.recent_connections
+    }
+
+    /// The state to write to `workbench.toml`; `None` when the file is from a newer `SQLer`.
+    #[must_use]
+    pub fn workbench_state(
+        &self,
+        recent: &RecentCommands,
+        window: Option<WindowState>,
+    ) -> Option<WorkbenchState> {
+        if self.workbench_newer {
+            return None;
+        }
+        let l = &self.layout;
+        Some(WorkbenchState {
+            version: WORKBENCH_VERSION,
+            side_panel: PanelState {
+                visible: l.side_visible(),
+                size: l.side_width(),
+                view: l.side_view().as_str().to_owned(),
+            },
+            bottom_panel: PanelState {
+                visible: l.panel_visible(),
+                size: l.panel_height(),
+                view: l.panel_view().as_str().to_owned(),
+            },
+            window: window.filter(|w| {
+                WINDOW_SIZE_RANGE.contains(&w.width) && WINDOW_SIZE_RANGE.contains(&w.height)
+            }),
+            recent_commands: recent.to_strings(),
+            recent_connections: self
+                .recent_connections
+                .iter()
+                .filter(|id| self.sidebar.index_of(id).is_some())
+                .map(|id| id.as_str().to_owned())
+                .collect(),
+        })
+    }
+
+    /// A tab header with the live state the strip decorates it with.
+    #[must_use]
+    pub fn tab_decor(&self, id: TabId) -> Option<TabDecor> {
+        let mut header = self.tabs.get(id)?.header();
+        let dirty = self.editors.is_dirty(id) || self.edit.pending_notice(id).is_some();
+        let running = self.queries.get(&id).is_some_and(QueryTab::is_running);
+        header.preview &= !dirty;
+        Some(TabDecor {
+            header,
+            dirty,
+            running,
+        })
+    }
+
+    /// What the status bar shows for the active tab. `rows` describes the result in view.
+    #[must_use]
+    pub fn status_bar(&self, rows: Option<RowInfo>) -> StatusBarModel {
+        let Some(tab) = self.tabs.active() else {
+            return StatusBarModel::default();
+        };
+        let id = tab.id();
+        let conn = tab.connection();
+        let database = self
+            .tab_conns
+            .get(&id)
+            .and_then(|c| self.sidebar.index_of(c))
+            .and_then(|i| self.sidebar.entries().get(i))
+            .and_then(|e| database_label(&conn.driver, &e.config().target));
+        let query = self.queries.get(&id);
+        let run = match query.map(QueryTab::phase) {
+            Some(Phase::Running { cancelling, .. }) => {
+                if *cancelling {
+                    RunIndicator::Cancelling
+                } else {
+                    RunIndicator::Running
+                }
+            }
+            _ => RunIndicator::Idle,
+        };
+        let timing = query.and_then(|q| {
+            q.results().iter().rev().find_map(|r| match &r.status {
+                StatementStatus::Done { duration, .. }
+                | StatementStatus::Failed { duration, .. } => Some(format_duration(*duration)),
+                _ => None,
+            })
+        });
+        StatusBarModel {
+            env: conn.environment,
+            connection: Some(conn.name.clone()),
+            accent: tab.header().accent,
+            database,
+            run,
+            rows: rows.map(format_rows),
+            timing,
+        }
+    }
+
+    /// Closes `ids` one by one through the normal close path; stops at the first pending-changes
+    /// prompt so later tabs do not close behind the dialog. Unlike closing a single tab, a batch
+    /// also treats an editor with unsaved text as pending changes (refinement of Q3).
+    fn close_many(&mut self, ids: Vec<TabId>) -> Effect {
+        let mut effects = Vec::new();
+        for id in ids {
+            if self.close_prompt().is_some() {
+                break;
+            }
+            if self.tabs.get(id).is_some()
+                && !self.edit.is_applying(id)
+                && self.editors.is_dirty(id)
+            {
+                self.edit.text_prompt(id);
+                break;
+            }
+            match self.request_close_tab(id) {
+                Effect::None => {}
+                effect => effects.push(effect),
+            }
+        }
+        match effects.len() {
+            0 => Effect::None,
+            1 => effects.swap_remove(0),
+            _ => Effect::Batch(effects),
+        }
+    }
+
+    /// The tabs of the group `id` is in, in order, with the position of `id`.
+    fn group_tabs_of(&self, id: TabId) -> Option<(Vec<TabId>, usize)> {
+        let group = self.tabs.group_of(id)?;
+        let tabs = self
+            .tabs
+            .groups()
+            .iter()
+            .find(|g| g.id() == group)?
+            .tabs()
+            .to_vec();
+        let at = tabs.iter().position(|t| *t == id)?;
+        Some((tabs, at))
+    }
+
+    /// Refuses a split with a notice.
+    fn split_right(&mut self) {
+        if self.tabs.split_right().is_some() {
+            self.show_connection_tabs();
+        } else if self.tabs.groups().len() >= crate::tabs::MAX_GROUPS {
+            self.notice = Some(format!(
+                "At most {} editor groups.",
+                crate::tabs::MAX_GROUPS
+            ));
+        } else {
+            self.notice = Some("Split needs two or more tabs in the group.".to_owned());
+        }
+    }
+
+    /// Runs a tab-strip change that moves or focuses tabs; the connection tabs come to the front
+    /// when it worked.
+    fn tabs_changed(&mut self, changed: bool) -> Effect {
+        if changed {
+            self.show_connection_tabs();
+        }
+        Effect::None
     }
 
     /// Sets the drivers the connection form offers (the connector's `driver_ids`).
@@ -621,6 +834,7 @@ impl Workspace {
     }
 
     /// Applies an action and returns what the view must do next.
+    #[allow(clippy::too_many_lines)] // one arm per action
     pub fn dispatch(&mut self, action: WorkspaceAction) -> Effect {
         match action {
             WorkspaceAction::SelectConnection(index) => {
@@ -672,6 +886,65 @@ impl Workspace {
             WorkspaceAction::SetUiFontSize(size) => {
                 Self::changed(self.settings.set_ui_font_size(size))
             }
+            WorkspaceAction::PinTab(id) => {
+                self.tabs.pin(id);
+                Effect::None
+            }
+            WorkspaceAction::CloseOtherTabs(id) => match self.group_tabs_of(id) {
+                Some((tabs, _)) => self.close_many(tabs.into_iter().filter(|t| *t != id).collect()),
+                None => Effect::None,
+            },
+            WorkspaceAction::CloseTabsToRight(id) => match self.group_tabs_of(id) {
+                Some((tabs, at)) => self.close_many(tabs[at + 1..].to_vec()),
+                None => Effect::None,
+            },
+            WorkspaceAction::CloseAllTabs => {
+                let focused = self.tabs.focused_group();
+                let tabs = self
+                    .tabs
+                    .groups()
+                    .iter()
+                    .find(|g| g.id() == focused)
+                    .map(|g| g.tabs().to_vec())
+                    .unwrap_or_default();
+                self.close_many(tabs)
+            }
+            WorkspaceAction::MoveTab { id, group, index } => {
+                let moved = self.tabs.move_tab(id, group, index);
+                self.tabs_changed(moved)
+            }
+            WorkspaceAction::MoveActiveTabLeft => {
+                let moved = self.tabs.move_active_by(-1);
+                self.tabs_changed(moved)
+            }
+            WorkspaceAction::MoveActiveTabRight => {
+                let moved = self.tabs.move_active_by(1);
+                self.tabs_changed(moved)
+            }
+            WorkspaceAction::SplitRight => {
+                self.split_right();
+                Effect::None
+            }
+            WorkspaceAction::FocusGroup(group) => {
+                let changed = self.tabs.focus_group(group);
+                self.tabs_changed(changed)
+            }
+            WorkspaceAction::FocusNextGroup => {
+                let changed = self.tabs.focus_adjacent_group(true);
+                self.tabs_changed(changed)
+            }
+            WorkspaceAction::FocusPreviousGroup => {
+                let changed = self.tabs.focus_adjacent_group(false);
+                self.tabs_changed(changed)
+            }
+            WorkspaceAction::MoveActiveTabToNextGroup => {
+                let moved = self.tabs.move_active_to_adjacent_group(true);
+                self.tabs_changed(moved)
+            }
+            WorkspaceAction::MoveActiveTabToPreviousGroup => {
+                let moved = self.tabs.move_active_to_adjacent_group(false);
+                self.tabs_changed(moved)
+            }
         }
     }
 
@@ -710,17 +983,36 @@ impl Workspace {
     /// Moves to the next or previous tab; the settings tab, when open, comes after the last
     /// connection tab.
     fn step_tab(&mut self, forward: bool) {
-        let first = self.tabs.iter().next().map(crate::tabs::Tab::id);
-        let last = self.tabs.iter().last().map(crate::tabs::Tab::id);
+        let focused = self.tabs.focused_group();
+        let in_first_group = self
+            .tabs
+            .groups()
+            .first()
+            .is_some_and(|g| g.id() == focused);
+        let group_tabs: Vec<TabId> = self
+            .tabs
+            .groups()
+            .iter()
+            .find(|g| g.id() == focused)
+            .map(|g| g.tabs().to_vec())
+            .unwrap_or_default();
+        let first = group_tabs.first().copied();
+        let last = group_tabs.last().copied();
         let active = self.tabs.active().map(crate::tabs::Tab::id);
-        match self.settings_tab {
-            SettingsTab::Closed => {
-                if forward {
-                    self.tabs.next();
-                } else {
-                    self.tabs.previous();
-                }
+        let plain = |ws: &mut Self| {
+            if forward {
+                ws.tabs.next();
+            } else {
+                ws.tabs.previous();
             }
+        };
+        if !in_first_group {
+            plain(self);
+            self.show_connection_tabs();
+            return;
+        }
+        match self.settings_tab {
+            SettingsTab::Closed => plain(self),
             SettingsTab::Active => {
                 // With no connection tabs the settings tab stays active.
                 if let Some(id) = if forward { first } else { last } {
@@ -731,10 +1023,8 @@ impl Workspace {
             SettingsTab::Background => {
                 if active == if forward { last } else { first } {
                     self.settings_tab = SettingsTab::Active;
-                } else if forward {
-                    self.tabs.next();
                 } else {
-                    self.tabs.previous();
+                    plain(self);
                 }
             }
         }
@@ -876,6 +1166,7 @@ impl Workspace {
                 self.tab_conns.insert(tab, id.clone());
                 self.editors.open(tab, dialect, seed);
                 self.queries.insert(tab, QueryTab::new());
+                self.recent_connections.record(id);
                 self.show_connection_tabs();
                 return self.ensure_browser(id);
             }
@@ -1414,8 +1705,13 @@ mod tests {
     use super::*;
     use crate::connections::{FormField, SecretSource, SshAuthKind};
     use crate::sidebar::ConnectionStatus;
+    use crate::workbench::{
+        RecentCommands, RowInfo, RunIndicator, StatusBarModel, WorkbenchAction,
+    };
+    use crate::workspace::CloseTarget;
     use crate::workspace::testing::FakeSession;
     use sqler_config::{SecretKind, ThemePreference};
+    use sqler_config::{WORKBENCH_VERSION, WindowState, WorkbenchLoad, WorkbenchState};
     use sqler_driver_api::sqler_core::{DriverId, Environment};
 
     fn ws() -> Workspace {
@@ -1784,6 +2080,315 @@ mod tests {
         model.set_theme(ThemePreference::Dark);
         let w = ws().with_settings(model);
         assert_eq!(w.appearance(), Appearance::Dark);
+    }
+
+    // ---- workbench wiring ----
+
+    #[test]
+    fn tab_decor_shows_dirty_and_running_and_editing_pins_a_preview() {
+        let mut w = ws();
+        let tab = open_tabs(&mut w, 1)[0];
+        let d = w.tab_decor(tab).unwrap();
+        assert!(!d.dirty && !d.running && !d.header.preview);
+        w.editor_edited(tab);
+        assert!(w.tab_decor(tab).unwrap().dirty);
+        // A preview tab is pinned by an edit.
+        let conn = w.sidebar().entries()[0].id().clone();
+        let preview = w
+            .open_object_preview(&conn, TabKind::Ddl, "t")
+            .map(|(t, _)| t)
+            .unwrap();
+        assert!(w.tab_decor(preview).unwrap().header.preview);
+        w.editor_edited(preview);
+        assert!(!w.tab_decor(preview).unwrap().header.preview);
+    }
+
+    #[test]
+    fn close_others_to_the_right_and_all_close_within_the_group() {
+        let mut w = ws();
+        let t = open_tabs(&mut w, 4);
+        w.dispatch(WorkspaceAction::CloseTabsToRight(t[1]));
+        assert_eq!(w.tabs().len(), 2);
+        w.dispatch(WorkspaceAction::CloseOtherTabs(t[0]));
+        assert_eq!(
+            w.tabs()
+                .iter()
+                .map(crate::tabs::Tab::id)
+                .collect::<Vec<_>>(),
+            [t[0]]
+        );
+        let more = open_tabs(&mut w, 2);
+        w.dispatch(WorkspaceAction::CloseAllTabs);
+        assert!(w.tabs().is_empty(), "{more:?}");
+    }
+
+    fn stage_pending(w: &mut Workspace, tab: TabId) {
+        w.set_pending_edits(crate::grid::edit::GridKey { tab, result: None }, 1);
+    }
+
+    #[test]
+    fn a_batch_close_stops_at_the_first_pending_changes_prompt() {
+        for action in [
+            |t: &[TabId]| WorkspaceAction::CloseOtherTabs(t[0]),
+            |_: &[TabId]| WorkspaceAction::CloseAllTabs,
+        ] {
+            let mut w = ws();
+            let t = open_tabs(&mut w, 3);
+            stage_pending(&mut w, t[1]);
+            w.dispatch(action(&t));
+            let prompt = *w.close_prompt().expect("a prompt");
+            assert_eq!(prompt.target, CloseTarget::Tab(t[1]));
+            assert!(w.tabs().get(t[1]).is_some());
+            assert!(
+                w.tabs().get(t[2]).is_some(),
+                "later tabs stay behind the dialog"
+            );
+            w.confirm_close();
+            assert!(w.tabs().get(t[1]).is_none());
+            assert!(
+                w.tabs().get(t[2]).is_some(),
+                "confirm closes only the prompted tab"
+            );
+        }
+        // To the right: the prompt stops the tabs after the dirty one.
+        let mut w = ws();
+        let t = open_tabs(&mut w, 4);
+        stage_pending(&mut w, t[2]);
+        w.dispatch(WorkspaceAction::CloseTabsToRight(t[0]));
+        assert_eq!(w.close_prompt().unwrap().target, CloseTarget::Tab(t[2]));
+        assert!(
+            w.tabs().get(t[1]).is_none(),
+            "tabs before the prompt closed"
+        );
+        assert!(w.tabs().get(t[3]).is_some());
+        w.confirm_close();
+        assert!(w.tabs().get(t[2]).is_none());
+        assert!(w.tabs().get(t[3]).is_some());
+    }
+
+    fn dirty_editor(w: &mut Workspace, tab: TabId) {
+        w.editors.get_mut(tab).expect("an editor").mark_dirty();
+    }
+
+    #[test]
+    fn a_batch_close_prompts_for_a_dirty_editor_and_a_single_close_does_not() {
+        for action in [
+            |t: &[TabId]| WorkspaceAction::CloseOtherTabs(t[0]),
+            |_: &[TabId]| WorkspaceAction::CloseAllTabs,
+        ] {
+            let mut w = ws();
+            let t = open_tabs(&mut w, 3);
+            dirty_editor(&mut w, t[1]);
+            w.dispatch(action(&t));
+            let prompt = *w.close_prompt().expect("a prompt");
+            assert_eq!(prompt.target, CloseTarget::Tab(t[1]));
+            assert!(prompt.unsaved_text);
+            assert!(w.tabs().get(t[1]).is_some());
+            assert!(w.tabs().get(t[2]).is_some(), "later tabs stay behind it");
+            w.confirm_close();
+            assert!(w.tabs().get(t[1]).is_none());
+            assert!(
+                w.tabs().get(t[2]).is_some(),
+                "confirm closes only the prompted tab"
+            );
+        }
+        // To the right.
+        let mut w = ws();
+        let t = open_tabs(&mut w, 4);
+        dirty_editor(&mut w, t[2]);
+        w.dispatch(WorkspaceAction::CloseTabsToRight(t[0]));
+        assert_eq!(w.close_prompt().unwrap().target, CloseTarget::Tab(t[2]));
+        assert!(w.tabs().get(t[1]).is_none());
+        assert!(w.tabs().get(t[3]).is_some());
+        // Cancel stops the batch and keeps every remaining tab.
+        w.dismiss_close();
+        assert!(w.close_prompt().is_none());
+        assert!(w.tabs().get(t[2]).is_some());
+        assert!(w.tabs().get(t[3]).is_some());
+        // A single close of a dirty editor is unchanged (Q3): no prompt.
+        w.dispatch(WorkspaceAction::CloseTab(t[2]));
+        assert!(w.close_prompt().is_none());
+        assert!(w.tabs().get(t[2]).is_none());
+    }
+
+    #[test]
+    fn a_real_run_decorates_the_tab_sets_the_status_and_reveals_results() {
+        let mut w = ws();
+        let tab = open_tabs(&mut w, 1)[0];
+        assert!(!w.layout().panel_visible());
+        let Effect::RunQuery { job, .. } = w.run_query(
+            tab,
+            crate::query::RunMode::All,
+            crate::query::BufferSnapshot::at_cursor("select 1", 0),
+        ) else {
+            panic!("expected RunQuery");
+        };
+        assert!(w.tab_decor(tab).unwrap().running);
+        assert_eq!(w.status_bar(None).run, RunIndicator::Running);
+        assert!(w.layout().panel_visible());
+        assert_eq!(
+            w.layout().panel_view(),
+            crate::workbench::PanelView::Results
+        );
+        w.cancel_query(tab);
+        assert_eq!(w.status_bar(None).run, RunIndicator::Cancelling);
+        drop(job);
+    }
+
+    #[test]
+    fn pin_tab_pins_a_preview() {
+        let mut w = ws();
+        open_tabs(&mut w, 1);
+        let conn = w.sidebar().entries()[0].id().clone();
+        let (p, _) = w.open_object_preview(&conn, TabKind::Ddl, "t").unwrap();
+        w.dispatch(WorkspaceAction::PinTab(p));
+        assert_eq!(w.tabs().mode(p), Some(crate::tabs::TabMode::Pinned));
+    }
+
+    #[test]
+    fn split_refusals_give_notices_and_a_split_moves_the_tab() {
+        let mut w = ws();
+        open_tabs(&mut w, 1);
+        w.dispatch(WorkspaceAction::SplitRight);
+        assert_eq!(
+            w.take_notice().as_deref(),
+            Some("Split needs two or more tabs in the group.")
+        );
+        open_tabs(&mut w, 1);
+        for _ in 0..3 {
+            w.dispatch(WorkspaceAction::SplitRight);
+            open_tabs(&mut w, 1);
+        }
+        assert_eq!(w.tabs().groups().len(), 4);
+        assert!(w.take_notice().is_none());
+        w.dispatch(WorkspaceAction::SplitRight);
+        assert_eq!(w.take_notice().as_deref(), Some("At most 4 editor groups."));
+        w.dispatch(WorkspaceAction::FocusPreviousGroup);
+        w.dispatch(WorkspaceAction::MoveActiveTabToNextGroup);
+        // The third group had one tab: it is gone after the move.
+        assert_eq!(w.tabs().groups().len(), 3);
+    }
+
+    #[test]
+    fn layout_actions_and_run_reveal_the_panel() {
+        let mut w = ws();
+        assert!(!w.layout().panel_visible());
+        assert!(matches!(
+            w.dispatch_workbench(WorkbenchAction::ToggleBottomPanel),
+            Effect::None
+        ));
+        assert!(w.layout().panel_visible());
+        w.dispatch_workbench(WorkbenchAction::ToggleBottomPanel);
+        w.layout.reveal_panel(crate::workbench::PanelView::Results);
+        assert!(w.layout().panel_visible());
+    }
+
+    #[test]
+    fn with_workbench_loaded_newer_and_invalid() {
+        let mut state = WorkbenchState::default();
+        state.side_panel.visible = false;
+        state.side_panel.size = 300.0;
+        let w = ws().with_workbench(&WorkbenchLoad::Loaded(state.clone()));
+        assert!(!w.layout().side_visible());
+        let saved = w.workbench_state(&RecentCommands::default(), None).unwrap();
+        assert!(!saved.side_panel.visible);
+        assert_eq!(saved.version, WORKBENCH_VERSION);
+
+        let w = ws().with_workbench(&WorkbenchLoad::Newer(2));
+        assert!(w.layout().side_visible());
+        assert!(
+            w.workbench_state(&RecentCommands::default(), None)
+                .is_none()
+        );
+
+        // An invalid file gives defaults and a notice; the config layer copies the file to
+        // `workbench.toml.bak` before the first save replaces it.
+        let mut w = ws().with_workbench(&WorkbenchLoad::Invalid("bad".into()));
+        assert_eq!(
+            w.take_notice().as_deref(),
+            Some(
+                "Could not read workbench.toml, using the default layout \
+                 (the file is copied to workbench.toml.bak before it is replaced): bad"
+            )
+        );
+        assert!(
+            w.workbench_state(&RecentCommands::default(), None)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn the_startup_load_reaches_the_workspace() {
+        use crate::workbench::WorkbenchStartup;
+        use sqler_config::ConfigDir;
+        let dir = std::env::temp_dir().join(format!("sqler-ui-startup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = ConfigDir::new(&dir);
+
+        let mut state = WorkbenchState::default();
+        state.side_panel.visible = false;
+        config.save_workbench_state(&state).unwrap();
+        let w = ws().with_workbench(&WorkbenchStartup::load(Some(config.clone())).load);
+        assert!(!w.layout().side_visible());
+
+        std::fs::write(config.workbench_path(), "side_panel = [oops").unwrap();
+        let mut w = ws().with_workbench(&WorkbenchStartup::load(Some(config)).load);
+        assert!(w.layout().side_visible());
+        assert!(
+            w.take_notice()
+                .is_some_and(|n| n.contains("workbench.toml"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recent_connections_follow_opens_and_the_sidebar() {
+        let mut w = ws();
+        let dev = w.sidebar().entries()[0].id().clone();
+        let prod = w.sidebar().entries()[1].id().clone();
+        let r = connect(&mut w, 0);
+        finish_ok(&mut w, r);
+        let r = connect(&mut w, 1);
+        finish_ok(&mut w, r);
+        let ids: Vec<&ConnectionId> = w.recent_connections().iter().collect();
+        assert_eq!(ids, [&prod, &dev]);
+        let state = w
+            .workbench_state(
+                &RecentCommands::default(),
+                Some(WindowState {
+                    width: 1200.0,
+                    height: 5.0,
+                }),
+            )
+            .unwrap();
+        assert_eq!(state.recent_connections.len(), 2);
+        assert_eq!(state.window, None, "an out-of-range window is dropped");
+        let reload = ws().with_workbench(&WorkbenchLoad::Loaded(state));
+        assert_eq!(reload.recent_connections().iter().count(), 2);
+    }
+
+    #[test]
+    fn status_bar_for_no_tab_prod_and_sqlite() {
+        let mut w = ws();
+        assert_eq!(w.status_bar(None), StatusBarModel::default());
+        let r = connect(&mut w, 1);
+        finish_ok(&mut w, r);
+        let s = w.status_bar(Some(RowInfo {
+            loaded: 1234,
+            shown: 1234,
+            more: false,
+        }));
+        assert_eq!(s.env, Some(Environment::Prod));
+        assert_eq!(s.connection.as_deref(), Some("prod"));
+        assert_eq!(s.database.as_deref(), Some("memory"));
+        assert_eq!(s.run, RunIndicator::Idle);
+        assert_eq!(s.rows.as_deref(), Some("1,234 rows"));
+        assert_eq!(s.timing, None);
+        let r = connect(&mut w, 0);
+        finish_ok(&mut w, r);
+        let s = w.status_bar(None);
+        assert_eq!(s.accent, Some(crate::tabs::Rgb(0x0000_ff00)));
+        assert_eq!(s.rows, None);
     }
 
     #[test]

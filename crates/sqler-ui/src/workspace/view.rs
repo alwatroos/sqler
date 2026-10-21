@@ -94,6 +94,8 @@ pub struct Startup {
     pub keybindings: Result<KeybindingOverrides, String>,
     /// Where the query history and the saved queries live; `None` without a config directory.
     pub history_dir: Option<ConfigDir>,
+    /// Workbench layout state, loaded by the binary.
+    pub workbench: crate::workbench::WorkbenchStartup,
 }
 
 impl std::fmt::Debug for Startup {

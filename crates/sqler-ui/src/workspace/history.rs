@@ -666,6 +666,7 @@ impl Workspace {
                     queries
                         .set_sql(id, sql.clone())
                         .map_err(|e| e.to_string())?;
+                    self.mark_editor_clean(*tab);
                     return Ok(());
                 }
                 let draft = SavedQueryDraft {
@@ -674,9 +675,17 @@ impl Workspace {
                 };
                 let id = queries.create(draft).map_err(|e| e.to_string())?;
                 self.history.tab_saved.insert(*tab, id);
+                self.mark_editor_clean(*tab);
                 Ok(())
             }
             NamePurpose::Rename(id) => queries.rename(id, name).map_err(|e| e.to_string()),
+        }
+    }
+
+    /// The text of the tab is saved under a name: it is no longer dirty.
+    fn mark_editor_clean(&mut self, tab: TabId) {
+        if let Some(doc) = self.editors.get_mut(tab) {
+            doc.mark_clean();
         }
     }
 

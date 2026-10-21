@@ -306,6 +306,7 @@ fn startup(
         settings,
         keybindings: Ok(KeybindingOverrides::default()),
         history_dir: None,
+        workbench: crate::workbench::WorkbenchStartup::default(),
     }
 }
 
