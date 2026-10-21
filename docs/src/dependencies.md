@@ -129,6 +129,7 @@ Per-dependency rationale is added by the PR that introduces it.
   measures the delta against the 7.1 MB Linux headroom. `hyper`, `hyper-util`, `hyper-rustls`,
   `rustls`, `ring` and `tokio` are already in the app tree through `gpui-pre-reqwest` and `sqlx`;
   the new code is `reqwest`, `tower-http` and this crate.
+- `sqler-ai-mistral` (T6) adds no crate: it reuses the T3 `reqwest` 0.12.28 and `base64` 0.22.1 rows above (same workspace line, same rustls/ring stack) and, as dev-dependencies, `log` 0.4.34 and `tracing` 0.1.44 (workspace lines shared with `sqler-ai-anthropic`, both already in `Cargo.lock`). Checked 2026-10-21: `cargo tree -p sqler-ai-mistral -i rsa`, `-i webpki-roots`, `-i openssl-sys`, `-i native-tls` and `-i aws-lc-rs` find no package, one `rustls`, one `hyper`, one `hyper-rustls`, `cargo deny check` clean with no new ignore. Not linked into `sqler-app` yet, so `size.yml` does not change; T11 (the `ai-mistral` feature) measures the delta.
 - `sqlx` 0.9.0: database backend of `sqler-driver-sqlite`, `sqler-driver-postgres` and `sqler-driver-mysql` (AGENTS.md §6).
   The workspace line carries only `sqlite-bundled` (compiles SQLite from source, so Windows and macOS
   CI need no system library) and `runtime-tokio`; no `macros`, `migrate`, `json`, `any` or TLS. The
