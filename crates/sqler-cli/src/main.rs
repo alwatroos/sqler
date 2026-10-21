@@ -7,6 +7,7 @@
 
 mod args;
 mod export;
+mod mcp;
 mod output;
 
 use std::io::{self, Write};
@@ -45,6 +46,18 @@ fn main() -> ExitCode {
             Err(failure) => {
                 eprintln!("error: {}", failure.message());
                 ExitCode::from(failure.exit_code())
+            }
+        },
+        Ok(Command::Mcp(mcp_args)) if mcp::usage_problem(&mcp_args).is_some() => {
+            let msg = mcp::usage_problem(&mcp_args).unwrap_or_default();
+            eprintln!("error: {msg}\n\n{USAGE}");
+            ExitCode::from(2)
+        }
+        Ok(Command::Mcp(mcp_args)) => match mcp::run(&mcp_args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                ExitCode::from(1)
             }
         },
         Err(UsageError(msg)) => {
@@ -87,6 +100,15 @@ pub(crate) fn registry() -> Result<DriverRegistry> {
 /// password) must never end up in a name that errors or logs print.
 pub(crate) fn connection_config(driver: &str, target: &str) -> Result<ConnectionConfig> {
     Ok(ConnectionConfig::new(driver, driver_id(driver)?, target))
+}
+
+/// Like [`connection_config`] with an explicit name (the MCP connections are `db1..dbN`).
+pub(crate) fn connection_config_named(
+    name: &str,
+    driver: &str,
+    target: &str,
+) -> Result<ConnectionConfig> {
+    Ok(ConnectionConfig::new(name, driver_id(driver)?, target))
 }
 
 /// The text for an unknown driver. Fixed: the argument may be a URL in the wrong place.

@@ -11,4 +11,5 @@ Planned topics:
 - [Providers](providers.md): the provider contract (ADR-0034)
 - [Tool contract](tool-contract.md): tools, guards and host interfaces (ADR-0036)
 - [Safety](safety.md): redaction, untrusted-data envelope and audit log (ADR-0037)
+- [MCP server](mcp.md): `sqler-cli mcp` over stdio or loopback HTTP (ADR-0040)
 - Prompt templates: planned (M5)
