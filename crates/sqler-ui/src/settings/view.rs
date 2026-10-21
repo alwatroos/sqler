@@ -12,6 +12,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
 use sqler_config::{FONT_SIZE_RANGE, ThemePreference};
 
+use crate::ai::settings::view::ai_section;
 use crate::theme::SPACE;
 use crate::theme::icons::AppIcon;
 use crate::theme::widgets::{icon_button, section_header};
@@ -97,7 +98,11 @@ pub(crate) fn strip_end(
 }
 
 /// The settings page, shown instead of the tab body while the settings tab is active.
-pub(crate) fn page(ws: &Workspace, cx: &mut Context<WorkspaceView>) -> impl IntoElement + use<> {
+pub(crate) fn page(
+    view: &WorkspaceView,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement + use<> {
+    let ws = view.workspace();
     let theme = cx.theme();
     let (muted, danger) = (theme.muted_foreground, theme.danger);
     let scale = ui_scale(cx);
@@ -158,10 +163,11 @@ pub(crate) fn page(ws: &Workspace, cx: &mut Context<WorkspaceView>) -> impl Into
                 )),
         );
 
-    let mut page = div()
-        .id("settings-page")
-        .flex_1()
+    // One inner column keeps its natural height (`flex_none`), so the scroll container never
+    // shrinks the rows; the padding gives the last section room at the bottom.
+    let mut content = div()
         .w_full()
+        .flex_none()
         .flex()
         .flex_col()
         .gap(px(SPACE[4]))
@@ -176,19 +182,29 @@ pub(crate) fn page(ws: &Workspace, cx: &mut Context<WorkspaceView>) -> impl Into
         .child(field_row("Theme", choices, cx))
         .child(field_row("UI font size", font, cx));
     if let Some(notice) = ws.settings().notice() {
-        page = page.child(div().text_color(danger).child(notice.to_owned()));
+        content = content.child(div().text_color(danger).child(notice.to_owned()));
     }
     if !ws.settings().persistent() {
-        page = page.child(
+        content = content.child(
             div()
                 .text_color(muted)
                 .child("Changes apply to this session only."),
         );
     }
-    page.child(
-        div()
-            .text_color(muted)
-            .text_size(px(scale.sm))
-            .child("Saved to settings.toml in the config directory (see User guide > Settings)."),
-    )
+    let content =
+        content
+            .child(div().text_color(muted).text_size(px(scale.sm)).child(
+                "Saved to settings.toml in the config directory (see User guide > Settings).",
+            ))
+            .child(ai_section(view, cx));
+    div()
+        .id("settings-page")
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .flex()
+        .flex_col()
+        .overflow_y_scroll()
+        .track_scroll(&view.settings_scroll)
+        .child(content)
 }

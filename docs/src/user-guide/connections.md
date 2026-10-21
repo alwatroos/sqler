@@ -146,7 +146,8 @@ New connection and Edit open the same form: name, driver, target, colour (preset
 environment (none, dev, staging, prod), group, TLS and SSH tunnel. The fields follow
 [the file format](#file-format). TLS "from target" leaves TLS to the connection string; the other
 modes set `mode`, the CA certificate and an optional client certificate with its key. The SSH part
-has host, port, user and the method (password, key file, agent).
+has host, port, user and the method (password, key file, agent). The **AI** block turns AI on or off for the
+connection and sets whether result rows may be sent (see [AI](ai.md#the-connection-dialog)).
 
 A name that is empty, a colour that is not `#rrggbb`, a port outside 1 to 65535, a missing key file
 path, or a client certificate without its key is reported next to the field, and Save stays blocked.

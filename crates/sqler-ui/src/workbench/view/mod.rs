@@ -31,6 +31,7 @@ use crate::workspace::WorkspaceView;
 const HINT_COMMANDS: &[&str] = &[
     "workbench:show-connections",
     "workbench:show-saved-queries",
+    "workbench:show-ai",
     "history:open",
     "settings:open",
     "workbench:toggle-side-panel",

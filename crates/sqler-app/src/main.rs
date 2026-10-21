@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod ai;
 mod args;
 mod connect;
 mod open_sessions;
@@ -15,6 +16,7 @@ use std::sync::Arc;
 
 use sqler_config::{ConfigDir, KeychainStore, Platform, SecretStore};
 use sqler_driver_api::{DriverError, DriverRegistry};
+use sqler_ui::ai::AiStartup;
 use sqler_ui::connections::Connector;
 use sqler_ui::settings::SettingsModel;
 use sqler_ui::workbench::WorkbenchStartup;
@@ -93,6 +95,12 @@ fn start(exit_after_first_frame: bool, open_sessions: bool) -> ExitCode {
         open_sessions::spawn(runtime.handle(), Arc::clone(&connector), profiles);
     }
     let workbench = WorkbenchStartup::load(dir.as_ref().ok().cloned());
+    // Reads `ai.toml` only; no provider is built and the keychain is not touched until the user
+    // tests or uses a provider.
+    let ai = AiStartup::load(
+        dir.as_ref().ok().cloned(),
+        Arc::new(ai::Providers::new(Arc::clone(&secrets))),
+    );
     run(Startup {
         connections,
         config_dir,
@@ -104,6 +112,7 @@ fn start(exit_after_first_frame: bool, open_sessions: bool) -> ExitCode {
         keybindings,
         history_dir,
         workbench,
+        ai,
     });
     ExitCode::SUCCESS
 }

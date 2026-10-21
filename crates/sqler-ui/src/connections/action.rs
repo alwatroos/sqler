@@ -49,6 +49,10 @@ pub enum ConnectionAction {
     SetSshEnabled(bool),
     /// Choose how the tunnel authenticates.
     SetSshAuth(SshAuthKind),
+    /// Turn AI on or off for the connection in the form.
+    SetAiEnabled(bool),
+    /// Choose whether result rows may go to the AI provider (`None` = the environment default).
+    SetAiSendRows(Option<bool>),
     /// Remove a stored secret on save.
     ClearSecret(SecretSlot),
     /// Open the "move to group" dialog for a connection.
@@ -125,6 +129,8 @@ impl ConnectionAction {
             | Self::SetTlsMode(_)
             | Self::SetSshEnabled(_)
             | Self::SetSshAuth(_)
+            | Self::SetAiEnabled(_)
+            | Self::SetAiSendRows(_)
             | Self::ClearSecret(_) => "connection:edit",
             Self::Delete(_) | Self::ConfirmDelete => "connection:delete",
             Self::Test => "connection:test",
@@ -224,6 +230,8 @@ mod tests {
             ConnectionAction::SetTlsMode(None),
             ConnectionAction::SetSshEnabled(true),
             ConnectionAction::SetSshAuth(SshAuthKind::Agent),
+            ConnectionAction::SetAiEnabled(true),
+            ConnectionAction::SetAiSendRows(Some(false)),
             ConnectionAction::ClearSecret(SecretSlot::Db),
             ConnectionAction::OpenMoveTo(c.clone()),
             ConnectionAction::MoveConnection {

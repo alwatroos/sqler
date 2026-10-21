@@ -29,6 +29,7 @@ use sqler_config::{
 };
 use tokio::sync::oneshot;
 
+mod ai;
 mod edit_ui;
 mod shell;
 
@@ -69,7 +70,7 @@ use crate::theme::apply::{appearance_of, apply};
 use crate::theme::icons::AppAssets;
 use crate::theme::resolve;
 use crate::workbench::view::Hints;
-use crate::workbench::{self, PanelView, RecentCommands, Region, WorkbenchAction};
+use crate::workbench::{self, ActivityItem, PanelView, RecentCommands, Region, WorkbenchAction};
 use edit_ui::EditUi;
 
 mod export;
@@ -103,6 +104,8 @@ pub struct Startup {
     pub history_dir: Option<ConfigDir>,
     /// Workbench layout state, loaded by the binary.
     pub workbench: crate::workbench::WorkbenchStartup,
+    /// The AI settings and the provider factory, loaded by the binary.
+    pub ai: crate::ai::AiStartup,
 }
 
 impl std::fmt::Debug for Startup {
@@ -114,6 +117,7 @@ impl std::fmt::Debug for Startup {
             .field("settings", &self.settings)
             .field("keybindings", &self.keybindings)
             .field("history_dir", &self.history_dir)
+            .field("ai", &self.ai)
             .finish_non_exhaustive()
     }
 }
@@ -193,6 +197,14 @@ pub(crate) struct WorkspaceView {
     tasks: HashMap<RequestId, Task<()>>,
     /// The text inputs of the dialog on screen.
     inputs: Option<DialogInputs>,
+    /// The text inputs of the AI section, while the settings page is shown.
+    ai_inputs: Option<ai::AiInputs>,
+    /// The `ai.toml` saves: one in flight, the latest waiting.
+    ai_saves: crate::workspace::ai::SaveQueue,
+    /// The scroll position of the settings page.
+    pub(crate) settings_scroll: ScrollHandle,
+    /// Builds the AI providers compiled in (the binary supplies it).
+    ai_factory: Arc<dyn crate::ai::AiProviderFactory>,
     /// Takes the keys while the sidebar has the focus.
     sidebar_focus: FocusHandle,
     /// The virtualized sidebar list and the lines it shows.
@@ -221,7 +233,7 @@ pub(crate) struct WorkspaceView {
     split_subs: Vec<Subscription>,
     /// The focus handles of the activity bar, the bottom panel and the status bar.
     activity_focus: FocusHandle,
-    /// One handle per activity bar item (Connections, Saved Queries, History, Settings).
+    /// One handle per activity bar item (Connections, Saved Queries, History, AI, Settings).
     activity_items: Vec<FocusHandle>,
     /// The first action item of the status bar.
     status_first: FocusHandle,
@@ -261,7 +273,8 @@ impl WorkspaceView {
         let mut ws = Workspace::new(sidebar)
             .with_settings(startup.settings)
             .with_drivers(startup.connector.driver_ids())
-            .with_workbench(&startup.workbench.load);
+            .with_workbench(&startup.workbench.load)
+            .with_ai(crate::ai::AiState::from_startup(&startup.ai));
         ws.set_system_appearance(appearance_of(window.appearance()));
         apply(ws.appearance(), ws.settings().settings().ui_font_size, cx);
         // Follow the OS while the preference is "follow system". Nothing changes in the
@@ -309,6 +322,9 @@ impl WorkspaceView {
         }
         if let Err(err) = history::register_commands(&mut commands) {
             eprintln!("sqler: could not register the history commands: {err}");
+        }
+        if let Err(err) = crate::ai::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the AI commands: {err}");
         }
         if let Err(err) = workbench::register_commands(&mut commands) {
             eprintln!("sqler: could not register the workbench commands: {err}");
@@ -399,6 +415,10 @@ impl WorkspaceView {
             queries: QueryViews::default(),
             tasks: HashMap::new(),
             inputs: None,
+            ai_inputs: None,
+            ai_saves: crate::workspace::ai::SaveQueue::default(),
+            settings_scroll: ScrollHandle::new(),
+            ai_factory: startup.ai.factory,
             sidebar_focus: cx.focus_handle(),
             sidebar_list: new_list_state(),
             list_entries: Vec::new(),
@@ -414,7 +434,9 @@ impl WorkspaceView {
             split_generation,
             split_subs: Vec::new(),
             activity_focus: cx.focus_handle(),
-            activity_items: (0..4).map(|_| cx.focus_handle().tab_stop(true)).collect(),
+            activity_items: (0..ActivityItem::COUNT)
+                .map(|_| cx.focus_handle().tab_stop(true))
+                .collect(),
             status_first: cx.focus_handle().tab_stop(true),
             panel_focus: cx.focus_handle(),
             status_focus: cx.focus_handle(),
@@ -749,6 +771,16 @@ impl WorkspaceView {
         } else if let Some(command) = crate::export::action_for(id) {
             self.palette.close();
             self.run_export_command(command, window, cx);
+        } else if let Some(action) = crate::ai::action_for(id, &self.ws) {
+            self.palette.close();
+            self.dispatch_ai(action, cx);
+        } else if id.category() == "ai" {
+            // An AI command that needs a provider kind or an open provider editor.
+            self.palette.close();
+            window.push_notification(
+                "This AI command does not apply now. Open Settings > AI to add a provider.",
+                cx,
+            );
         } else if let Some(format) = CopyFormat::from_command_id(id) {
             self.palette.close();
             self.copy_grid(format, window, cx);
@@ -1139,6 +1171,9 @@ impl WorkspaceView {
             | Effect::ClearHistory
             | Effect::SaveSavedQueries { .. } => self.apply_history(effect, cx),
             Effect::PickExportPath { .. } | Effect::RunExport(_) => self.apply_export(effect, cx),
+            Effect::SaveAiConfig { .. } | Effect::TestAiProvider { .. } => {
+                self.apply_ai(effect, cx);
+            }
             Effect::CancelQuery(handle) => {
                 // The answer does not matter: the job reports how the statement ended.
                 drop(self.bridge.spawn(async move {
@@ -1563,6 +1598,7 @@ impl Render for WorkspaceView {
         }
         self.sync_edit(window, cx);
         self.sync_dialog_inputs(window, cx);
+        self.sync_ai_inputs(window, cx);
         self.sync_export_inputs(window, cx);
         if self.history_views.materialize(&self.ws, window, cx) {
             // A history dialog or the picker closed: the root takes the focus back.

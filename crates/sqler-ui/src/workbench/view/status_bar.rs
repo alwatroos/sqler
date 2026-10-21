@@ -52,11 +52,12 @@ fn action_item(
     colors: Colors,
     handle: Option<&FocusHandle>,
     command: &'static str,
-    label: &'static str,
+    label: impl Into<SharedString>,
     tip: Option<SharedString>,
     cx: &mut Context<WorkspaceView>,
 ) -> Stateful<gpui::Div> {
-    let tip = tip.unwrap_or_else(|| label.into());
+    let label: SharedString = label.into();
+    let tip = tip.unwrap_or_else(|| label.clone());
     let ring = colors.ring;
     let el = item(id, colors)
         .border_1()
@@ -146,6 +147,22 @@ pub(crate) fn status_bar(
             item("status-database", colors)
                 .child(Icon::new(AppIcon::Database).size(px(12.)).text_color(text))
                 .child(database.clone()),
+        );
+    }
+
+    if let Some(status) = &model.ai {
+        left = left.child(
+            action_item(
+                "status-ai",
+                colors,
+                None,
+                "workbench:show-ai",
+                status.label(),
+                Some(status.tooltip().into()),
+                cx,
+            )
+            .child(Icon::new(AppIcon::Sparkles).size(px(12.)).text_color(text))
+            .child(status.label()),
         );
     }
 
