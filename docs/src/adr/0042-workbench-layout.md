@@ -31,7 +31,7 @@ Option 3. `WorkbenchLayout` (side panel visibility, width and view, bottom panel
 - **Bottom panel.** Results, Messages and History in a `v_resizable` panel (120 px to 70 % of the window, default 280). It follows the focused group's active tab. A run always reveals Results. `history:open` shows History in the panel.
 - **Welcome.** An empty editor area shows a welcome view (actions with shortcut hints, recent connections), not a tab.
 - **Settings tab** stays a special case rendered at the end of the first group's strip.
-- **Owner questions (accepted):** Q1 results move into the shared bottom panel (the ADS alternative of keeping them in the editor was not chosen); Q2 `history:open` opens History in the panel and keeps its ID; Q5 browser object tabs open as preview.
+- **Owner questions (defaults taken, status stays accepted; each Q is open to owner override by follow-up):** Q1 results move into the shared bottom panel (the ADS alternative of keeping them in the editor was not chosen); Q2 `history:open` opens History in the panel and keeps its ID; Q5 browser object tabs open as preview.
 
 The tab bar is our own element: preview, dirty, middle-click, drag and the environment top border are not in the `gpui-component` `TabBar`.
 

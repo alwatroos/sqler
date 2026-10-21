@@ -29,7 +29,7 @@ Option 2. Details are in [Workbench design](../architecture/workbench.md), secti
 - **Themes.** `crates/sqler-ui/assets/themes/sqler.json` is a `gpui-component` `ThemeSet` with "SQLer Dark" and "SQLer Light", modelled on Zed One Dark and One Light. `ThemePreference` (`light`/`dark`/`system`) now maps to them. `apply` installs them before `Theme::change(mode)` and keeps the font-size override after it. The look changes for everybody (intended).
 - **Rust extras.** `theme/tokens.rs` holds the tokens that are not in `ThemeConfig` (activity bar colours, dirty dot, preview style) and `env_accent` (chip = foreground at alpha 0.18; prod chip solid with `on_solid`).
 - **Contrast.** A headless test requires at least 4.5:1 for the listed text/background pairs and for prod `on_solid` on `solid`, in both themes.
-- **Prod status bar (Q4, accepted).** When the focused tab's connection is `prod`, the whole status bar turns solid red with white text, in addition to the tab top border and the PROD chips. Colour is never the only signal: the chip carries the text.
+- **Prod status bar (Q4, default taken; owner may overrule by follow-up).** When the focused tab's connection is `prod`, the whole status bar turns solid red with white text, in addition to the tab top border and the PROD chips. Colour is never the only signal: the chip carries the text.
 - **States.** Hover, pressed, selected, focus (`ring`) and disabled (50 % opacity) are fixed in the design page.
 - **Fonts.** System UI font and platform mono.
 

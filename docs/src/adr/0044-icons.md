@@ -32,6 +32,6 @@ Rejected:
 
 ## Consequences
 
-- One line in `run()` registers `AppAssets` (owned by the visual system item, U1); the screenshot harness uses the same source.
+- One line in `run()` registers `AppAssets` (owned by the visual system item, U1); the screenshot harness starts with an empty asset source (U6 merges first) and U1 switches it to `AppAssets`.
 - Adding an icon means adding one `AppIcon` variant and one name to the macro list; an icon outside the list does not render.
 - Assets are referenced lazily, so cold start is unaffected (measured in U1).

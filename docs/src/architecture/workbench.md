@@ -15,13 +15,13 @@ SQLer keeps its own headless workbench model and draws it with GPUI plus `gpui-c
 
 ## Owner questions, defaults applied
 
-The product questions are taken with the recommended defaults and implemented unless the owner answers otherwise; the owner may overrule any of them in review (recorded in ADR-0042, ADR-0043 and ADR-0046).
+The product questions are taken with the recommended defaults and implemented unless the owner answers otherwise; every answer below is a default taken, not an owner decision: the owner may overrule any of them by a follow-up (recorded in ADR-0042, ADR-0043 and ADR-0046, and listed as awaiting owner veto in the PR).
 
-- Q1: Query results move from below each editor into the shared bottom panel, which follows the focused editor (VS Code/owner wording; ADS keeps them inside the editor). Decision: yes.
-- Q2: `history:open` shows History in the bottom panel instead of opening an editor tab (ID unchanged). Decision: yes.
-- Q3: Closing an editor with unsaved text (dirty dot) does NOT prompt (unchanged behaviour; the pending-edits prompt stays). Decision: no prompt until tab restore exists.
-- Q4: When the focused tab's connection is `prod`, the whole status bar turns solid red (white text) in addition to the tab top border and PROD chips. Decision: yes.
-- Q5: Object tabs opened from the browser (double-click/Enter: data, DDL, properties) open as preview and replace the previous preview. They pin on tab double-click, `tab:pin`, staged edit, drag. Query editors are always pinned. Decision: yes.
+- Q1: Query results move from below each editor into the shared bottom panel, which follows the focused editor (VS Code/owner wording; ADS keeps them inside the editor). Decision: yes (default taken; owner may overrule by follow-up).
+- Q2: `history:open` shows History in the bottom panel instead of opening an editor tab (ID unchanged). Decision: yes (default taken; owner may overrule by follow-up).
+- Q3: Closing an editor with unsaved text (dirty dot) does NOT prompt (unchanged behaviour; the pending-edits prompt stays). Decision: no prompt (unchanged behaviour); a prompt waits until tab restore exists (default taken; owner may overrule by follow-up).
+- Q4: When the focused tab's connection is `prod`, the whole status bar turns solid red (white text) in addition to the tab top border and PROD chips. Decision: yes (default taken; owner may overrule by follow-up).
+- Q5: Object tabs opened from the browser (double-click/Enter: data, DDL, properties) open as preview and replace the previous preview. They pin on tab double-click, `tab:pin`, staged edit, drag. Query editors are always pinned. Decision: yes (default taken; owner may overrule by follow-up).
 
 ## 1. Current state
 | Area | Today (paths) | Hard-coded / missing |
@@ -89,7 +89,7 @@ The product questions are taken with the recommended defaults and implemented un
   - selected unfocused = hover colour
   - focus = 1 px `ring` (gpui-component `focus_ring = true`)
   - disabled = 50 % opacity, no hover, `muted.foreground`
-- **Icons**: Lucide 1.43 SVGs from the `gpui-kit-assets` 0.8.0 crate (Apache-2.0 crate; icons ISC, Feather-derived MIT). They are embedded with its `icon_assets!` macro, selected set only (~38 SVGs, about +20 KiB), and composed with `gpui_kit_assets::Assets` (the 101 component icons, which fixes today's blank component icons). The licence text is copied to `licenses/LUCIDE-ISC.txt` and listed in `docs/src/dependencies.md`.
+- **Icons**: Lucide 1.43 SVGs from the `gpui-kit-assets` 0.8.0 crate (Apache-2.0 crate; icons ISC, Feather-derived MIT). They are embedded with its `icon_assets!` macro, selected set only (42 SVGs, about +20 KiB), and composed with `gpui_kit_assets::Assets` (the 106 component icons, which fixes today's blank component icons). The licence text is copied to `licenses/LUCIDE-ISC.txt` and listed in `docs/src/dependencies.md`.
   The set (`AppIcon` → `IconName`): Database, Server, Table, Table2, Eye, KeyRound, SquareFunction, Folder, FolderOpen, Play, SquarePlay, CircleStop, ListTree, FileCode, FileText, SlidersHorizontal, Clock, Bookmark, Settings, Search, X, Plus, ChevronRight, ChevronDown, PanelLeft, PanelBottom, Columns2, Pin, MessageSquare, WandSparkles, Save, RefreshCw, Copy, Plug, Unplug, TriangleAlert, CircleAlert, Info, Check, Ellipsis, LoaderCircle, Command.
 - **Theme tokens** live in `crates/sqler-ui/assets/themes/sqler.json`, a gpui-component `ThemeSet` with two `ThemeConfig`s (`radius` 6, `radius.lg` 8, `shadow` false, no font keys):
 
@@ -185,7 +185,7 @@ The product questions are taken with the recommended defaults and implemented un
   - theme JSON parse + workbench read ≤ 1 ms each
 
 ## 6. Screenshot strategy
-- **Harness**: `crates/sqler-ui/tests/screenshots.rs`, `harness = false`, `required-features = ["screenshots"]`, feature `screenshots = ["gui", "gpui/test-support", "gpui_platform/test-support"]`. It runs on the main thread and uses `gpui::HeadlessAppContext::with_platform(gpui_platform::current_platform(true).text_system(), Arc::new(AppAssets), gpui_platform::current_headless_renderer)`.
+- **Harness**: `crates/sqler-ui/tests/screenshots.rs`, `harness = false`, `required-features = ["screenshots"]`, feature `screenshots = ["gui", "gpui/test-support", "gpui_platform/test-support"]`. It runs on the main thread and uses `gpui::HeadlessAppContext::with_platform(gpui_platform::current_platform(true).text_system(), Arc::new(()), gpui_platform::current_headless_renderer)`. `()` is GPUI's empty asset source: U6 ships no `AppAssets` (it merges before U1 and must not depend on it), so the "before" set shows today's look including the blank icons. U1 switches this one line to `AppAssets`.
 - **Capture loop**: open a 1280x800 window with `Root` + `WorkspaceView` from a scene script, then call `run_until_parked`, `update_window(.., |_, w, cx| w.draw(cx))`, `capture_screenshot(handle)` and save `PNG` (dev-dep `image` with `png`, same version as the lockfile's 0.25.10, checked on crates.io).
 - **Output and checks**: files go to `$SQLER_SCREENSHOT_DIR` (default `target/screenshots/`) as `<scene>-<dark|light>.png`. A scene fails if the image has the wrong size or fewer than 16 distinct colours. Optional layout checks use `window.painted_quads()`.
 - **Renderers**: macOS = Metal headless. Linux = `WgpuHeadlessRenderer` on lavapipe (`mesa-vulkan-drivers libvulkan1 fonts-dejavu-core`). Windows = no headless renderer, so the harness prints `skipped: no headless renderer on windows` and exits 0.
@@ -268,7 +268,7 @@ pub fn contrast(a: Rgb, b: Rgb) -> f32;  pub const THEMES_JSON: &str; // include
 
 ## Implementation items and merge order
 
-| Item | Wave | Depends | Owns (exclusive within its wave) | Delivers |
+| Item | Wave | Depends | Owns (shared files noted below) | Delivers |
 | ---- | ---- | ------- | -------------------------------- | -------- |
 | U2 Workbench state | A | D1 | `crates/sqler-config/src/{workbench.rs,lib.rs,paths.rs,keymap.rs}`, `crates/sqler-ui/src/workbench/**` (new: mod, layout, recent, status, action), `src/lib.rs`, `src/tabs/{model.rs,header.rs,mod.rs}`, `src/workspace/{action.rs,state.rs,editor.rs,browser.rs,query.rs,history.rs}`, `src/editor/doc.rs`, `src/palette/mod.rs`, `src/keymap/route.rs`, `crates/sqler-app/src/main.rs` | headless layout/groups/preview/dirty/recents/status model, new commands + defaults, `workbench.toml`; no view change |
 | U1 Visual system | A | D1 | `crates/sqler-ui/src/theme/**` (tokens, apply, icons, widgets), `crates/sqler-ui/assets/**`, `crates/sqler-ui/Cargo.toml` (`gpui-kit-assets` dep), root `Cargo.toml`, `src/keymap/{chord.rs,dispatcher.rs}`, `workspace/view.rs` **only** the `run()` `with_assets(AppAssets)` line, `licenses/LUCIDE-ISC.txt`, `docs/src/dependencies.md` | SQLer Dark/Light applied, icons render (incl. component icons), primitives, contrast test, Kbd glyph labels |
@@ -278,5 +278,6 @@ pub fn contrast(a: Rgb, b: Rgb) -> f32;  pub const THEMES_JSON: &str; // include
 | U4 Query surface | C | U3 | `query/**` (toolbar.rs new, explain.rs new, action.rs, view/mod.rs, view/results.rs), `tabs/view.rs` object/data toolbars + breadcrumbs, `docs/src/user-guide/running-queries.md` | toolbar Run/Run All/Cancel/Explain/Format/Save, breadcrumbs, `query:explain`, segmented result strip |
 | U7 Metrics + report | C | all | `docs/reports/iteration-005b.md`, `docs/src/benchmarks.md`, `AGENTS.md` §9, `CHANGELOG.md` | cold start/RSS/size/bench numbers, final screenshot set, owner checklist |
 
-- **Merge order**: D1 → U2 → U6 → U1 → U3 → U5 → U4 → U7. U6 lands before U1 so its "before" set shows the old look. After U6, U1 swaps the harness asset source to `AppAssets` (one line). U3 before U5, because U3 resizes the sidebar container and U5 makes the sidebar fill it.
+- **Shared files in wave A**: U1 and U6 both edit `crates/sqler-ui/Cargo.toml` (U1 the `gpui-kit-assets` dependency, U6 `[features]`, `[[test]]` and the `image` dev-dependency) and `workspace/view.rs` (U1 the `run()` assets line, U6 the `mod scene` line); U2 also touches `view.rs`. Each item adds only its own lines, so the edits are disjoint and the merge order below resolves any conflict; the item that lands second rebases and expects it.
+- **Merge order**: D1 → U2 → U6 → U1 → U3 → U5 → U4 → U7. U6 lands before U1 so its "before" set shows the old look. U6 uses an empty asset source; U1 then switches the harness to `AppAssets` (one line). U3 before U5, because U3 resizes the sidebar container and U5 makes the sidebar fill it.
 - **Parallelism (≤ 4 building worktrees)**: wave A runs U2, U1, U6 at once (3); wave B runs U3, U5 (2); wave C runs U4, then U7 alone. Each item still carries its own CHANGELOG line, docs, "Pending (maintainer)" list, screenshots from U6 onward, and bench/size numbers where listed in §5.
