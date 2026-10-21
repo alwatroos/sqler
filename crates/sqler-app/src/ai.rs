@@ -70,6 +70,10 @@ impl AiProviderFactory for Providers {
         let mut kinds = Vec::new();
         #[cfg(feature = "ai-ollama")]
         kinds.push(ProviderKind::Ollama);
+        #[cfg(feature = "ai-anthropic")]
+        kinds.push(ProviderKind::Anthropic);
+        #[cfg(feature = "ai-openai")]
+        kinds.push(ProviderKind::OpenAi);
         kinds
     }
 
@@ -92,6 +96,24 @@ impl AiProviderFactory for Providers {
             #[cfg(feature = "ai-ollama")]
             ProviderKind::Ollama => {
                 let built = sqler_ai_ollama::OllamaProvider::new(provider.endpoint.as_deref())?;
+                Ok(Arc::new(built))
+            }
+            #[cfg(feature = "ai-anthropic")]
+            ProviderKind::Anthropic => {
+                let key = key.ok_or_else(|| AiError::Auth("an API key is needed".to_owned()))?;
+                let built = sqler_ai_anthropic::AnthropicProvider::new(
+                    key.expose(),
+                    provider.endpoint.as_deref(),
+                )?;
+                Ok(Arc::new(built))
+            }
+            #[cfg(feature = "ai-openai")]
+            ProviderKind::OpenAi => {
+                let key = key.ok_or_else(|| AiError::Auth("an API key is needed".to_owned()))?;
+                let built = sqler_ai_openai::OpenAiProvider::new(
+                    provider.endpoint.as_deref(),
+                    Some(key.expose()),
+                )?;
                 Ok(Arc::new(built))
             }
             _ => Err(AiError::Unsupported(format!(
@@ -122,8 +144,14 @@ mod tests {
             kinds.contains(&ProviderKind::Ollama),
             cfg!(feature = "ai-ollama")
         );
-        assert!(!kinds.contains(&ProviderKind::Anthropic));
-        assert!(!kinds.contains(&ProviderKind::OpenAi));
+        assert_eq!(
+            kinds.contains(&ProviderKind::Anthropic),
+            cfg!(feature = "ai-anthropic")
+        );
+        assert_eq!(
+            kinds.contains(&ProviderKind::OpenAi),
+            cfg!(feature = "ai-openai")
+        );
         assert!(!kinds.contains(&ProviderKind::Mistral));
     }
 
@@ -144,13 +172,55 @@ mod tests {
     #[test]
     fn a_kind_without_a_provider_is_unsupported() {
         let r = registry(MemoryStore::new());
-        for kind in [
-            ProviderKind::Anthropic,
-            ProviderKind::OpenAi,
-            ProviderKind::Mistral,
+        let key = Secret::new("sk-test");
+        for (kind, on) in [
+            (ProviderKind::Anthropic, cfg!(feature = "ai-anthropic")),
+            (ProviderKind::OpenAi, cfg!(feature = "ai-openai")),
+            (ProviderKind::Mistral, cfg!(feature = "ai-mistral")),
         ] {
-            let err = r.build(&provider(kind, false), None).err().unwrap();
+            if on {
+                continue;
+            }
+            let err = r.build(&provider(kind, false), Some(&key)).err().unwrap();
             assert!(matches!(err, AiError::Unsupported(_)), "{err}");
+        }
+    }
+
+    #[cfg(any(feature = "ai-anthropic", feature = "ai-openai"))]
+    #[allow(clippy::vec_init_then_push)]
+    fn keyed_kinds() -> Vec<ProviderKind> {
+        let mut kinds = Vec::new();
+        #[cfg(feature = "ai-anthropic")]
+        kinds.push(ProviderKind::Anthropic);
+        #[cfg(feature = "ai-openai")]
+        kinds.push(ProviderKind::OpenAi);
+        kinds
+    }
+
+    #[cfg(any(feature = "ai-anthropic", feature = "ai-openai"))]
+    #[test]
+    fn keyed_providers_build_without_network_and_a_bad_endpoint_is_invalid() {
+        let r = registry(MemoryStore::new());
+        let key = Secret::new("sk-test");
+        for kind in keyed_kinds() {
+            assert!(r.build(&provider(kind, false), Some(&key)).is_ok());
+            let mut p = provider(kind, false);
+            p.endpoint = Some("ftp://host".to_owned());
+            let err = r.build(&p, Some(&key)).err().unwrap();
+            assert!(matches!(err, AiError::Invalid(_)), "{err}");
+            assert!(!err.to_string().contains("sk-test"));
+        }
+    }
+
+    #[cfg(any(feature = "ai-anthropic", feature = "ai-openai"))]
+    #[test]
+    fn keyed_providers_without_a_key_are_an_auth_error() {
+        let r = registry(MemoryStore::new());
+        for kind in keyed_kinds() {
+            for keyed in [false, true] {
+                let err = r.build(&provider(kind, keyed), None).err().unwrap();
+                assert!(matches!(err, AiError::Auth(_)), "{err}");
+            }
         }
     }
 
