@@ -62,6 +62,7 @@ use crate::sidebar::{self, SidebarModel, key_command};
 use crate::tabs;
 use crate::tabs::TabId;
 use crate::theme::apply::{appearance_of, apply};
+use crate::theme::icons::AppAssets;
 use crate::theme::resolve;
 use edit_ui::EditUi;
 
@@ -117,35 +118,37 @@ pub fn init(cx: &mut App) {
 ///
 /// On macOS the platform run loop may end the process instead of returning.
 pub fn run(startup: Startup) {
-    gpui_platform::application().run(move |cx: &mut App| {
-        init(cx);
-        let system = appearance_of(cx.window_appearance());
-        let settings = startup.settings.settings();
-        apply(resolve(settings.theme, system), settings.ui_font_size, cx);
-        cx.activate(true);
-        // Closing the main window quits the app on every OS.
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
+    gpui_platform::application()
+        .with_assets(AppAssets)
+        .run(move |cx: &mut App| {
+            init(cx);
+            let system = appearance_of(cx.window_appearance());
+            let settings = startup.settings.settings();
+            apply(resolve(settings.theme, system), settings.ui_font_size, cx);
+            cx.activate(true);
+            // Closing the main window quits the app on every OS.
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+            let opened = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let view = cx.new(|cx| WorkspaceView::new(startup, window, cx));
+                    cx.new(|cx| Root::new(view, window, cx))
+                },
+            );
+            if let Err(err) = opened {
+                eprintln!("error: could not open the window: {err:#}");
                 cx.quit();
             }
-        })
-        .detach();
-        let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
-        let opened = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |window, cx| {
-                let view = cx.new(|cx| WorkspaceView::new(startup, window, cx));
-                cx.new(|cx| Root::new(view, window, cx))
-            },
-        );
-        if let Err(err) = opened {
-            eprintln!("error: could not open the window: {err:#}");
-            cx.quit();
-        }
-    });
+        });
 }
 
 /// The root view: sidebar on the left, tab strip and tab body on the right.

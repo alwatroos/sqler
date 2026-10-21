@@ -13,6 +13,6 @@ mod dispatcher;
 pub(crate) mod input;
 mod route;
 
-pub use chord::{KeyInput, chord_from_input};
+pub use chord::{KeyInput, chord_from_input, display_chord};
 pub use dispatcher::KeyDispatcher;
 pub use route::{KeyOutcome, action_for, route_key};

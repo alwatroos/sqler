@@ -7443,6 +7443,7 @@ name = "sqler-ui"
 version = "0.1.0"
 dependencies = [
  "gpui-component",
+ "gpui-kit-assets",
  "gpui-pre",
  "gpui-pre-platform",
  "insta",
