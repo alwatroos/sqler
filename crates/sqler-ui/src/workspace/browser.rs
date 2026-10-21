@@ -589,7 +589,7 @@ impl Workspace {
         Effect::None
     }
 
-    fn request_for(&self, conn: &ConnectionId) -> Result<ConnectRequest, String> {
+    pub(super) fn request_for(&self, conn: &ConnectionId) -> Result<ConnectRequest, String> {
         let profile = self
             .sidebar
             .profile(conn)
@@ -707,6 +707,8 @@ impl Workspace {
         let Some(tab) = self.open_object_tab(conn, TabKind::Grid, &name) else {
             return Effect::None;
         };
+        // The grid edits this object (the editing flow reads it back).
+        self.edit.data_tabs.insert(tab, obj.clone());
         let limits = GridLimits::from_settings(self.settings().settings());
         let (model, sink) = grid_channel_with(limits);
         self.grid_cancels.insert(tab, sink.canceller());
@@ -945,6 +947,8 @@ impl Workspace {
             }
             (CacheKey::Table(obj), CatalogResult::Table(result)) => {
                 b.tree.table_loaded(&obj, result);
+                // An editable grid may have been waiting for this table.
+                self.edit.bump();
                 Effect::None
             }
             _ => Effect::None,
@@ -1077,6 +1081,7 @@ impl Workspace {
             Ok(session) => {
                 let (catalog, worker) = Catalog::new(session);
                 b.status = BrowserStatus::Ready(catalog);
+                self.edit.bump();
                 let generation = b.generation;
                 let root = b.tree.root();
                 let keys = b.tree.expand(root);
@@ -1100,6 +1105,7 @@ impl Workspace {
     pub(super) fn end_browser(&mut self, conn: &ConnectionId) {
         if let Some(b) = self.browsers.remove(conn) {
             b.shutdown();
+            self.edit.bump();
         }
         self.requests
             .retain(|_, purpose| *purpose != Purpose::Browse(conn.clone()));

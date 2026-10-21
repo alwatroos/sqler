@@ -154,7 +154,17 @@ impl GridControls {
             | GridAction::SortDescending
             | GridAction::ClearSort
             | GridAction::ClearFilter
-            | GridAction::ToggleMatchCase => {}
+            | GridAction::ToggleMatchCase
+            // Editing acts on the editor and the workspace, not on the selection or layout.
+            | GridAction::EditCell
+            | GridAction::SetNull
+            | GridAction::RevertSelection
+            | GridAction::AddRow
+            | GridAction::DeleteRows
+            | GridAction::PreviewChanges
+            | GridAction::ApplyChanges
+            | GridAction::DiscardChanges
+            | GridAction::EditWithoutKey => {}
         }
         out
     }

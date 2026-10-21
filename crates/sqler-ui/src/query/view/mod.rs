@@ -16,7 +16,7 @@ use gpui::{
 };
 use gpui_component::ActiveTheme as _;
 
-pub(crate) use dialogs::query_overlay;
+pub(crate) use dialogs::{query_overlay, scrim};
 pub(crate) use results::{OverlayChange, QueryViews};
 
 use crate::tabs::TabId;

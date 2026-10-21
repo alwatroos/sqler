@@ -17,6 +17,7 @@ use sqler_sql::Dialect;
 
 use super::action::WorkspaceAction;
 use super::browser::{BrowserJob, BrowserState, OpenDataJob};
+use super::edit::EditFlow;
 use super::export::ExportCenter;
 use super::history::HistoryWorkspace;
 use super::query::ActiveRun;
@@ -27,6 +28,7 @@ use crate::connections::{
 };
 use crate::editor::{EditorDocs, EditorKey, TextEdit};
 use crate::export::ExportJob;
+use crate::grid::edit::ApplyJob;
 use crate::grid::{
     GridCancel, GridTab, InsertTarget, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS,
 };
@@ -191,6 +193,9 @@ pub enum Effect {
     },
     /// Ask the database to cancel the running statement.
     CancelQuery(CancelHandle),
+    /// Run an apply job on tokio (`SessionBridge::spawn` with `ApplyJob::run`), mark the grid
+    /// with `GridEditor::begin_apply` first, then report with [`Workspace::apply_finished`].
+    ApplyEdits(ApplyJob),
     /// Record this statement in the query history on a blocking thread, then report with
     /// [`Workspace::history_recorded`].
     RecordHistory(NewHistoryEntry),
@@ -309,6 +314,12 @@ impl std::fmt::Debug for Effect {
                 .field("grids", &grids.len())
                 .finish_non_exhaustive(),
             Self::CancelQuery(_) => f.write_str("CancelQuery(..)"),
+            // Never the plan: only which grid and which apply.
+            Self::ApplyEdits(job) => f
+                .debug_struct("ApplyEdits")
+                .field("key", &job.key)
+                .field("run", &job.run)
+                .finish_non_exhaustive(),
             // Never the SQL text.
             Self::RecordHistory(entry) => f
                 .debug_struct("RecordHistory")
@@ -401,6 +412,8 @@ pub struct Workspace {
     pub(super) next_run: u64,
     /// The history tabs, saved queries and their dialogs.
     pub(super) history: HistoryWorkspace,
+    /// Inline editing: pending changes, the transaction flags, the apply flow.
+    pub(super) edit: EditFlow,
     /// The export dialog and the exports in progress.
     pub(super) exports: ExportCenter,
 }
@@ -455,6 +468,7 @@ impl Workspace {
             query_runs: HashMap::new(),
             next_run: 0,
             history: HistoryWorkspace::new(),
+            edit: EditFlow::default(),
             exports: ExportCenter::default(),
         }
     }
@@ -620,14 +634,14 @@ impl Workspace {
                 }
                 Effect::None
             }
-            WorkspaceAction::CloseTab(id) => self.close_tab(id),
+            WorkspaceAction::CloseTab(id) => self.request_close_tab(id),
             WorkspaceAction::CloseActiveTab => {
                 if self.settings_tab == SettingsTab::Active {
                     self.settings_tab = SettingsTab::Closed;
                     return Effect::None;
                 }
                 match self.tabs.active().map(crate::tabs::Tab::id) {
-                    Some(id) => self.close_tab(id),
+                    Some(id) => self.request_close_tab(id),
                     None => Effect::None,
                 }
             }
@@ -640,27 +654,7 @@ impl Workspace {
                 Effect::None
             }
             WorkspaceAction::OpenSyntheticGrid => self.open_synthetic_grid(),
-            WorkspaceAction::Quit => {
-                self.cancel_all_exports();
-                let cancels = self.cancel_all_queries();
-                // Ends every grid ingestion, waking one that is paused on a full page.
-                for (_, grid) in self.grid_cancels.drain() {
-                    grid.cancel();
-                }
-                let sessions = self.take_all_sessions();
-                let browsers = self.shutdown_browsers();
-                if sessions.is_empty() && !browsers && cancels.is_empty() {
-                    Effect::Quit
-                } else if cancels.is_empty() {
-                    Effect::CloseSessions(sessions)
-                } else {
-                    // A session lent to a query is cancelled and dropped at exit.
-                    let mut effects: Vec<Effect> =
-                        cancels.into_iter().map(Effect::CancelQuery).collect();
-                    effects.push(Effect::CloseSessions(sessions));
-                    Effect::Batch(effects)
-                }
-            }
+            WorkspaceAction::Quit => self.request_quit(),
             WorkspaceAction::OpenSettings => {
                 self.settings_tab = SettingsTab::Active;
                 Effect::None
@@ -678,6 +672,30 @@ impl Workspace {
             WorkspaceAction::SetUiFontSize(size) => {
                 Self::changed(self.settings.set_ui_font_size(size))
             }
+        }
+    }
+
+    /// Quits for real: stops every run and apply, ends the grid ingestions and returns what the
+    /// view has to close.
+    pub(super) fn quit_now(&mut self) -> Effect {
+        self.cancel_all_exports();
+        let mut cancels = self.cancel_all_queries();
+        cancels.extend(self.edit.stop_all_applies());
+        // Ends every grid ingestion, waking one that is paused on a full page.
+        for (_, grid) in self.grid_cancels.drain() {
+            grid.cancel();
+        }
+        let sessions = self.take_all_sessions();
+        let browsers = self.shutdown_browsers();
+        if sessions.is_empty() && !browsers && cancels.is_empty() {
+            Effect::Quit
+        } else if cancels.is_empty() {
+            Effect::CloseSessions(sessions)
+        } else {
+            // A session lent to a query or an apply is cancelled and dropped at exit.
+            let mut effects: Vec<Effect> = cancels.into_iter().map(Effect::CancelQuery).collect();
+            effects.push(Effect::CloseSessions(sessions));
+            Effect::Batch(effects)
         }
     }
 
@@ -777,10 +795,12 @@ impl Workspace {
         request
     }
 
-    fn close_tab(&mut self, id: TabId) -> Effect {
+    /// Closes the tab now, without asking about pending changes.
+    pub(super) fn close_tab_now(&mut self, id: TabId) -> Effect {
         if !self.tabs.close(id) {
             return Effect::None;
         }
+        self.edit.forget_tab(id);
         if let Some(cancel) = self.grid_cancels.remove(&id) {
             cancel.cancel();
         }

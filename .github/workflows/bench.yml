@@ -50,6 +50,8 @@ jobs:
             HAVE_BASE=1
             # Older base benches reject --reps (exit 2); pass it only if the base source knows it.
             if grep -q -- '--reps' "$BASE_SRC"; then BASE_ARGS="--reps 1"; fi
+            # --staged (staged edits on the grid) is newer still; pass it only if the base source knows it.
+            if grep -q -- '--staged' "$BASE_SRC"; then BASE_ARGS="$BASE_ARGS --staged 10000"; fi
             (cd "$GITHUB_WORKSPACE/../base" && rustup toolchain install && cargo bench -p sqler-ui --bench grid_viewport --no-run)
           else
             echo "::notice::no baseline bench on base"
@@ -60,7 +62,7 @@ jobs:
             (cd "$GITHUB_WORKSPACE/../base" && cargo bench -p sqler-ui --bench grid_viewport -- $BASE_ARGS --save "$T/bench-base-$1.txt") || [ $? -eq 1 ]
           }
           pr_round() {
-            cargo bench -p sqler-ui --bench grid_viewport -- --reps 1 --save "$T/bench-pr-$1.txt" || [ $? -eq 1 ]
+            cargo bench -p sqler-ui --bench grid_viewport -- --reps 1 --staged 10000 --save "$T/bench-pr-$1.txt" || [ $? -eq 1 ]
           }
           JUDGE=""
           for i in $(seq 1 "$ROUNDS"); do

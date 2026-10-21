@@ -83,10 +83,19 @@ pub enum EditError {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(super) struct RowUpdate {
     pub(super) original: Row,
     pub(super) cells: BTreeMap<usize, Value>,
+}
+
+impl std::fmt::Debug for RowUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RowUpdate")
+            .field("columns", &self.original.len())
+            .field("changed", &self.cells.len())
+            .finish()
+    }
 }
 
 /// The staged edits of one editable result.
@@ -94,13 +103,26 @@ pub(super) struct RowUpdate {
 /// It can only be built from an [`EditTarget`], so a result that did not pass
 /// `check_editable` cannot have staged changes. It never writes anything; [`Self::plan`] lists
 /// the statements and `apply` runs them.
-#[derive(Debug, Clone)]
+///
+/// `Debug` prints counts only: the staged values and the snapshots of the rows are user data.
+#[derive(Clone)]
 pub struct StagedEdits {
     target: EditTarget,
     pub(super) updates: BTreeMap<ModelRow, RowUpdate>,
     pub(super) deletes: BTreeMap<ModelRow, Row>,
     pub(super) inserts: Vec<(NewRowId, Vec<Option<Value>>)>,
     next_id: u32,
+}
+
+impl std::fmt::Debug for StagedEdits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StagedEdits")
+            .field("dialect", &self.target.dialect())
+            .field("updated_rows", &self.updates.len())
+            .field("deleted_rows", &self.deletes.len())
+            .field("new_rows", &self.inserts.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl StagedEdits {
@@ -405,6 +427,25 @@ mod tests {
         assert!(c > b, "ids are not reused");
         s.clear();
         assert!(s.is_empty());
+    }
+
+    #[test]
+    fn debug_never_shows_values() {
+        let mut s = StagedEdits::new(target(false));
+        let r = row(424_242, Some("sekrit-old"));
+        s.set_cell(ModelRow(0), &r, 1, Value::Text("sekrit-new".into()))
+            .unwrap();
+        s.delete_row(ModelRow(1), &row(515_151, Some("sekrit-del")))
+            .unwrap();
+        let id = s.add_row();
+        s.set_new_cell(id, 1, Some(Value::Text("sekrit-ins".into())))
+            .unwrap();
+        let shown = format!("{s:?} {:?}", s.updates.values().collect::<Vec<_>>());
+        for secret in ["sekrit", "424242", "515151"] {
+            assert!(!shown.contains(secret), "{shown}");
+        }
+        assert!(shown.contains("updated_rows: 1"), "{shown}");
+        assert!(shown.contains("new_rows: 1"), "{shown}");
     }
 
     #[test]

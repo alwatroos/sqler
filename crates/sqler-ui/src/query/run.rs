@@ -74,6 +74,15 @@ pub enum RunEvent {
         /// The statement.
         index: usize,
     },
+    /// The schema the server resolves the (unqualified) table of a finished statement to, read
+    /// on the run's session right after it (`None` when the lookup failed). It changes no
+    /// statement's status.
+    Resolved {
+        /// The statement.
+        index: usize,
+        /// The schema, or `None`.
+        schema: Option<String>,
+    },
 }
 
 /// Why a request was refused or a prompt rejected.
@@ -429,6 +438,8 @@ impl QueryTab {
                 duration,
             } => (index, StatementStatus::Failed { message, duration }),
             RunEvent::Cancelled { index } => (index, StatementStatus::Cancelled),
+            // Not a status: the workspace keeps it for the editability of the result.
+            RunEvent::Resolved { .. } => return false,
         };
         let Some(pos) = self.results.iter().position(|r| r.index == index) else {
             return false;
@@ -700,6 +711,26 @@ mod tests {
         .unwrap();
         let mut tab = QueryTab::new();
         assert_eq!(tab.request(None, p, true), Ok(Step::Confirm));
+    }
+
+    #[test]
+    fn resolved_changes_no_status() {
+        let mut tab = QueryTab::new();
+        let Step::Start(bound) = tab.request(D, planned("select * from t"), false).unwrap() else {
+            panic!()
+        };
+        let run = start(&mut tab, &bound);
+        assert!(tab.event(run, RunEvent::Started { index: 0 }));
+        let before = format!("{:?}", statuses(&tab));
+        assert!(!tab.event(
+            run,
+            RunEvent::Resolved {
+                index: 0,
+                schema: Some("main".to_owned())
+            }
+        ));
+        assert_eq!(format!("{:?}", statuses(&tab)), before);
+        assert_eq!(statuses(&tab)[0], &StatementStatus::Running);
     }
 
     #[test]

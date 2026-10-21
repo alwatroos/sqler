@@ -25,6 +25,13 @@
 //! after `Committed`, which would repeat the `INSERT`s) needs a plan rebuilt from the staged
 //! edits.
 //!
+//! # The editing layer (T11)
+//!
+//! [`GridEditor`] (one per grid) holds editability, the cell editor, the [`StagedEdits`] and what
+//! the grid shows after a commit; [`SchemaProbe`] reads the schema the server resolves a query's
+//! table name to; [`ApplyJob`] runs a [`ConfirmedPlan`] off the UI thread. `Debug` of every type
+//! here that holds user data prints counts and kinds only.
+//!
 //! # Preconditions
 //!
 //! * `resolved_schema` (see [`EditRequest`]) must be what the server resolves the unqualified
@@ -41,17 +48,31 @@
 
 mod apply;
 mod editability;
+mod editor;
+mod input;
+mod job;
 mod plan;
+mod probe;
 mod staged;
 #[cfg(test)]
-mod testing;
+pub(crate) mod testing;
+#[cfg(feature = "gui")]
+pub(crate) mod view;
 
+pub use crate::grid::action::{EditorKey, cell_editor_key};
 pub use apply::{ApplyFailure, ApplyOutcome, apply};
 pub use editability::{
     EditRequest, EditSource, EditTarget, Editability, ReadOnlyReason, RowIdentity, check_editable,
 };
+pub use editor::{
+    COMMIT_UNKNOWN, CellEditor, CellMark, DisplayCell, EditContext, EditOrigin, EditState,
+    EditorInput, GridEditor, GridKey, KEYLESS_WARNING, LAST_WRITER_WINS, preview_text,
+};
+pub use input::{EditorKind, edit_text, editor_kind, parse_cell};
+pub use job::{ApplyId, ApplyJob, ApplyJobDone, ApplySession, ApplyStop};
 pub use plan::{
     ApplyPlan, ConfirmationRequired, ConfirmedPlan, PlannedStatement, PreviewParam,
     PreviewStatement, PreviewWhen, display_value,
 };
+pub use probe::SchemaProbe;
 pub use staged::{ChangeKind, EditError, ModelRow, NewRowId, RowRef, StagedEdits};

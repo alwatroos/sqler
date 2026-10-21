@@ -66,7 +66,7 @@ pub use stats::{ProbeReport, RenderStats, nearest_rank};
 pub use store::{CellRef, RowRef};
 pub use synthetic::SyntheticSource;
 pub use tab::{
-    GridTab, POLL_BUDGET, PollOutcome, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS,
+    GridRows, GridTab, POLL_BUDGET, PollOutcome, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS,
 };
 pub use viewport::{ROW_HEIGHT_PX, ScrollViewport};
 pub mod edit;

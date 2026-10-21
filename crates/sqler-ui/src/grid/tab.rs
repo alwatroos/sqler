@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use super::action::GridAction;
 use super::cell::{self, ColumnHeader, group_thousands};
+use super::edit::{CellMark, DisplayCell, EditContext, EditState, GridEditor};
 use super::order::{DisplayRows, GridOrder, OrderProgress};
 use super::selection::RowOrder;
 use super::sort::{Collation, SortDirection, SortSpec};
@@ -39,9 +40,41 @@ pub struct PollOutcome {
     pub terminal: bool,
 }
 
+/// The rows of a grid as drawn: a [`DisplayRows`] followed by the rows editing added.
+#[derive(Debug, Clone, Copy)]
+pub struct GridRows<'a> {
+    shown: DisplayRows<'a>,
+    base: usize,
+    extra: usize,
+}
+
+impl RowOrder for GridRows<'_> {
+    fn len(&self) -> usize {
+        self.shown.len() + self.extra
+    }
+
+    fn model_row(&self, display: usize) -> Option<usize> {
+        let shown = self.shown.len();
+        if display < shown {
+            self.shown.model_row(display)
+        } else {
+            (display - shown < self.extra).then(|| self.base + (display - shown))
+        }
+    }
+
+    fn display_row(&self, row: usize) -> Option<usize> {
+        if row < self.base {
+            self.shown.display_row(row)
+        } else {
+            (row - self.base < self.extra).then(|| self.shown.len() + (row - self.base))
+        }
+    }
+}
+
 /// A results-grid tab: the model, header labels, the sort and filter order, the visible row
-/// range and render statistics.
-#[derive(Debug)]
+/// range, render statistics and the editing state.
+///
+/// `Debug` prints sizes and states only, never cell values.
 pub struct GridTab {
     model: GridModel,
     headers: Vec<ColumnHeader>,
@@ -49,6 +82,19 @@ pub struct GridTab {
     order: Box<GridOrder>,
     visible: Range<usize>,
     stats: RenderStats,
+    /// Boxed: the editor is large and most grids (read-only results) never use it.
+    edit: Box<GridEditor>,
+}
+
+impl std::fmt::Debug for GridTab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GridTab")
+            .field("rows", &self.model.row_count())
+            .field("columns", &self.headers.len())
+            .field("state", &std::mem::discriminant(self.model.state()))
+            .field("edit", &self.edit)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GridTab {
@@ -61,6 +107,7 @@ impl GridTab {
             order: Box::default(),
             visible: 0..0,
             stats: RenderStats::default(),
+            edit: Box::default(),
         }
     }
 
@@ -92,6 +139,7 @@ impl GridTab {
                 .iter()
                 .map(ColumnHeader::from)
                 .collect();
+            self.edit.set_columns(self.model.columns());
         }
         PollOutcome {
             applied,
@@ -167,10 +215,29 @@ impl GridTab {
         self.order.rows(self.model.row_count())
     }
 
-    /// The number of displayed rows.
+    /// The number of rows the sort and filter show (not counting rows added by editing).
     #[must_use]
     pub fn display_count(&self) -> usize {
         self.rows().len()
+    }
+
+    /// The rows as drawn: the displayed model rows (sorted and filtered), then the rows an apply
+    /// inserted and the staged new rows, which the sort and filter do not touch. A position is
+    /// a *grid row* (a model row, or above `model.row_count()` an added row), the identity edits,
+    /// marks and the apply plan use.
+    #[must_use]
+    pub fn grid_rows(&self) -> GridRows<'_> {
+        GridRows {
+            shown: self.rows(),
+            base: self.model.row_count(),
+            extra: self.edit.extra_rows(),
+        }
+    }
+
+    /// The grid row (model row identity) drawn at a display position.
+    #[must_use]
+    pub fn grid_row(&self, display: usize) -> Option<usize> {
+        self.grid_rows().model_row(display)
     }
 
     /// The model row shown at a display position.
@@ -315,9 +382,59 @@ impl GridTab {
         self.model.heap_bytes()
     }
 
-    /// Loads the next page of a paused result; `false` when nothing is paused.
+    /// Loads the next page of a paused result; `false` when nothing is paused, or when rows are
+    /// added below the model's (new rows staged, or rows inserted by an apply): the next page
+    /// would shift their positions.
     pub fn fetch_more(&mut self) -> bool {
+        if self.edit.extra_rows() > 0 {
+            return false;
+        }
         self.model.fetch_more()
+    }
+
+    // ---- editing ----
+
+    /// The editing state.
+    #[must_use]
+    pub fn edit(&self) -> &GridEditor {
+        &self.edit
+    }
+
+    /// The model (read only) and the editor, to edit cells of this grid.
+    pub fn edit_parts(&mut self) -> (&GridModel, &mut GridEditor) {
+        (&self.model, &mut self.edit)
+    }
+
+    /// Sets what is known about the source of this grid (see [`GridEditor::set_context`]).
+    pub fn set_edit_context(&mut self, ctx: EditContext) {
+        self.edit.set_context(ctx, self.model.columns());
+    }
+
+    /// Whether and why the grid can be edited; `Loading` while rows are still arriving.
+    #[must_use]
+    pub fn edit_state(&self) -> EditState {
+        self.edit.state_for(&self.model)
+    }
+
+    /// Rows to draw: the displayed model rows, then the rows an apply inserted, then the staged
+    /// new rows.
+    #[must_use]
+    pub fn display_row_count(&self) -> usize {
+        self.grid_rows().len()
+    }
+
+    /// What to draw for a cell (display row, model column): the value, staged or applied, and its
+    /// mark. The display row is mapped to its grid row first.
+    #[must_use]
+    pub fn display_cell(&self, row: usize, col: usize) -> DisplayCell {
+        match self.grid_row(row) {
+            Some(grid_row) => self.edit.display_cell(&self.model, grid_row, col),
+            None => DisplayCell {
+                text: String::new(),
+                mark: CellMark::None,
+                null: false,
+            },
+        }
     }
 
     /// Cancels ingestion.
@@ -586,6 +703,43 @@ mod tests {
     }
 
     #[test]
+    fn grid_rows_map_display_rows_to_model_rows_and_back() {
+        let mut tab = loaded(2_500);
+        tab.order_mut().set_filter(quick("r12", 1));
+        assert_eq!(tab.step_order(None), OrderProgress::Published);
+        let rows = tab.grid_rows();
+        // Without added rows the grid rows are the displayed model rows.
+        assert_eq!(rows.len(), 111);
+        assert_eq!(tab.display_row_count(), 111);
+        assert_eq!(tab.grid_row(0), Some(12));
+        assert_eq!(tab.grid_row(1), Some(120));
+        assert_eq!(rows.display_row(120), Some(1));
+        assert_eq!(
+            rows.display_row(13),
+            None,
+            "a filtered-out row has no position"
+        );
+        assert_eq!(tab.grid_row(111), None);
+        // The drawn cell is the model row's, not the row at the same position in the model.
+        assert_eq!(tab.display_cell(1, 1).text, tab.cell_text(120, 1));
+        assert_eq!(tab.display_cell(500, 1).text, "");
+        // Added rows follow the displayed rows and map to rows past the model.
+        let with_extra = GridRows {
+            shown: tab.rows(),
+            base: 2_500,
+            extra: 2,
+        };
+        assert_eq!(with_extra.len(), 113);
+        assert_eq!(with_extra.model_row(110), Some(tab.model_row(110).unwrap()));
+        assert_eq!(with_extra.model_row(111), Some(2_500));
+        assert_eq!(with_extra.model_row(112), Some(2_501));
+        assert_eq!(with_extra.model_row(113), None);
+        assert_eq!(with_extra.display_row(2_500), Some(111));
+        assert_eq!(with_extra.display_row(2_501), Some(112));
+        assert_eq!(with_extra.display_row(2_502), None);
+    }
+
+    #[test]
     fn filtered_status_range_and_jump_targets_use_displayed_rows() {
         let mut tab = loaded(2_500);
         tab.order_mut().set_filter(quick("r12", 1));
@@ -705,5 +859,235 @@ mod tests {
         assert!(tab.stats().max_rows_per_frame() > 20);
         assert!(tab.stats().saw_last());
         assert!(tab.stats().frames() > 300_000);
+    }
+
+    // ---- editing ----
+
+    use std::sync::Arc;
+
+    use sqler_driver_api::sqler_core::{
+        ColumnInfo, DataType, DbObject, ObjectKind, ObjectPath, PrimaryKey, Table, Value,
+    };
+    use sqler_sql::Dialect;
+
+    use super::super::edit::testing::{model_of, row};
+    use super::super::edit::{CellMark, EditContext, EditOrigin, EditState, EditorInput};
+    use super::super::{CellPos, ColumnLayout, DisplayMap, RowOrder};
+
+    /// Display row `d` shows model row `len - 1 - d`.
+    struct Reversed(usize);
+
+    impl RowOrder for Reversed {
+        fn len(&self) -> usize {
+            self.0
+        }
+        fn model_row(&self, display: usize) -> Option<usize> {
+            (display < self.0).then(|| self.0 - 1 - display)
+        }
+        fn display_row(&self, model: usize) -> Option<usize> {
+            (model < self.0).then(|| self.0 - 1 - model)
+        }
+    }
+
+    fn edit_ctx() -> EditContext {
+        let table = Table::new(DbObject::new(
+            ObjectKind::Table,
+            ObjectPath::root().in_schema("main"),
+            "t",
+        ))
+        .with_columns(vec![
+            ColumnInfo::new("id", DataType::Integer).with_nullable(false),
+            ColumnInfo::new("name", DataType::Text),
+        ])
+        .with_primary_key(PrimaryKey::new(vec!["id".to_owned()]));
+        EditContext {
+            dialect: Some(Dialect::Sqlite),
+            origin: EditOrigin::QueryResult("SELECT * FROM t".to_owned()),
+            table: Some(Arc::new(table)),
+            relation_kind: None,
+            resolved_schema: Some("main".to_owned()),
+            production: false,
+            apply_block: None,
+        }
+    }
+
+    fn edit_tab(state: IngestState) -> GridTab {
+        let rows = (1..=5)
+            .map(|i| row(i, Some(&format!("n{i}"))))
+            .collect::<Vec<_>>();
+        let mut tab = GridTab::new(model_of(rows, state));
+        tab.poll(POLL_BUDGET);
+        tab.set_edit_context(edit_ctx());
+        tab
+    }
+
+    /// AC7: on a permuted view an edit lands on the model row behind the display row, and the
+    /// statement's WHERE carries that row's key.
+    #[test]
+    fn edits_on_a_permuted_view_land_on_the_model_row() {
+        let mut tab = edit_tab(IngestState::Done {
+            rows_affected: None,
+        });
+        assert_eq!(tab.edit_state(), EditState::Editable);
+        let order = Reversed(5);
+        let layout = ColumnLayout::new(vec![80.0, 80.0]);
+        let map = DisplayMap {
+            rows: &order,
+            columns: &layout,
+        };
+        // Display row 0 is model row 4 (id 5).
+        let pos = map.cell_at(0, 1).unwrap();
+        assert_eq!(pos, CellPos { row: 4, col: 1 });
+        {
+            let (model, edit) = tab.edit_parts();
+            edit.start_edit(model, pos).unwrap();
+            edit.commit_edit(model, EditorInput::Text("X".to_owned()))
+                .unwrap();
+            // Display row 1 is model row 3 (id 4): delete it.
+            let del = map.cell_at(1, 0).unwrap();
+            assert_eq!(edit.delete_rows(model, &[del.row]), Ok(1));
+        }
+        let plan = tab.edit().plan().unwrap();
+        let statements = plan.statements();
+        assert_eq!(statements.len(), 2);
+        assert_eq!(statements[0].query.params, vec![Value::Int(4)]);
+        assert_eq!(
+            statements[1].query.params,
+            vec![Value::Text("X".to_owned()), Value::Int(5)]
+        );
+        assert!(statements[1].query.sql.ends_with("WHERE \"id\" = ?2"));
+        // The marks follow the model rows.
+        assert_eq!(tab.display_cell(4, 1).mark, CellMark::Changed);
+        assert_eq!(tab.display_cell(4, 1).text, "X");
+        assert_eq!(tab.display_cell(3, 0).mark, CellMark::Deleted);
+        assert_eq!(tab.display_cell(0, 1).mark, CellMark::None);
+    }
+
+    /// AC7 with a real sort and filter: the displayed rows are the filtered, sorted ones, and an
+    /// edit, a delete and an added row (all addressed by display row through `grid_row`) target
+    /// the keys of the rows behind them.
+    #[test]
+    fn edits_on_a_sorted_and_filtered_view_target_the_right_keys() {
+        let names = ["a1", "b2", "a3", "b4", "a5", "b6"];
+        let rows = (1..=6)
+            .zip(names)
+            .map(|(i, n)| row(i, Some(n)))
+            .collect::<Vec<_>>();
+        let mut tab = GridTab::new(model_of(
+            rows,
+            IngestState::Done {
+                rows_affected: None,
+            },
+        ));
+        tab.poll(POLL_BUDGET);
+        tab.set_edit_context(edit_ctx());
+        tab.order_mut().set_filter(FilterSpec {
+            quick: Some(QuickFilter {
+                text: "a".to_owned(),
+                column: Some(1),
+            }),
+            conditions: vec![],
+        });
+        assert!(tab.apply_order_action(GridAction::SortDescending, Some(0)));
+        while tab.step_order(None) != OrderProgress::Published {}
+        // Displayed: ids 5, 3, 1.
+        assert_eq!(tab.display_count(), 3);
+        assert_eq!(tab.model_row(0), Some(4));
+        assert_eq!(tab.model_row(1), Some(2));
+        assert_eq!(tab.model_row(2), Some(0));
+        let at = |tab: &GridTab, display: usize, col: usize| CellPos {
+            row: tab.grid_row(display).unwrap(),
+            col,
+        };
+        let (edit_pos, del_pos) = (at(&tab, 1, 1), at(&tab, 2, 0));
+        {
+            let (model, edit) = tab.edit_parts();
+            edit.start_edit(model, edit_pos).unwrap();
+            edit.commit_edit(model, EditorInput::Text("X".to_owned()))
+                .unwrap();
+            assert_eq!(edit.delete_rows(model, &[del_pos.row]), Ok(1));
+            assert_eq!(edit.add_row(model), Ok(6));
+        }
+        // The added row is shown below the three displayed rows.
+        assert_eq!(tab.display_row_count(), 4);
+        let new_pos = at(&tab, 3, 1);
+        assert_eq!(new_pos.row, 6);
+        {
+            let (model, edit) = tab.edit_parts();
+            edit.start_edit(model, new_pos).unwrap();
+            edit.commit_edit(model, EditorInput::Text("new".to_owned()))
+                .unwrap();
+        }
+        let plan = tab.edit().plan().unwrap();
+        let params: Vec<Vec<Value>> = plan
+            .statements()
+            .iter()
+            .map(|s| s.query.params.clone())
+            .collect();
+        assert_eq!(params.len(), 3);
+        // The update is keyed by id 3 (display row 1), the delete by id 1 (display row 2).
+        assert!(params.contains(&vec![Value::Text("X".to_owned()), Value::Int(3)]));
+        assert!(params.contains(&vec![Value::Int(1)]));
+        assert!(params.iter().all(|p| !p.contains(&Value::Int(5))));
+        assert!(
+            params
+                .iter()
+                .any(|p| p.contains(&Value::Text("new".to_owned())))
+        );
+        // The marks sit on the same display rows.
+        assert_eq!(tab.display_cell(1, 1).mark, CellMark::Changed);
+        assert_eq!(tab.display_cell(2, 0).mark, CellMark::Deleted);
+        assert_eq!(tab.display_cell(0, 1).mark, CellMark::None);
+        assert_eq!(tab.display_cell(0, 1).text, "a5");
+    }
+
+    #[test]
+    fn new_rows_extend_the_display_and_block_fetch_more() {
+        let mut tab = edit_tab(IngestState::Paused);
+        assert_eq!(tab.display_row_count(), 5);
+        let n = {
+            let (model, edit) = tab.edit_parts();
+            edit.add_row(model).unwrap()
+        };
+        assert_eq!(n, 5);
+        assert_eq!(tab.display_row_count(), 6);
+        assert_eq!(tab.display_cell(5, 0).mark, CellMark::Unset);
+        // The next page would move the new row.
+        assert!(!tab.fetch_more());
+        tab.edit_parts().1.discard();
+        assert_eq!(tab.display_row_count(), 5);
+        assert!(tab.fetch_more());
+    }
+
+    #[test]
+    fn edit_context_before_the_columns_waits() {
+        let (model, sink) = grid_channel();
+        let mut tab = GridTab::new(model);
+        tab.set_edit_context(edit_ctx());
+        assert_eq!(tab.edit_state(), EditState::Loading);
+        drop(sink);
+        assert_eq!(tab.display_cell(0, 0).text, "");
+    }
+
+    #[test]
+    fn the_columns_arriving_make_the_grid_editable() {
+        let mut tab = GridTab::new(model_of(vec![row(1, Some("a"))], IngestState::Paused));
+        // Context set before the first poll delivered the columns to the headers.
+        tab.set_edit_context(edit_ctx());
+        tab.poll(POLL_BUDGET);
+        assert_eq!(tab.edit_state(), EditState::Editable);
+    }
+
+    #[test]
+    fn debug_prints_no_cell_values() {
+        let mut tab = GridTab::new(model_of(
+            vec![row(424_242, Some("sekrit-cell"))],
+            IngestState::Paused,
+        ));
+        tab.poll(POLL_BUDGET);
+        tab.set_edit_context(edit_ctx());
+        let shown = format!("{tab:?}");
+        assert!(!shown.contains("sekrit"), "{shown}");
+        assert!(!shown.contains("424242"), "{shown}");
     }
 }

@@ -42,3 +42,4 @@ consequences. SQLer uses the MADR format.
 | [0030](0030-staged-edits-and-dml.md) | Staged edits and DML: bound statements, single-table editability, one-transaction apply | accepted |
 | [0031](0031-client-side-sort-and-filter.md) | Client-side sort and filter: published display order, resumable job on the UI thread | accepted |
 | [0032](0032-grid-export.md) | Grid export: loaded rows or a fresh run of a read statement, writer on the blocking pool, hidden partial file, Parquet in the app default | accepted |
+| [0033](0033-inline-editing-ui.md) | Inline editing: apply session, transaction flag, schema probe, in-place overlay and a single gate | accepted |

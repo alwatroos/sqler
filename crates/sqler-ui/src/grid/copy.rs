@@ -148,8 +148,9 @@ pub fn copy_key_format(
     platform: Platform,
     table_focused: bool,
     overlay_open: bool,
+    editing: bool,
 ) -> Option<CopyFormat> {
-    if !table_focused || overlay_open || input.alt || input.key != "c" {
+    if !table_focused || overlay_open || editing || input.alt || input.key != "c" {
         return None;
     }
     let (modifier, other) = match platform {
@@ -741,7 +742,7 @@ mod tests {
     fn copy_keys_on_both_platforms() {
         for (platform, m, other) in [(Platform::MacOs, "m", "c"), (Platform::Other, "c", "m")] {
             let k = |mods: &str, focused: bool, overlay: bool| {
-                copy_key_format(&key(mods, "c"), platform, focused, overlay)
+                copy_key_format(&key(mods, "c"), platform, focused, overlay, false)
             };
             assert_eq!(k(m, true, false), Some(CopyFormat::Tsv));
             assert_eq!(
@@ -750,13 +751,18 @@ mod tests {
             );
             assert_eq!(k(m, false, false), None, "table not focused");
             assert_eq!(k(m, true, true), None, "overlay open");
+            assert_eq!(
+                copy_key_format(&key(m, "c"), platform, true, false, true),
+                None,
+                "a cell editor is open: its input owns copy"
+            );
             assert_eq!(k(&format!("{m}a"), true, false), None, "alt");
             assert_eq!(k(other, true, false), None, "other modifier");
             assert_eq!(k(&format!("{m}{other}"), true, false), None);
             assert_eq!(k("", true, false), None, "no modifier");
             assert_eq!(k("s", true, false), None);
             assert_eq!(
-                copy_key_format(&key(m, "x"), platform, true, false),
+                copy_key_format(&key(m, "x"), platform, true, false, false),
                 None,
                 "another key"
             );
