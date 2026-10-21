@@ -28,6 +28,8 @@ pub enum SideView {
     Connections,
     /// The saved queries.
     SavedQueries,
+    /// The AI view: provider, model and opt-in of the active connection.
+    Ai,
 }
 
 impl SideView {
@@ -37,6 +39,7 @@ impl SideView {
         match self {
             Self::Connections => SIDE_VIEWS[0],
             Self::SavedQueries => SIDE_VIEWS[1],
+            Self::Ai => SIDE_VIEWS[2],
         }
     }
 
@@ -46,6 +49,7 @@ impl SideView {
         match s {
             "connections" => Some(Self::Connections),
             "saved-queries" => Some(Self::SavedQueries),
+            "ai" => Some(Self::Ai),
             _ => None,
         }
     }
@@ -320,6 +324,7 @@ mod tests {
         for (v, s) in [
             (SideView::Connections, "connections"),
             (SideView::SavedQueries, "saved-queries"),
+            (SideView::Ai, "ai"),
         ] {
             assert_eq!(v.as_str(), s);
             assert_eq!(SideView::parse(s), Some(v));

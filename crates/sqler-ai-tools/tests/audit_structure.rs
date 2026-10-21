@@ -12,7 +12,10 @@ fn sources(dir: &Path, out: &mut Vec<(PathBuf, String)>) {
         if path.is_dir() {
             sources(&path, out);
         } else if path.extension().is_some_and(|e| e == "rs") {
-            let text = std::fs::read_to_string(&path).unwrap();
+            // Normalise CRLF (Windows checkouts) so the "\n"-based scans match.
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("\r\n", "\n");
             out.push((path, text));
         }
     }
