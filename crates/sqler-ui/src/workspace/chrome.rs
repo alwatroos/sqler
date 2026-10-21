@@ -6,10 +6,6 @@
 //! item with a shortcut hint. Colours come from the active theme, spacing from [`SPACE`] and
 //! text sizes from [`ui_scale`]; views use these instead of literals.
 
-// The constants and helpers are consumed by the sidebar, connection, grid, export, settings and
-// history views (U5 work packages W2 to W4); the last package removes this allow.
-#![allow(dead_code)]
-
 use gpui::{
     App, Div, ElementId, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div, px,
@@ -30,8 +26,6 @@ pub(crate) const HEADER_HEIGHT: f32 = 30.;
 pub(crate) const ICON_SM: f32 = 14.;
 /// Medium icon size.
 pub(crate) const ICON_MD: f32 = 16.;
-/// Large icon size.
-pub(crate) const ICON_LG: f32 = 20.;
 /// Indent per tree level.
 pub(crate) const INDENT: f32 = 12.;
 /// Width of the label column of a form row.

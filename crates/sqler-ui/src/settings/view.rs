@@ -12,10 +12,10 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
 use sqler_config::{FONT_SIZE_RANGE, ThemePreference};
 
+use crate::theme::SPACE;
 use crate::theme::icons::AppIcon;
 use crate::theme::widgets::{icon_button, section_header};
-use crate::theme::{Appearance, SPACE};
-use crate::workspace::chrome::{ICON_SM, TOOLBAR_HEIGHT, field_row, ui_scale};
+use crate::workspace::chrome::{ICON_SM, field_row, ui_scale};
 use crate::workspace::{Workspace, WorkspaceAction, WorkspaceView};
 
 /// Font weight of the page title.
@@ -42,31 +42,29 @@ fn choice(
     }))
 }
 
-/// The settings header and the theme toggle, drawn at the right end of the tab strip.
+/// The Settings tab, drawn at the right end of the tab strip of the first group while it is
+/// open. The activity bar gear opens it; the theme is chosen on the page.
 pub(crate) fn strip_end(
     ws: &Workspace,
     cx: &mut Context<WorkspaceView>,
-) -> impl IntoElement + use<> {
+) -> Option<impl IntoElement + use<>> {
+    if !ws.settings_tab_open() {
+        return None;
+    }
     let theme = cx.theme();
-    let (bar, border) = (theme.tab_bar, theme.border);
-    let (rest_fill, active_fill) = (theme.tab, theme.tab_active);
+    let (border, rest_fill, active_fill) = (theme.border, theme.tab, theme.tab_active);
     let (fg, active_text, muted) = (
         theme.tab_foreground,
         theme.tab_active_foreground,
         theme.muted_foreground,
     );
     let sm = ui_scale(cx).sm;
-    let open = ws.settings_tab_open();
     let active = ws.settings_tab_active();
-    let target = match ws.appearance() {
-        Appearance::Light => "Dark",
-        Appearance::Dark => "Light",
-    };
-
-    let settings = if open {
+    Some(
         div()
             .id("settings-tab")
             .h_full()
+            .flex_none()
             .flex()
             .flex_row()
             .items_center()
@@ -94,51 +92,8 @@ pub(crate) fn strip_end(
                         cx.stop_propagation();
                     },
                 )),
-            )
-    } else {
-        div()
-            .id("settings-open")
-            .h_full()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(SPACE[2]))
-            .px(px(SPACE[3]))
-            .text_size(px(sm))
-            .text_color(fg)
-            .cursor_pointer()
-            .child(
-                Icon::new(AppIcon::Settings)
-                    .size(px(ICON_SM))
-                    .text_color(muted),
-            )
-            .child("Settings")
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                view.dispatch(WorkspaceAction::OpenSettings, cx);
-            }))
-    };
-    let toggle = Button::new("theme-toggle")
-        .label(target)
-        .ghost()
-        .small()
-        .on_click(cx.listener(|view, _, _, cx| {
-            view.dispatch(WorkspaceAction::ToggleThemeMode, cx);
-        }));
-
-    div()
-        .id("tab-strip-end")
-        .h(px(TOOLBAR_HEIGHT))
-        .flex_none()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(SPACE[1]))
-        .pr(px(SPACE[2]))
-        .bg(bar)
-        .border_b_1()
-        .border_color(border)
-        .child(settings)
-        .child(toggle)
+            ),
+    )
 }
 
 /// The settings page, shown instead of the tab body while the settings tab is active.

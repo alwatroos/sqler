@@ -496,39 +496,49 @@ fn bar_state(table: &Table, cx: &gpui::App) -> Option<BarState> {
 
 /// The edit bar of a grid: status, the read-only reason, and the buttons. `None` for a grid with
 /// no source (nothing to edit, nothing to say).
-#[allow(clippy::too_many_lines)] // one declarative element tree
 pub(crate) fn edit_bar(
     view: &WorkspaceView,
     key: GridKey,
     table: &Table,
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
+    let border = cx.theme().border;
+    let row = edit_row(view, key, table, cx)?;
+    Some(
+        row.w_full()
+            .h(px(TOOLBAR_HEIGHT))
+            .flex_none()
+            .px(px(SPACE[3]))
+            .border_b_1()
+            .border_color(border)
+            .into_any_element(),
+    )
+}
+
+/// The content of the edit bar without its frame, so a toolbar can carry it inline: it grows to
+/// the space it is given and keeps its buttons at the right end.
+#[allow(clippy::too_many_lines)] // one declarative element tree
+pub(crate) fn edit_row(
+    view: &WorkspaceView,
+    key: GridKey,
+    table: &Table,
+    cx: &mut Context<WorkspaceView>,
+) -> Option<gpui::Stateful<gpui::Div>> {
     let bar = bar_state(table, cx)?;
     if bar.state == EditState::Loading {
         return None;
     }
     let scale = ui_scale(cx);
     let theme = cx.theme();
-    let (border, muted, danger, warning) = (
-        theme.border,
-        theme.muted_foreground,
-        theme.danger,
-        theme.warning,
-    );
+    let (muted, danger, warning) = (theme.muted_foreground, theme.danger, theme.warning);
     let applying = view.workspace().is_applying(key.tab);
     let editable = bar.state == EditState::Editable;
     let mut row = div()
         .id(("edit-bar", key.tab.raw()))
-        .w_full()
-        .h(px(TOOLBAR_HEIGHT))
-        .flex_none()
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(SPACE[3]))
-        .px(px(SPACE[3]))
-        .border_b_1()
-        .border_color(border);
+        .gap(px(SPACE[3]));
     if editable {
         let text = bar.status.clone().unwrap_or_else(|| "Editable".to_owned());
         row = row.child(div().text_size(px(scale.sm)).child(text));
@@ -587,7 +597,7 @@ pub(crate) fn edit_bar(
                         view.edit_cancel_apply(key.tab, cx);
                     })),
             );
-        return Some(row.into_any_element());
+        return Some(row);
     }
     if bar.can_opt_in {
         let t = table.clone();
@@ -642,7 +652,7 @@ pub(crate) fn edit_bar(
                 })),
         );
     }
-    Some(row.into_any_element())
+    Some(row)
 }
 
 // ---- dialogs -----------------------------------------------------------------------------------

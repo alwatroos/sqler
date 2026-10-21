@@ -13,7 +13,7 @@ use std::time::SystemTime;
 
 use sqler_config::{ConnectionId, HistoryEntry, SavedQueries, SavedQueryDraft, SavedQueryId};
 
-use super::state::{Effect, RequestId, Workspace, tab_connection};
+use super::state::{Effect, RequestId, Workspace};
 use crate::editor::EditorBuffer;
 use crate::history::{
     HistoryCommand, HistoryDialog, HistoryRow, HistoryScope, HistoryTab, NamePurpose, SavedLoad,
@@ -21,6 +21,7 @@ use crate::history::{
 };
 use crate::query::{BufferSnapshot, RunEvent, RunMode};
 use crate::tabs::{Tab, TabId, TabKind};
+use crate::workbench::PanelView;
 
 /// What to do with the editor tab that a connect attempt opens.
 #[derive(Clone, PartialEq, Eq)]
@@ -139,7 +140,7 @@ impl Workspace {
         buffer: Option<EditorBuffer>,
     ) -> Effect {
         match command {
-            HistoryCommand::OpenHistory => self.open_history_tab(),
+            HistoryCommand::OpenHistory => self.open_history_panel(),
             HistoryCommand::OpenEntry => match self.selected_entry() {
                 Some((tab, index)) => self.open_history_entry(tab, index),
                 None => self.history_notice("Select a history entry first."),
@@ -178,7 +179,15 @@ impl Workspace {
         }
     }
 
+    /// The history the commands act on: the panel's while it is visible on History, else the
+    /// active strip tab if it is a history tab.
     fn active_history_tab(&self) -> Option<TabId> {
+        if self.layout.panel_visible()
+            && self.layout.panel_view() == PanelView::History
+            && let Some(panel) = self.panel_history()
+        {
+            return Some(panel);
+        }
         self.tabs
             .active()
             .map(Tab::id)
@@ -227,9 +236,10 @@ impl Workspace {
         }
     }
 
-    /// Opens the history tab of the active tab's connection (else the selected one), or shows the
-    /// one that is open.
-    fn open_history_tab(&mut self) -> Effect {
+    /// Shows History in the bottom panel, bound to the active tab's connection (else the selected
+    /// one). The panel keeps its state under [`TabId::PANEL_HISTORY`] and starts over when the
+    /// connection differs. No strip tab opens.
+    fn open_history_panel(&mut self) -> Effect {
         let conn = self
             .tabs
             .active()
@@ -239,31 +249,30 @@ impl Workspace {
         let Some(conn) = conn else {
             return self.history_notice("Select a connection in the sidebar first.");
         };
-        let existing = self
+        if self.sidebar.index_of(&conn).is_none() {
+            return self.history_notice("The connection no longer exists.");
+        }
+        let bound = self
             .history
             .tabs
-            .iter()
-            .filter(|(_, history)| *history.connection() == conn)
-            .map(|(tab, _)| *tab)
-            .min();
-        let tab = if let Some(tab) = existing {
-            self.tabs.activate(tab);
-            tab
-        } else {
-            let Some(index) = self.sidebar.index_of(&conn) else {
-                return self.history_notice("The connection no longer exists.");
-            };
-            let config = self.sidebar.entries()[index].config();
-            let name = config.name.clone();
-            let tab = self
+            .get(&TabId::PANEL_HISTORY)
+            .is_some_and(|history| *history.connection() == conn);
+        if !bound {
+            self.history
                 .tabs
-                .open_object(tab_connection(config), TabKind::History, name);
-            self.tab_conns.insert(tab, conn.clone());
-            self.history.tabs.insert(tab, HistoryTab::new(conn));
-            tab
-        };
-        self.show_connection_tabs();
-        self.search_history(tab)
+                .insert(TabId::PANEL_HISTORY, HistoryTab::new(conn));
+        }
+        self.layout.reveal_panel(PanelView::History);
+        self.search_history(TabId::PANEL_HISTORY)
+    }
+
+    /// The panel's History state, if the panel has been bound to a connection.
+    #[must_use]
+    pub fn panel_history(&self) -> Option<TabId> {
+        self.history
+            .tabs
+            .contains_key(&TabId::PANEL_HISTORY)
+            .then_some(TabId::PANEL_HISTORY)
     }
 
     /// Sets the search text of a history tab and searches again when it changed.
@@ -1061,51 +1070,56 @@ mod tests {
     // ---- the history tab ----
 
     #[test]
-    fn the_history_tab_opens_once_per_connection_and_closes() {
+    fn history_open_reveals_the_panel_and_rebinds_on_a_connection_change() {
         let mut w = ws();
         let editor_tab = open(&mut w, 0);
+        assert!(w.panel_history().is_none());
         let Effect::SearchHistory(search) = w.dispatch_history(HistoryCommand::OpenHistory, None)
         else {
             panic!("expected SearchHistory");
         };
-        let tab = search.tab;
+        assert_eq!(search.tab, TabId::PANEL_HISTORY);
         assert_eq!(search.limit, HISTORY_PAGE);
         assert_eq!(search.connection, Some(conn(&w, 0)));
         assert_eq!(search.text, "");
-        let opened = w.tabs().get(tab).unwrap();
-        assert_eq!(opened.kind(), TabKind::History);
-        assert_eq!(opened.title(), "History: dev");
-        assert_eq!(w.tabs().active().map(Tab::id), Some(tab));
-        assert_eq!(w.history_tab(tab).unwrap().connection(), &conn(&w, 0));
-        assert!(w.history_tab(tab).unwrap().searching());
-        assert!(!w.has_session(tab));
+        // The panel shows History; no strip tab opened and the editor stays active.
+        assert!(w.layout().panel_visible());
+        assert_eq!(w.layout().panel_view(), PanelView::History);
+        assert_eq!(w.tabs().len(), 1);
+        assert_eq!(w.tabs().active().map(Tab::id), Some(editor_tab));
+        assert_eq!(w.panel_history(), Some(TabId::PANEL_HISTORY));
+        let history = w.history_tab(TabId::PANEL_HISTORY).unwrap();
+        assert_eq!(history.connection(), &conn(&w, 0));
+        assert!(history.searching());
 
-        // Again from the editor tab: the same history tab.
-        w.dispatch(WorkspaceAction::ActivateTab(editor_tab));
+        // Again on the same connection: the same state, a newer search.
         let Effect::SearchHistory(again) = w.dispatch_history(HistoryCommand::OpenHistory, None)
         else {
             panic!("expected SearchHistory");
         };
-        assert_eq!(again.tab, tab);
+        assert_eq!(again.tab, TabId::PANEL_HISTORY);
         assert!(again.request > search.request);
-        assert_eq!(w.tabs().len(), 2);
-        assert_eq!(w.tabs().active().map(Tab::id), Some(tab));
+        assert_eq!(w.tabs().len(), 1);
 
-        // From the history tab itself too.
-        let Effect::SearchHistory(third) = w.dispatch_history(HistoryCommand::OpenHistory, None)
+        // Another connection: the panel starts over bound to it.
+        w.dispatch(WorkspaceAction::SelectConnection(1));
+        let prod_tab = open(&mut w, 1);
+        assert_eq!(w.tabs().active().map(Tab::id), Some(prod_tab));
+        let Effect::SearchHistory(rebound) = w.dispatch_history(HistoryCommand::OpenHistory, None)
         else {
             panic!("expected SearchHistory");
         };
-        assert_eq!(third.tab, tab);
+        assert_eq!(rebound.tab, TabId::PANEL_HISTORY);
+        assert_eq!(rebound.connection, Some(conn(&w, 1)));
+        assert_eq!(
+            w.history_tab(TabId::PANEL_HISTORY).unwrap().connection(),
+            &conn(&w, 1)
+        );
         assert_eq!(w.tabs().len(), 2);
-
-        w.dispatch(WorkspaceAction::CloseTab(tab));
-        assert!(w.history_tab(tab).is_none());
-        assert!(!w.tab_conns.contains_key(&tab));
     }
 
     #[test]
-    fn the_history_tab_binds_the_selected_connection_without_a_tab() {
+    fn history_binds_the_selected_connection_without_a_tab() {
         let mut w = ws();
         w.dispatch_history(HistoryCommand::OpenHistory, None);
         assert_eq!(
@@ -1113,13 +1127,41 @@ mod tests {
             Some("Select a connection in the sidebar first.")
         );
         assert!(w.tabs().is_empty());
+        assert!(w.panel_history().is_none());
         w.dispatch(WorkspaceAction::SelectConnection(1));
         let Effect::SearchHistory(search) = w.dispatch_history(HistoryCommand::OpenHistory, None)
         else {
             panic!("expected SearchHistory");
         };
         assert_eq!(search.connection, Some(conn(&w, 1)));
-        assert_eq!(w.tabs().get(search.tab).unwrap().title(), "History: prod");
+        assert_eq!(search.tab, TabId::PANEL_HISTORY);
+        assert!(w.tabs().is_empty());
+    }
+
+    #[test]
+    fn history_commands_act_on_the_panel_only_while_it_shows_history() {
+        let dir = temp_dir("panel-visible");
+        let svc = service(&dir);
+        let mut w = ws();
+        let tab = history_with(&mut w, &svc, 0, &["select 1"]);
+        assert_eq!(tab, TabId::PANEL_HISTORY);
+        w.select_history_entry(tab, 0);
+        // The panel switches to Results: the commands no longer see the history.
+        w.layout.reveal_panel(PanelView::Results);
+        assert!(matches!(
+            w.dispatch_history(HistoryCommand::OpenEntry, None),
+            Effect::None
+        ));
+        assert_eq!(
+            w.take_notice().as_deref(),
+            Some("Select a history entry first.")
+        );
+        w.layout.reveal_panel(PanelView::History);
+        assert!(!matches!(
+            w.dispatch_history(HistoryCommand::OpenEntry, None),
+            Effect::None
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1236,8 +1278,6 @@ mod tests {
         let h = w.history_tab(tab).unwrap();
         assert_eq!(h.results().len(), 1);
         assert_eq!(h.results()[0].sql(), "select 2");
-        w.dispatch(WorkspaceAction::CloseTab(tab));
-        assert_eq!(w.history_rows(tab, SystemTime::now()).len(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1556,10 +1596,6 @@ mod tests {
         w.dispatch_history(HistoryCommand::SaveQuery, editor("  \n "));
         assert_eq!(w.take_notice().as_deref(), Some("Nothing to save."));
         assert!(w.history_dialog().is_none());
-        // A history tab is not an editor.
-        w.dispatch_history(HistoryCommand::OpenHistory, None);
-        w.dispatch_history(HistoryCommand::SaveQuery, editor("select 1"));
-        assert_eq!(w.take_notice().as_deref(), Some("Open a SQL editor first."));
     }
 
     #[test]

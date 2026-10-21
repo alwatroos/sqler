@@ -25,14 +25,14 @@ use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
 use super::{HistoryCommand, HistoryDialog, HistoryRow, HistoryScope, NamePurpose, SavedLoad};
 use crate::tabs::TabId;
+use crate::theme::icons::AppIcon;
+use crate::theme::widgets::empty_state;
 use crate::workspace::{Effect, Workspace, WorkspaceView};
 
 /// Height of one history row, in pixels.
 const ROW_HEIGHT: f32 = 28.;
 /// Rows of the picker visible before it scrolls.
 const PICKER_ROWS: f32 = 12.;
-/// Height of the saved-query list in the sidebar before it scrolls, in pixels.
-const SAVED_LIST_HEIGHT: f32 = 160.;
 
 /// A text input and the subscription that reports its changes.
 struct TextInput {
@@ -59,7 +59,8 @@ impl HistoryViews {
         window: &mut Window,
         cx: &mut Context<WorkspaceView>,
     ) -> bool {
-        for tab in ws.tabs().iter().map(crate::tabs::Tab::id) {
+        let panel = ws.panel_history();
+        for tab in ws.tabs().iter().map(crate::tabs::Tab::id).chain(panel) {
             if ws.history_tab(tab).is_some() && !self.searches.contains_key(&tab) {
                 let input = cx.new(|cx| {
                     InputState::new(window, cx)
@@ -401,8 +402,7 @@ pub(crate) fn saved_section(
 ) -> impl IntoElement + use<> {
     let saved = view.workspace().saved();
     let theme = cx.theme();
-    let (border, fg, muted, danger) = (
-        theme.sidebar_border,
+    let (fg, muted, danger) = (
         theme.sidebar_foreground,
         theme.muted_foreground,
         theme.danger,
@@ -410,14 +410,13 @@ pub(crate) fn saved_section(
     let (selected_bg, hover_bg) = (theme.sidebar_accent, theme.list_hover);
     let mut section = div()
         .id("saved-section")
-        .flex_none()
+        .flex_1()
+        .min_h_0()
+        .w_full()
         .flex()
         .flex_col()
         .gap_1()
-        .p_2()
-        .border_t_1()
-        .border_color(border)
-        .child(div().text_xs().text_color(muted).child("SAVED QUERIES"));
+        .p_2();
     match saved.load() {
         SavedLoad::Loading => {
             section = section.child(div().text_xs().text_color(muted).child("Loading…"));
@@ -437,14 +436,15 @@ pub(crate) fn saved_section(
                     div()
                         .text_xs()
                         .text_color(muted)
-                        .child("None yet. Use Query: Save Query in an editor."),
+                        .child("No saved queries. Save the editor text with Query: Save Query"),
                 );
             }
             let mut list = div()
                 .id("saved-list")
+                .flex_1()
+                .min_h_0()
                 .flex()
                 .flex_col()
-                .max_h(px(SAVED_LIST_HEIGHT))
                 .overflow_y_scroll();
             for (ix, query) in queries.iter().enumerate() {
                 let id = query.id().clone();
@@ -509,6 +509,32 @@ pub(crate) fn saved_section(
         }
     }
     section
+}
+
+/// The History view of the bottom panel: the panel's history, or an empty state when none is
+/// bound yet.
+pub(crate) fn history_panel_body(
+    view: &WorkspaceView,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    if view.workspace().panel_history().is_some() {
+        return history_body(view, TabId::PANEL_HISTORY, cx);
+    }
+    div()
+        .id("history-panel")
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(empty_state(
+            AppIcon::Clock,
+            "No history for this connection yet",
+            "Statements you run are recorded here.",
+            cx,
+        ))
+        .into_any_element()
 }
 
 /// A small text button that runs a history command.

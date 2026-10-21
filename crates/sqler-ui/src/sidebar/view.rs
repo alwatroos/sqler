@@ -25,8 +25,9 @@ use crate::browser::{BrowserAction, LoadState, MenuEntry, TreeNodeId, TreeNodeKi
 use crate::connections::ConnectionAction;
 use crate::tabs::Rgb;
 use crate::theme::icons::AppIcon;
-use crate::theme::widgets::{empty_state, env_chip, icon_button};
+use crate::theme::widgets::{empty_state, env_chip, icon_button, section_header};
 use crate::theme::{Appearance, SPACE, env_accent, tooltip_text};
+use crate::workbench::view::run_command_id;
 use crate::workspace::chrome::{ICON_SM, INDENT, RowState, hinted_item, list_row, ui_scale};
 use crate::workspace::{BrowserNote, Workspace, WorkspaceAction, WorkspaceView};
 
@@ -106,9 +107,6 @@ pub(crate) fn sync_list(entries: &mut Vec<ListEntry>, state: &ListState, new: Ve
     *entries = new;
 }
 
-/// Shown when there are no saved connections and no load error.
-pub(crate) const EMPTY_TEXT: &str = "No saved connections. Use New connection above, or run connection:new from the command palette.";
-
 /// The indentation of a nesting depth, in pixels.
 pub(crate) fn indent(depth: usize) -> f32 {
     INDENT * u16::try_from(depth).map_or(0., f32::from)
@@ -151,28 +149,6 @@ fn group_id(name: &str, key: &str) -> ElementId {
     ElementId::Name(format!("{name}-{key}").into())
 }
 
-/// A small text button that dispatches a connection action.
-fn text_button(
-    id: impl Into<ElementId>,
-    label: &'static str,
-    color: Hsla,
-    action: ConnectionAction,
-    cx: &mut Context<WorkspaceView>,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .text_xs()
-        .px_1()
-        .rounded_sm()
-        .text_color(color)
-        .cursor_pointer()
-        .child(label)
-        .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
-            view.dispatch_connection(action.clone(), cx);
-            cx.stop_propagation();
-        }))
-}
-
 /// The colours of the current theme, as the rows need them.
 fn palette_of(cx: &Context<WorkspaceView>) -> Palette {
     let theme = cx.theme();
@@ -203,17 +179,9 @@ pub(crate) fn sidebar(
         selected_bg,
         ..
     } = palette_of(cx);
-    let new_group_parent = model.selected_group().cloned();
-
     // The header is the drop target for "move to the root".
-    let header = div()
+    let header = section_header("CONNECTIONS", cx)
         .id("sidebar-header")
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .px_1()
-        .rounded_sm()
         .drag_over::<DragConnection>(move |style, _, _, _| style.bg(selected_bg))
         .on_drop(cx.listener(|view, drag: &DragConnection, _, cx| {
             view.dispatch_connection(
@@ -227,58 +195,57 @@ pub(crate) fn sidebar(
         }))
         .child(
             div()
-                .flex_1()
-                .text_xs()
-                .text_color(muted)
-                .child("CONNECTIONS"),
-        )
-        .child(text_button(
-            "new-connection",
-            "New connection",
-            fg,
-            ConnectionAction::New,
-            cx,
-        ))
-        .child(text_button(
-            "new-group",
-            "New group",
-            fg,
-            ConnectionAction::NewGroup {
-                parent: new_group_parent,
-            },
-            cx,
-        ));
+                .flex()
+                .flex_row()
+                .gap_1()
+                .child(
+                    icon_button("new-connection", AppIcon::Plus, "New connection").on_click(
+                        cx.listener(|view, _: &ClickEvent, window, cx| {
+                            run_command_id(view, "connection:new", window, cx);
+                        }),
+                    ),
+                )
+                .child(
+                    icon_button("new-group", AppIcon::Folder, "New group").on_click(cx.listener(
+                        |view, _: &ClickEvent, window, cx| {
+                            run_command_id(view, "connection-group:new", window, cx);
+                        },
+                    )),
+                ),
+        );
 
-    let mut top = div()
-        .id("sidebar-top")
-        .flex()
-        .flex_col()
-        .flex_none()
-        .gap_1()
-        .p_2()
-        .child(header);
+    let mut notes = div().flex().flex_col().flex_none().gap_1().px_2();
 
     if let Some(error) = model.load_error() {
-        top = top.child(
+        notes = notes.child(
             div()
                 .text_sm()
                 .text_color(danger)
                 .child(format!("Could not load connections: {error}")),
         );
-        top = top.child(div().text_xs().text_color(muted).child(
+        notes = notes.child(div().text_xs().text_color(muted).child(
             "Changes are not saved while the file cannot be loaded. Fix connections.toml and restart.",
         ));
     } else if model.entries().is_empty() && model.store().groups().is_empty() {
-        top = top.child(div().text_sm().text_color(muted).child(EMPTY_TEXT));
+        notes = notes.child(connections_empty(view, cx));
     }
     if let Some(error) = model.save_error() {
-        top = top.child(
+        notes = notes.child(
             div()
                 .text_xs()
                 .text_color(danger)
                 .child(format!("Could not save connections: {error}")),
         );
     }
+
+    let top = div()
+        .id("sidebar-top")
+        .flex()
+        .flex_col()
+        .flex_none()
+        .gap_1()
+        .child(header)
+        .child(notes);
 
     let rows = list(
         view.sidebar_list().clone(),
@@ -289,18 +256,16 @@ pub(crate) fn sidebar(
     div()
         .id("sidebar")
         .track_focus(view.sidebar_focus())
-        .w(px(260.))
+        .w_full()
         .h_full()
         .flex()
         .flex_col()
-        .flex_none()
         .bg(bg)
         .text_color(fg)
         .border_r_1()
         .border_color(border)
         .child(top)
         .child(div().flex_1().min_h_0().px_2().pb_2().child(rows))
-        .child(crate::history::view::saved_section(view, cx))
 }
 
 /// The icon of a tree node, 14 px, muted.
@@ -901,7 +866,6 @@ fn connection_row(
 }
 
 /// The empty state of the connection list: what to do next, with the action at hand.
-#[allow(dead_code)] // the sidebar container calls it once the workbench shell has merged
 pub(crate) fn connections_empty(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> Div {
     let hint = view.shortcut_hint(&ConnectionAction::New.command_id());
     empty_state(
