@@ -19,7 +19,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::spinner::Spinner;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
-use sqler_config::{GroupId, TlsMode};
+use sqler_config::{ConnectionAi, GroupId, TlsMode};
 use sqler_driver_api::sqler_core::{DriverId, Environment};
 
 use super::action::ConnectionAction;
@@ -709,8 +709,14 @@ fn form_panel(
     if ai_on {
         let rows = form.ai_send_rows();
         let mut choices = chips();
+        // What the default resolves to, through the same resolver the sends use.
+        let resolved = if ConnectionAi::new(true).sends_rows(form.environment()) {
+            "Environment default: yes"
+        } else {
+            "Environment default: no"
+        };
         for (id, label, value) in [
-            ("ai-rows-default", "Environment default", None),
+            ("ai-rows-default", resolved, None),
             ("ai-rows-yes", "Yes", Some(true)),
             ("ai-rows-no", "No", Some(false)),
         ] {

@@ -489,9 +489,14 @@ impl ConnectionForm {
         self.ai_enabled
     }
 
-    /// Turns AI on or off for this connection.
+    /// Turns AI on or off for this connection. Turning it off also drops an explicit "send result
+    /// rows" choice, so consent given earlier cannot survive unseen and a later re-enable starts
+    /// from the environment default.
     pub fn set_ai_enabled(&mut self, enabled: bool) {
         self.ai_enabled = enabled;
+        if !enabled {
+            self.ai_send_rows = None;
+        }
     }
 
     /// Whether result rows may be sent to the AI provider; `None` is the environment default.
@@ -775,8 +780,36 @@ mod tests {
         let ai = f.validate().unwrap().spec.ai;
         assert_eq!(ai, ConnectionAi::new(true).with_send_rows(false));
         f.set_ai_enabled(false);
-        f.set_ai_send_rows(None);
         assert!(f.validate().unwrap().spec.ai.is_default());
+    }
+
+    #[test]
+    fn ai_off_then_on_starts_from_the_environment_default() {
+        use sqler_config::ConfigDir;
+        for env in [Environment::Prod, Environment::Dev] {
+            let default = env != Environment::Prod;
+            let mut f = filled();
+            f.set_environment(Some(env));
+            f.set_ai_enabled(true);
+            f.set_ai_send_rows(Some(!default));
+            f.set_ai_enabled(false);
+            assert_eq!(f.ai_send_rows(), None);
+            let v = f.validate().unwrap();
+            assert!(v.spec.ai.is_default());
+            // The saved file holds no leftover choice either.
+            let dir =
+                std::env::temp_dir().join(format!("sqler-form-ai-{}-{env:?}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let mut store = ConnectionStore::new();
+            store.add_connection(v.spec, None).unwrap();
+            ConfigDir::new(&dir).save_connection_store(&store).unwrap();
+            let text = std::fs::read_to_string(dir.join("connections.toml")).unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(!text.contains("send_rows"), "{text}");
+            f.set_ai_enabled(true);
+            assert_eq!(f.ai_send_rows(), None);
+            assert_eq!(f.validate().unwrap().spec.ai.sends_rows(Some(env)), default);
+        }
     }
 
     #[test]

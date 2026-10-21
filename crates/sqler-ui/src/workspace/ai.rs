@@ -249,6 +249,10 @@ impl Workspace {
         let mut spec = profile.spec().clone();
         let mut ai = spec.ai;
         ai.enabled = !ai.enabled;
+        if !ai.enabled {
+            // Consent must not outlive AI being off: a re-enable starts from the environment default.
+            ai.send_rows = None;
+        }
         spec = spec.with_ai(ai);
         let turned_on = ai.enabled;
         if let Err(err) = self.sidebar.update_connection(&id, spec) {
@@ -510,6 +514,45 @@ mod tests {
         w.dispatch_ai(AiAction::ToggleConnection);
         assert!(!w.sidebar().profile(&conn).unwrap().spec().ai.enabled);
         assert_eq!(w.take_notice(), None);
+    }
+
+    #[test]
+    fn toggling_off_then_on_forgets_the_row_consent() {
+        use sqler_driver_api::sqler_core::Environment;
+        for env in [Environment::Prod, Environment::Dev] {
+            let mut sidebar = SidebarModel::default();
+            let id = sidebar
+                .add_connection(
+                    ConnectionSpec::new("c", DriverId::new("sqlite").unwrap(), "x")
+                        .with_environment(env)
+                        .with_ai(
+                            sqler_config::ConnectionAi::new(true)
+                                .with_send_rows(env != Environment::Dev),
+                        ),
+                    None,
+                )
+                .unwrap();
+            let mut w = Workspace::new(sidebar).with_ai(AiState::for_config(AiConfig::default()));
+            w.dispatch(WorkspaceAction::SelectConnection(0));
+            w.dispatch_ai(AiAction::ToggleConnection);
+            let ai = w.sidebar().profile(&id).unwrap().spec().ai;
+            assert!(!ai.enabled && ai.send_rows.is_none());
+            w.dispatch_ai(AiAction::ToggleConnection);
+            let ai = w.sidebar().profile(&id).unwrap().spec().ai;
+            assert!(ai.enabled && ai.send_rows.is_none());
+            assert_eq!(ai.sends_rows(Some(env)), env != Environment::Prod);
+            // And the file written for it holds no leftover choice.
+            w.dispatch_ai(AiAction::ToggleConnection);
+            let dir = std::env::temp_dir()
+                .join(format!("sqler-toggle-ai-{}-{env:?}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            sqler_config::ConfigDir::new(&dir)
+                .save_connection_store(w.sidebar().store())
+                .unwrap();
+            let text = std::fs::read_to_string(dir.join("connections.toml")).unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(!text.contains("send_rows"), "{text}");
+        }
     }
 
     #[test]

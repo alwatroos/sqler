@@ -233,8 +233,10 @@ impl AiState {
         }
         if let Some(draft) = &mut self.draft {
             let before = draft.id().to_owned();
+            let had_key = draft.key_typed();
             draft.set_kind(kind, &self.config);
-            if draft.id() != before {
+            // The masked key input must be rebuilt whenever the typed key was dropped.
+            if draft.id() != before || had_key != draft.key_typed() {
                 self.bump();
             }
         }
@@ -514,6 +516,20 @@ mod tests {
         let d = s.draft().unwrap();
         assert!(d.is_editing() && d.key_kept() && !d.key_typed() && d.saved());
         assert!(!format!("{s:?} {d:?}").contains("sk-test-123"));
+    }
+
+    #[test]
+    fn changing_the_kind_rebuilds_the_inputs_when_the_typed_key_is_dropped() {
+        let mut s = state();
+        assert!(s.open_new(K::OpenAi));
+        s.set_text(AiField::ProviderId, "mine".into());
+        s.set_text(AiField::Key, "sk-typed".into());
+        assert!(s.draft().unwrap().key_typed());
+        let g = s.inputs_generation();
+        s.set_kind(K::Mistral);
+        assert_eq!(s.draft().unwrap().id(), "mine", "a typed id stays");
+        assert!(!s.draft().unwrap().key_typed());
+        assert!(s.inputs_generation() > g);
     }
 
     #[test]
