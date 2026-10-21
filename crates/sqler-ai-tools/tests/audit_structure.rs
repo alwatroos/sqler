@@ -129,3 +129,33 @@ fn no_other_entry_runs_a_tool_without_finish() {
         "new public async entry point: {entries:?}"
     );
 }
+
+#[test]
+fn call_detailed_arms_the_cancel_guard_before_running_and_disarms_before_finish() {
+    let toolset = all()
+        .into_iter()
+        .find(|(p, _)| p.ends_with("toolset.rs"))
+        .unwrap()
+        .1;
+    let detailed = toolset
+        .split("pub async fn call_detailed(")
+        .nth(1)
+        .unwrap()
+        .split("\n    }\n")
+        .next()
+        .unwrap();
+    let at = |needle: &str| detailed.find(needle).unwrap_or_else(|| panic!("{needle}"));
+    assert!(at("CancelGuard {") < at("self.run("));
+    assert!(at("self.run(") < at("guard.disarm()"));
+    assert!(at("guard.disarm()") < at("self.finish("));
+    // The guard is the only other writer to the sink, and it never awaits.
+    assert_eq!(count(".record(&entry)"), [("toolset.rs".to_owned(), 1)]);
+    let guard = toolset
+        .split("impl Drop for CancelGuard")
+        .nth(1)
+        .unwrap()
+        .split("\n}\n")
+        .next()
+        .unwrap();
+    assert!(!guard.contains(".await"));
+}

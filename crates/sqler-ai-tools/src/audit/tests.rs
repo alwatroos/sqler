@@ -48,6 +48,7 @@ fn draft<'a>(
         redaction: RedactionSummary::default(),
         rules: rules(),
         dialect: Some(Dialect::Postgres),
+        cancel: None,
     }
 }
 
@@ -220,6 +221,11 @@ fn enums_round_trip_their_wire_names() {
     for s in ["not_needed", "approved", "denied", "refused", "not_asked"] {
         assert_eq!(ApprovalOutcome::from_wire(s).unwrap().as_str(), s);
     }
+    assert_eq!(CallOutcome::Cancelled.as_str(), "cancelled");
+    assert_eq!(
+        CallOutcome::from_wire("cancelled"),
+        Some(CallOutcome::Cancelled)
+    );
     assert!(CallOutcome::from_wire("nope").is_none());
 }
 

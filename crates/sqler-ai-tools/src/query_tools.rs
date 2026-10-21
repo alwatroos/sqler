@@ -16,7 +16,7 @@ use crate::schema::{
     ExplainArgs, OpenInEditorArgs, OpenResultsTabArgs, RunQueryArgs, SampleRowsArgs, addr_path,
 };
 use crate::source::ConnectionInfo;
-use crate::toolset::{ExecutedStatement, Inner, Ran, Truncation};
+use crate::toolset::{ExecutedStatement, Inner, Phase, Ran, Truncation};
 
 /// The default number of rows `sample_rows` reads.
 const DEFAULT_SAMPLE_ROWS: u32 = 50;
@@ -32,11 +32,13 @@ async fn run_sql(
     ran: &mut Ran,
 ) -> Result<Value, ToolError> {
     let plan = guard::plan(info, sql, force)?;
-    ran.planned = plan
-        .iter()
-        .map(|p| (p.sql.clone(), p.class, p.requires_approval()))
-        .collect();
+    ran.set_planned(
+        plan.iter()
+            .map(|p| (p.sql.clone(), p.class, p.requires_approval()))
+            .collect(),
+    );
     let approved = guard::approve_all(tool, ts.approver.as_deref(), info, &plan).await?;
+    ran.set_phase(Phase::Approved);
     let caps = ts.limits.effective(info.environment);
     let row_cap = caps.rows_for(requested_rows);
     // The deadline covers the call from here: acquiring the session counts, approvals (a person
@@ -50,6 +52,7 @@ async fn run_sql(
             ));
         }
     };
+    ran.set_phase(Phase::Executing);
     let execution = exec::execute(&mut *session, &plan, deadline, row_cap).await;
     if execution
         .statements
@@ -86,7 +89,7 @@ async fn run_sql(
             _ => None,
         };
         let row_count = out.rows.len();
-        ran.executed.push(ExecutedStatement {
+        ran.push_executed(ExecutedStatement {
             sql: planned.sql.clone(),
             class: planned.class,
             approved,

@@ -74,6 +74,9 @@ wire_enum! {
         Ok => "ok",
         /// An error body.
         Error => "error",
+        /// The call's future was dropped (client cancel, shutdown, UI close) before it finished.
+        /// The entry is best effort: a statement marked `ran` was sent, or may have been sent.
+        Cancelled => "cancelled",
     }
 }
 
