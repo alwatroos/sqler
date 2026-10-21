@@ -395,7 +395,7 @@ mod tests {
 
     #[gpui::test]
     fn an_edit_across_a_framed_pair_resets_the_frames(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| gpui_component::init(cx));
+        cx.update(gpui_component::init);
         let (state, cx) = cx.add_window_view(|window, cx| {
             EditorState::new(window, cx)
                 .language(LANGUAGE)
@@ -422,6 +422,6 @@ mod tests {
         cx.update(|_, cx| set_frames(&frames, Some((1, 3)), cx));
         assert_eq!(frame(cx), two);
         cx.update(|_, cx| set_frames(&frames, None, cx));
-        assert!(frame(cx).is_empty());
+        assert_eq!(frame(cx), Vec::<std::ops::Range<usize>>::new());
     }
 }
