@@ -19,7 +19,8 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use sqler_ui::grid::{
-    CellRef, GridLimits, GridModel, IngestState, SyntheticSource, grid_channel_with, spawn_ingest,
+    CellPos, CellRef, ColumnLayout, DisplayMap, GridLimits, GridModel, IdentityRows, IngestState,
+    Selection, SyntheticSource, grid_channel_with, spawn_ingest,
 };
 
 struct Args {
@@ -35,6 +36,8 @@ struct Args {
     slack_ns: u64,
     cells_slack_ns: u64,
     budget_p95_ns: u64,
+    layout_rows: usize,
+    layout_columns: usize,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -51,6 +54,8 @@ fn parse_args() -> Result<Args, String> {
         slack_ns: 100,
         cells_slack_ns: 500,
         budget_p95_ns: 1_000_000,
+        layout_rows: 100_000,
+        layout_columns: 50,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -75,11 +80,16 @@ fn parse_args() -> Result<Args, String> {
             "--slack-ns" => a.slack_ns = num(value()?)?,
             "--cells-slack-ns" => a.cells_slack_ns = num(value()?)?,
             "--budget-p95-ns" => a.budget_p95_ns = num(value()?)?,
+            "--layout-rows" => a.layout_rows = to_usize(num(value()?)?),
+            "--layout-columns" => a.layout_columns = to_usize(num(value()?)?),
             other => return Err(format!("unknown argument: {other}")),
         }
     }
     if a.samples == 0 || a.reps == 0 || a.rows == 0 || a.viewport > a.rows {
         return Err("need samples > 0, reps > 0, rows > 0 and viewport <= rows".to_owned());
+    }
+    if a.layout_columns < 2 || a.viewport > a.layout_rows {
+        return Err("need layout-columns >= 2 and viewport <= layout-rows".to_owned());
     }
     Ok(a)
 }
@@ -151,6 +161,78 @@ fn build_model(a: &Args) -> Result<(GridModel, Duration), String> {
         return Err("ingestion thread panicked".to_owned());
     }
     Ok((model, elapsed))
+}
+
+/// A second model for the layout measurement, built like [`build_model`].
+fn build_layout_model(a: &Args) -> Result<GridModel, String> {
+    let (mut model, sink) = grid_channel_with(GridLimits::UNBOUNDED);
+    let source = SyntheticSource::new(a.layout_rows, a.layout_columns, a.batch);
+    let handle =
+        spawn_ingest(source, sink).map_err(|e| format!("cannot spawn ingestion thread: {e}"))?;
+    loop {
+        match model.state() {
+            IngestState::Done { .. } => break,
+            IngestState::Waiting | IngestState::Streaming => {}
+            other => return Err(format!("ingestion ended in state {other:?}")),
+        }
+        if model.poll(usize::MAX) == 0 {
+            std::thread::sleep(Duration::from_micros(50));
+        }
+    }
+    if handle.join().is_err() {
+        return Err("ingestion thread panicked".to_owned());
+    }
+    Ok(model)
+}
+
+/// A reversed column order with model columns 0 and 1 pinned.
+fn reversed_pinned_layout(columns: usize) -> ColumnLayout {
+    let mut layout = ColumnLayout::new(vec![120.0; columns]);
+    for target in 0..columns - 1 {
+        layout.move_display(columns - 1, target);
+    }
+    layout.pin(0);
+    layout.pin(1);
+    layout
+}
+
+/// Minimum over `reps` of the p50 and p95 of building one viewport and visiting every display
+/// column of its rows through the layout and a 10x5 selection.
+fn measure_layout(a: &Args, model: &GridModel) -> (u64, u64) {
+    let layout = reversed_pinned_layout(a.layout_columns);
+    let order = IdentityRows(a.layout_rows);
+    let map = DisplayMap {
+        rows: &order,
+        columns: &layout,
+    };
+    let mut selection = Selection::default();
+    selection.click(CellPos { row: 0, col: 0 }, false);
+    selection.click(CellPos { row: 9, col: 4 }, true);
+    let span = (a.layout_rows - a.viewport + 1) as u64;
+    let mut rng = 0x2545_F491_4F6C_DD1D_u64;
+    let (mut p50, mut p95) = (u64::MAX, u64::MAX);
+    for _ in 0..a.reps {
+        let mut timings = Vec::with_capacity(a.samples);
+        for _ in 0..a.samples {
+            let first = to_usize(xorshift(&mut rng) % span);
+            let start = Instant::now();
+            let view = model.viewport(first, a.viewport);
+            for (offset, row) in view.iter().enumerate() {
+                for display in 0..layout.len() {
+                    if let Some(model_col) = layout.model_column(display) {
+                        black_box(row.get(model_col));
+                        black_box(selection.contains(first + offset, display, &map));
+                    }
+                }
+            }
+            let ns = start.elapsed().as_nanos();
+            timings.push(u64::try_from(ns).unwrap_or(u64::MAX));
+        }
+        timings.sort_unstable();
+        p50 = p50.min(percentile(&timings, 50));
+        p95 = p95.min(percentile(&timings, 95));
+    }
+    (p50, p95)
 }
 
 /// The gated keys of a saved report. `cells_p95_ns` is absent from reports of earlier versions.
@@ -264,9 +346,14 @@ fn run() -> Result<ExitCode, (u8, String)> {
         (Some(b), Some(e)) => e.saturating_sub(b).to_string(),
         _ => "n/a".to_owned(),
     };
+    let layout_model = build_layout_model(&a).map_err(|e| (1, e))?;
+    let (layout_p50, layout_p95) = measure_layout(&a, &layout_model);
     let report = format!(
         "bench=grid_viewport\nos={}-{}\nrows={}\ncolumns={}\nviewport_rows={}\nsamples={}\nreps={}\n\
-         p50_ns={p50}\np95_ns={p95}\ncells_p50_ns={cells_p50}\ncells_p95_ns={cells_p95}\ningest_ms={}\nheap_bytes={}\nrss_delta_bytes={rss_delta}\n",
+         p50_ns={p50}\np95_ns={p95}\ncells_p50_ns={cells_p50}\ncells_p95_ns={cells_p95}\n\
+         ingest_ms={}\nheap_bytes={}\nrss_delta_bytes={rss_delta}\n\
+         layout_rows={}\nlayout_columns={}\nlayout_pinned=2\nlayout_p50_ns={layout_p50}\n\
+         layout_p95_ns={layout_p95}\n",
         std::env::consts::OS,
         std::env::consts::ARCH,
         a.rows,
@@ -276,6 +363,8 @@ fn run() -> Result<ExitCode, (u8, String)> {
         a.reps,
         ingest_time.as_millis(),
         model.heap_bytes(),
+        a.layout_rows,
+        a.layout_columns,
     );
     print!("{report}");
     if let Some(path) = &a.save {

@@ -68,6 +68,28 @@ While the editor has focus, the editor component also handles its own keys. Thes
 
 Chords bound by SQLer are taken first, so a chord you bind in `keybindings.toml` wins over the editor's own key. See [SQL editor](sql-editor.md).
 
+## Results grid
+
+While a results grid has the focus, these keys select cells. `Mod` is Cmd on macOS and Ctrl elsewhere.
+
+| Keys | Command |
+| ---- | ------- |
+| Up, Down, Left, Right | `grid:move-up`, `grid:move-down`, `grid:move-left`, `grid:move-right` |
+| Home, End | `grid:move-row-start`, `grid:move-row-end` |
+| Mod+Home, Mod+End | `grid:move-first-cell`, `grid:move-last-cell` |
+| Page Up, Page Down | `grid:move-page-up`, `grid:move-page-down` |
+| Tab, Shift+Tab | `grid:move-right`, `grid:move-left`, only while that moves the active cell (at the last or first cell the key goes on, so Tab leaves the table) |
+| Shift with any of the movement keys above except Tab | the matching `grid:extend-*` command |
+| Mod+A | `grid:select-all` |
+| Shift+Space | `grid:select-row` |
+| Ctrl+Space | `grid:select-column` (Ctrl on every system, also on macOS) |
+
+These in-grid keys are fixed: they are not in `keybindings.toml` and cannot be rebound. The commands they run are palette commands, and you can also give them global chords. The grid gets no global default shortcut, because every useful chord (Mod+A, Alt or Mod with arrows, Mod+Home and Mod+End) is a text-editing chord in the SQL editor.
+
+The grid takes these keys before the global chords, but only while a results table has the focus. That is why Ctrl+Space, which is bound to `editor:trigger-completion` by default, selects the column in a results grid and still triggers completion in the SQL editor. A key the grid does not use (for example Mod+W or Ctrl+Tab) goes on to your global chords as usual. While the palette or a dialog is open, the grid takes no keys.
+
+The commands without an in-grid key are `grid:pin-column`, `grid:unpin-column`, `grid:move-column-left`, `grid:move-column-right`, `grid:autofit-column`, `grid:reset-layout`, `grid:scroll-to-top`, `grid:scroll-to-end` and `grid:fetch-more`. All `grid:*` commands act on the active results grid, or on the result a query tab shows. See [Results grid](results-grid.md).
+
 ## Rebind a shortcut
 
 Edit `keybindings.toml` in the config directory. [Settings](settings.md) lists where the file lives and the full chord grammar (modifiers, keys, `mod`).

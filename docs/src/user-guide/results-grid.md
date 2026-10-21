@@ -19,6 +19,35 @@ The command needs a connection: it uses the connection of the active tab, or the
 
 You can scroll while the rows are still loading. Loading runs on its own thread and never blocks the window.
 
+## Columns
+
+- **Resize.** Drag the right edge of a header. Double-click the edge to fit the column to its header and the rows on screen (`grid:autofit-column`). Widths stay between 40 and 1,200 pixels.
+- **Move.** Drag a header to another place, or run `grid:move-column-left` or `grid:move-column-right` for the column of the active cell.
+- **Pin.** `grid:pin-column` pins the column of the active cell at the left edge, so it stays in view while you scroll sideways; `grid:unpin-column` releases it. Pinned columns can only be moved among themselves, and the others among themselves.
+- **Reset.** `grid:reset-layout` restores the original order, the default widths and no pinned columns.
+
+These commands are in the palette and have no default shortcut. The layout belongs to the open table: it is not kept after you close the tab or restart SQLer, and it resets when a result brings a different number of columns.
+
+## Selecting cells
+
+Click a cell to select it; the selected cell has a border. Shift+click extends the selection to a range. Click a column header to select the whole column (Shift+click extends it). The active cell and the ends of a range follow their cells when you move a column; the range itself is the block between them as currently shown, so moving a column into or out of that block changes which cells it covers.
+
+When the grid has the focus (click a cell, or run a grid command from the palette), these keys work. `Mod` is Cmd on macOS and Ctrl elsewhere. Holding Shift extends the selection from the cell where it started.
+
+| Keys | Action |
+| ---- | ------ |
+| Arrow keys | Move the active cell |
+| Home, End | First, last column of the row |
+| Mod+Home, Mod+End | First cell, last cell |
+| Page Up, Page Down | Move by a page of rows |
+| Tab, Shift+Tab | Move right, left; at the last or first cell the key is not used by the grid, so Tab leaves the table |
+| Mod+A | Select all cells |
+| Shift+Space | Select the row of the active cell |
+| Ctrl+Space | Select the column of the active cell (Ctrl on every system) |
+| Shift+arrows, Shift+Home and so on | Extend the selection |
+
+The view scrolls to keep the active cell visible. Ctrl+Space belongs to the grid only while a results table has the focus; in the SQL editor it still triggers completion. The same actions are palette commands (`grid:move-*`, `grid:extend-*`, `grid:select-all`, `grid:select-row`, `grid:select-column`); see [Keybindings](keybindings.md#results-grid).
+
 ## Close a grid
 
 Closing the tab cancels the loading and frees the rows. A synthetic grid is not paged and holds all its rows, so close grids you no longer need; the memory it takes is on the [Benchmarks](../benchmarks.md) page.
@@ -35,7 +64,7 @@ Memory is gated on a result with 6 columns (the `grid_viewport` default); other 
 
 ## Not yet available
 
-Sorting, filtering, resizing and moving columns, editing cells and exporting arrive in M4. Column widths are fixed by type.
+Sorting, filtering, copying cells, editing cells and exporting arrive in M4.
 
 ## Editing limits
 
