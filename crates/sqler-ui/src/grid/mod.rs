@@ -19,10 +19,13 @@ mod action;
 mod cell;
 mod control;
 mod copy;
+mod filter;
 mod ingest;
 mod layout;
 mod model;
+mod order;
 mod selection;
+mod sort;
 mod stats;
 mod store;
 mod synthetic;
@@ -39,16 +42,19 @@ pub use copy::{
     NOTIFY_CELLS, PLACEHOLDER_TABLE, SYNC_CELLS, copy_key_format, copy_now, register_copy_commands,
     success_notice,
 };
+pub use filter::{CompiledFilter, Condition, FilterOp, FilterSpec, QuickFilter};
 pub use ingest::{IngestSummary, ingest, spawn_ingest};
 pub use layout::{ColumnLayout, MAX_COLUMN_PX, MIN_COLUMN_PX, default_width, widest_text};
 pub use model::{
     GridCancel, GridLimits, GridModel, GridSink, IngestState, Viewport, grid_channel,
     grid_channel_with,
 };
+pub use order::{DisplayRows, GridOrder, OrderProgress};
 pub use selection::{
     CellPos, DisplayMap, DisplayRect, IdentityRows, Motion, RowOrder, Selection, SelectionKind,
     key_command, scroll_row,
 };
+pub use sort::{Collation, SortDirection, SortKey, SortSpec, compare_cells};
 pub use stats::{ProbeReport, RenderStats, nearest_rank};
 pub use store::{CellRef, RowRef};
 pub use synthetic::SyntheticSource;

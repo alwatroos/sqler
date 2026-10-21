@@ -153,7 +153,6 @@ impl<'a> RowRef<'a> {
 }
 
 /// The rows of one ingested batch.
-#[derive(Debug)]
 pub(super) struct Chunk {
     cells: Vec<Cell>,
     text: String,
@@ -161,6 +160,19 @@ pub(super) struct Chunk {
     other: Vec<Value>,
     rows: usize,
     width: usize,
+}
+
+/// Sizes only: a log line never carries cell data.
+impl std::fmt::Debug for Chunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Chunk")
+            .field("rows", &self.rows)
+            .field("width", &self.width)
+            .field("text_bytes", &self.text.len())
+            .field("binary_bytes", &self.bytes.len())
+            .field("other_values", &self.other.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Whether a payload of `len` bytes still fits an arena that holds `used` bytes, with every

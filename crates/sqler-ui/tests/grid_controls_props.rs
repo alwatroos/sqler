@@ -175,7 +175,7 @@ fn controls_keep_invariants_under_random_sequences() {
             };
             let before = pinned_set(&gc);
             let a = random_action(&mut rng);
-            let out = gc.apply(a, rows, vis.clone());
+            let out = gc.apply(a, &IdentityRows(rows), vis.clone());
             let ctx = format!("case {case} step {step} {a:?} rows {rows} cols {cols}");
             if let Some(r) = out.scroll_row {
                 assert!(r < rows, "{ctx}: scroll row oob");
@@ -195,12 +195,12 @@ fn controls_keep_invariants_under_random_sequences() {
                     gc.click_cell(
                         rng.below(rows + 2),
                         rng.below(cols + 2),
-                        rows,
+                        &IdentityRows(rows),
                         rng.below(2) == 0,
                     );
                 }
                 1 => {
-                    gc.click_header(rng.below(cols + 2), rows, rng.below(2) == 0);
+                    gc.click_header(rng.below(cols + 2), &IdentityRows(rows), rng.below(2) == 0);
                 }
                 2 => {
                     gc.move_display(rng.below(cols + 2), rng.below(cols + 2));
@@ -225,7 +225,7 @@ fn controls_keep_invariants_under_random_sequences() {
             check_selection(gc.selection(), &map);
             for _ in 0..3 {
                 let (r, c) = (rng.below(rows + 1), rng.below(cols + 1));
-                let _ = gc.is_selected(r, c, rows);
+                let _ = gc.is_selected(r, c, &order);
             }
         }
     }
@@ -299,11 +299,14 @@ fn range_over_reversed_rows_covers_the_display_span_between_anchor_and_active() 
 fn appended_rows_keep_the_selection_and_all_covers_them() {
     let mut gc = GridControls::default();
     gc.sync_columns(&headers(3));
-    gc.click_cell(1, 1, 3, false);
-    gc.apply(GridAction::SelectAll, 3, 0..3);
-    assert!(gc.is_selected(2, 2, 3) && !gc.is_selected(3, 2, 3));
-    assert!(gc.is_selected(9, 2, 10), "select-all covers fetched rows");
-    gc.apply(GridAction::SelectRow, 10, 0..10);
+    gc.click_cell(1, 1, &IdentityRows(3), false);
+    gc.apply(GridAction::SelectAll, &IdentityRows(3), 0..3);
+    assert!(gc.is_selected(2, 2, &IdentityRows(3)) && !gc.is_selected(3, 2, &IdentityRows(3)));
+    assert!(
+        gc.is_selected(9, 2, &IdentityRows(10)),
+        "select-all covers fetched rows"
+    );
+    gc.apply(GridAction::SelectRow, &IdentityRows(10), 0..10);
     assert_eq!(gc.selection().active(), Some(CellPos { row: 1, col: 1 }));
 }
 
@@ -313,10 +316,10 @@ fn edges_and_empty_grids_do_nothing_harmful() {
         let mut gc = GridControls::default();
         gc.sync_columns(&headers(cols));
         for a in GridAction::ALL {
-            let out = gc.apply(a, rows, 0..rows);
+            let out = gc.apply(a, &IdentityRows(rows), 0..rows);
             assert!(out.autofit.is_none() && out.scroll_col.is_none(), "{a:?}");
         }
-        assert!(!gc.click_cell(0, 0, rows, false));
+        assert!(!gc.click_cell(0, 0, &IdentityRows(rows), false));
     }
     // Keyboard at the edges stays put.
     let mut gc = GridControls::default();
@@ -326,11 +329,15 @@ fn edges_and_empty_grids_do_nothing_harmful() {
             to: Motion::First,
             extend: false,
         },
-        5,
+        &IdentityRows(5),
         0..5,
     );
     for to in [Motion::Up, Motion::Left, Motion::PageUp, Motion::RowStart] {
-        gc.apply(GridAction::Move { to, extend: false }, 5, 0..5);
+        gc.apply(
+            GridAction::Move { to, extend: false },
+            &IdentityRows(5),
+            0..5,
+        );
         assert_eq!(gc.selection().active(), Some(CellPos { row: 0, col: 0 }));
     }
     gc.apply(
@@ -338,7 +345,7 @@ fn edges_and_empty_grids_do_nothing_harmful() {
             to: Motion::Last,
             extend: false,
         },
-        5,
+        &IdentityRows(5),
         0..5,
     );
     for to in [
@@ -347,7 +354,11 @@ fn edges_and_empty_grids_do_nothing_harmful() {
         Motion::PageDown,
         Motion::RowEnd,
     ] {
-        gc.apply(GridAction::Move { to, extend: false }, 5, 0..5);
+        gc.apply(
+            GridAction::Move { to, extend: false },
+            &IdentityRows(5),
+            0..5,
+        );
         assert_eq!(gc.selection().active(), Some(CellPos { row: 4, col: 1 }));
     }
 }

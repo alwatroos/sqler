@@ -71,6 +71,28 @@ The copy uses the same writers as file export. In TSV, a value with a tab, a lin
 
 The copied text is only put on the clipboard; SQLer does not log it or show it in notifications. The SQL editor keeps its own Mod+C.
 
+## Sort
+
+Sorting works on the rows the grid holds. Every header has a small sort indicator at its right edge (`↕` while the column is unsorted). Click the indicator to sort the column ascending (`↑`), click again for descending (`↓`), and again to remove the sort. Shift+click the indicator of another column to add it as a secondary key; with two or more keys the indicators are numbered (`↑1`, `↓2`). A click on the rest of the header still selects the column.
+
+The commands `grid:sort-ascending` ("Results: Sort Ascending") and `grid:sort-descending` sort by the column of the active cell and replace the current sort; `grid:clear-sort` removes it. They have no default shortcut, and without an active cell they do nothing.
+
+- **Order.** Values compare by their type: numbers by value, dates and times by instant, text by characters, and so on. NULL comes last in both directions. Rows that compare equal keep their original order.
+- **Match case.** Text sorts and filters ignoring case by default. The **Match case** box in the filter bar (`grid:toggle-match-case`, "Results: Match Case in Sort and Filter") switches to comparing by Unicode code point. It is kept for the open table only.
+- **Large results.** The sort runs in short slices on the interface thread, so the window stays usable; the previous order stays on screen until the new one is ready, and the status shows `Sorting… 40%`. Changing the sort or the filter while it runs starts over.
+
+## Filter
+
+The filter bar above the table has a **quick filter** (rows where any column, or the column picked in the list next to it, contains the text; applied shortly after you stop typing) and a **condition editor**: pick a column, an operator (`=`, `≠`, contains, `>`, `<`, is NULL, is not NULL), type a value and click **Add**. Each condition shows as a chip; click `×` on it to remove it. All parts combine with AND. NULL only matches "is NULL"; comparing with `≠` does not match NULL either. **Clear filter** (`grid:clear-filter`, "Results: Clear Filter") removes everything.
+
+The status next to the bar shows `1,204 of 1,000,000 rows` while a filter is on, or `Sorted 1,000,000 rows` when only a sort is on.
+
+## Loaded rows only
+
+Sort and filter cover the rows the grid holds. While a result is still loading, or paused after a page (see [Pages and paused results](#pages-and-paused-results)), the status ends with `· loaded rows only`. Rows that arrive while a sort or filter is on are merged in once enough of them are there (or half a second after the last merge, or when loading ends), so rows can move under the view while a result loads. Fetching more rows extends the sorted and filtered view in the same way. Sorting by the database (`ORDER BY`) is not part of the grid.
+
+**Known limit.** A MySQL text column with a binary collation (for example `VARCHAR ... COLLATE utf8mb4_bin`) reaches the grid as binary data, not as text. It sorts correctly (byte order), but the quick filter and the "contains" condition find nothing in it. This is a driver limit, not a grid one.
+
 ## Close a grid
 
 Closing the tab cancels the loading and frees the rows. A synthetic grid is not paged and holds all its rows, so close grids you no longer need; the memory it takes is on the [Benchmarks](../benchmarks.md) page.
@@ -87,7 +109,7 @@ Memory is gated on a result with 6 columns (the `grid_viewport` default); other 
 
 ## Not yet available
 
-Sorting, filtering, editing cells and exporting arrive in M4.
+Editing cells and exporting arrive in M4.
 
 ## Editing limits
 

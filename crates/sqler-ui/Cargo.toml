@@ -44,6 +44,10 @@ name = "grid_copy"
 harness = false
 
 [[bench]]
+name = "grid_sort"
+harness = false
+
+[[bench]]
 name = "browser_tree"
 harness = false
 
