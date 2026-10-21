@@ -9,8 +9,12 @@
 //! `--cells-slack-ns`). With `--staged N` (default 0, off) it also stages N cell edits on the
 //! 1M-row grid and times the display path with edits pending: `staged_p95_ns` (minimum over the
 //! repetitions) is held to the same budget, and compared against the baseline only when the
-//! baseline file has that key. Exit codes: 0 ok, 1 budget or regression failure, 2 bad arguments or
-//! unreadable baseline. See `docs/src/benchmarks.md` for the method and the rule.
+//! baseline file has that key. `--compare` may repeat: the baseline is the minimum over the files,
+//! which is how the workflow interleaves base and PR rounds. `--pr FILE` (repeatable) judges
+//! previously saved runs instead of measuring: no ingestion, the minimum per key over the files is
+//! checked against the budget and the baseline (the staged keys count only if every file has them).
+//! Exit codes: 0 ok, 1 budget or regression failure, 2 bad arguments or unreadable baseline. See
+//! `docs/src/benchmarks.md` for the method and the rule.
 //!
 //! `p50_ns` and `p95_ns` time the viewport fetch plus the construction of a `RowRef` for each
 //! visible row; they read no cell and no per-row memory. `cells_p50_ns` and `cells_p95_ns` also
@@ -39,7 +43,8 @@ struct Args {
     samples: usize,
     reps: usize,
     save: Option<String>,
-    compare: Option<String>,
+    compare: Vec<String>,
+    pr: Vec<String>,
     threshold_pct: u64,
     slack_ns: u64,
     cells_slack_ns: u64,
@@ -58,7 +63,8 @@ fn parse_args() -> Result<Args, String> {
         samples: 100_000,
         reps: 3,
         save: None,
-        compare: None,
+        compare: Vec::new(),
+        pr: Vec::new(),
         threshold_pct: 25,
         slack_ns: 100,
         cells_slack_ns: 500,
@@ -85,7 +91,8 @@ fn parse_args() -> Result<Args, String> {
             "--samples" => a.samples = to_usize(num(value()?)?),
             "--reps" => a.reps = to_usize(num(value()?)?),
             "--save" => a.save = Some(value()?),
-            "--compare" => a.compare = Some(value()?),
+            "--compare" => a.compare.push(value()?),
+            "--pr" => a.pr.push(value()?),
             "--threshold-pct" => a.threshold_pct = num(value()?)?,
             "--slack-ns" => a.slack_ns = num(value()?)?,
             "--cells-slack-ns" => a.cells_slack_ns = num(value()?)?,
@@ -358,18 +365,80 @@ struct Baseline {
     staged_p95: Option<u64>,
 }
 
-fn read_baseline(path: &str) -> Result<Baseline, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-    let key = |name: &str| {
-        text.lines()
-            .find_map(|l| l.strip_prefix(name))
-            .and_then(|v| v.trim().parse().ok())
+fn field(text: &str, key: &str) -> Option<u64> {
+    let prefix = format!("{key}=");
+    text.lines()
+        .find_map(|l| l.strip_prefix(prefix.as_str()))
+        .and_then(|v| v.trim().parse().ok())
+}
+
+fn read_file(path: &str) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))
+}
+
+/// Minimum over the baseline files: noise on a shared runner only adds time. `cells_p95` is
+/// `Some` only when every file has the key; the same for `staged_p95`.
+fn read_baseline(paths: &[String]) -> Result<Option<Baseline>, String> {
+    let mut merged: Option<Baseline> = None;
+    for path in paths {
+        let text = read_file(path)?;
+        let p95 = field(&text, "p95_ns").ok_or_else(|| format!("no p95_ns in {path}"))?;
+        let cells_p95 = field(&text, "cells_p95_ns");
+        let staged_p95 = field(&text, "staged_p95_ns");
+        merged = Some(match merged {
+            None => Baseline {
+                p95,
+                cells_p95,
+                staged_p95,
+            },
+            Some(m) => Baseline {
+                p95: m.p95.min(p95),
+                cells_p95: m.cells_p95.zip(cells_p95).map(|(x, y)| x.min(y)),
+                staged_p95: m.staged_p95.zip(staged_p95).map(|(x, y)| x.min(y)),
+            },
+        });
+    }
+    Ok(merged)
+}
+
+/// The keys of a measurement (or of a judged set of saved runs). The staged keys are `Some` only
+/// when staged edits were measured (in every judged file).
+struct Measured {
+    p50: u64,
+    p95: u64,
+    cells_p50: u64,
+    cells_p95: u64,
+    staged_p50: Option<u64>,
+    staged_p95: Option<u64>,
+}
+
+/// Judge mode: the minimum per key over saved runs; every key is required.
+fn read_pr(paths: &[String]) -> Result<Measured, String> {
+    let mut staged = Some((u64::MAX, u64::MAX));
+    let mut best = Measured {
+        p50: u64::MAX,
+        p95: u64::MAX,
+        cells_p50: u64::MAX,
+        cells_p95: u64::MAX,
+        staged_p50: None,
+        staged_p95: None,
     };
-    Ok(Baseline {
-        p95: key("p95_ns=").ok_or_else(|| format!("no p95_ns in {path}"))?,
-        cells_p95: key("cells_p95_ns="),
-        staged_p95: key("staged_p95_ns="),
-    })
+    for path in paths {
+        let text = read_file(path)?;
+        let need = |key: &str| field(&text, key).ok_or_else(|| format!("no {key} in {path}"));
+        best.p50 = best.p50.min(need("p50_ns")?);
+        best.p95 = best.p95.min(need("p95_ns")?);
+        best.cells_p50 = best.cells_p50.min(need("cells_p50_ns")?);
+        best.cells_p95 = best.cells_p95.min(need("cells_p95_ns")?);
+        staged = staged
+            .zip(field(&text, "staged_p50_ns").zip(field(&text, "staged_p95_ns")))
+            .map(|((a, b), (c, d))| (a.min(c), b.min(d)));
+    }
+    (best.staged_p50, best.staged_p95) = match staged {
+        Some((a, b)) => (Some(a), Some(b)),
+        None => (None, None),
+    };
+    Ok(best)
 }
 
 /// The limit a measurement may reach: the baseline plus `pct` percent plus an absolute slack.
@@ -425,13 +494,8 @@ fn within_baseline(
 }
 
 /// Applies the budget and the baseline comparison; true when every check passed.
-fn gate(
-    a: &Args,
-    baseline: Option<&Baseline>,
-    p95: u64,
-    cells_p95: u64,
-    staged_p95: Option<u64>,
-) -> bool {
+fn gate(a: &Args, baseline: Option<&Baseline>, m: &Measured) -> bool {
+    let (p95, cells_p95, staged_p95) = (m.p95, m.cells_p95, m.staged_p95);
     let mut ok = true;
     if p95 > a.budget_p95_ns {
         eprintln!(
@@ -455,16 +519,11 @@ fn gate(
     ok
 }
 
-fn run() -> Result<ExitCode, (u8, String)> {
-    let a = parse_args().map_err(|e| (2, e))?;
-    // The baseline is read first so a bad path fails before the long run.
-    let baseline = match &a.compare {
-        Some(path) => Some(read_baseline(path).map_err(|e| (2, e))?),
-        None => None,
-    };
-
+/// Measures the viewport fetches: the minimum over the repetitions of each percentile, plus the
+/// ingestion facts of the report.
+fn measure(a: &Args) -> Result<(Measured, String), String> {
     let rss_before = rss_bytes();
-    let (model, ingest_time) = build_model(&a).map_err(|e| (1, e))?;
+    let (model, ingest_time) = build_model(a)?;
     let rss_after = rss_bytes();
     let heap_bytes = model.heap_bytes();
 
@@ -472,8 +531,14 @@ fn run() -> Result<ExitCode, (u8, String)> {
     let mut rng = 0x9E37_79B9_7F4A_7C15_u64;
     // The gate uses the minimum over the repetitions: noise on a shared runner only adds time, so
     // the fastest repetition is the closest to the real cost.
-    let (mut p50, mut p95) = (u64::MAX, u64::MAX);
-    let (mut cells_p50, mut cells_p95) = (u64::MAX, u64::MAX);
+    let mut best = Measured {
+        p50: u64::MAX,
+        p95: u64::MAX,
+        cells_p50: u64::MAX,
+        cells_p95: u64::MAX,
+        staged_p50: None,
+        staged_p95: None,
+    };
     for _ in 0..a.reps {
         // Gated: the viewport fetch and a `RowRef` for each visible row. It reads no cell and no
         // per-row memory (earlier versions read each row's `Vec` header), so it does less work
@@ -490,8 +555,8 @@ fn run() -> Result<ExitCode, (u8, String)> {
             timings.push(u64::try_from(ns).unwrap_or(u64::MAX));
         }
         timings.sort_unstable();
-        p50 = p50.min(percentile(&timings, 50));
-        p95 = p95.min(percentile(&timings, 95));
+        best.p50 = best.p50.min(percentile(&timings, 50));
+        best.p95 = best.p95.min(percentile(&timings, 95));
 
         // The same fetch, reading every cell of the visible rows. Random positions in a large
         // model make this a cold-memory read. Gated against a baseline that has the key.
@@ -509,22 +574,24 @@ fn run() -> Result<ExitCode, (u8, String)> {
             timings.push(u64::try_from(ns).unwrap_or(u64::MAX));
         }
         timings.sort_unstable();
-        cells_p50 = cells_p50.min(percentile(&timings, 50));
-        cells_p95 = cells_p95.min(percentile(&timings, 95));
+        best.cells_p50 = best.cells_p50.min(percentile(&timings, 50));
+        best.cells_p95 = best.cells_p95.min(percentile(&timings, 95));
     }
 
     let rss_delta = match (rss_before, rss_after) {
         (Some(b), Some(e)) => e.saturating_sub(b).to_string(),
         _ => "n/a".to_owned(),
     };
-    let layout_model = build_layout_model(&a).map_err(|e| (1, e))?;
-    let (layout_p50, layout_p95) = measure_layout(&a, &layout_model);
+    let layout_model = build_layout_model(a)?;
+    let (layout_p50, layout_p95) = measure_layout(a, &layout_model);
     drop(layout_model);
     let staged = if a.staged > 0 {
-        Some(measure_staged(&a, model).map_err(|e| (1, e))?)
+        Some(measure_staged(a, model)?)
     } else {
         None
     };
+    best.staged_p50 = staged.as_ref().map(|s| s.p50);
+    best.staged_p95 = staged.as_ref().map(|s| s.p95);
     let staged_report = staged.as_ref().map_or_else(String::new, |s| {
         format!(
             "staged_edits={}\nstaged_stage_ms={}\nstaged_p50_ns={}\nstaged_p95_ns={}\n",
@@ -534,6 +601,13 @@ fn run() -> Result<ExitCode, (u8, String)> {
             s.p95
         )
     });
+    let Measured {
+        p50,
+        p95,
+        cells_p50,
+        cells_p95,
+        ..
+    } = best;
     let report = format!(
         "bench=grid_viewport\nos={}-{}\nrows={}\ncolumns={}\nviewport_rows={}\nsamples={}\nreps={}\n\
          p50_ns={p50}\np95_ns={p95}\ncells_p50_ns={cells_p50}\ncells_p95_ns={cells_p95}\n\
@@ -552,18 +626,52 @@ fn run() -> Result<ExitCode, (u8, String)> {
         a.layout_rows,
         a.layout_columns,
     );
+    Ok((best, report))
+}
+
+fn run() -> Result<ExitCode, (u8, String)> {
+    let a = parse_args().map_err(|e| (2, e))?;
+    // The baselines are read first so a bad path fails before the long run.
+    let baseline = read_baseline(&a.compare).map_err(|e| (2, e))?;
+
+    let (best, mut report) = if a.pr.is_empty() {
+        measure(&a).map_err(|e| (1, e))?
+    } else {
+        let best = read_pr(&a.pr).map_err(|e| (2, e))?;
+        let report = format!(
+            "bench=grid_viewport\nos={}-{}\nmode=judge\nrounds={}\n\
+             p50_ns={}\np95_ns={}\ncells_p50_ns={}\ncells_p95_ns={}\n{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            a.pr.len(),
+            best.p50,
+            best.p95,
+            best.cells_p50,
+            best.cells_p95,
+            match (best.staged_p50, best.staged_p95) {
+                (Some(p50), Some(p95)) => format!("staged_p50_ns={p50}\nstaged_p95_ns={p95}\n"),
+                _ => String::new(),
+            },
+        );
+        (best, report)
+    };
+    if !a.pr.is_empty()
+        && let Some(base) = &baseline
+    {
+        let cells = base
+            .cells_p95
+            .map_or_else(String::new, |c| format!("base_cells_p95_ns={c}\n"));
+        let staged = base
+            .staged_p95
+            .map_or_else(String::new, |c| format!("base_staged_p95_ns={c}\n"));
+        report = format!("{report}base_p95_ns={}\n{cells}{staged}", base.p95);
+    }
     print!("{report}");
     if let Some(path) = &a.save {
         std::fs::write(path, &report).map_err(|e| (2, format!("cannot write {path}: {e}")))?;
     }
 
-    let ok = gate(
-        &a,
-        baseline.as_ref(),
-        p95,
-        cells_p95,
-        staged.as_ref().map(|s| s.p95),
-    );
+    let ok = gate(&a, baseline.as_ref(), &best);
     Ok(if ok {
         ExitCode::SUCCESS
     } else {
