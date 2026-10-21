@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! The activity bar: one icon per view, settings at the bottom.
+//! The activity bar: one icon per view, AI and settings at the bottom.
 
 use gpui::{
     AnyElement, ClickEvent, Context, FocusHandle, InteractiveElement as _, IntoElement,
@@ -27,19 +27,21 @@ fn icon_of(item: ActivityItem) -> AppIcon {
         ActivityItem::Connections => AppIcon::Database,
         ActivityItem::SavedQueries => AppIcon::Bookmark,
         ActivityItem::History => AppIcon::Clock,
+        ActivityItem::Ai => AppIcon::Sparkles,
         ActivityItem::Settings => AppIcon::Settings,
     }
 }
 
-/// The index in the bar (top items, then Settings) of the item `F6` lands on: the active one,
-/// else the first.
+/// The index in the bar (top items, then the bottom ones) of the item `F6` lands on: the
+/// active one, else the first.
 pub(crate) fn focus_index(view: &WorkspaceView) -> usize {
     let ws = view.workspace();
     if ws.settings_tab_active() {
-        return ActivityItem::TOP.len();
+        return ActivityItem::COUNT - 1;
     }
     ActivityItem::TOP
         .iter()
+        .chain(&ActivityItem::BOTTOM)
         .position(|item| item.is_active(ws.layout()))
         .unwrap_or(0)
 }
@@ -118,6 +120,13 @@ pub(crate) fn activity_bar(
     for (item, handle) in ActivityItem::TOP.into_iter().zip(items) {
         top = top.child(item_element(view, item, hints, handle, cx));
     }
+    let mut bottom = div().flex().flex_col();
+    for (item, handle) in ActivityItem::BOTTOM
+        .into_iter()
+        .zip(items.iter().skip(ActivityItem::TOP.len()))
+    {
+        bottom = bottom.child(item_element(view, item, hints, handle, cx));
+    }
     div()
         .id("activity-bar")
         .track_focus(focus)
@@ -133,10 +142,6 @@ pub(crate) fn activity_bar(
         .border_r_1()
         .border_color(border)
         .child(top)
-        .children(
-            items
-                .get(ActivityItem::TOP.len())
-                .map(|handle| item_element(view, ActivityItem::Settings, hints, handle, cx)),
-        )
+        .child(bottom)
         .into_any_element()
 }

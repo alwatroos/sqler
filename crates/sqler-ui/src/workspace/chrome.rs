@@ -221,7 +221,8 @@ pub(crate) fn field_row(
                 .text_color(cx.theme().muted_foreground)
                 .child(label.into()),
         )
-        .child(div().flex_1().child(content))
+        // `min_w_0` lets long text in the content column wrap instead of widening the row.
+        .child(div().flex_1().min_w_0().child(content))
 }
 
 /// A menu item with an optional icon and, right-aligned, its shortcut hint.
