@@ -40,7 +40,7 @@ The script entries follow the object kind and the dialect, see [DDL and scripts]
 - **Generate CREATE, SELECT, INSERT, DROP** opens a read-only `DDL: <object>` tab with the script and a Copy button. Nothing runs against the server, except Generate CREATE for a view, function, index and the like: it opens a short-lived session to read the definition.
 - **Properties** opens a read-only `Properties: <object>` tab with a two-column table of the fields SQLer knows (kind, path, owner, comment, columns and so on).
 - **Copy Name** puts the fully quoted, qualified name on the clipboard.
-- **Refresh** reloads the node and everything below it. The row shows progress while it runs and a cancel link; `Object: Cancel Refresh` does the same. Cancelling keeps the old tree.
+- **Refresh** reloads the node and everything below it. The row shows progress while it runs and a cancel button (X) next to the count; `Object: Cancel Refresh` does the same. Cancelling keeps the old tree.
 
 ## Drop
 

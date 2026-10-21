@@ -97,11 +97,11 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "object-browser-ddl",
-        pending: Some("restyle (U5)"),
+        pending: None,
     },
     Scene {
         name: "palette-recent",
-        pending: Some("\"Recently used\" in the palette (U5)"),
+        pending: None,
     },
     Scene {
         name: "messages-error",
@@ -109,7 +109,7 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "settings",
-        pending: Some("restyle (U5)"),
+        pending: None,
     },
     Scene {
         name: "panels-collapsed",
@@ -117,7 +117,7 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "connection-dialog",
-        pending: Some("restyle (U5)"),
+        pending: None,
     },
 ];
 
@@ -187,6 +187,8 @@ enum Step {
     Command(&'static str),
     /// Selects the sidebar entry called `conn`.
     Select(&'static str),
+    /// Records a command as just used in the palette.
+    Record(&'static str),
     /// Closes every tab.
     CloseAll,
     /// Marks the n-th query tab as edited (a stand-in for typing).
@@ -265,6 +267,9 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
         "palette-recent" => vec![
             open_step("dev", "select * from customers;"),
             Step::Wait(Wait::Editors(1)),
+            Step::Record("query:run-all"),
+            Step::Record("editor:format-sql"),
+            Step::Record("settings:open"),
             Step::Command(OPEN_PALETTE),
         ],
         "messages-error" => vec![
@@ -447,6 +452,10 @@ impl WorkspaceView {
             Step::Command(command) => {
                 let id = CommandId::new(command).map_err(|err| err.to_string())?;
                 self.run_command(&id, window, cx);
+            }
+            Step::Record(command) => {
+                let id = CommandId::new(command).map_err(|err| err.to_string())?;
+                self.palette.record(&id);
             }
             Step::Select(conn) => {
                 let index = self

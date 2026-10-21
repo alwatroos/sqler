@@ -50,6 +50,13 @@ impl MenuEntry {
             Self::Properties => "Properties",
         }
     }
+
+    /// Whether a separator goes before this entry in the menu: the generated scripts, the
+    /// destructive entry and the clipboard entry each start a group.
+    #[must_use]
+    pub fn starts_group(self) -> bool {
+        matches!(self, Self::GenerateCreate | Self::Drop | Self::CopyName)
+    }
 }
 
 /// The entries for `node`, in menu order.
@@ -106,6 +113,29 @@ mod tests {
             ObjectPath::root().in_schema("public").in_table("t"),
             "x",
         ))
+    }
+
+    #[test]
+    fn starts_group_marks_the_group_leaders() {
+        let leaders = [
+            MenuEntry::GenerateCreate,
+            MenuEntry::Drop,
+            MenuEntry::CopyName,
+        ];
+        for entry in [
+            MenuEntry::OpenData,
+            MenuEntry::OpenInEditor,
+            MenuEntry::GenerateCreate,
+            MenuEntry::GenerateSelect,
+            MenuEntry::GenerateInsert,
+            MenuEntry::GenerateDrop,
+            MenuEntry::Drop,
+            MenuEntry::CopyName,
+            MenuEntry::Refresh,
+            MenuEntry::Properties,
+        ] {
+            assert_eq!(entry.starts_group(), leaders.contains(&entry), "{entry:?}");
+        }
     }
 
     #[test]

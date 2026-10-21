@@ -14,25 +14,36 @@ use std::rc::Rc;
 use std::time::SystemTime;
 
 use gpui::{
-    AnyElement, AppContext as _, ClickEvent, Context, Div, Entity, Focusable as _,
+    AnyElement, AppContext as _, ClickEvent, Context, Entity, Focusable as _,
     InteractiveElement as _, IntoElement, ParentElement as _, StatefulInteractiveElement as _,
     Styled as _, Subscription, Window, div, px, uniform_list,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
+use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 
 use super::{HistoryCommand, HistoryDialog, HistoryRow, HistoryScope, NamePurpose, SavedLoad};
 use crate::tabs::TabId;
+use crate::theme::SPACE;
 use crate::theme::icons::AppIcon;
 use crate::theme::widgets::empty_state;
+use crate::workspace::chrome::{
+    DIALOG_W_SM, ICON_SM, OVERLAY_ROW, OVERLAY_TOP, OVERLAY_W, RowState, TOOLBAR_HEIGHT,
+    dialog_footer, dialog_panel, dialog_title, list_row, scrim, ui_scale,
+};
 use crate::workspace::{Effect, Workspace, WorkspaceView};
 
-/// Height of one history row, in pixels.
-const ROW_HEIGHT: f32 = 28.;
 /// Rows of the picker visible before it scrolls.
 const PICKER_ROWS: f32 = 12.;
+/// Width of the "when" column of a history row.
+const WHEN_W: f32 = 80.;
+/// Width of the outcome column of a history row.
+const OUTCOME_W: f32 = 70.;
+/// Width of the connection column of a history row (all-connections scope).
+const CONNECTION_W: f32 = 130.;
+/// Width of the detail column of a history row.
+const DETAIL_W: f32 = 150.;
 
 /// A text input and the subscription that reports its changes.
 struct TextInput {
@@ -160,21 +171,6 @@ impl HistoryViews {
     }
 }
 
-/// A full-window dimmed layer that centres its child and takes the clicks.
-fn scrim(id: &'static str) -> gpui::Stateful<Div> {
-    div()
-        .id(id)
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(gpui::black().opacity(0.45))
-        .occlude()
-}
-
 /// The body of a history tab: the search box, the scope toggle, the buttons and the list.
 #[allow(clippy::too_many_lines)] // one declarative element tree
 pub(crate) fn history_body(
@@ -188,13 +184,16 @@ pub(crate) fn history_body(
     };
     let theme = cx.theme();
     let (border, muted) = (theme.border, theme.muted_foreground);
+    let scale = ui_scale(cx);
     let all = history.scope() == HistoryScope::All;
     let selected = history.selected();
+    let empty = !history.searching() && history.results().is_empty();
+    let blank_search = history.text().trim().is_empty();
     let status = if history.searching() {
         "Searching…".to_owned()
-    } else if history.results().is_empty() {
-        if history.text().trim().is_empty() {
-            "No history yet. Statements you run are recorded here.".to_owned()
+    } else if empty {
+        if blank_search {
+            String::new()
         } else {
             "Nothing matches.".to_owned()
         }
@@ -205,13 +204,20 @@ pub(crate) fn history_body(
     let count = rows.len();
 
     let mut toolbar = div()
+        .h(px(TOOLBAR_HEIGHT))
+        .flex_none()
         .flex()
         .flex_row()
         .items_center()
-        .gap_2()
-        .p_2()
+        .gap(px(SPACE[3]))
+        .px(px(SPACE[3]))
         .border_b_1()
-        .border_color(border);
+        .border_color(border)
+        .child(
+            Icon::new(AppIcon::Search)
+                .size(px(ICON_SM))
+                .text_color(muted),
+        );
     if let Some(search) = view.history_views.searches.get(&tab) {
         toolbar = toolbar.child(div().flex_1().min_w_0().child(Input::new(&search.input)));
     }
@@ -272,6 +278,30 @@ pub(crate) fn history_body(
     .min_h_0()
     .w_full();
 
+    let (title, line) = if all {
+        (
+            "No history yet",
+            "Statements you run on any connection are recorded here.",
+        )
+    } else {
+        (
+            "No history for this connection yet",
+            "Statements you run are recorded here.",
+        )
+    };
+    let body = if empty && blank_search {
+        div()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(empty_state(AppIcon::Clock, title, line, cx))
+            .into_any_element()
+    } else {
+        list.into_any_element()
+    };
     div()
         .id("history-tab")
         .flex_1()
@@ -280,15 +310,15 @@ pub(crate) fn history_body(
         .flex()
         .flex_col()
         .child(toolbar)
-        .child(
+        .children((!status.is_empty()).then(|| {
             div()
-                .px_3()
-                .py_1()
-                .text_xs()
+                .px(px(SPACE[3]))
+                .py(px(SPACE[1]))
+                .text_size(px(scale.xs))
                 .text_color(muted)
-                .child(status),
-        )
-        .child(list)
+                .child(status)
+        }))
+        .child(body)
         .into_any_element()
 }
 
@@ -303,25 +333,22 @@ fn history_row(
 ) -> AnyElement {
     let theme = cx.theme();
     let (muted, danger) = (theme.muted_foreground, theme.danger);
-    let (selected_bg, hover_bg) = (theme.list_active, theme.list_hover);
     let mono = theme.mono_font_family.clone();
+    let scale = ui_scale(cx);
     let outcome_color = if row.outcome == "Error" {
         danger
     } else {
         muted
     };
-    let mut line = div()
-        .id(("history-row", ix))
-        .h(px(ROW_HEIGHT))
+    let state = RowState {
+        selected,
+        // The list has no focus handle of its own: the selection draws unfocused.
+        focused: false,
+        disabled: false,
+    };
+    let mut line = list_row(("history-row", ix), state, cx)
         .w_full()
-        .flex_none()
-        .px_3()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_3()
-        .cursor_pointer()
-        .hover(move |s| s.bg(hover_bg))
+        .gap(px(SPACE[3]))
         .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
             if event.click_count() >= 2 {
                 view.history_do(
@@ -343,26 +370,26 @@ fn history_row(
         }))
         .child(
             div()
-                .w(px(80.))
+                .w(px(WHEN_W))
                 .flex_none()
-                .text_xs()
+                .text_size(px(scale.xs))
                 .text_color(muted)
                 .child(row.when.clone()),
         )
         .child(
             div()
-                .w(px(70.))
+                .w(px(OUTCOME_W))
                 .flex_none()
-                .text_xs()
+                .text_size(px(scale.xs))
                 .text_color(outcome_color)
                 .child(row.outcome),
         );
     if show_connection {
         line = line.child(
             div()
-                .w(px(130.))
+                .w(px(CONNECTION_W))
                 .flex_none()
-                .text_xs()
+                .text_size(px(scale.xs))
                 .truncate()
                 .child(row.connection.clone()),
         );
@@ -370,9 +397,9 @@ fn history_row(
     line = line
         .child(
             div()
-                .w(px(150.))
+                .w(px(DETAIL_W))
                 .flex_none()
-                .text_xs()
+                .text_size(px(scale.xs))
                 .text_color(muted)
                 .child(row.detail.clone()),
         )
@@ -381,15 +408,18 @@ fn history_row(
                 .flex_1()
                 .min_w_0()
                 .font_family(mono)
-                .text_sm()
+                .text_size(px(scale.mono))
                 .truncate()
                 .child(row.sql.clone()),
         );
     if row.truncated {
-        line = line.child(div().flex_none().text_xs().text_color(muted).child("cut"));
-    }
-    if selected {
-        line = line.bg(selected_bg);
+        line = line.child(
+            div()
+                .flex_none()
+                .text_size(px(scale.xs))
+                .text_color(muted)
+                .child("cut"),
+        );
     }
     line.into_any_element()
 }
@@ -402,12 +432,8 @@ pub(crate) fn saved_section(
 ) -> impl IntoElement + use<> {
     let saved = view.workspace().saved();
     let theme = cx.theme();
-    let (fg, muted, danger) = (
-        theme.sidebar_foreground,
-        theme.muted_foreground,
-        theme.danger,
-    );
-    let (selected_bg, hover_bg) = (theme.sidebar_accent, theme.list_hover);
+    let (muted, danger) = (theme.muted_foreground, theme.danger);
+    let scale = ui_scale(cx);
     let mut section = div()
         .id("saved-section")
         .flex_1()
@@ -415,16 +441,21 @@ pub(crate) fn saved_section(
         .w_full()
         .flex()
         .flex_col()
-        .gap_1()
-        .p_2();
+        .gap(px(SPACE[1]))
+        .p(px(SPACE[2]));
     match saved.load() {
         SavedLoad::Loading => {
-            section = section.child(div().text_xs().text_color(muted).child("Loading…"));
+            section = section.child(
+                div()
+                    .text_size(px(scale.xs))
+                    .text_color(muted)
+                    .child("Loading…"),
+            );
         }
         SavedLoad::Failed(err) => {
             section = section.child(
                 div()
-                    .text_xs()
+                    .text_size(px(scale.xs))
                     .text_color(danger)
                     .child(format!("Not available: {err}")),
             );
@@ -433,10 +464,13 @@ pub(crate) fn saved_section(
             let queries = saved.queries().queries();
             if queries.is_empty() {
                 section = section.child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child("No saved queries. Save the editor text with Query: Save Query"),
+                    empty_state(
+                        AppIcon::Bookmark,
+                        "No saved queries",
+                        "Save the editor text with Query: Save Query.",
+                        cx,
+                    )
+                    .py(px(SPACE[5])),
                 );
             }
             let mut list = div()
@@ -452,16 +486,13 @@ pub(crate) fn saved_section(
                     Some(folder) => format!("{folder}/{}", query.name()),
                     None => query.name().to_owned(),
                 };
-                let mut row = div()
-                    .id(("saved-row", ix))
-                    .flex_none()
-                    .px_1()
-                    .py_0p5()
-                    .rounded_sm()
-                    .text_sm()
-                    .truncate()
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(hover_bg))
+                let state = RowState {
+                    selected: saved.selected() == Some(query.id()),
+                    focused: false,
+                    disabled: false,
+                };
+                let row = list_row(("saved-row", ix), state, cx)
+                    .text_size(px(scale.sm))
                     .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
                         let id = id.clone();
                         let double = event.click_count() >= 2;
@@ -477,10 +508,13 @@ pub(crate) fn saved_section(
                             cx,
                         );
                     }))
-                    .child(label);
-                if saved.selected() == Some(query.id()) {
-                    row = row.bg(selected_bg);
-                }
+                    .child(
+                        Icon::new(AppIcon::Bookmark)
+                            .size(px(ICON_SM))
+                            .flex_none()
+                            .text_color(muted),
+                    )
+                    .child(div().min_w_0().truncate().child(label));
                 list = list.child(row);
             }
             section = section.child(list);
@@ -489,18 +523,16 @@ pub(crate) fn saved_section(
                     div()
                         .flex()
                         .flex_row()
-                        .gap_1()
+                        .gap(px(SPACE[1]))
                         .child(saved_button(
                             "saved-rename",
                             "Rename",
-                            fg,
                             HistoryCommand::RenameSaved,
                             cx,
                         ))
                         .child(saved_button(
                             "saved-delete",
                             "Delete",
-                            fg,
                             HistoryCommand::DeleteSaved,
                             cx,
                         )),
@@ -537,22 +569,17 @@ pub(crate) fn history_panel_body(
         .into_any_element()
 }
 
-/// A small text button that runs a history command.
+/// A small ghost button that runs a history command.
 fn saved_button(
     id: &'static str,
     label: &'static str,
-    color: gpui::Hsla,
     command: HistoryCommand,
     cx: &mut Context<WorkspaceView>,
-) -> gpui::Stateful<Div> {
-    div()
-        .id(id)
-        .text_xs()
-        .px_1()
-        .rounded_sm()
-        .text_color(color)
-        .cursor_pointer()
-        .child(label)
+) -> Button {
+    Button::new(id)
+        .label(label)
+        .ghost()
+        .xsmall()
         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
             view.history_command(command, cx);
             cx.stop_propagation();
@@ -625,19 +652,19 @@ fn name_dialog(
     error: Option<&str>,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    let theme = cx.theme();
-    let (panel_bg, border, fg, danger) = (
-        theme.popover,
-        theme.border,
-        theme.popover_foreground,
-        theme.danger,
-    );
-    let mut body = div().flex().flex_col().gap_2().px_4().py_2();
+    let danger = cx.theme().danger;
+    let xs = ui_scale(cx).xs;
+    let mut body = div().flex().flex_col().gap(px(SPACE[2]));
     if let Some(input) = input {
         body = body.child(Input::new(input));
     }
     if let Some(error) = error {
-        body = body.child(div().text_xs().text_color(danger).child(error.to_owned()));
+        body = body.child(
+            div()
+                .text_size(px(xs))
+                .text_color(danger)
+                .child(error.to_owned()),
+        );
     }
     let submit = Button::new("history-dialog-ok")
         .label(action)
@@ -648,31 +675,12 @@ fn name_dialog(
                 view.history_do(Workspace::submit_history_dialog, cx);
             }
         }));
-    scrim("history-scrim")
+    scrim("history-scrim", cx)
         .child(
-            div()
-                .id("history-dialog")
-                .w(px(460.))
-                .flex()
-                .flex_col()
-                .bg(panel_bg)
-                .text_color(fg)
-                .border_1()
-                .border_color(border)
-                .rounded_lg()
-                .shadow_lg()
-                .child(div().px_4().pt_4().pb_1().text_lg().child(title))
+            dialog_panel("history-dialog", DIALOG_W_SM, cx)
+                .child(dialog_title(Some(AppIcon::Bookmark), title, cx))
                 .child(body)
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap_2()
-                        .p_4()
-                        .child(cancel_button(cx))
-                        .child(submit),
-                ),
+                .child(dialog_footer(cx).child(cancel_button(cx)).child(submit)),
         )
         .into_any_element()
 }
@@ -683,13 +691,8 @@ fn confirm_dialog(
     action: &'static str,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    let theme = cx.theme();
-    let (panel_bg, border, fg, muted) = (
-        theme.popover,
-        theme.border,
-        theme.popover_foreground,
-        theme.muted_foreground,
-    );
+    let muted = cx.theme().muted_foreground;
+    let sm = ui_scale(cx).sm;
     let confirm = Button::new("history-dialog-ok")
         .label(action)
         .small()
@@ -699,38 +702,17 @@ fn confirm_dialog(
                 view.history_do(Workspace::submit_history_dialog, cx);
             }
         }));
-    scrim("history-scrim")
+    scrim("history-scrim", cx)
         .child(
-            div()
-                .id("history-dialog")
-                .w(px(460.))
-                .flex()
-                .flex_col()
-                .bg(panel_bg)
-                .text_color(fg)
-                .border_1()
-                .border_color(border)
-                .rounded_lg()
-                .shadow_lg()
-                .child(div().px_4().pt_4().pb_2().text_lg().child(title))
+            dialog_panel("history-dialog", DIALOG_W_SM, cx)
+                .child(dialog_title(Some(AppIcon::TriangleAlert), title, cx))
                 .child(
                     div()
-                        .px_4()
-                        .pb_2()
-                        .text_sm()
+                        .text_size(px(sm))
                         .text_color(muted)
                         .child(question.to_owned()),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap_2()
-                        .p_4()
-                        .child(cancel_button(cx))
-                        .child(confirm),
-                ),
+                .child(dialog_footer(cx).child(cancel_button(cx)).child(confirm)),
         )
         .into_any_element()
 }
@@ -748,7 +730,8 @@ fn picker_overlay(
         theme.border,
         theme.muted_foreground,
     );
-    let (selected_bg, hover_bg) = (theme.list_active, theme.list_hover);
+    let radius = theme.radius_lg;
+    let scale = ui_scale(cx);
     let queries = view.workspace().saved().queries();
     let matches = picker.matches(queries);
     let current = picker.selected();
@@ -756,14 +739,14 @@ fn picker_overlay(
         .id("picker-list")
         .flex()
         .flex_col()
-        .max_h(px(ROW_HEIGHT * PICKER_ROWS))
+        .max_h(px(OVERLAY_ROW * PICKER_ROWS))
         .overflow_y_scroll();
     if matches.is_empty() {
         list = list.child(
             div()
-                .px_3()
-                .py_2()
-                .text_sm()
+                .px(px(SPACE[3]))
+                .py(px(SPACE[2]))
+                .text_size(px(scale.sm))
                 .text_color(muted)
                 .child("No saved query matches."),
         );
@@ -773,16 +756,13 @@ fn picker_overlay(
             Some(folder) => format!("{folder}/{}", query.name()),
             None => query.name().to_owned(),
         };
-        let mut row = div()
-            .id(("picker-row", ix))
-            .h(px(ROW_HEIGHT))
-            .flex_none()
-            .px_3()
-            .flex()
-            .flex_row()
-            .items_center()
-            .cursor_pointer()
-            .hover(move |s| s.bg(hover_bg))
+        let state = RowState {
+            selected: ix == current,
+            focused: true,
+            disabled: false,
+        };
+        let row = list_row(("picker-row", ix), state, cx)
+            .h(px(OVERLAY_ROW))
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 view.history_do(
                     |ws| {
@@ -796,29 +776,31 @@ fn picker_overlay(
                     cx,
                 );
             }))
-            .child(div().text_sm().child(label));
-        if ix == current {
-            row = row.bg(selected_bg);
-        }
+            .child(
+                Icon::new(AppIcon::Bookmark)
+                    .size(px(ICON_SM))
+                    .flex_none()
+                    .text_color(muted),
+            )
+            .child(div().text_size(px(scale.sm)).child(label));
         list = list.child(row);
     }
     let mut panel = div()
         .id("picker")
-        .w(px(600.))
+        .w(px(OVERLAY_W))
         .flex()
         .flex_col()
         .bg(bg)
         .text_color(fg)
         .border_1()
         .border_color(border)
-        .rounded_md()
-        .shadow_lg();
+        .rounded(radius);
     if let Some(input) = &view.history_views.picker {
-        panel = panel.child(div().p_2().child(Input::new(&input.input)));
+        panel = panel.child(div().p(px(SPACE[2])).child(Input::new(&input.input)));
     }
-    scrim("picker-scrim")
+    scrim("picker-scrim", cx)
         .items_start()
-        .pt(px(48.))
+        .pt(px(OVERLAY_TOP))
         .child(panel.child(list))
         .into_any_element()
 }

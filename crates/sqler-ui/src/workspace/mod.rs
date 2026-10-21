@@ -10,6 +10,8 @@ mod action;
 mod bridge;
 mod browser;
 #[cfg(feature = "gui")]
+pub(crate) mod chrome;
+#[cfg(feature = "gui")]
 mod drop_dialog;
 mod edit;
 mod editor;

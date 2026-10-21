@@ -28,12 +28,20 @@ use super::{
 use crate::grid::view::{GridDelegate, Table, apply_action};
 use crate::grid::{CellPos, DisplayMap, GridAction, Motion, RowOrder as _};
 use crate::query::view::scrim;
+use crate::theme::icons::AppIcon;
+use crate::theme::widgets::env_chip;
+use crate::theme::{SPACE, TypeScale};
+use crate::workspace::chrome::{
+    DIALOG_W_LG, DIALOG_W_MD, DIALOG_W_SM, LIST_MAX_H, TOOLBAR_HEIGHT, dialog_footer, dialog_panel,
+    dialog_title, ui_scale,
+};
 use crate::workspace::{CloseTarget, WorkspaceView};
+use sqler_driver_api::sqler_core::Environment;
 
 /// The largest selection a bulk edit (Set NULL, Revert, Delete) works on in one go.
 const MAX_BULK: usize = 100_000;
-/// Height of the statement list in the preview and the confirmation, in pixels.
-const LIST_HEIGHT: f32 = 380.;
+/// How far beyond the visible part the statement lists keep rows laid out, in pixels.
+const OVERDRAW: f32 = 400.;
 
 /// The input of the open cell editor.
 pub(crate) struct CellInput {
@@ -320,7 +328,7 @@ pub(crate) fn editor_element(
         _ => None,
     };
     let nullable = editor.nullable;
-    let mut row = div().flex().flex_row().items_center().gap_1();
+    let mut row = div().flex().flex_row().items_center().gap(px(SPACE[1]));
     for (ix, (label, value)) in [("true", Some(true)), ("false", Some(false)), ("NULL", None)]
         .into_iter()
         .enumerate()
@@ -500,9 +508,9 @@ pub(crate) fn edit_bar(
     let row = edit_row(view, key, table, cx)?;
     Some(
         row.w_full()
+            .h(px(TOOLBAR_HEIGHT))
             .flex_none()
-            .px_2()
-            .py_1()
+            .px(px(SPACE[3]))
             .border_b_1()
             .border_color(border)
             .into_any_element(),
@@ -522,6 +530,7 @@ pub(crate) fn edit_row(
     if bar.state == EditState::Loading {
         return None;
     }
+    let scale = ui_scale(cx);
     let theme = cx.theme();
     let (muted, danger, warning) = (theme.muted_foreground, theme.danger, theme.warning);
     let applying = view.workspace().is_applying(key.tab);
@@ -531,14 +540,14 @@ pub(crate) fn edit_row(
         .flex()
         .flex_row()
         .items_center()
-        .gap_3();
+        .gap(px(SPACE[3]));
     if editable {
         let text = bar.status.clone().unwrap_or_else(|| "Editable".to_owned());
-        row = row.child(div().text_sm().child(text));
+        row = row.child(div().text_size(px(scale.sm)).child(text));
         if bar.keyless {
             row = row.child(
                 div()
-                    .text_xs()
+                    .text_size(px(scale.xs))
                     .text_color(warning)
                     .child("rows matched on all values"),
             );
@@ -548,17 +557,22 @@ pub(crate) fn edit_row(
         row = row.child(
             div()
                 .id(("edit-reason", key.tab.raw()))
-                .text_sm()
+                .text_size(px(scale.sm))
                 .text_color(muted)
                 .tooltip(move |window, cx| Tooltip::new(reason.clone()).build(window, cx))
                 .child("Read-only"),
         );
     }
     if bar.production {
-        row = row.child(div().text_xs().text_color(danger).child("production"));
+        row = row.child(env_chip(Environment::Prod, cx));
     }
     if let Some(blocked) = bar.blocked.as_ref().filter(|_| editable) {
-        row = row.child(div().text_xs().text_color(danger).child(blocked.clone()));
+        row = row.child(
+            div()
+                .text_size(px(scale.xs))
+                .text_color(danger)
+                .child(blocked.clone()),
+        );
     }
     row = row.child(div().flex_1());
     let table = table.clone();
@@ -566,12 +580,13 @@ pub(crate) fn edit_row(
         row = row
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(scale.sm))
                     .text_color(muted)
                     .child(format!("Applying {} statements…", bar.pending)),
             )
             .child(
                 Button::new("edit-cancel-apply")
+                    .icon(AppIcon::CircleStop)
                     .label("Cancel")
                     .ghost()
                     .small()
@@ -624,6 +639,7 @@ pub(crate) fn edit_row(
         let t = table;
         row = row.child(
             Button::new("edit-apply")
+                .icon(AppIcon::Check)
                 .label("Apply")
                 .primary()
                 .small()
@@ -640,111 +656,96 @@ pub(crate) fn edit_row(
 
 /// The list state for a statement list of `count` items.
 pub(crate) fn new_statement_list() -> ListState {
-    ListState::new(0, ListAlignment::Top, px(400.))
+    ListState::new(0, ListAlignment::Top, px(OVERDRAW))
+}
+
+/// How a dialog button looks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tone {
+    Plain,
+    Primary,
+    Danger,
 }
 
 fn dialog_button(
     id: &'static str,
     label: &str,
-    danger: bool,
+    tone: Tone,
     focus: Option<&gpui::FocusHandle>,
-    theme: &Theme,
     cx: &mut Context<WorkspaceView>,
     on_click: impl Fn(&mut WorkspaceView, &mut Window, &mut Context<WorkspaceView>) + 'static,
 ) -> AnyElement {
-    let mut button = div()
-        .id(id)
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .border_1()
-        .border_color(if danger { theme.danger } else { theme.border })
-        .cursor_pointer();
-    if danger {
-        button = button.bg(theme.danger).text_color(theme.danger_foreground);
-    }
+    let mut button = Button::new(id).label(label.to_owned()).small();
+    button = match tone {
+        Tone::Plain => button.outline(),
+        Tone::Primary => button.primary(),
+        Tone::Danger => button.primary().danger(),
+    };
+    let button = button.on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
+        if event.click_count() == 1 {
+            on_click(view, window, cx);
+        }
+    }));
+    // The wrapper holds the default focus, so a stray Enter never confirms.
+    let mut holder = div().child(button);
     if let Some(focus) = focus {
-        button = button.track_focus(focus);
+        holder = holder.track_focus(focus);
     }
-    button
-        .child(label.to_owned())
-        .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
-            if event.click_count() == 1 {
-                on_click(view, window, cx);
-            }
-        }))
-        .into_any_element()
+    holder.into_any_element()
 }
 
 /// The frame of every edit dialog: scrim, panel, title, body and a row of buttons.
 fn dialog_frame(
     id: &'static str,
+    icon: Option<AppIcon>,
     title: &str,
     width: f32,
     body: Vec<AnyElement>,
     footer: Vec<AnyElement>,
-    theme: &Theme,
+    cx: &gpui::App,
 ) -> AnyElement {
-    scrim(id)
+    let panel_id = format!("{id}-panel");
+    scrim(id, cx)
         .child(
-            div()
-                .w(px(width))
-                .max_h(px(760.))
-                .flex()
-                .flex_col()
-                .bg(theme.popover)
-                .text_color(theme.popover_foreground)
-                .border_1()
-                .border_color(theme.border)
-                .rounded_lg()
-                .shadow_lg()
-                .child(div().px_4().pt_4().pb_2().text_lg().child(title.to_owned()))
+            dialog_panel(gpui::SharedString::from(panel_id), width, cx)
+                .child(dialog_title(icon, title.to_owned(), cx))
                 .children(body)
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap_2()
-                        .p_4()
-                        .children(footer),
-                ),
+                .child(dialog_footer(cx).children(footer)),
         )
         .into_any_element()
 }
 
-fn note(text: String, muted: Hsla) -> AnyElement {
+fn note(text: String, muted: Hsla, size: f32) -> AnyElement {
     div()
-        .px_4()
-        .pb_2()
-        .text_sm()
+        .text_size(px(size))
         .text_color(muted)
         .child(text)
         .into_any_element()
 }
 
 /// One statement of the preview or the confirmation: the SQL, then each bound value.
-fn statement_row(s: &PreviewStatement, theme: &Theme) -> AnyElement {
-    let mut item =
-        div()
-            .mx_4()
-            .mb_2()
-            .p_2()
-            .rounded_md()
-            .bg(theme.muted)
-            .font_family(theme.mono_font_family.clone())
-            .text_sm()
-            .child(div().text_xs().text_color(theme.muted_foreground).child(
-                match s.expected_rows {
+fn statement_row(s: &PreviewStatement, theme: &Theme, scale: TypeScale) -> AnyElement {
+    let mut item = div()
+        .mb(px(SPACE[3]))
+        .p(px(SPACE[3]))
+        .rounded(theme.radius)
+        .bg(theme.muted)
+        .font_family(theme.mono_font_family.clone())
+        .text_size(px(scale.mono))
+        .child(
+            div()
+                .text_size(px(scale.xs))
+                .text_color(theme.muted_foreground)
+                .child(match s.expected_rows {
                     Some(n) => format!("#{} · expects {n} row(s)", s.ordinal),
                     None => format!("#{}", s.ordinal),
-                },
-            ))
-            .child(s.sql.clone());
+                }),
+        )
+        .child(s.sql.clone());
     for p in &s.params {
         item = item.child(
             div()
-                .text_xs()
+                .text_size(px(scale.xs))
                 .text_color(theme.muted_foreground)
                 .child(format!(
                     "{} {} ({}) = {}",
@@ -782,16 +783,17 @@ fn statement_list(
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     div()
-        .h(px(LIST_HEIGHT))
-        .mx_0()
+        .h(px(LIST_MAX_H))
         .child(
             list(
                 state.clone(),
                 cx.processor(move |view, ix: usize, _window, cx| {
+                    let scale = ui_scale(cx);
                     let theme = cx.theme();
-                    statements_of(view, source)
-                        .get(ix)
-                        .map_or_else(|| div().into_any_element(), |s| statement_row(s, theme))
+                    statements_of(view, source).get(ix).map_or_else(
+                        || div().into_any_element(),
+                        |s| statement_row(s, theme, scale),
+                    )
                 }),
             )
             .size_full(),
@@ -807,8 +809,8 @@ pub(crate) fn edit_overlay(
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
     let ws = view.workspace();
-    let theme = cx.theme().clone();
-    let muted = theme.muted_foreground;
+    let muted = cx.theme().muted_foreground;
+    let size = ui_scale(cx).sm;
     let (cancel_focus, preview_list, confirm_list) = view.edit_dialog_parts();
     if let Some(confirm) = ws.edit_confirm() {
         let body = vec![
@@ -819,16 +821,16 @@ pub(crate) fn edit_overlay(
                     confirm.data_statements()
                 ),
                 muted,
+                size,
             ),
             statement_list(confirm_list, Source::Confirm, cx),
-            note(confirm.notice().to_owned(), muted),
+            note(confirm.notice().to_owned(), muted, size),
         ];
         let cancel = dialog_button(
             "edit-confirm-cancel",
             "Cancel",
-            false,
+            Tone::Plain,
             Some(cancel_focus),
-            &theme,
             cx,
             |v, _, cx| {
                 v.edit_confirm_dismiss(cx);
@@ -839,9 +841,8 @@ pub(crate) fn edit_overlay(
             dialog_button(
                 "edit-confirm-apply",
                 "Apply",
-                true,
+                Tone::Danger,
                 None,
-                &theme,
                 cx,
                 |v, window, cx| {
                     v.edit_confirm_apply(window, cx);
@@ -850,11 +851,12 @@ pub(crate) fn edit_overlay(
         ];
         return Some(dialog_frame(
             "edit-confirm-scrim",
+            Some(AppIcon::TriangleAlert),
             "Apply to production?",
-            680.,
+            DIALOG_W_LG,
             body,
             footer,
-            &theme,
+            cx,
         ));
     }
     if let Some(preview) = ws.edit_preview() {
@@ -865,16 +867,16 @@ pub(crate) fn edit_overlay(
                     preview.statements.len()
                 ),
                 muted,
+                size,
             ),
             statement_list(preview_list, Source::Preview, cx),
-            note(super::LAST_WRITER_WINS.to_owned(), muted),
+            note(super::LAST_WRITER_WINS.to_owned(), muted, size),
         ];
         let close = dialog_button(
             "edit-preview-close",
             "Close",
-            false,
+            Tone::Plain,
             Some(cancel_focus),
-            &theme,
             cx,
             |v, _, cx| {
                 v.edit_preview_close(cx);
@@ -884,9 +886,8 @@ pub(crate) fn edit_overlay(
             dialog_button(
                 "edit-preview-copy",
                 "Copy SQL",
-                false,
+                Tone::Plain,
                 None,
-                &theme,
                 cx,
                 |v, _, cx| {
                     v.edit_preview_copy(cx);
@@ -896,9 +897,8 @@ pub(crate) fn edit_overlay(
             dialog_button(
                 "edit-preview-apply",
                 "Apply",
-                false,
+                Tone::Primary,
                 None,
-                &theme,
                 cx,
                 |v, window, cx| {
                     v.edit_preview_apply(window, cx);
@@ -907,21 +907,21 @@ pub(crate) fn edit_overlay(
         ];
         return Some(dialog_frame(
             "edit-preview-scrim",
+            Some(AppIcon::FileCode),
             "Pending changes",
-            680.,
+            DIALOG_W_LG,
             body,
             footer,
-            &theme,
+            cx,
         ));
     }
     if view.edit_keyless_pending() {
-        let body = vec![note(KEYLESS_WARNING.to_owned(), muted)];
+        let body = vec![note(KEYLESS_WARNING.to_owned(), muted, size)];
         let cancel = dialog_button(
             "edit-keyless-cancel",
             "Cancel",
-            false,
+            Tone::Plain,
             Some(cancel_focus),
-            &theme,
             cx,
             |v, _, cx| {
                 v.edit_keyless_dismiss(cx);
@@ -932,20 +932,20 @@ pub(crate) fn edit_overlay(
             dialog_button(
                 "edit-keyless-accept",
                 "Edit without a key",
-                true,
+                Tone::Danger,
                 None,
-                &theme,
                 cx,
                 WorkspaceView::edit_keyless_accept,
             ),
         ];
         return Some(dialog_frame(
             "edit-keyless-scrim",
+            Some(AppIcon::TriangleAlert),
             "Edit without a key?",
-            560.,
+            DIALOG_W_MD,
             body,
             footer,
-            &theme,
+            cx,
         ));
     }
     if let Some(prompt) = ws.close_prompt() {
@@ -966,13 +966,12 @@ pub(crate) fn edit_overlay(
                 prompt.pending
             )
         };
-        let body = vec![note(text, muted)];
+        let body = vec![note(text, muted, size)];
         let keep = dialog_button(
             "edit-close-keep",
             "Keep open",
-            false,
+            Tone::Plain,
             Some(cancel_focus),
-            &theme,
             cx,
             |v, _, cx| {
                 v.edit_close_dismiss(cx);
@@ -983,9 +982,8 @@ pub(crate) fn edit_overlay(
             dialog_button(
                 "edit-close-discard",
                 "Discard changes",
-                true,
+                Tone::Danger,
                 None,
-                &theme,
                 cx,
                 |v, _, cx| {
                     v.edit_close_confirm(cx);
@@ -994,11 +992,12 @@ pub(crate) fn edit_overlay(
         ];
         return Some(dialog_frame(
             "edit-close-scrim",
+            Some(AppIcon::TriangleAlert),
             "Discard pending changes?",
-            520.,
+            DIALOG_W_SM,
             body,
             footer,
-            &theme,
+            cx,
         ));
     }
     None
