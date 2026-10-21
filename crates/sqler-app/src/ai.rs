@@ -63,9 +63,14 @@ impl Providers {
 }
 
 impl AiProviderFactory for Providers {
+    // Empty when no provider feature is on; pushes follow the features otherwise.
+    #[allow(unused_mut, clippy::vec_init_then_push)]
     fn kinds(&self) -> Vec<ProviderKind> {
         // One block per provider crate that exports a provider type, in enum order.
-        Vec::new()
+        let mut kinds = Vec::new();
+        #[cfg(feature = "ai-ollama")]
+        kinds.push(ProviderKind::Ollama);
+        kinds
     }
 
     #[allow(unused_variables)] // `key` is used by the arms of the providers compiled in
@@ -80,12 +85,20 @@ impl AiProviderFactory for Providers {
                 kind_label(provider.kind)
             )));
         }
+        #[allow(unused_variables)] // no provider feature on: nothing reads the key
         let key = self.resolve_key(provider, key)?;
         // One `#[cfg(feature = ...)]` arm per provider whose crate exports a provider type.
-        Err(AiError::Unsupported(format!(
-            "{} is not available in this build",
-            kind_label(provider.kind)
-        )))
+        match provider.kind {
+            #[cfg(feature = "ai-ollama")]
+            ProviderKind::Ollama => {
+                let built = sqler_ai_ollama::OllamaProvider::new(provider.endpoint.as_deref())?;
+                Ok(Arc::new(built))
+            }
+            _ => Err(AiError::Unsupported(format!(
+                "{} is not available in this build",
+                kind_label(provider.kind)
+            ))),
+        }
     }
 }
 
@@ -104,16 +117,34 @@ mod tests {
 
     #[test]
     fn kinds_follow_the_providers_compiled_in() {
-        // No provider crate exports a provider type on this base: nothing is offered, so
-        // `--no-default-features` and the default build agree.
-        assert_eq!(registry(MemoryStore::new()).kinds().len(), 0);
+        let kinds = registry(MemoryStore::new()).kinds();
+        assert_eq!(
+            kinds.contains(&ProviderKind::Ollama),
+            cfg!(feature = "ai-ollama")
+        );
+        assert!(!kinds.contains(&ProviderKind::Anthropic));
+        assert!(!kinds.contains(&ProviderKind::OpenAi));
+        assert!(!kinds.contains(&ProviderKind::Mistral));
+    }
+
+    #[cfg(feature = "ai-ollama")]
+    #[test]
+    fn ollama_builds_without_network_and_a_bad_endpoint_is_invalid() {
+        let r = registry(MemoryStore::new());
+        assert!(
+            r.build(&provider(ProviderKind::Ollama, false), None)
+                .is_ok()
+        );
+        let mut p = provider(ProviderKind::Ollama, false);
+        p.endpoint = Some("ftp://host".to_owned());
+        let err = r.build(&p, None).err().unwrap();
+        assert!(matches!(err, AiError::Invalid(_)), "{err}");
     }
 
     #[test]
-    fn a_kind_that_is_not_compiled_in_is_unsupported() {
+    fn a_kind_without_a_provider_is_unsupported() {
         let r = registry(MemoryStore::new());
         for kind in [
-            ProviderKind::Ollama,
             ProviderKind::Anthropic,
             ProviderKind::OpenAi,
             ProviderKind::Mistral,
