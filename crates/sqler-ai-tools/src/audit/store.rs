@@ -156,6 +156,15 @@ impl AuditLog {
         fs::rename(&self.path, self.rotated(1))
     }
 
+    /// Takes the cross-process advisory lock on `<file>.lock`; `None` if it cannot be had.
+    fn lock_file(&self) -> Option<fs::File> {
+        let mut name = self.path.as_os_str().to_os_string();
+        name.push(".lock");
+        let file = open_private(Path::new(&name)).ok()?;
+        file.lock().ok()?;
+        Some(file)
+    }
+
     /// Appends one entry as one line, rotating first if the file would grow past its cap.
     ///
     /// # Errors
@@ -170,6 +179,9 @@ impl AuditLog {
         if let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty()) {
             create_private_dir(dir).map_err(io_err(dir))?;
         }
+        // Held to the end of the call: serializes the size check, rotation and write across
+        // processes (the app and `sqler-cli mcp`). Best effort: without it, appends still work.
+        let _file_lock = self.lock_file();
         let len = fs::metadata(&self.path).map_or(0, |m| m.len());
         if len > 0 && len + line.len() as u64 > self.options.max_file_bytes {
             // If rotation fails, the line goes to the current file anyway.
@@ -195,28 +207,34 @@ impl AuditLog {
     /// # Errors
     /// [`AuditError::Io`] if a file exists but cannot be read.
     pub fn read(&self, query: &AuditQuery) -> Result<AuditPage, AuditError> {
-        let _guard = self.io.lock().unwrap_or_else(PoisonError::into_inner);
         let mut files = vec![self.path.clone()];
         files.extend((1..=self.options.keep_files).map(|k| self.rotated(k)));
         let mut contents = Vec::new();
         let mut budget = READ_BUDGET_BYTES;
-        for path in files {
-            if budget == 0 {
-                break;
-            }
-            match read_tail(&path, budget) {
-                Ok(Some(bytes)) => {
-                    budget = budget.saturating_sub(bytes.len() as u64);
-                    contents.push(bytes);
+        {
+            // Only the loading of the bytes holds the lock; the scan of up to 64 MiB does not,
+            // so an open audit view never stalls a tool call that appends.
+            let _guard = self.io.lock().unwrap_or_else(PoisonError::into_inner);
+            for path in files {
+                if budget == 0 {
+                    break;
                 }
-                Ok(None) => {}
-                Err(source) => return Err(AuditError::Io { path, source }),
+                match read_tail(&path, budget) {
+                    Ok(Some(bytes)) => {
+                        budget = budget.saturating_sub(bytes.len() as u64);
+                        contents.push(bytes);
+                    }
+                    Ok(None) => {}
+                    Err(source) => return Err(AuditError::Io { path, source }),
+                }
             }
         }
         Ok(scan(&contents, query))
     }
 }
 
+/// `record` is a short blocking append (one small write under the lock). It never waits on a
+/// `read`, which releases the lock before it scans.
 impl AuditSink for AuditLog {
     fn record(&self, entry: &AuditEntry) {
         if let Err(e) = self.append(entry) {

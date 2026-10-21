@@ -263,18 +263,24 @@ async fn canary_secrets_never_reach_the_audit_bytes() {
         AuditOptions::default(),
     ));
     let source = SqliteSource::seeded("adv-audit", None, Some(true), SEED).await;
+    let list =
+        sqler_config::RedactionList::new(["loyalty_no".to_owned(), "iban".to_owned()]).unwrap();
     let ts = ToolSet::new(source, limits())
+        .with_redaction(list)
         .with_approver(ScriptedApprover::always(Decision::Approve))
         .with_audit(log.clone(), Surface::Assist);
     // Credentials written in SQL text.
     for sql in [
         "update acct set password = 'CANARY-SQL1' where id = 1",
-        "update acct set token='CANARY-SQL2', ssn = 'CANARY-SQL3'",
+        "update acct set token='CANARY-SQL2'",
+        "update acct set ssn = 'CANARY-SQL3'",
         "insert into acct (id, password) values (9, 'CANARY-SQL4')",
         "alter user u identified by 'CANARY-SQL5'",
         "create user u with password 'CANARY-SQL6'",
         "select * from acct where api_key = 'CANARY-SQL7'",
         "select * from acct where \"API-KEY\" = 'CANARY-SQL8'",
+        "insert into acct (id, iban) values (9, 'CANARY-SQL9')",
+        "update acct set loyalty_no = 'CANARY-SQL10'",
     ] {
         let _ = call(&ts, names::RUN_QUERY, run(sql)).await;
     }
@@ -293,7 +299,7 @@ async fn canary_secrets_never_reach_the_audit_bytes() {
     }
     assert_eq!(log.failed_writes(), 0, "{:?}", log.last_error());
     let bytes = all_bytes(&dir.0);
-    let leaks: Vec<String> = (1..=8)
+    let leaks: Vec<String> = (1..=10)
         .flat_map(|n| ["SQL", "ARG"].map(|p| format!("CANARY-{p}{n}")))
         .filter(|c| bytes.contains(c.as_str()))
         .collect();
@@ -338,6 +344,7 @@ fn rotation_holds_the_cap_under_repeated_and_concurrent_writes() {
     let files: Vec<_> = std::fs::read_dir(&dir.0)
         .unwrap()
         .map(|e| e.unwrap())
+        .filter(|e| e.path().extension().is_none_or(|x| x != "lock"))
         .collect();
     assert!(files.len() <= 3, "{} files", files.len());
     for f in &files {

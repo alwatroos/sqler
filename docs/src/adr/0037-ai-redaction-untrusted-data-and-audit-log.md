@@ -53,11 +53,13 @@ The JSON is `serde_json::to_string` with every `<` written as `<` and every `>` 
 
 ### Audit log
 
-One `AuditEntry` per call, built in `finish` with or without a sink (`CallReport.audit`). Fields: `id`, `ts_ms`, `surface` (`assist|session|mcp|agent|unspecified`), `tool`, `connection {id,name}`, `arguments` (credential-scrubbed, `Bearer`/`Basic` tokens hidden in every text, texts capped to 1 KiB, `sql` to 16 KiB, the whole object to 64 KiB, beyond which only `{"_omitted": <bytes>}` is kept and `arguments_truncated` is set; keys are matched against the built-in list, not the configured one), `arguments_truncated`, `statements` (SQL scrubbed then capped to 16 KiB, class, approval, ran, rows, truncated, failed; at most 64, the rest counted in `statements_omitted`), `approval` (`not_needed|approved|denied|refused|not_asked`), `outcome` (`ok|error`), `error {code,message}` (scrubbed, 1 KiB), `result_bytes`, `rows`, `duration_ms`, `redaction`.
+One `AuditEntry` per call, built in `finish` with or without a sink (`CallReport.audit`). Fields: `id`, `ts_ms`, `surface` (`assist|session|mcp|agent|unspecified`), `tool`, `connection {id,name}`, `arguments` (credential-scrubbed, `Bearer`/`Basic` tokens hidden in every text, texts capped to 1 KiB, `sql` to 16 KiB, the whole object to 64 KiB, beyond which only `{"_omitted": <bytes>}` is kept and `arguments_truncated` is set; keys are matched against the configured list), `arguments_truncated`, `statements` (SQL scrubbed then capped to 16 KiB, class, approval, ran, rows, truncated, failed; at most 64, the rest counted in `statements_omitted`), `approval` (`not_needed|approved|denied|refused|not_asked`), `outcome` (`ok|error`), `error {code,message}` (scrubbed, 1 KiB), `result_bytes`, `rows`, `duration_ms`, `redaction`.
 
 Approval per statement is derived from the plan and the error: statements that need none are `not_needed`; on `denied` with index `k`, those before `k` are `approved`, `k` is `denied` and the later ones `not_asked`; on `no_approver` or `read_only` the first one needing approval is `refused` and the later ones `not_asked`; otherwise `approved`. The call level is denied, else refused, else approved, else not needed.
 
 Never stored: cell values, statement error texts (only `failed`), config, keys, tokens.
+
+Literals in SQL text: the SQL of a statement and the `sql` argument go through `redact_credentials`, and also through the configured redaction list (built-in plus the user's entries, ADR-0036's `Redaction`). When the statement mentions a listed word (the same `statement_tainted` check as rule R2, on the whole statement), every string, dollar-quoted and numeric literal and every comment is replaced by `?` (or removed), wherever it sits: `update acct set ssn = ?`, `insert into t (iban) values (?)`, `where ssn = ?`. Argument keys are matched against the same configured list. The tool name is scrubbed and capped like the other texts.
 
 Permissions: on Unix the file (and so the rotated files, which are renamed) is created with mode 0600, a looser existing file is tightened, and a directory the log has to create gets 0700; an existing directory is left as it is. On Windows the file inherits the ACLs of the user profile.
 
@@ -82,7 +84,9 @@ A write failure never fails the call: `AuditLog` counts it (`failed_writes`) and
 - The entry is written after the call; a crash during a call loses its entry.
 - `redact_credentials` does not hide unquoted secrets (ADR-0021).
 - The log is persisted only when the host sets `with_audit`; hosts must wire `AuditLog::open(&ConfigDir)`.
-- Two processes (the app and `sqler-cli mcp`) appending to one file are not coordinated beyond single-write lines; a rotation race can move lines into `.1` but cannot lose them.
+- Two processes (the app and `sqler-cli mcp`) appending to one file take an advisory file lock (`ai-audit.jsonl.lock`, `std::fs::File::lock`) around the size check, the rotation and the write, so they do not rotate twice. The lock is best effort: if the lock file cannot be opened or locked, the append goes ahead without it, and a race then can shift a nearly empty file into `.1` and push real history out of retention early. `read` takes no cross-process lock; it can see a file between two renames.
+- The literal masking of audit SQL follows the dialect's lexer. On `MySQL` with `ANSI_QUOTES` on, `"ssn"` is an identifier to the server but a string to the lexer, so the statement is not seen as mentioning `ssn` (the same limit applies to rule R2); a statement without a dialect is lexed as `PostgreSQL`.
+- `AuditSink::record` is a short blocking append. It waits only for another append, never for a `read`, which releases the lock before it scans.
 
 ## Consequences
 

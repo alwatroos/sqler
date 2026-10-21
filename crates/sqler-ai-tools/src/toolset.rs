@@ -335,6 +335,8 @@ impl ToolSet {
             }),
             result_bytes,
             redaction: summary.clone(),
+            rules: &self.inner.redaction,
+            dialect,
         });
         if let Some(sink) = &self.inner.audit {
             sink.record(&audit);

@@ -52,6 +52,12 @@ fn tool_results_are_built_only_in_finish() {
     for needle in ["ToolResult::ok(", "ToolResult::error("] {
         assert_eq!(count(needle), [("toolset.rs".to_owned(), 1)], "{needle}");
     }
+    // Any other constructor spelling (`ToolResult::new`, `ToolResult::from`, ...).
+    assert_eq!(
+        count("ToolResult::"),
+        [("toolset.rs".to_owned(), 2)],
+        "only ok/error in finish"
+    );
     let toolset = all()
         .into_iter()
         .find(|(p, _)| p.ends_with("toolset.rs"))

@@ -7,8 +7,8 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
-use sqler_config::{RedactionList, redact_credentials};
-use sqler_sql::StatementClass;
+use sqler_config::redact_credentials;
+use sqler_sql::{Dialect, StatementClass, TokenKind, tokenize};
 
 use super::entry::{
     ApprovalOutcome, AuditConnection, AuditEntry, AuditFailure, AuditStatement, CallOutcome,
@@ -17,7 +17,7 @@ use super::entry::{
 use super::{
     MAX_AUDIT_ARGUMENTS_BYTES, MAX_AUDIT_SQL_BYTES, MAX_AUDIT_STATEMENTS, MAX_AUDIT_TEXT_BYTES,
 };
-use crate::redact::{REDACTED, RedactionSummary};
+use crate::redact::{REDACTED, Redaction, RedactionSummary};
 
 /// Everything the audit needs from one finished call.
 pub(crate) struct AuditDraft<'a> {
@@ -32,6 +32,10 @@ pub(crate) struct AuditDraft<'a> {
     pub error: Option<DraftError<'a>>,
     pub result_bytes: usize,
     pub redaction: RedactionSummary,
+    /// The configured redaction list (built-in plus user entries) the SQL text is checked with.
+    pub rules: &'a Redaction,
+    /// The dialect of the connection, if the driver has one.
+    pub dialect: Option<Dialect>,
 }
 
 pub(crate) struct DraftStatement<'a> {
@@ -94,9 +98,44 @@ fn scrub(text: &str) -> String {
     hide_auth_tokens(&redact_credentials(text))
 }
 
-/// Cut, then credential-redacted (the history order).
-fn sql_text(text: &str) -> (String, bool) {
+/// The redaction list and dialect the SQL text is checked with.
+#[derive(Clone, Copy)]
+struct SqlRules<'a> {
+    rules: &'a Redaction,
+    dialect: Option<Dialect>,
+}
+
+/// Replaces every literal and comment of `text` with `?` / nothing. The statement shape, the
+/// identifiers and the placeholders stay, so the audit still says what was run.
+fn mask_literals(dialect: Option<Dialect>, text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for t in tokenize(dialect.unwrap_or(Dialect::Postgres), text) {
+        let masked = match t.kind {
+            TokenKind::Str { .. } | TokenKind::DollarStr { .. } | TokenKind::Number => Some("?"),
+            TokenKind::LineComment
+            | TokenKind::BlockComment { .. }
+            | TokenKind::ExecComment { .. } => Some(""),
+            _ => None,
+        };
+        if let Some(mark) = masked {
+            out.push_str(&text[at..t.start]);
+            out.push_str(mark);
+            at = t.end;
+        }
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+/// Cut, then credential-redacted (the history order). A statement that mentions a listed word
+/// (`ssn`, a user entry) keeps no literal at all, wherever the literal sits: the check runs on
+/// the whole text, the masking on the part that is kept.
+fn sql_text(text: &str, rules: SqlRules<'_>) -> (String, bool) {
     let (cut_text, truncated) = cut(text, MAX_AUDIT_SQL_BYTES);
+    if rules.rules.statement_tainted(rules.dialect, text) {
+        return (scrub(&mask_literals(rules.dialect, cut_text)), truncated);
+    }
     (scrub(cut_text), truncated)
 }
 
@@ -107,21 +146,21 @@ fn plain_text(text: &str, max: usize) -> (String, bool) {
     (cut_text.to_owned(), truncated)
 }
 
-struct ArgScrub {
-    keys: RedactionList,
+struct ArgScrub<'a> {
+    rules: SqlRules<'a>,
     truncated: bool,
 }
 
-impl ArgScrub {
+impl ArgScrub<'_> {
     fn value(&mut self, key: Option<&str>, value: &Value) -> Value {
         // A value stored under a name like `password` or `api_key` is never kept.
-        if key.is_some_and(|k| self.keys.matches_column(k)) && !value.is_null() {
+        if key.is_some_and(|k| self.rules.rules.column_redacted(k)) && !value.is_null() {
             return Value::String(REDACTED.to_owned());
         }
         match value {
             Value::String(s) => {
                 let (text, cut) = if key == Some("sql") {
-                    sql_text(s)
+                    sql_text(s, self.rules)
                 } else {
                     plain_text(s, MAX_AUDIT_TEXT_BYTES)
                 };
@@ -143,9 +182,9 @@ impl ArgScrub {
     }
 }
 
-fn arguments(raw: &str) -> (Value, bool) {
+fn arguments(raw: &str, rules: SqlRules<'_>) -> (Value, bool) {
     let mut scrub = ArgScrub {
-        keys: RedactionList::default(),
+        rules,
         truncated: false,
     };
     if raw.trim().is_empty() {
@@ -216,7 +255,11 @@ impl AuditEntry {
             .started
             .duration_since(UNIX_EPOCH)
             .map_or(0, |t| u64::try_from(t.as_millis()).unwrap_or(u64::MAX));
-        let (arguments, arguments_truncated) = arguments(d.raw_arguments);
+        let rules = SqlRules {
+            rules: d.rules,
+            dialect: d.dialect,
+        };
+        let (arguments, arguments_truncated) = arguments(d.raw_arguments, rules);
         let outcomes = approvals(&d.statements, d.error.as_ref());
         let total = d.statements.len();
         let statements: Vec<AuditStatement> = d
@@ -225,7 +268,7 @@ impl AuditEntry {
             .zip(&outcomes)
             .take(MAX_AUDIT_STATEMENTS)
             .map(|(s, &approval)| {
-                let (sql, sql_truncated) = sql_text(s.sql);
+                let (sql, sql_truncated) = sql_text(s.sql, rules);
                 AuditStatement {
                     sql,
                     sql_truncated,
@@ -257,7 +300,7 @@ impl AuditEntry {
             id: new_id(ts_ms),
             ts_ms,
             surface: d.surface,
-            tool: d.tool.to_owned(),
+            tool: plain_text(d.tool, MAX_AUDIT_TEXT_BYTES).0,
             connection: d
                 .connection
                 .map(|(id, name)| AuditConnection::new(id, name)),

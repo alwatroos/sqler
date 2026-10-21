@@ -9,7 +9,9 @@ use sqler_sql::StatementClass;
 use super::draft::{AuditDraft, DraftError, DraftRun, DraftStatement};
 use super::wire::serialize_line;
 use super::*;
-use crate::redact::RedactionSummary;
+use sqler_sql::Dialect;
+
+use crate::redact::{Redaction, RedactionSummary};
 
 fn st(sql: &str, needs: bool, ran: bool) -> DraftStatement<'_> {
     DraftStatement {
@@ -44,7 +46,14 @@ fn draft<'a>(
         error,
         result_bytes: 99,
         redaction: RedactionSummary::default(),
+        rules: rules(),
+        dialect: Some(Dialect::Postgres),
     }
+}
+
+fn rules() -> &'static Redaction {
+    static RULES: std::sync::OnceLock<Redaction> = std::sync::OnceLock::new();
+    RULES.get_or_init(Redaction::default)
 }
 
 fn err(code: &str, index: Option<usize>) -> DraftError<'_> {
@@ -214,4 +223,77 @@ fn enums_round_trip_their_wire_names() {
         assert_eq!(ApprovalOutcome::from_wire(s).unwrap().as_str(), s);
     }
     assert!(CallOutcome::from_wire("nope").is_none());
+}
+
+fn sql_line(rules: &Redaction, dialect: Option<Dialect>, sql: &str) -> String {
+    let mut d = draft(r#"{"sql":"x"}"#, vec![st(sql, true, true)], None);
+    d.rules = rules;
+    d.dialect = dialect;
+    let raw = json!({ "sql": sql }).to_string();
+    d.raw_arguments = &raw;
+    let e = AuditEntry::from_draft(d);
+    String::from_utf8(serialize_line(&e)).unwrap()
+}
+
+#[test]
+fn a_listed_word_masks_every_literal_of_the_statement() {
+    let rules = Redaction::new(sqler_config::RedactionList::new(["iban".to_owned()]).unwrap());
+    for sql in [
+        "update acct set ssn = '123-45-6789' where id = 7",
+        "insert into t (iban) values ('DE89370400440532013000')",
+        "select * from t where ssn = 'CANARY-X' /* CANARY-Y */",
+        "update acct set ssn = 123456789",
+    ] {
+        for dialect in [Some(Dialect::Postgres), Some(Dialect::MySql), None] {
+            let line = sql_line(&rules, dialect, sql);
+            for canary in ["123-45-6789", "DE89", "CANARY", "123456789", "= 7"] {
+                assert!(!line.contains(canary), "{canary} in {line}");
+            }
+            assert!(line.contains('?'), "{line}");
+        }
+    }
+}
+
+#[test]
+fn dollar_quoted_literals_are_masked_on_postgres() {
+    let line = sql_line(
+        &Redaction::default(),
+        Some(Dialect::Postgres),
+        "update acct set ssn = $q$CANARY-Z$q$",
+    );
+    assert!(!line.contains("CANARY-Z"), "{line}");
+}
+
+#[test]
+fn a_user_added_entry_masks_literals_and_argument_keys() {
+    let list = sqler_config::RedactionList::new(["loyalty_no".to_owned()]).unwrap();
+    let rules = Redaction::new(list);
+    let sql = "update c set loyalty_no = 'CANARY-L1'";
+    let line = sql_line(&rules, Some(Dialect::Sqlite), sql);
+    assert!(!line.contains("CANARY-L1"), "{line}");
+    assert!(line.contains("update c set loyalty_no = ?"), "{line}");
+    let mut d = draft(r#"{"loyalty_no":"CANARY-L2"}"#, vec![], None);
+    d.rules = &rules;
+    let line = String::from_utf8(serialize_line(&AuditEntry::from_draft(d))).unwrap();
+    assert!(!line.contains("CANARY-L2"), "{line}");
+}
+
+#[test]
+fn an_untainted_statement_is_kept_as_written() {
+    let rules = Redaction::default();
+    let line = sql_line(
+        &rules,
+        Some(Dialect::Postgres),
+        "select * from t where id = 7",
+    );
+    assert!(line.contains("id = 7"), "{line}");
+}
+
+#[test]
+fn the_tool_name_is_capped_and_scrubbed() {
+    let long = "x".repeat(10_000);
+    let mut d = draft("{}", vec![], None);
+    d.tool = &long;
+    let e = AuditEntry::from_draft(d);
+    assert!(e.tool.len() <= MAX_AUDIT_TEXT_BYTES);
 }

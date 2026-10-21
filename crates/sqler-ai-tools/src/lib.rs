@@ -47,7 +47,8 @@
 //! ([`wrap_untrusted`]; a consumer parses it with [`unwrap_untrusted`]). Finally an
 //! [`AuditEntry`] goes to the optional [`AuditSink`] ([`AuditLog`] persists to
 //! `ai-audit.jsonl`). Entries hold SQL and arguments passed through credential redaction and
-//! size caps, never cell values or statement error texts.
+//! size caps, and the SQL of a statement that mentions a listed word has its literals masked;
+//! never cell values or statement error texts.
 
 #![forbid(unsafe_code)]
 
