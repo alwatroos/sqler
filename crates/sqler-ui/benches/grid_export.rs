@@ -184,7 +184,9 @@ fn run(
             let stop = stop.clone();
             thread::spawn(move || write_feed(rx, spec, &stop, Box::new(|_| {})))
         };
-        let mut cursor = LoadedCursor::new(LoadedRows::All, model.row_count());
+        let mut cursor = LoadedCursor::new(LoadedRows::All {
+            rows: model.row_count(),
+        });
         while let Some(feed) = cursor.next_feed(&model, COPY_BATCH) {
             if tx.blocking_send(feed).is_err() {
                 break;

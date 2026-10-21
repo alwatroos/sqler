@@ -547,7 +547,7 @@ fn a_non_read_statement_is_never_run_again() {
     assert!(w.export_dialog().unwrap().error.is_some());
     let out = dir.0.join("out.csv");
     assert!(matches!(
-        w.export_path_chosen(Some(out.clone())),
+        w.export_path_chosen(w.export_dialog().unwrap().generation, Some(out.clone())),
         Effect::None
     ));
     assert!(!out.exists());
@@ -562,7 +562,9 @@ fn a_non_read_statement_is_never_run_again() {
         w.submit_export(form),
         Effect::PickExportPath { .. }
     ));
-    let Effect::RunExport(job) = w.export_path_chosen(Some(out)) else {
+    let Effect::RunExport(job) =
+        w.export_path_chosen(w.export_dialog().unwrap().generation, Some(out))
+    else {
         panic!("expected RunExport");
     };
     assert!(matches!(job.source, ExportSource::Loaded(_)));
@@ -603,7 +605,7 @@ fn a_read_statement_runs_again_from_the_workspace_to_the_file() {
         spec,
         stop,
         ..
-    }) = w.export_path_chosen(Some(out.clone()))
+    }) = w.export_path_chosen(w.export_dialog().unwrap().generation, Some(out.clone()))
     else {
         panic!("expected RunExport");
     };
@@ -624,4 +626,22 @@ fn a_read_statement_runs_again_from_the_workspace_to_the_file() {
     assert_eq!(counts.connects.load(Ordering::SeqCst), 1);
     assert_eq!(counts.closed.load(Ordering::SeqCst), 1);
     assert!(w.export_status(tab).is_none());
+}
+
+#[test]
+fn the_fresh_session_refuses_a_write() {
+    let dir = Scratch::new("read-only");
+    let (connector, counts) = CountingConnector::pair();
+    let err = export_fresh(
+        connector,
+        spec(&dir, "csv", "csv"),
+        &ExportStop::new(),
+        Box::new(|_| {}),
+        request(":memory:"),
+        Query::new("create table w (a integer)"),
+    )
+    .unwrap_err();
+    assert!(matches!(err, ExportFailure::Driver(_)), "{err:?}");
+    assert_eq!(counts.closed.load(Ordering::SeqCst), 1);
+    assert_eq!(dir.names(), Vec::<String>::new());
 }

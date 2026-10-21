@@ -215,6 +215,8 @@ pub enum Effect {
         directory: PathBuf,
         /// The suggested file name.
         suggested_name: String,
+        /// The dialog this prompt belongs to; hand it back to `export_path_chosen`.
+        dialog: u64,
     },
     /// Start this export; report with [`Workspace::export_progress`] and
     /// [`Workspace::export_finished`].

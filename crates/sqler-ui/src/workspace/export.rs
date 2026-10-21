@@ -37,6 +37,8 @@ struct PendingExport {
     loaded_only: bool,
     /// The generation of the tab's result when the dialog opened.
     result: u64,
+    /// The generation of the dialog that asked for the path.
+    dialog: u64,
 }
 
 /// The notice when the result under a dialog was replaced.
@@ -230,7 +232,9 @@ impl Workspace {
         };
         let loaded_only = matches!(dialog.fresh, FreshRun::Refused(_));
         let source = match dialog.form.scope {
-            ExportScope::Loaded => ExportSource::Loaded(LoadedRows::All),
+            ExportScope::Loaded => ExportSource::Loaded(LoadedRows::All {
+                rows: dialog.loaded_rows,
+            }),
             ExportScope::Selection => {
                 let Some(rows) = dialog.selection.clone() else {
                     dialog.error = Some("There is no selection to export.".to_owned());
@@ -264,16 +268,27 @@ impl Workspace {
             source,
             loaded_only,
             result: self.exports.dialog_result,
+            dialog: self.exports.next_dialog,
         });
         Effect::PickExportPath {
             directory: start_directory(self.exports.last_dir.as_ref()),
             suggested_name,
+            dialog: self.exports.next_dialog,
         }
     }
 
-    /// The save dialog answered. `None` (dismissed) keeps the export dialog; a path closes it and
-    /// starts the job.
-    pub fn export_path_chosen(&mut self, path: Option<PathBuf>) -> Effect {
+    /// The save dialog answered for the export dialog `dialog` (from `PickExportPath`). An answer
+    /// to an older prompt is ignored. `None` (dismissed) keeps the export dialog; a path closes it
+    /// and starts the job.
+    pub fn export_path_chosen(&mut self, dialog: u64, path: Option<PathBuf>) -> Effect {
+        if self
+            .exports
+            .pending
+            .as_ref()
+            .is_none_or(|p| p.dialog != dialog)
+        {
+            return Effect::None;
+        }
         let Some(path) = path else {
             self.exports.pending = None;
             return Effect::None;
@@ -486,8 +501,10 @@ mod tests {
         w.export_dialog_mut().unwrap().set_scope(scope);
         let f = form(w);
         assert!(matches!(w.submit_export(f), Effect::PickExportPath { .. }));
-        let Effect::RunExport(job) = w.export_path_chosen(Some(PathBuf::from("/tmp/x/out.csv")))
-        else {
+        let Effect::RunExport(job) = w.export_path_chosen(
+            w.export_dialog().unwrap().generation,
+            Some(PathBuf::from("/tmp/x/out.csv")),
+        ) else {
             panic!("expected RunExport");
         };
         job
@@ -545,7 +562,10 @@ mod tests {
             assert!(matches!(w.submit_export(f), Effect::PickExportPath { .. }));
             // The tab runs again before the save dialog answers.
             w.remember_open_data(tab, "select 2");
-            let effect = w.export_path_chosen(Some(PathBuf::from("/tmp/x/out.csv")));
+            let effect = w.export_path_chosen(
+                w.export_dialog().unwrap().generation,
+                Some(PathBuf::from("/tmp/x/out.csv")),
+            );
             assert!(effect.is_none_effect(), "{scope:?}");
             assert_eq!(w.take_notice().as_deref(), Some(CHANGED), "{scope:?}");
             assert!(w.export_status(tab).is_none(), "{scope:?}");
@@ -585,7 +605,10 @@ mod tests {
         assert!(matches!(w.submit_export(f), Effect::PickExportPath { .. }));
         w.remember_open_data(other, "select 2");
         assert!(matches!(
-            w.export_path_chosen(Some(PathBuf::from("/tmp/x/out.csv"))),
+            w.export_path_chosen(
+                w.export_dialog().unwrap().generation,
+                Some(PathBuf::from("/tmp/x/out.csv"))
+            ),
             Effect::RunExport(_)
         ));
     }
@@ -676,8 +699,11 @@ mod tests {
         let d = w.export_dialog().unwrap();
         assert!(d.error.as_deref().unwrap().contains("class: write"));
         assert!(
-            w.export_path_chosen(Some(PathBuf::from("/tmp/o.csv")))
-                .is_none_effect()
+            w.export_path_chosen(
+                w.export_dialog().unwrap().generation,
+                Some(PathBuf::from("/tmp/o.csv"))
+            )
+            .is_none_effect()
         );
         assert!(w.export_status(tab).is_none());
 
@@ -687,10 +713,16 @@ mod tests {
             .set_scope(ExportScope::Loaded);
         let f = form(&w);
         assert!(matches!(w.submit_export(f), Effect::PickExportPath { .. }));
-        let Effect::RunExport(job) = w.export_path_chosen(Some(PathBuf::from("/tmp/o.csv"))) else {
+        let Effect::RunExport(job) = w.export_path_chosen(
+            w.export_dialog().unwrap().generation,
+            Some(PathBuf::from("/tmp/o.csv")),
+        ) else {
             panic!("expected RunExport");
         };
-        assert!(matches!(job.source, ExportSource::Loaded(LoadedRows::All)));
+        assert!(matches!(
+            job.source,
+            ExportSource::Loaded(LoadedRows::All { .. })
+        ));
         let summary = ExportSummary {
             rows: 1234,
             bytes: 5,
@@ -731,6 +763,32 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_for_an_older_dialog_is_ignored() {
+        let mut w = ws();
+        let tab = open(&mut w, 0);
+        run(&mut w, tab, "select 1");
+        w.open_export(target(tab, 0), &facts(false));
+        w.export_dialog_mut()
+            .unwrap()
+            .set_scope(ExportScope::Loaded);
+        let f = form(&w);
+        let Effect::PickExportPath { dialog, .. } = w.submit_export(f) else {
+            panic!("expected PickExportPath");
+        };
+        let stale = dialog - 1;
+        let path = Some(PathBuf::from("/tmp/x/out.csv"));
+        assert!(matches!(
+            w.export_path_chosen(stale, path.clone()),
+            Effect::None
+        ));
+        // The pending export is still there for the right answer.
+        assert!(matches!(
+            w.export_path_chosen(dialog, path),
+            Effect::RunExport(_)
+        ));
+    }
+
+    #[test]
     fn submit_validates_and_suggests_a_name() {
         let mut w = ws();
         let tab = open(&mut w, 0);
@@ -754,12 +812,18 @@ mod tests {
         };
         assert_eq!(suggested_name, "result-1.sql");
         // A dismissed save dialog keeps the dialog.
-        assert!(w.export_path_chosen(None).is_none_effect());
+        assert!(
+            w.export_path_chosen(w.export_dialog().unwrap().generation, None)
+                .is_none_effect()
+        );
         assert!(w.export_dialog().is_some());
         // And nothing is pending any more.
         assert!(
-            w.export_path_chosen(Some(PathBuf::from("/tmp/a.sql")))
-                .is_none_effect()
+            w.export_path_chosen(
+                w.export_dialog().unwrap().generation,
+                Some(PathBuf::from("/tmp/a.sql"))
+            )
+            .is_none_effect()
         );
     }
 
@@ -786,7 +850,10 @@ mod tests {
             .set_scope(ExportScope::Selection);
         let f = form(&w);
         assert!(matches!(w.submit_export(f), Effect::PickExportPath { .. }));
-        let Effect::RunExport(job) = w.export_path_chosen(Some(PathBuf::from("/tmp/s.csv"))) else {
+        let Effect::RunExport(job) = w.export_path_chosen(
+            w.export_dialog().unwrap().generation,
+            Some(PathBuf::from("/tmp/s.csv")),
+        ) else {
             panic!("expected RunExport");
         };
         assert!(matches!(
@@ -941,7 +1008,7 @@ mod tests {
         assert!(w.export_dialog().is_none());
         // A late answer of the save dialog does nothing.
         assert!(
-            w.export_path_chosen(Some(PathBuf::from("/tmp/a.csv")))
+            w.export_path_chosen(1, Some(PathBuf::from("/tmp/a.csv")))
                 .is_none_effect()
         );
     }
@@ -951,6 +1018,7 @@ mod tests {
         let effect = Effect::PickExportPath {
             directory: PathBuf::from("/secret/dir"),
             suggested_name: "private-name.csv".to_owned(),
+            dialog: 1,
         };
         let text = format!("{effect:?}");
         assert!(

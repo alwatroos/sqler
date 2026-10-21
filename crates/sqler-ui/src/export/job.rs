@@ -394,6 +394,7 @@ async fn fresh_run(
     tx: &mpsc::Sender<Feed>,
     stop: &ExportStop,
 ) -> Result<(), ExportFailure> {
+    let driver = request.spec.driver.clone();
     if stop.is_cancelled() {
         return Err(ExportFailure::Cancelled);
     }
@@ -412,6 +413,22 @@ async fn fresh_run(
         // The `SQLite` driver resets its cancel flag in `execute`: a stop before it ends here.
         if stop.is_cancelled() {
             return Err(ExportFailure::Cancelled);
+        }
+        // Second layer behind the lexical gate: the session itself refuses writes.
+        if let Some(sql) = read_only_statement(driver.as_str()) {
+            let guard = Query::new(sql);
+            let mut stream = session
+                .execute(&guard)
+                .await
+                .map_err(|err| driver_failure(&err))?;
+            while let Some(event) = stream.next_event().await {
+                if matches!(
+                    event.map_err(|err| driver_failure(&err))?,
+                    QueryEvent::Done { .. }
+                ) {
+                    break;
+                }
+            }
         }
         let executed = tokio::select! {
             executed = session.execute(query) => executed,
@@ -439,6 +456,17 @@ async fn fresh_run(
     result
 }
 
+/// The statement that makes a fresh session read only, for the drivers that can do it. `DuckDB`
+/// and `SQL Server` have no session setting for it: for them only the lexical gate applies.
+fn read_only_statement(driver: &str) -> Option<&'static str> {
+    match driver {
+        "sqlite" => Some("PRAGMA query_only = ON"),
+        "postgres" => Some("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"),
+        "mysql" => Some("SET SESSION TRANSACTION READ ONLY"),
+        _ => None,
+    }
+}
+
 /// Where a [`LoadedCursor`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -453,19 +481,17 @@ enum Stage {
 #[derive(Debug)]
 pub struct LoadedCursor {
     rows: LoadedRows,
-    row_count: usize,
     next: usize,
     stage: Stage,
 }
 
 impl LoadedCursor {
-    /// A cursor over `rows`. For [`LoadedRows::All`] it covers `0..row_count`, fixed now: rows
-    /// that arrive later are not exported.
+    /// A cursor over `rows`. [`LoadedRows::All`] covers `0..rows`, as the dialog described it:
+    /// rows that arrive later are not exported, and a model with fewer rows fails the copy.
     #[must_use]
-    pub fn new(rows: LoadedRows, row_count: usize) -> Self {
+    pub fn new(rows: LoadedRows) -> Self {
         Self {
             rows,
-            row_count,
             next: 0,
             stage: Stage::Columns,
         }
@@ -486,7 +512,7 @@ impl LoadedCursor {
             Stage::Columns => {
                 self.stage = Stage::Rows;
                 let columns = match &self.rows {
-                    LoadedRows::All => model.columns().to_vec(),
+                    LoadedRows::All { .. } => model.columns().to_vec(),
                     LoadedRows::Picked { columns, .. } => {
                         let picked: Option<Vec<Column>> = columns
                             .iter()
@@ -502,7 +528,7 @@ impl LoadedCursor {
             }
             Stage::Rows => {
                 let total = match &self.rows {
-                    LoadedRows::All => self.row_count,
+                    LoadedRows::All { rows } => *rows,
                     LoadedRows::Picked { rows, .. } => rows.len(),
                 };
                 let end = total.min(self.next.saturating_add(max_rows));
@@ -510,7 +536,7 @@ impl LoadedCursor {
                 for i in self.next..end {
                     // A row or column that is not there any more is an error, never skipped.
                     let row = match &self.rows {
-                        LoadedRows::All => model.row(i).map(|r| r.to_row()),
+                        LoadedRows::All { .. } => model.row(i).map(|r| r.to_row()),
                         LoadedRows::Picked { rows, columns } => {
                             rows.get(i).and_then(|&r| model.row(r)).and_then(|r| {
                                 columns
@@ -1029,7 +1055,9 @@ mod tests {
     #[test]
     fn the_cursor_copies_all_rows_in_slices() {
         let model = model(25, 3);
-        let mut cursor = LoadedCursor::new(LoadedRows::All, model.row_count());
+        let mut cursor = LoadedCursor::new(LoadedRows::All {
+            rows: model.row_count(),
+        });
         let feeds = drain(&mut cursor, &model, 10);
         // Columns, 10 + 10 + 5 rows, Done.
         assert_eq!(feeds.len(), 5);
@@ -1056,7 +1084,7 @@ mod tests {
     #[test]
     fn the_cursor_is_fixed_at_the_row_count_it_was_given() {
         let model = model(25, 2);
-        let mut cursor = LoadedCursor::new(LoadedRows::All, 12);
+        let mut cursor = LoadedCursor::new(LoadedRows::All { rows: 12 });
         let total: usize = drain(&mut cursor, &model, 100)
             .iter()
             .map(|f| if let Feed::Rows(r) = f { r.len() } else { 0 })
@@ -1064,7 +1092,11 @@ mod tests {
         assert_eq!(total, 12);
         // An empty result still gives Columns and Done.
         let empty = self::model(0, 2);
-        let feeds = drain(&mut LoadedCursor::new(LoadedRows::All, 0), &empty, 10);
+        let feeds = drain(
+            &mut LoadedCursor::new(LoadedRows::All { rows: 0 }),
+            &empty,
+            10,
+        );
         assert!(matches!(feeds[..], [Feed::Columns(_), Feed::Done]));
     }
 
@@ -1075,7 +1107,7 @@ mod tests {
             rows: vec![5, 2, 9],
             columns: vec![3, 0],
         };
-        let mut cursor = LoadedCursor::new(picked, model.row_count());
+        let mut cursor = LoadedCursor::new(picked);
         let feeds = drain(&mut cursor, &model, 2);
         let Feed::Columns(c) = &feeds[0] else {
             panic!("columns")
@@ -1109,7 +1141,7 @@ mod tests {
                 columns: vec![0, 4],
             },
         ] {
-            let mut cursor = LoadedCursor::new(picked, model.row_count());
+            let mut cursor = LoadedCursor::new(picked);
             let feeds = drain(&mut cursor, &model, 100);
             let last = feeds.last().unwrap();
             assert!(
@@ -1120,7 +1152,7 @@ mod tests {
             assert!(cursor.next_feed(&model, 10).is_none());
         }
         // Fewer rows than the cursor was told about.
-        let mut cursor = LoadedCursor::new(LoadedRows::All, 30);
+        let mut cursor = LoadedCursor::new(LoadedRows::All { rows: 30 });
         let feeds = drain(&mut cursor, &model, 100);
         assert!(matches!(
             feeds.last(),

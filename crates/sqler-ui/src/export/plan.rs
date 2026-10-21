@@ -56,8 +56,12 @@ impl std::fmt::Debug for ExportOrigin {
 /// Rows and columns of the grid model, by model index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadedRows {
-    /// Every row and column, in model order.
-    All,
+    /// Every column and the first `rows` rows, in model order. `rows` is the count the dialog
+    /// showed: rows that arrive later are not exported.
+    All {
+        /// The number of rows the dialog described.
+        rows: usize,
+    },
     /// These rows and columns, in display order.
     Picked {
         /// Row indices.

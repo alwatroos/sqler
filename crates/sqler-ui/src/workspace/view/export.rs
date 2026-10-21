@@ -32,6 +32,10 @@ const COPY_TICK_BUDGET: Duration = Duration::from_millis(4);
 /// The pause between two ticks.
 const COPY_TICK_PAUSE: Duration = Duration::from_millis(1);
 
+/// Shown when the selection no longer matches the rows or columns of the grid.
+const SELECTION_UNMAPPED: &str =
+    "The selection no longer matches the grid. Select the cells again, then export.";
+
 /// The text inputs of the export dialog on screen.
 pub(crate) struct ExportInputs {
     /// The dialog these inputs belong to.
@@ -46,8 +50,9 @@ pub(crate) struct ExportInputs {
     pub(crate) rows_per_insert: Entity<InputState>,
 }
 
-/// What the dialog needs to know about the table on screen.
-fn grid_facts(table: &Table, cx: &App) -> GridFacts {
+/// What the dialog needs to know about the table on screen. A selection that holds a position the
+/// grid cannot map to the model is an error, never a smaller selection.
+fn grid_facts(table: &Table, cx: &App) -> Result<GridFacts, &'static str> {
     let state = table.read(cx);
     let delegate = state.delegate();
     let grid = delegate.grid();
@@ -61,17 +66,24 @@ fn grid_facts(table: &Table, cx: &App) -> GridFacts {
         columns: layout,
     };
     // Selection exports use the order on screen.
-    let selection = controls.selection().rect(&map).and_then(|rect| {
-        let rows: Vec<usize> = rect.rows.filter_map(|r| order.model_row(r)).collect();
-        let columns: Vec<usize> = rect.cols.filter_map(|c| layout.model_column(c)).collect();
-        (!rows.is_empty() && !columns.is_empty()).then_some(LoadedRows::Picked { rows, columns })
-    });
-    GridFacts {
+    let selection = match controls.selection().rect(&map) {
+        None => None,
+        Some(rect) => {
+            let rows: Option<Vec<usize>> = rect.rows.map(|r| order.model_row(r)).collect();
+            let columns: Option<Vec<usize>> = rect.cols.map(|c| layout.model_column(c)).collect();
+            match (rows, columns) {
+                (Some(rows), Some(columns)) => (!rows.is_empty() && !columns.is_empty())
+                    .then_some(LoadedRows::Picked { rows, columns }),
+                _ => return Err(SELECTION_UNMAPPED),
+            }
+        }
+    };
+    Ok(GridFacts {
         columns: grid.column_count(),
         rows,
         complete: matches!(grid.state(), IngestState::Done { .. }),
         selection,
-    }
+    })
 }
 
 /// Sends up to a tick's worth of batches. `true` when the copy is over: everything was handed
@@ -150,7 +162,13 @@ impl WorkspaceView {
                     window.push_notification("Open a results grid first.", cx);
                     return;
                 };
-                let facts = grid_facts(&table, cx);
+                let facts = match grid_facts(&table, cx) {
+                    Ok(facts) => facts,
+                    Err(message) => {
+                        window.push_notification(message, cx);
+                        return;
+                    }
+                };
                 self.ws.open_export(target, &facts)
             }
             ExportCommand::Cancel => {
@@ -283,6 +301,7 @@ impl WorkspaceView {
             Effect::PickExportPath {
                 directory,
                 suggested_name,
+                dialog,
             } => {
                 let picked = cx.prompt_for_new_path(&directory, Some(&suggested_name));
                 cx.spawn(async move |this, cx| {
@@ -299,7 +318,7 @@ impl WorkspaceView {
                         Err(_) => None,
                     };
                     this.update(cx, |view, cx| {
-                        let effect = view.ws.export_path_chosen(path);
+                        let effect = view.ws.export_path_chosen(dialog, path);
                         view.apply(effect, cx);
                         view.settle(cx);
                     })
@@ -387,9 +406,8 @@ impl WorkspaceView {
         stop: crate::export::ExportStop,
         cx: &mut Context<Self>,
     ) {
-        let row_count = table.read(cx).delegate().grid().row_count();
         cx.spawn(async move |_, cx| {
-            let mut cursor = LoadedCursor::new(rows, row_count);
+            let mut cursor = LoadedCursor::new(rows);
             let mut pending = None;
             // Dropping the sender (on any exit) tells the writer the source ended.
             while !stop.is_cancelled() {
@@ -426,7 +444,9 @@ mod tests {
     #[test]
     fn a_full_channel_keeps_the_batch_for_the_next_tick() {
         let model = model(10_000, 2);
-        let mut cursor = LoadedCursor::new(LoadedRows::All, model.row_count());
+        let mut cursor = LoadedCursor::new(LoadedRows::All {
+            rows: model.row_count(),
+        });
         let (tx, mut rx) = mpsc::channel(2);
         let mut pending = None;
         // Columns + one rows batch fill the channel; the third message waits.
@@ -454,7 +474,9 @@ mod tests {
     #[test]
     fn a_closed_channel_ends_the_copy() {
         let model = model(100, 2);
-        let mut cursor = LoadedCursor::new(LoadedRows::All, model.row_count());
+        let mut cursor = LoadedCursor::new(LoadedRows::All {
+            rows: model.row_count(),
+        });
         let (tx, rx) = mpsc::channel(2);
         drop(rx);
         let mut pending = None;
