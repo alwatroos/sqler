@@ -45,6 +45,7 @@ consequences. SQLer uses the MADR format.
 | [0033](0033-inline-editing-ui.md) | Inline editing: apply session, transaction flag, schema probe, in-place overlay and a single gate | accepted |
 | [0034](0034-ai-provider-api.md) | AI provider API: boxed futures, crate-owned event stream, cancel by drop, increment usage | accepted |
 | [0035](0035-ai-configuration.md) | AI configuration: `ai.toml`, provider key references, per-connection opt-in, connections format v2 | accepted |
+| [0036](0036-ai-tool-schemas-guards-and-host-traits.md) | AI tool schemas, guards and host traits: one `ToolSet`, approval per statement, prod twice, no approver refuses, row and time caps | accepted |
 | [0042](0042-workbench-layout.md) | Workbench layout and editor groups: headless layout, groups, preview tabs, bottom panel, status bar | accepted |
 | [0043](0043-visual-system-and-themes.md) | Visual system and themes: scales, embedded SQLer Dark/Light themes, env accents, contrast test | accepted |
 | [0044](0044-icons.md) | Icons: `gpui-kit-assets` Lucide subset plus component assets | accepted |
@@ -52,4 +53,4 @@ consequences. SQLer uses the MADR format.
 | [0046](0046-keyboard-first-model-and-accessibility.md) | Keyboard-first model and accessibility: command IDs, F6 regions, labels, `query:explain` through the prod gate | accepted |
 | [0047](0047-screenshot-harness.md) | Screenshot harness: headless GPUI renderer, scenes in both themes, Linux CI artifact | accepted |
 
-ADR numbers 0036 to 0041 are reserved for M5.
+ADR numbers 0037 to 0040 are reserved for M5.

@@ -7266,6 +7266,20 @@ version = "0.1.0"
 [[package]]
 name = "sqler-ai-tools"
 version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "sqler-ai-api",
+ "sqler-catalog",
+ "sqler-config",
+ "sqler-core",
+ "sqler-driver-api",
+ "sqler-driver-sqlite",
+ "sqler-sql",
+ "thiserror 2.0.21",
+ "tokio",
+]
 
 [[package]]
 name = "sqler-app"
