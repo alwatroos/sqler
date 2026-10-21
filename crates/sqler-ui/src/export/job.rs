@@ -9,8 +9,10 @@
 //! copy of the rows the grid holds ([`LoadedCursor`]). At most [`FEED_CAPACITY`] batches wait in
 //! the channel, so memory does not depend on the row count.
 //!
-//! No text made here holds the target path, the statement or a credential. Driver and connect
-//! failures carry the text the connect pipeline and the driver made for the user.
+//! No text made here holds the target path, the statement or a credential. `Driver` and `Connect`
+//! carry the text the driver or the connect pipeline shows the user (as the query tab does),
+//! built from their `Display` only and through [`driver_text`] and [`connect_text`], which swap
+//! every variant that can echo the target, a path or a secret for a fixed text.
 
 use std::sync::Arc;
 
@@ -23,7 +25,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::file::PartialFile;
 use super::plan::LoadedRows;
-use crate::connections::{ConnectRequest, Connector};
+use crate::connections::{ConnectFailure, ConnectRequest, Connector};
 use crate::grid::GridModel;
 
 use std::path::PathBuf;
@@ -74,6 +76,9 @@ pub enum ExportFailure {
     /// The rows stopped coming before the result was complete.
     #[error("the rows stopped coming before the result was complete")]
     SourceEnded,
+    /// The result the dialog described is not the one that is there now.
+    #[error("The result changed while the dialog was open; export cancelled.")]
+    ResultChanged,
     /// The export task ended without a result.
     #[error("the export ended unexpectedly")]
     Lost,
@@ -276,7 +281,36 @@ async fn send(tx: &mpsc::Sender<Feed>, stop: &ExportStop, feed: Feed) -> Result<
 fn driver_failure(err: &DriverError) -> ExportFailure {
     match err {
         DriverError::Cancelled => ExportFailure::Cancelled,
-        other => ExportFailure::Driver(other.to_string()),
+        other => ExportFailure::Driver(driver_text(other)),
+    }
+}
+
+/// The user text of a driver error. The database's own message is kept (`syntax error at row
+/// 40,000` is what the user needs); a target that a driver could not parse and the library
+/// errors that are not a database message get a fixed text, because only those can echo the
+/// target.
+#[must_use]
+pub fn driver_text(err: &DriverError) -> String {
+    match err {
+        DriverError::Connection(text) if text.starts_with("invalid ") => {
+            "the connection target is invalid".to_owned()
+        }
+        DriverError::Backend(_) => "the database library reported an error".to_owned(),
+        other => other.to_string(),
+    }
+}
+
+/// The user text of a connect failure. `Tunnel` (its text can hold a key or `known_hosts` path),
+/// `Target` and `Secret` get a fixed text; the rest is the `Display` of the variant, which holds
+/// no path, URL or secret (a host key prompt names the SSH `host:port`).
+#[must_use]
+pub fn connect_text(failure: &ConnectFailure) -> String {
+    match failure {
+        ConnectFailure::Tunnel(_) => "SSH tunnel failed".to_owned(),
+        ConnectFailure::Target(_) => "the connection target is invalid".to_owned(),
+        ConnectFailure::Secret(_) => "the secret store failed".to_owned(),
+        ConnectFailure::Driver(err) => driver_text(err),
+        other => other.to_string(),
     }
 }
 
@@ -372,7 +406,7 @@ async fn fresh_run(
         () = stop.cancelled() => return Err(ExportFailure::Cancelled),
         () = tx.closed() => return Err(ExportFailure::SourceEnded),
     };
-    let mut session = connected.map_err(|err| ExportFailure::Connect(err.to_string()))?;
+    let mut session = connected.map_err(|err| ExportFailure::Connect(connect_text(&err)))?;
     let handle = session.cancel_handle();
     let result = async {
         // The `SQLite` driver resets its cancel flag in `execute`: a stop before it ends here.
@@ -437,20 +471,34 @@ impl LoadedCursor {
         }
     }
 
+    /// The failure message that ends the copy.
+    fn fail(&mut self) -> Feed {
+        self.stage = Stage::Finished;
+        Feed::Failed(ExportFailure::ResultChanged)
+    }
+
     /// The next message: `Columns`, then `Rows` with at most `max_rows` rows each, then `Done`,
-    /// then `None`.
+    /// then `None`. A picked row or column that the model does not have (the result changed)
+    /// ends the copy with `Failed(ResultChanged)`; nothing is skipped.
     pub fn next_feed(&mut self, model: &GridModel, max_rows: usize) -> Option<Feed> {
         let max_rows = max_rows.max(1);
         match self.stage {
             Stage::Columns => {
                 self.stage = Stage::Rows;
-                Some(Feed::Columns(match &self.rows {
+                let columns = match &self.rows {
                     LoadedRows::All => model.columns().to_vec(),
-                    LoadedRows::Picked { columns, .. } => columns
-                        .iter()
-                        .filter_map(|&c| model.columns().get(c).cloned())
-                        .collect(),
-                }))
+                    LoadedRows::Picked { columns, .. } => {
+                        let picked: Option<Vec<Column>> = columns
+                            .iter()
+                            .map(|&c| model.columns().get(c).cloned())
+                            .collect();
+                        match picked {
+                            Some(picked) => picked,
+                            None => return Some(self.fail()),
+                        }
+                    }
+                };
+                Some(Feed::Columns(columns))
             }
             Stage::Rows => {
                 let total = match &self.rows {
@@ -460,18 +508,23 @@ impl LoadedCursor {
                 let end = total.min(self.next.saturating_add(max_rows));
                 let mut batch = Vec::with_capacity(end.saturating_sub(self.next));
                 for i in self.next..end {
+                    // A row or column that is not there any more is an error, never skipped.
                     let row = match &self.rows {
                         LoadedRows::All => model.row(i).map(|r| r.to_row()),
                         LoadedRows::Picked { rows, columns } => {
-                            rows.get(i).and_then(|&r| model.row(r)).map(|r| {
-                                Row(columns
+                            rows.get(i).and_then(|&r| model.row(r)).and_then(|r| {
+                                columns
                                     .iter()
-                                    .filter_map(|&c| r.get(c).map(|cell| cell.to_value()))
-                                    .collect())
+                                    .map(|&c| r.get(c).map(|cell| cell.to_value()))
+                                    .collect::<Option<Vec<_>>>()
+                                    .map(Row)
                             })
                         }
                     };
-                    batch.extend(row);
+                    match row {
+                        Some(row) => batch.push(row),
+                        None => return Some(self.fail()),
+                    }
                 }
                 self.next = end;
                 if end >= total {
@@ -1042,6 +1095,40 @@ mod tests {
     }
 
     #[test]
+    fn a_selection_that_no_longer_fits_the_model_fails_instead_of_dropping_rows() {
+        let model = model(10, 4);
+        for picked in [
+            // A row that is gone.
+            LoadedRows::Picked {
+                rows: vec![1, 10, 2],
+                columns: vec![0],
+            },
+            // A column that is gone.
+            LoadedRows::Picked {
+                rows: vec![1],
+                columns: vec![0, 4],
+            },
+        ] {
+            let mut cursor = LoadedCursor::new(picked, model.row_count());
+            let feeds = drain(&mut cursor, &model, 100);
+            let last = feeds.last().unwrap();
+            assert!(
+                matches!(last, Feed::Failed(ExportFailure::ResultChanged)),
+                "{last:?}"
+            );
+            assert!(!feeds.iter().any(|f| matches!(f, Feed::Done)));
+            assert!(cursor.next_feed(&model, 10).is_none());
+        }
+        // Fewer rows than the cursor was told about.
+        let mut cursor = LoadedCursor::new(LoadedRows::All, 30);
+        let feeds = drain(&mut cursor, &model, 100);
+        assert!(matches!(
+            feeds.last(),
+            Some(Feed::Failed(ExportFailure::ResultChanged))
+        ));
+    }
+
+    #[test]
     fn the_failure_texts_name_no_target() {
         for failure in [
             ExportFailure::Cancelled,
@@ -1054,6 +1141,49 @@ mod tests {
         assert_eq!(
             ExportFailure::Connect("x".into()).to_string(),
             "cannot connect: x"
+        );
+    }
+
+    #[test]
+    fn connect_and_driver_texts_hold_no_target_path_or_secret() {
+        use sqler_config::{SecretError, SecretKind};
+        let secret = "hunter2-secret";
+        let hostile = [
+            ConnectFailure::Tunnel(format!("private key /home/u/.ssh/{secret}: bad")),
+            ConnectFailure::Target(format!("postgres://u:{secret}@h/d")),
+            ConnectFailure::Driver(DriverError::Connection(format!(
+                "invalid PostgreSQL target: postgres://u:{secret}@h/d"
+            ))),
+            ConnectFailure::Driver(DriverError::Backend(
+                format!("bad url postgres://u:{secret}@h/d").into(),
+            )),
+            ConnectFailure::Secret(SecretError::InvalidRef {
+                input: secret.to_owned(),
+                reason: "bad",
+            }),
+        ];
+        for failure in &hostile {
+            let text = connect_text(failure);
+            assert!(!text.contains(secret), "{failure:?} -> {text}");
+            assert!(!text.contains("postgres://"), "{text}");
+            assert!(!text.contains(".ssh"), "{text}");
+        }
+        // The user-facing texts stay.
+        assert_eq!(
+            connect_text(&ConnectFailure::Driver(DriverError::Connection(
+                "refused".into()
+            ))),
+            "connection failed: refused"
+        );
+        assert_eq!(
+            driver_text(&DriverError::Query("syntax error at row 40,000".into())),
+            "query failed: syntax error at row 40,000"
+        );
+        assert!(
+            connect_text(&ConnectFailure::MissingSecret {
+                kind: SecretKind::DatabasePassword
+            })
+            .contains("keychain")
         );
     }
 }

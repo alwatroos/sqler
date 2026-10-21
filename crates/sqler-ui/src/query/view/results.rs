@@ -131,7 +131,7 @@ impl QueryViews {
 
     /// The index of the result a query tab shows: the one the user picked, else the last
     /// statement that has started. `None` while there are no results.
-    fn shown_index(&self, ws: &Workspace, tab: TabId) -> Option<usize> {
+    pub(crate) fn shown_index(&self, ws: &Workspace, tab: TabId) -> Option<usize> {
         let entries = ws.query_tab(tab)?.results();
         if entries.is_empty() {
             return None;
@@ -150,7 +150,7 @@ impl QueryViews {
         self.table(tab, self.shown_index(ws, tab)?).cloned()
     }
 
-    fn table(&self, tab: TabId, index: usize) -> Option<&Table> {
+    pub(crate) fn table(&self, tab: TabId, index: usize) -> Option<&Table> {
         self.results.get(&tab)?.tables.get(index)
     }
 

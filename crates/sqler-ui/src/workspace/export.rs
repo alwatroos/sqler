@@ -35,7 +35,12 @@ struct PendingExport {
     source: ExportSource,
     /// The dialog showed that a fresh run was refused.
     loaded_only: bool,
+    /// The generation of the tab's result when the dialog opened.
+    result: u64,
 }
+
+/// The notice when the result under a dialog was replaced.
+const RESULT_CHANGED: &str = "The result changed while the dialog was open; export cancelled.";
 
 /// An export in progress.
 struct RunningExport {
@@ -54,6 +59,11 @@ pub(super) struct ExportCenter {
     origins: HashMap<(TabId, Option<usize>), ExportOrigin>,
     next_job: u64,
     next_dialog: u64,
+    /// The generation of the result each tab shows. A new run or a reopened grid replaces it.
+    results: HashMap<TabId, u64>,
+    next_result: u64,
+    /// The generation of the result the open dialog describes.
+    dialog_result: u64,
     last_dir: Option<PathBuf>,
 }
 
@@ -67,9 +77,21 @@ impl Workspace {
         Dialect::from_driver_id(self.tabs.get(tab)?.connection().driver.as_str())
     }
 
+    /// Marks the results of a tab as replaced (a new run, a reopened grid). An open export dialog
+    /// or a waiting save dialog of the tab then no longer describes what is on screen.
+    pub fn result_replaced(&mut self, tab: TabId) {
+        self.exports.next_result += 1;
+        self.exports.results.insert(tab, self.exports.next_result);
+    }
+
+    fn result_generation(&self, tab: TabId) -> u64 {
+        self.exports.results.get(&tab).copied().unwrap_or(0)
+    }
+
     /// Remembers the statements of a run, so their results can be exported with a fresh run.
     /// Replaces the results of the tab's earlier run.
     pub fn remember_run(&mut self, tab: TabId, statements: &[BoundStatement]) {
+        self.result_replaced(tab);
         let origins = &mut self.exports.origins;
         origins.retain(|(t, result), _| !(*t == tab && result.is_some()));
         for (i, statement) in statements.iter().enumerate() {
@@ -86,6 +108,7 @@ impl Workspace {
 
     /// Remembers the `SELECT` behind a grid tab, classified with the dialect of its connection.
     pub fn remember_open_data(&mut self, tab: TabId, sql: &str) {
+        self.result_replaced(tab);
         let class = match self.export_dialect(tab).map(|d| classify_each(d, sql)) {
             Some(segments) if segments.len() == 1 => segments[0].1,
             _ => StatementClass::Unknown,
@@ -151,6 +174,7 @@ impl Workspace {
             ),
         };
         self.exports.next_dialog += 1;
+        self.exports.dialog_result = self.result_generation(target.tab);
         self.exports.pending = None;
         self.exports.dialog = Some(ExportDialog::new(
             target,
@@ -185,6 +209,10 @@ impl Workspace {
         let Some(target) = self.exports.dialog.as_ref().map(|d| d.target) else {
             return Effect::None;
         };
+        if self.exports.dialog_result != self.result_generation(target.tab) {
+            self.dismiss_export();
+            return self.export_notice(RESULT_CHANGED);
+        }
         let dialect = self.export_dialect(target.tab);
         // Checked again here: the statement and the connection may have changed.
         let fresh = self.fresh_check(target);
@@ -235,6 +263,7 @@ impl Workspace {
             options,
             source,
             loaded_only,
+            result: self.exports.dialog_result,
         });
         Effect::PickExportPath {
             directory: start_directory(self.exports.last_dir.as_ref()),
@@ -261,6 +290,10 @@ impl Workspace {
             return self.export_notice("An export is already running in this tab.");
         }
         self.exports.dialog = None;
+        // The job starts in this call, so this is also the check at job start.
+        if pending.result != self.result_generation(tab) {
+            return self.export_notice(RESULT_CHANGED);
+        }
         if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             self.exports.last_dir = Some(dir.to_owned());
         }
@@ -367,6 +400,7 @@ impl Workspace {
             running.stop.cancel();
         }
         self.exports.origins.retain(|(t, _), _| *t != tab);
+        self.exports.results.remove(&tab);
         if self
             .exports
             .dialog
@@ -481,6 +515,79 @@ mod tests {
         assert_eq!(w.exports.origins[&(tab, Some(0))].sql, "select 3");
         assert!(!w.exports.origins.contains_key(&(tab, Some(1))));
         assert!(w.exports.origins.contains_key(&(tab, None)));
+    }
+
+    fn picked_facts() -> GridFacts {
+        GridFacts {
+            selection: Some(LoadedRows::Picked {
+                rows: vec![1, 2],
+                columns: vec![0],
+            }),
+            ..facts(false)
+        }
+    }
+
+    const CHANGED: &str = "The result changed while the dialog was open; export cancelled.";
+
+    #[test]
+    fn a_result_replaced_while_the_save_dialog_is_open_starts_no_job() {
+        for scope in [
+            ExportScope::Loaded,
+            ExportScope::Selection,
+            ExportScope::Fresh,
+        ] {
+            let mut w = ws();
+            let tab = open(&mut w, 0);
+            run(&mut w, tab, "select 1");
+            w.open_export(target(tab, 0), &picked_facts());
+            w.export_dialog_mut().unwrap().set_scope(scope);
+            let f = form(&w);
+            assert!(matches!(w.submit_export(f), Effect::PickExportPath { .. }));
+            // The tab runs again before the save dialog answers.
+            w.remember_open_data(tab, "select 2");
+            let effect = w.export_path_chosen(Some(PathBuf::from("/tmp/x/out.csv")));
+            assert!(effect.is_none_effect(), "{scope:?}");
+            assert_eq!(w.take_notice().as_deref(), Some(CHANGED), "{scope:?}");
+            assert!(w.export_status(tab).is_none(), "{scope:?}");
+            assert!(w.export_dialog().is_none(), "{scope:?}");
+        }
+    }
+
+    #[test]
+    fn a_result_replaced_while_the_dialog_is_open_refuses_the_submit() {
+        for scope in [
+            ExportScope::Loaded,
+            ExportScope::Selection,
+            ExportScope::Fresh,
+        ] {
+            let mut w = ws();
+            let tab = open(&mut w, 0);
+            run(&mut w, tab, "select 1");
+            w.open_export(target(tab, 0), &picked_facts());
+            w.export_dialog_mut().unwrap().set_scope(scope);
+            // A grid tab that is opened again counts the same.
+            w.result_replaced(tab);
+            let f = form(&w);
+            assert!(w.submit_export(f).is_none_effect(), "{scope:?}");
+            assert_eq!(w.take_notice().as_deref(), Some(CHANGED), "{scope:?}");
+            assert!(w.export_dialog().is_none(), "{scope:?}");
+        }
+    }
+
+    #[test]
+    fn an_unchanged_result_still_exports_after_other_tabs_ran() {
+        let mut w = ws();
+        let tab = open(&mut w, 0);
+        let other = open(&mut w, 1);
+        run(&mut w, tab, "select 1");
+        w.open_export(target(tab, 0), &facts(false));
+        let f = form(&w);
+        assert!(matches!(w.submit_export(f), Effect::PickExportPath { .. }));
+        w.remember_open_data(other, "select 2");
+        assert!(matches!(
+            w.export_path_chosen(Some(PathBuf::from("/tmp/x/out.csv"))),
+            Effect::RunExport(_)
+        ));
     }
 
     #[test]

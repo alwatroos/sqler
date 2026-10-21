@@ -90,6 +90,11 @@ impl GridDelegate {
         &mut self.tab
     }
 
+    /// The layout and the selection of the table.
+    pub(crate) fn controls(&self) -> &GridControls {
+        &self.controls
+    }
+
     /// Whether the motion would change the active cell.
     pub(crate) fn motion_moves(&self, to: super::selection::Motion) -> bool {
         self.controls

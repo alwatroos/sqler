@@ -76,11 +76,23 @@ impl PartialFile {
 
     /// Syncs the file to disk, then renames it over the target.
     ///
+    /// The rename replaces the directory entry. A target that is a symlink is replaced by a
+    /// regular file (the file it pointed to is not touched). On Unix, replacing a regular file
+    /// gives the new file the permissions of the old one (best effort); any other new file has
+    /// the default permissions of the process (its umask).
+    ///
     /// # Errors
     ///
     /// An [`io::Error`] if the sync or the rename fails; the partial file is deleted then.
     pub fn commit(mut self) -> io::Result<()> {
         if let Some(file) = self.keep.take() {
+            #[cfg(unix)]
+            if let Ok(old) = fs::symlink_metadata(&self.target)
+                && old.is_file()
+            {
+                // Best effort: a failure leaves the default permissions.
+                let _ = file.set_permissions(old.permissions());
+            }
             file.sync_all()?;
         }
         fs::rename(&self.path, &self.target)?;
@@ -211,5 +223,45 @@ mod tests {
         assert!(PartialFile::create(&target, 5).is_err());
         drop(file);
         drop(first);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_a_file_keeps_its_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = Scratch::new("file-mode");
+        let target = dir.0.join("out.csv");
+        fs::write(&target, b"old").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        let (partial, mut file) = PartialFile::create(&target, 1).unwrap();
+        file.write_all(b"new").unwrap();
+        drop(file);
+        partial.commit().unwrap();
+        let mode = fs::metadata(&target).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o640);
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_is_replaced_by_a_regular_file_and_its_file_is_untouched() {
+        let dir = Scratch::new("file-link");
+        let real = dir.0.join("real.csv");
+        let link = dir.0.join("link.csv");
+        fs::write(&real, b"old").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let (partial, mut file) = PartialFile::create(&link, 1).unwrap();
+        file.write_all(b"new").unwrap();
+        drop(file);
+        partial.commit().unwrap();
+        assert!(
+            !fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(&link).unwrap(), b"new");
+        assert_eq!(fs::read(&real).unwrap(), b"old");
     }
 }

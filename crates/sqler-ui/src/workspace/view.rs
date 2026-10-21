@@ -35,6 +35,7 @@ use crate::connections::FormField;
 use crate::connections::view::{DialogInputs, dialog_overlay};
 use crate::connections::{self, ConnectionAction, Connector, Dialog};
 use crate::editor::{self, EditorAction, view::EditorViews};
+use crate::export::view::{export_bar, export_overlay};
 use crate::grid::view::{
     GridProbe, GridViews, Table, action_for_command as grid_action_for, apply_action,
 };
@@ -53,6 +54,8 @@ use crate::tabs;
 use crate::tabs::TabId;
 use crate::theme::apply::{appearance_of, apply};
 use crate::theme::resolve;
+
+mod export;
 
 /// How long quitting waits for open sessions to close.
 const CLOSE_LIMIT: Duration = Duration::from_secs(2);
@@ -167,6 +170,8 @@ pub(crate) struct WorkspaceView {
     history: HistoryService,
     /// The inputs of the history tabs and the history dialogs.
     pub(crate) history_views: HistoryViews,
+    /// The text inputs of the export dialog on screen.
+    export_inputs: Option<export::ExportInputs>,
     /// Keeps the OS appearance observer alive.
     _appearance: Subscription,
     /// Keeps the quit hook (closes sessions when the app quits any way) alive.
@@ -213,6 +218,9 @@ impl WorkspaceView {
         if let Err(err) = crate::grid::register_commands(&mut commands) {
             eprintln!("sqler: could not register the grid commands: {err}");
         }
+        if let Err(err) = crate::export::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the export commands: {err}");
+        }
         if let Err(err) = connections::register_commands(&mut commands) {
             eprintln!("sqler: could not register the connection commands: {err}");
         }
@@ -255,6 +263,7 @@ impl WorkspaceView {
         // Any way of quitting (window close, the OS menu) closes the open sessions, within the
         // short time the platform allows. The `app:quit` command waits longer (`CLOSE_LIMIT`).
         let quit = cx.on_app_quit(|view, _| {
+            view.ws.cancel_all_exports();
             for handle in view.ws.cancel_all_queries() {
                 drop(view.bridge.spawn(async move {
                     let _ = handle.cancel().await;
@@ -290,6 +299,7 @@ impl WorkspaceView {
             notices: Vec::new(),
             history,
             history_views: HistoryViews::default(),
+            export_inputs: None,
             _appearance: appearance,
             _quit: quit,
         };
@@ -402,6 +412,16 @@ impl WorkspaceView {
         if !was_open
             && chord.key() == "escape"
             && chord.modifiers() == Modifiers::default()
+            && self.ws.export_dialog().is_some()
+        {
+            // Escape closes the export dialog; nothing is exported.
+            cx.stop_propagation();
+            self.export_dismiss(cx);
+            return;
+        }
+        if !was_open
+            && chord.key() == "escape"
+            && chord.modifiers() == Modifiers::default()
             && self.history_overlay_open()
         {
             // Escape closes the history dialog or the saved-query picker; nothing changes.
@@ -467,7 +487,8 @@ impl WorkspaceView {
             || self.ws.dialog().is_some()
             || self.ws.drop_dialog().is_some()
             || self.query_overlay_tab().is_some()
-            || self.history_overlay_open();
+            || self.history_overlay_open()
+            || self.ws.export_dialog().is_some();
         let Some(action) = grid_key_action(
             &key_input(&event.keystroke),
             Platform::current(),
@@ -555,6 +576,9 @@ impl WorkspaceView {
         } else if let Some(command) = history::action_for(id) {
             self.palette.close();
             self.history_command(command, cx);
+        } else if let Some(command) = crate::export::action_for(id) {
+            self.palette.close();
+            self.run_export_command(command, window, cx);
         } else if let Some(grid_action) = grid_action_for(id) {
             self.palette.close();
             if grid_action == GridAction::FetchMore {
@@ -818,7 +842,10 @@ impl WorkspaceView {
                 })
                 .detach();
             }
-            Effect::OpenGrid { tab, grid } => self.grids.insert(tab, grid),
+            Effect::OpenGrid { tab, grid } => {
+                self.grids.insert(tab, grid);
+                self.ws.result_replaced(tab);
+            }
             Effect::CloseSession(session) => self.bridge.close(session),
             Effect::CloseSessions(sessions) => {
                 let closed = self.bridge.close_all(sessions, CLOSE_LIMIT);
@@ -844,6 +871,7 @@ impl WorkspaceView {
             | Effect::SearchHistory(_)
             | Effect::ClearHistory
             | Effect::SaveSavedQueries { .. } => self.apply_history(effect, cx),
+            Effect::PickExportPath { .. } | Effect::RunExport(_) => self.apply_export(effect, cx),
             Effect::CancelQuery(handle) => {
                 // The answer does not matter: the job reports how the statement ended.
                 drop(self.bridge.spawn(async move {
@@ -913,6 +941,7 @@ impl WorkspaceView {
     ) {
         let (tab, run) = (job.tab, job.run);
         self.queries.insert_grids(tab, grids);
+        self.ws.remember_run(tab, &job.statements);
         let done = self.bridge.spawn(job.run());
         cx.spawn(async move |this, cx| {
             // The channel closes when the job ends, so every event arrives before the end.
@@ -1183,6 +1212,7 @@ impl WorkspaceView {
             }
             Effect::OpenData { tab, grid, job } => {
                 self.grids.insert(tab, grid);
+                self.ws.remember_open_data(tab, &job.sql);
                 // The job reports failures to the grid itself; nobody waits for it.
                 drop(self.bridge.spawn(job.run(self.bridge.connector())));
             }
@@ -1260,6 +1290,7 @@ impl Render for WorkspaceView {
             self.editors.focus(tab, window, cx);
         }
         self.sync_dialog_inputs(window, cx);
+        self.sync_export_inputs(window, cx);
         if self.history_views.materialize(&self.ws, window, cx) {
             // A history dialog or the picker closed: the root takes the focus back.
             window.focus(&self.focus, cx);
@@ -1311,6 +1342,12 @@ impl Render for WorkspaceView {
             .query_overlay_tab()
             .and_then(|tab| query_overlay(self, tab, cx));
         let history_dialog = history::view::history_overlay(self, cx);
+        let export_dialog = export_overlay(self, cx);
+        let export_progress = self
+            .ws
+            .tabs()
+            .active()
+            .and_then(|tab| export_bar(self, tab.id(), cx));
         let palette = self.palette.is_open().then(|| {
             let items = self.palette.items(&self.commands, &self.keys);
             palette::view::palette_overlay(
@@ -1353,12 +1390,14 @@ impl Render for WorkspaceView {
                             .child(div().flex_1().min_w_0().child(strip))
                             .child(strip_end),
                     )
+                    .children(export_progress)
                     .child(body),
             )
             .children(dialog)
             .children(drop_dialog)
             .children(query_dialog)
             .children(history_dialog)
+            .children(export_dialog)
             .children(palette)
     }
 }

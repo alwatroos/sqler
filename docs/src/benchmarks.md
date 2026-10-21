@@ -336,6 +336,43 @@ Size cost of the formats, bench binary, release profile with T14's `strip = "sym
 
 Memory proof at 1M rows (`tests/streaming_memory.rs`, `cargo test --release`; RSS after batch 1,000 minus RSS after batch 100): Parquet +5.8 MB on macOS and +2.2 MB on Linux, `XLSX` +0 on both; the test allows +12 MiB.
 
+## Grid export
+
+`cargo bench -p sqler-ui --bench grid_export -- [--rows N --format ID --source loaded|fresh]` (T9, [ADR-0032](adr/0032-grid-export.md)) measures the export pipeline of the grid: producer, bounded feed, `write_feed` on a blocking thread and the writer, into a hidden partial file renamed on success. `loaded` copies the rows out of a bounded `GridModel` with `LoadedCursor`; `fresh` streams a `SQLite` recursive CTE through `fresh_rows`. It prints `<source>_<id>_rows_per_sec=`. Not in `bench.yml` and not gated.
+
+Measured on 2026-10-21 on macOS 27.0.1 arm64 (Apple M4 Pro), release (`bench` profile), 1,000,000 rows x 6 columns (second run, by the tester):
+
+| Source | Format | Rows/s | Time | File |
+| ------ | ------ | ------ | ---- | ---- |
+| loaded | `csv` | 4.34 M | 230 ms | 49.8 MB |
+| loaded | `json` | 3.65 M | | |
+| loaded | `parquet` | 3.32 M | 301 ms | 31.5 MB |
+| loaded | `xlsx` | 0.41 M | 2.5 s | |
+| fresh | `csv` | 0.86 M | | |
+| fresh | `parquet` | 0.66 M | | |
+
+Memory: the feed holds at most 4 batches; the unit test `memory_does_not_depend_on_the_row_count` checks at most `FEED_CAPACITY + 2` batches of 1,000 rows in flight over 1000 x 1000 rows. `grid_viewport` was not re-run (no grid code changed).
+
+### Parquet in the app default (T9)
+
+`cargo build --release -p sqler-app --locked` in Docker `rust:1.99.1` on the arm64 host (Linux `aarch64`, apt packages of AGENTS.md section 3, profile `strip = "symbols"`, `codegen-units = 1`), on the T9 tree. Rule: `export-parquet` goes into the default iff the Linux binary with it is at most 61,865,984 bytes (62,914,560 minus 1 MiB).
+
+| Build | `sqler` bytes | MiB | Build time |
+| ----- | ------------- | --- | ---------- |
+| without Parquet (`--no-default-features --features driver-sqlite,driver-postgres,driver-mysql,export-xlsx`) | 46,626,808 | 44.5 | 1 min 54 s (cold, 14 CPUs) |
+| with Parquet (default + `export-parquet`) | 47,282,168 | 45.1 | 28.7 s (incremental) |
+| delta | 655,360 | 0.63 | |
+
+Same two builds for Linux x86_64 (Docker `--platform linux/amd64`, emulated on the arm64 host; 5 min 43 s cold without Parquet, 56 s incremental with):
+
+| Build (x86_64) | `sqler` bytes | MiB |
+| -------------- | ------------- | --- |
+| without Parquet | 54,165,824 | 51.7 |
+| with Parquet | 54,947,264 | 52.4 |
+| delta | 781,440 | 0.75 |
+
+With Parquet the x86_64 binary is 6,918,720 bytes under the 61,865,984 limit. Authoritative: the `Binary size` run (`size.yml`) on the T9 pull request. `main` before T9 reported 53,703,760 bytes for x86_64 without Parquet. If that run shows more than 61,865,984 bytes, revert the `export-parquet` entry in the `sqler-app` default.
+
 ## UI framework spike
 
 Data, not pass/fail; spike build, not the product. Measured on `spikes/ui-framework` (ADR-0001), release profile

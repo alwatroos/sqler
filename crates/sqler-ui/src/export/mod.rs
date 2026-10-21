@@ -22,7 +22,7 @@ use crate::command::{Command, CommandError, CommandId, CommandRegistry};
 pub use file::PartialFile;
 pub use job::{
     ExportFailure, ExportOutcome, ExportStop, ExportSummary, FEED_CAPACITY, Feed, LoadedCursor,
-    WriteSpec, fresh_rows, pump_stream, write_feed,
+    WriteSpec, connect_text, driver_text, fresh_rows, pump_stream, write_feed,
 };
 pub use plan::{
     Delimiter, ExportDialog, ExportForm, ExportJob, ExportOrigin, ExportScope, ExportSource,

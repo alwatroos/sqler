@@ -374,6 +374,59 @@ fn a_failing_statement_is_reported_and_the_session_is_closed() {
     assert_eq!(dir.names(), Vec::<String>::new());
 }
 
+#[test]
+fn failure_texts_keep_the_database_message_but_hold_no_secret() {
+    let secret = "S3CR3T-literal";
+    // A statement that fails while it runs, and one that cannot be prepared.
+    for sql in [
+        format!("select abs(-9223372036854775808), '{secret}'"),
+        format!("select '{secret}' from no_such_table"),
+    ] {
+        let dir = Scratch::new("secret-sql");
+        let (connector, _) = CountingConnector::pair();
+        let err = export_fresh(
+            connector,
+            spec(&dir, "csv", "csv"),
+            &ExportStop::new(),
+            Box::new(|_| {}),
+            request(":memory:"),
+            Query::new(sql.as_str()),
+        )
+        .unwrap_err();
+        let ExportFailure::Driver(text) = &err else {
+            panic!("expected Driver, got {err:?}");
+        };
+        assert!(!text.contains(secret), "{text}");
+        assert!(!text.contains(&sql), "{text}");
+        assert!(text.starts_with("query failed: "), "{text}");
+        assert_eq!(dir.names(), Vec::<String>::new());
+    }
+    // A hostile connection: a URL that carries a password, and a path in a folder that is missing.
+    for target in [
+        format!("sqlite://user:{secret}@no-such-host/{secret}/x.db"),
+        format!("/no-such-folder-{secret}/{secret}/x.db"),
+        format!("sqlite:/no-such-folder-{secret}/x.db?mode=ro"),
+    ] {
+        let dir = Scratch::new("secret-conn");
+        let (connector, _) = CountingConnector::pair();
+        let err = export_fresh(
+            connector,
+            spec(&dir, "csv", "csv"),
+            &ExportStop::new(),
+            Box::new(|_| {}),
+            request(&target),
+            Query::new("select 1"),
+        )
+        .unwrap_err();
+        let ExportFailure::Connect(text) = &err else {
+            panic!("expected Connect for {target}, got {err:?}");
+        };
+        assert!(!text.contains(secret), "{text}");
+        assert!(!text.contains("no-such"), "{text}");
+        assert_eq!(dir.names(), Vec::<String>::new());
+    }
+}
+
 /// A workspace with one `SQLite` connection on `db` and a connected tab.
 fn workspace(db: &Path) -> (Workspace, sqler_ui::tabs::TabId) {
     let driver = DriverId::new(DRIVER_ID).unwrap();

@@ -95,6 +95,12 @@ impl GridTab {
         }
     }
 
+    /// The model that holds the rows (the export copies rows out of it).
+    #[must_use]
+    pub fn model(&self) -> &GridModel {
+        &self.model
+    }
+
     /// The ingestion state.
     #[must_use]
     pub fn state(&self) -> &IngestState {
