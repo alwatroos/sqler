@@ -17,8 +17,11 @@
 
 mod action;
 mod cell;
+mod control;
 mod ingest;
+mod layout;
 mod model;
+mod selection;
 mod stats;
 mod store;
 mod synthetic;
@@ -27,12 +30,18 @@ mod tab;
 pub(crate) mod view;
 mod viewport;
 
-pub use action::{GridAction, register_commands};
+pub use action::{GridAction, grid_key_action, register_commands};
 pub use cell::{ColumnHeader, MAX_CELL_CHARS, cell_text, group_thousands, type_label};
+pub use control::{Applied, GridControls};
 pub use ingest::{IngestSummary, ingest, spawn_ingest};
+pub use layout::{ColumnLayout, MAX_COLUMN_PX, MIN_COLUMN_PX, default_width, widest_text};
 pub use model::{
     GridCancel, GridLimits, GridModel, GridSink, IngestState, Viewport, grid_channel,
     grid_channel_with,
+};
+pub use selection::{
+    CellPos, DisplayMap, DisplayRect, IdentityRows, Motion, RowOrder, Selection, SelectionKind,
+    key_command, scroll_row,
 };
 pub use stats::{ProbeReport, RenderStats, nearest_rank};
 pub use store::{CellRef, RowRef};

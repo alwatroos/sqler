@@ -13,14 +13,19 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, AppContext as _, Context, Div, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Stateful, Styled as _, Window, div, px,
+    App, AppContext as _, Context, Div, Entity, Focusable as _, InteractiveElement as _,
+    IntoElement, KeyBinding, MouseButton, MouseDownEvent, NoAction, ParentElement as _, Pixels,
+    SharedString, Stateful, Styled as _, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::table::{Column, DataTable, TableDelegate, TableState};
+use gpui_component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
 use gpui_component::{ActiveTheme as _, Sizable as _};
 
-use super::{GridAction, GridTab, IngestState, POLL_BUDGET, ProbeReport};
+use super::layout::{MIN_COLUMN_PX, widest_text};
+use super::{
+    ColumnHeader, GridAction, GridControls, GridTab, IngestState, POLL_BUDGET, ProbeReport,
+};
+use crate::command::CommandId;
 use crate::tabs::{TabId, TabStrip};
 use crate::workspace::{WorkspaceAction, WorkspaceView};
 
@@ -28,30 +33,41 @@ use crate::workspace::{WorkspaceAction, WorkspaceView};
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 /// The grid action a command ID stands for, if it is one.
-pub(crate) fn action_for_command(id: &crate::command::CommandId) -> Option<GridAction> {
-    [
-        GridAction::ScrollToTop,
-        GridAction::ScrollToEnd,
-        GridAction::FetchMore,
-    ]
-    .into_iter()
-    .find(|a| a.command_id() == *id)
+pub(crate) fn action_for_command(id: &CommandId) -> Option<GridAction> {
+    GridAction::from_command_id(id)
 }
 
-/// The width of a column of this type, in pixels.
-fn column_width(label: &str) -> f32 {
-    match label {
-        "integer" => 110.0,
-        "float" => 120.0,
-        "boolean" => 80.0,
-        "text" => 220.0,
-        _ => 160.0,
-    }
+/// The key context of the data table.
+const TABLE_CONTEXT: &str = "DataTable";
+
+/// Keys of the table's own bindings that the grid takes over: its key-down listener gets them.
+const TABLE_KEYS: [&str; 11] = [
+    "up",
+    "down",
+    "left",
+    "right",
+    "home",
+    "end",
+    "pageup",
+    "pagedown",
+    "tab",
+    "shift-tab",
+    "escape",
+];
+
+/// Unbinds the key bindings of the data table, so the keys reach the grid's key-down listener.
+pub(crate) fn init_keys(cx: &mut App) {
+    cx.bind_keys(
+        TABLE_KEYS
+            .into_iter()
+            .map(|k| KeyBinding::new(k, NoAction, Some(TABLE_CONTEXT))),
+    );
 }
 
 /// The table delegate: a thin wrapper around a [`GridTab`].
 pub(crate) struct GridDelegate {
     tab: GridTab,
+    controls: GridControls,
     columns: Vec<Column>,
 }
 
@@ -59,6 +75,7 @@ impl GridDelegate {
     pub(crate) fn new(tab: GridTab) -> Self {
         Self {
             tab,
+            controls: GridControls::default(),
             columns: Vec::new(),
         }
     }
@@ -73,17 +90,42 @@ impl GridDelegate {
         &mut self.tab
     }
 
-    /// Rebuilds the column list from the tab's headers.
+    /// Whether the motion would change the active cell.
+    pub(crate) fn motion_moves(&self, to: super::selection::Motion) -> bool {
+        self.controls
+            .motion_moves(to, self.tab.row_count(), self.tab.visible())
+    }
+
+    /// Rebuilds the column list, in display order, from the tab's headers and the layout.
     fn rebuild_columns(&mut self) {
-        self.columns = (0..self.tab.column_count())
-            .filter_map(|ix| self.tab.header(ix).map(|h| (ix, h)))
-            .map(|(ix, h)| {
-                Column::new(format!("c{ix}"), h.name.clone())
-                    .width(px(column_width(h.type_label)))
-                    .resizable(false)
-                    .movable(false)
+        let headers: Vec<ColumnHeader> = (0..self.tab.column_count())
+            .filter_map(|ix| self.tab.header(ix).cloned())
+            .collect();
+        self.controls.sync_columns(&headers);
+        let layout = self.controls.layout();
+        let pinned = layout.pinned_count();
+        self.columns = (0..layout.len())
+            .filter_map(|display| {
+                let model = layout.model_column(display)?;
+                let header = headers.get(model)?;
+                let column = Column::new(format!("c{model}"), header.name.clone())
+                    .width(px(layout.width(model)))
+                    .min_width(px(MIN_COLUMN_PX));
+                Some(if display < pinned {
+                    column.fixed_left()
+                } else {
+                    column
+                })
             })
             .collect();
+    }
+
+    /// The model column drawn at a display position.
+    fn model_col(&self, display: usize) -> usize {
+        self.controls
+            .layout()
+            .model_column(display)
+            .unwrap_or(usize::MAX)
     }
 }
 
@@ -109,8 +151,9 @@ impl TableDelegate for GridDelegate {
         let muted = cx.theme().muted_foreground;
         let (name, label) = self
             .tab
-            .header(col_ix)
+            .header(self.model_col(col_ix))
             .map_or(("", ""), |h| (h.name.as_str(), h.type_label));
+        let rows = self.tab.row_count();
         div()
             .size_full()
             .flex()
@@ -119,6 +162,20 @@ impl TableDelegate for GridDelegate {
             .gap_1()
             .overflow_hidden()
             .whitespace_nowrap()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |state, e: &MouseDownEvent, window, cx| {
+                    let hit =
+                        state
+                            .delegate_mut()
+                            .controls
+                            .click_header(col_ix, rows, e.modifiers.shift);
+                    if hit {
+                        window.focus(&state.focus_handle(cx), cx);
+                        cx.notify();
+                    }
+                }),
+            )
             .child(name.to_owned())
             .child(div().text_xs().text_color(muted).child(label.to_owned()))
     }
@@ -139,13 +196,42 @@ impl TableDelegate for GridDelegate {
         row_ix: usize,
         col_ix: usize,
         _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        div()
+        let rows = self.tab.row_count();
+        let selected = self.controls.is_selected(row_ix, col_ix, rows);
+        let active = self.controls.selection().active().is_some_and(|c| {
+            c.row == row_ix && self.controls.layout().display_column(c.col) == Some(col_ix)
+        });
+        let tokens = &cx.theme().tokens;
+        let (fill, border) = (tokens.table_active, tokens.table_active_border);
+        let mut cell = div()
+            .size_full()
             .overflow_hidden()
             .whitespace_nowrap()
             .text_ellipsis()
-            .child(self.tab.cell_text(row_ix, col_ix))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |state, e: &MouseDownEvent, window, cx| {
+                    let hit = state.delegate_mut().controls.click_cell(
+                        row_ix,
+                        col_ix,
+                        rows,
+                        e.modifiers.shift,
+                    );
+                    if hit {
+                        window.focus(&state.focus_handle(cx), cx);
+                        cx.notify();
+                    }
+                }),
+            );
+        if selected {
+            cell = cell.bg(fill);
+        }
+        if active {
+            cell = cell.border_1().border_color(border);
+        }
+        cell.child(self.tab.cell_text(row_ix, self.model_col(col_ix)))
     }
 
     fn visible_rows_changed(
@@ -158,7 +244,47 @@ impl TableDelegate for GridDelegate {
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
-        self.tab.cell_text(row_ix, col_ix)
+        self.tab.cell_text(row_ix, self.model_col(col_ix))
+    }
+
+    fn move_column(
+        &mut self,
+        col_ix: usize,
+        to_ix: usize,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) {
+        if self.controls.move_display(col_ix, to_ix) {
+            self.rebuild_columns();
+        }
+    }
+
+    fn fit_column(
+        &mut self,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> Option<Pixels> {
+        let model = self.controls.layout().model_column(col_ix)?;
+        let header = self.tab.header(model)?;
+        let header_text = format!("{} {}", header.name, header.type_label);
+        let cells: Vec<String> = self
+            .tab
+            .visible()
+            .map(|row| self.tab.cell_text(row, model))
+            .collect();
+        let widest = widest_text(
+            std::iter::once(header_text.as_str()).chain(cells.iter().map(String::as_str)),
+        )?;
+        let font_size = cx.theme().font_size;
+        let run = window.text_style().to_run(widest.len());
+        let line = window.text_system().shape_line(
+            SharedString::from(widest.to_owned()),
+            font_size,
+            &[run],
+            None,
+        );
+        Some(line.width)
     }
 }
 
@@ -192,42 +318,22 @@ impl GridViews {
     /// Creates the table entities for pending grids and starts their poll tasks.
     pub(crate) fn materialize(&mut self, window: &mut Window, cx: &mut Context<WorkspaceView>) {
         for (id, tab) in std::mem::take(&mut self.pending) {
-            let table = cx.new(|cx| {
-                TableState::new(GridDelegate::new(tab), window, cx)
-                    .col_movable(false)
-                    .col_resizable(false)
-                    .sortable(false)
-            });
-            start_polling(&table, cx);
-            self.tables.insert(id, table);
+            self.tables.insert(id, new_table(tab, window, cx));
         }
     }
 
-    /// Runs a grid action on the grid of a tab: scrolls to the top or the end, or fetches the next
-    /// page of a paused result. Returns whether it did anything.
+    /// Runs a grid action on the grid of a tab. Returns whether it did anything.
     pub(crate) fn run_action(
         &self,
         tab: TabId,
         action: GridAction,
+        window: &mut Window,
         cx: &mut Context<WorkspaceView>,
     ) -> bool {
         let Some(table) = self.tables.get(&tab) else {
             return false;
         };
-        if action == GridAction::FetchMore {
-            return table.update(cx, |state, cx| {
-                let fetched = state.delegate_mut().grid_mut().fetch_more();
-                if fetched {
-                    cx.notify();
-                }
-                fetched
-            });
-        }
-        let Some(row) = table.read(cx).delegate().tab.jump_target(action) else {
-            return false;
-        };
-        table.update(cx, |state, cx| state.scroll_to_row(row, cx));
-        true
+        table.update(cx, |state, cx| apply_action(state, action, window, cx))
     }
 
     /// The body of a grid tab: toolbar above the table.
@@ -269,8 +375,9 @@ impl GridViews {
                 Button::new("grid-fetch-more")
                     .label("Fetch more")
                     .small()
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.grids.run_action(tab, GridAction::FetchMore, cx);
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.grids
+                            .run_action(tab, GridAction::FetchMore, window, cx);
                     }))
             }))
             .child(
@@ -278,8 +385,9 @@ impl GridViews {
                     .label("Top")
                     .ghost()
                     .small()
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.grids.run_action(tab, GridAction::ScrollToTop, cx);
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.grids
+                            .run_action(tab, GridAction::ScrollToTop, window, cx);
                     })),
             )
             .child(
@@ -287,8 +395,9 @@ impl GridViews {
                     .label("End")
                     .ghost()
                     .small()
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.grids.run_action(tab, GridAction::ScrollToEnd, cx);
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.grids
+                            .run_action(tab, GridAction::ScrollToEnd, window, cx);
                     })),
             );
         div()
@@ -299,13 +408,88 @@ impl GridViews {
             .flex()
             .flex_col()
             .child(toolbar)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .child(DataTable::new(table).stripe(true).bordered(true)),
-            )
+            .child(grid_table(table, cx))
     }
+}
+
+/// Builds the table entity of a grid: columns can be resized and moved, the table's own
+/// selection is off (the grid draws its own), and the ingestion is polled.
+pub(crate) fn new_table(
+    grid: GridTab,
+    window: &mut Window,
+    cx: &mut Context<WorkspaceView>,
+) -> Table {
+    let table = cx.new(|cx| {
+        TableState::new(GridDelegate::new(grid), window, cx)
+            .col_movable(true)
+            .col_resizable(true)
+            .sortable(false)
+            .row_selectable(false)
+            .col_selectable(false)
+            .cell_selectable(false)
+    });
+    cx.subscribe(&table, |_, table, event: &TableEvent, cx| {
+        if let TableEvent::ColumnWidthsChanged(widths) = event {
+            let widths: Vec<f32> = widths.iter().map(|w| f32::from(*w)).collect();
+            table.update(cx, |state, _| {
+                let delegate = state.delegate_mut();
+                delegate.controls.set_display_widths(&widths);
+                delegate.rebuild_columns();
+            });
+        }
+    })
+    .detach();
+    start_polling(&table, cx);
+    table
+}
+
+/// Applies a grid action to a table: selection, layout, scrolling and fetching. Returns whether
+/// it did anything.
+pub(crate) fn apply_action(
+    state: &mut TableState<GridDelegate>,
+    action: GridAction,
+    window: &mut Window,
+    cx: &mut Context<TableState<GridDelegate>>,
+) -> bool {
+    if action == GridAction::FetchMore {
+        let fetched = state.delegate_mut().grid_mut().fetch_more();
+        if fetched {
+            cx.notify();
+        }
+        return fetched;
+    }
+    let delegate = state.delegate_mut();
+    let (rows, visible) = (delegate.tab.row_count(), delegate.tab.visible());
+    let applied = delegate.controls.apply(action, rows, visible);
+    if applied.relayout {
+        state.delegate_mut().rebuild_columns();
+        state.refresh(cx);
+    }
+    if let Some(row) = applied.scroll_row {
+        // Strict: `row` is the first row to show; the lazy scroll does nothing when the target
+        // is already on screen, which would leave a row below the view unreached.
+        state
+            .vertical_scroll_handle
+            .scroll_to_item_strict(row, gpui::ScrollStrategy::Top);
+        cx.notify();
+    }
+    if let Some(col) = applied.scroll_col {
+        state.scroll_to_col(col, cx);
+    }
+    if let Some(col) = applied.autofit {
+        state.fit_col(col, window, cx);
+    }
+    cx.notify();
+    applied != super::Applied::default()
+}
+
+/// The table. Its keys are routed by the workspace (`WorkspaceView::grid_key`), before the
+/// global chord router, because that router would otherwise take Ctrl+Space for completion.
+pub(crate) fn grid_table(table: &Table, _cx: &mut Context<WorkspaceView>) -> Div {
+    div()
+        .flex_1()
+        .min_h_0()
+        .child(DataTable::new(table).stripe(true).bordered(true))
 }
 
 /// Applies the pending ingestion messages every [`POLL_INTERVAL`] until the grid ends or goes.

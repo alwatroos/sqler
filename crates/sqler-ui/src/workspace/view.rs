@@ -35,8 +35,10 @@ use crate::connections::FormField;
 use crate::connections::view::{DialogInputs, dialog_overlay};
 use crate::connections::{self, ConnectionAction, Connector, Dialog};
 use crate::editor::{self, EditorAction, view::EditorViews};
-use crate::grid::GridAction;
-use crate::grid::view::{GridProbe, GridViews, action_for_command as grid_action_for};
+use crate::grid::view::{
+    GridProbe, GridViews, Table, action_for_command as grid_action_for, apply_action,
+};
+use crate::grid::{GridAction, grid_key_action};
 use crate::history::view::HistoryViews;
 use crate::history::{self, HistoryCommand, HistoryService};
 use crate::keymap::input::key_input;
@@ -95,6 +97,7 @@ impl std::fmt::Debug for Startup {
 /// Initialises the component library. The theme is applied afterwards, from the settings.
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
+    crate::grid::view::init_keys(cx);
 }
 
 /// Opens the main window and runs the application; returns when the app quits.
@@ -305,6 +308,16 @@ impl WorkspaceView {
             .map(crate::tabs::Tab::id)
     }
 
+    /// The table the grid commands act on: the table of the active grid tab, else the shown
+    /// result of the active query tab.
+    fn active_table(&self) -> Option<Table> {
+        if let Some(tab) = self.ws_active_grid() {
+            return self.grids.table(tab).cloned();
+        }
+        let tab = self.ws_active_query()?;
+        self.queries.shown_table(&self.ws, tab)
+    }
+
     /// The active tab, if it is a query tab.
     fn ws_active_query(&self) -> Option<crate::tabs::TabId> {
         self.ws
@@ -396,7 +409,7 @@ impl WorkspaceView {
             self.history_escape(cx);
             return;
         }
-        if self.sidebar_key(event, window, cx) {
+        if self.sidebar_key(event, window, cx) || self.grid_key(event, window, cx) {
             cx.stop_propagation();
             return;
         }
@@ -434,6 +447,38 @@ impl WorkspaceView {
             return false;
         };
         self.run_command(&id, window, cx);
+        true
+    }
+
+    /// Runs the grid action a key stands for while the data table has the focus. `true` if the
+    /// key was used. It runs before the chord router, so that Ctrl+Space is "select column"
+    /// in the grid; any key the grid does not claim still reaches the router.
+    fn grid_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(table) = self.active_table() else {
+            return false;
+        };
+        let focused = table.focus_handle(cx).contains_focused(window, cx);
+        let overlay = self.palette.is_open()
+            || self.ws.dialog().is_some()
+            || self.ws.drop_dialog().is_some()
+            || self.query_overlay_tab().is_some()
+            || self.history_overlay_open();
+        let Some(action) = grid_key_action(
+            &key_input(&event.keystroke),
+            Platform::current(),
+            focused,
+            overlay,
+            |m| table.read(cx).delegate().motion_moves(m),
+        ) else {
+            return false;
+        };
+        table.update(cx, |state, cx| apply_action(state, action, window, cx));
+        cx.notify();
         true
     }
 
@@ -478,6 +523,7 @@ impl WorkspaceView {
         let was_open = self.palette.is_open();
         let mut reopen_with = None;
         let mut editor_focus = false;
+        let mut grid_focus: Option<Table> = None;
         if id.as_str() == OPEN_PALETTE {
             self.palette.open();
             if was_open {
@@ -513,7 +559,7 @@ impl WorkspaceView {
             self.palette.close();
             if grid_action == GridAction::FetchMore {
                 let fetched = match (self.ws_active_grid(), self.ws_active_query()) {
-                    (Some(tab), _) => self.grids.run_action(tab, grid_action, cx),
+                    (Some(tab), _) => self.grids.run_action(tab, grid_action, window, cx),
                     (None, Some(tab)) => self.queries.fetch_more(tab, cx),
                     (None, None) => {
                         window.push_notification("Open a results grid first.", cx);
@@ -524,9 +570,12 @@ impl WorkspaceView {
                     window.push_notification("No more rows to fetch.", cx);
                 }
             } else {
-                match self.ws_active_grid() {
-                    Some(tab) => {
-                        self.grids.run_action(tab, grid_action, cx);
+                match self.active_table() {
+                    Some(table) => {
+                        table.update(cx, |state, cx| {
+                            apply_action(state, grid_action, window, cx);
+                        });
+                        grid_focus = Some(table);
                     }
                     None => window.push_notification("Open a results grid first.", cx),
                 }
@@ -550,6 +599,10 @@ impl WorkspaceView {
         if editor_focus && let Some(tab) = self.ws_active_editor() {
             // The palette gave the focus back to the root; the editor takes it.
             self.editors.focus(tab, window, cx);
+        }
+        if let Some(table) = grid_focus {
+            // The palette gave the focus back to the root; the grid takes it.
+            window.focus(&table.focus_handle(cx), cx);
         }
         if let Some(query) = reopen_with {
             self.palette_input

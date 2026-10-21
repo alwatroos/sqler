@@ -179,7 +179,7 @@ impl GridTab {
         Some(match a {
             GridAction::ScrollToTop => 0,
             GridAction::ScrollToEnd => rows - 1,
-            GridAction::FetchMore => return None,
+            _ => return None,
         })
     }
 

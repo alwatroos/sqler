@@ -13,10 +13,9 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::InputState;
-use gpui_component::table::{DataTable, TableState};
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
-use crate::grid::view::{GridDelegate, Table, start_polling};
+use crate::grid::view::{Table, grid_table, new_table};
 use crate::grid::{GridTab, IngestState};
 use crate::query::{Phase, QueryTab, StatementStatus};
 use crate::tabs::{TabId, TabKind, TabStrip};
@@ -130,6 +129,27 @@ impl QueryViews {
         })
     }
 
+    /// The index of the result a query tab shows: the one the user picked, else the last
+    /// statement that has started. `None` while there are no results.
+    fn shown_index(&self, ws: &Workspace, tab: TabId) -> Option<usize> {
+        let entries = ws.query_tab(tab)?.results();
+        if entries.is_empty() {
+            return None;
+        }
+        let index =
+            self.chosen(tab).unwrap_or_else(|| {
+                followed(entries.iter().map(|e| {
+                    !matches!(e.status, StatementStatus::Pending | StatementStatus::NotRun)
+                }))
+            });
+        Some(index.min(entries.len() - 1))
+    }
+
+    /// The table of the result a query tab shows, if it has one.
+    pub(crate) fn shown_table(&self, ws: &Workspace, tab: TabId) -> Option<Table> {
+        self.table(tab, self.shown_index(ws, tab)?).cloned()
+    }
+
     fn table(&self, tab: TabId, index: usize) -> Option<&Table> {
         self.results.get(&tab)?.tables.get(index)
     }
@@ -149,16 +169,7 @@ impl QueryViews {
         for (id, grids) in std::mem::take(&mut self.pending) {
             let tables = grids
                 .into_iter()
-                .map(|grid| {
-                    let table = cx.new(|cx| {
-                        TableState::new(GridDelegate::new(grid), window, cx)
-                            .col_movable(false)
-                            .col_resizable(false)
-                            .sortable(false)
-                    });
-                    start_polling(&table, cx);
-                    table
-                })
+                .map(|grid| new_table(grid, window, cx))
                 .collect();
             self.results.insert(
                 id,
@@ -274,15 +285,7 @@ pub(super) fn results_area(
             .child("Run the statement at the cursor, the selection or the whole script with the Query commands.")
             .into_any_element();
     }
-    let index =
-        view.queries
-            .chosen(tab)
-            .unwrap_or_else(|| {
-                followed(entries.iter().map(|e| {
-                    !matches!(e.status, StatementStatus::Pending | StatementStatus::NotRun)
-                }))
-            })
-            .min(entries.len() - 1);
+    let index = view.queries.shown_index(view.workspace(), tab).unwrap_or(0);
     let entry = &entries[index];
 
     let mut strip = div()
@@ -383,11 +386,7 @@ pub(super) fn results_area(
         .table(tab, index)
         .filter(|t| t.read(cx).delegate().grid().column_count() > 0);
     let body = match table {
-        Some(table) => div()
-            .flex_1()
-            .min_h_0()
-            .child(DataTable::new(table).stripe(true).bordered(true))
-            .into_any_element(),
+        Some(table) => grid_table(table, cx).into_any_element(),
         None => div().flex_1().into_any_element(),
     };
     area.child(strip)
