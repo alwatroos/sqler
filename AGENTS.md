@@ -252,6 +252,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0031](docs/src/adr/0031-client-side-sort-and-filter.md) | Client-side sort and filter: published display order, resumable job on the UI thread | accepted |
 | [0032](docs/src/adr/0032-grid-export.md) | Grid export: loaded rows or a fresh run of a read statement, writer on the blocking pool, hidden partial file, Parquet in the app default | accepted |
 | [0033](docs/src/adr/0033-inline-editing-ui.md) | Inline editing: apply session, transaction flag, schema probe, in-place overlay and a single gate | accepted |
+| [0041](docs/src/adr/0041-acp-client.md) | ACP client: agent profiles, one supervisor task per agent, scrubbed environment, MCP descriptor and no client capabilities | accepted |
 
 ## 9. Roadmap status
 
