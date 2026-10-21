@@ -11,13 +11,13 @@ use std::collections::HashMap;
 
 use gpui::Focusable as _;
 use gpui::{
-    AnyElement, AppContext as _, ClickEvent, Context, Div, ElementId, Entity, Hsla,
+    AnyElement, App, AppContext as _, ClickEvent, Context, Div, ElementId, Entity, Hsla,
     InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, px, rgb,
 };
-use gpui_component::ActiveTheme as _;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::spinner::Spinner;
+use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
 use sqler_config::{GroupId, TlsMode};
 use sqler_driver_api::sqler_core::{DriverId, Environment};
 
@@ -28,7 +28,16 @@ use super::form::{
     TestStatus,
 };
 use crate::tabs::Rgb;
+use crate::theme::SPACE;
+use crate::theme::icons::AppIcon;
+use crate::workspace::chrome::{
+    DIALOG_W_MD, ICON_SM, LIST_MAX_H, dialog_footer, dialog_panel, dialog_title, field_row, scrim,
+    ui_scale,
+};
 use crate::workspace::{Workspace, WorkspaceView};
+
+/// Diameter of a colour swatch.
+const SWATCH: f32 = 20.;
 
 /// The text fields of the form, in the order they are created.
 const TEXT_FIELDS: [FormField; 10] = [
@@ -173,33 +182,30 @@ fn subscribe(
 /// Theme colours the dialogs use, copied out of the theme.
 #[derive(Clone, Copy)]
 struct Colors {
-    fg: Hsla,
     muted: Hsla,
     border: Hsla,
     danger: Hsla,
-    danger_fg: Hsla,
     success: Hsla,
-    primary: Hsla,
-    primary_fg: Hsla,
+    active: Hsla,
+    ring: Hsla,
 }
 
 impl Colors {
     fn of(cx: &Context<WorkspaceView>) -> Self {
         let theme = cx.theme();
         Self {
-            fg: theme.popover_foreground,
             muted: theme.muted_foreground,
             border: theme.border,
             danger: theme.danger,
-            danger_fg: theme.danger_foreground,
             success: theme.success,
-            primary: theme.primary,
-            primary_fg: theme.primary_foreground,
+            active: theme.list_active,
+            ring: theme.ring,
         }
     }
 }
 
-/// A clickable chip that dispatches a connection action.
+/// A clickable chip that dispatches a connection action. The picked chip has the active fill
+/// and a ring.
 fn chip(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -208,53 +214,58 @@ fn chip(
     colors: Colors,
     cx: &mut Context<WorkspaceView>,
 ) -> gpui::Stateful<Div> {
+    let theme = cx.theme();
+    let (radius, hover) = (theme.radius, theme.list_hover);
+    let size = ui_scale(cx).sm;
     let mut chip = div()
         .id(id)
-        .px_2()
-        .py_0p5()
-        .rounded_sm()
+        .px(px(SPACE[3]))
+        .py(px(SPACE[0]))
+        .rounded(radius)
         .border_1()
         .border_color(colors.border)
-        .text_sm()
+        .text_size(px(size))
         .cursor_pointer()
         .child(label.into())
         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
             view.dispatch_connection(action.clone(), cx);
         }));
-    if selected {
-        chip = chip
-            .bg(colors.primary)
-            .text_color(colors.primary_fg)
-            .border_color(colors.primary);
-    }
+    chip = if selected {
+        chip.bg(colors.active).border_color(colors.ring)
+    } else {
+        chip.hover(move |style| style.bg(hover))
+    };
     chip
 }
 
-/// A primary or danger button.
+/// How a dialog button looks.
+#[derive(Clone, Copy)]
+enum Look {
+    /// A neutral outline button.
+    Plain,
+    /// The primary action.
+    Primary,
+    /// A destructive action.
+    Danger,
+}
+
+/// A small button that dispatches a connection action.
 fn button(
     id: &'static str,
     label: &'static str,
     action: ConnectionAction,
-    fill: Option<(Hsla, Hsla)>,
-    colors: Colors,
+    look: Look,
     cx: &mut Context<WorkspaceView>,
-) -> gpui::Stateful<Div> {
-    let mut button = div()
-        .id(id)
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .border_1()
-        .border_color(colors.border)
-        .cursor_pointer()
-        .child(label)
-        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-            view.dispatch_connection(action.clone(), cx);
-        }));
-    if let Some((bg, ink)) = fill {
-        button = button.bg(bg).text_color(ink).border_color(bg);
-    }
-    button
+) -> Button {
+    let button = Button::new(id).label(label).small();
+    let button = match look {
+        Look::Plain => button.outline(),
+        Look::Primary => button.primary(),
+        Look::Danger => button.primary().danger(),
+    };
+    button.on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+        view.dispatch_connection(action.clone(), cx);
+    }))
 }
 
 /// A label, a body and the field's error.
@@ -263,22 +274,18 @@ fn labelled(
     body: impl IntoElement,
     error: Option<&str>,
     colors: Colors,
+    cx: &App,
 ) -> Div {
-    let mut row = div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .child(div().text_xs().text_color(colors.muted).child(label))
-        .child(body);
+    let mut content = div().flex().flex_col().gap(px(SPACE[0])).child(body);
     if let Some(error) = error {
-        row = row.child(
+        content = content.child(
             div()
-                .text_xs()
+                .text_size(px(ui_scale(cx).xs))
                 .text_color(colors.danger)
                 .child(error.to_owned()),
         );
     }
-    row
+    field_row(label, content, cx)
 }
 
 fn text_row(
@@ -287,6 +294,7 @@ fn text_row(
     form: &ConnectionForm,
     inputs: &DialogInputs,
     colors: Colors,
+    cx: &App,
 ) -> Option<Div> {
     let input = inputs.fields.get(&field)?;
     Some(labelled(
@@ -294,11 +302,12 @@ fn text_row(
         Input::new(input),
         form.error_for(field),
         colors,
+        cx,
     ))
 }
 
 fn chips() -> Div {
-    div().flex().flex_row().flex_wrap().gap_1()
+    div().flex().flex_row().flex_wrap().gap(px(SPACE[1]))
 }
 
 /// Renders the dialog on screen as a full-window overlay; `None` when there is none.
@@ -308,10 +317,9 @@ pub(crate) fn dialog_overlay(
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
     let colors = Colors::of(cx);
-    let (panel_bg, panel_border) = (cx.theme().popover, cx.theme().border);
     let body = match ws.dialog()? {
         Dialog::Form(form) => form_panel(ws, form, inputs?, colors, cx).into_any_element(),
-        Dialog::ConfirmDelete { name, .. } => confirm_panel(name, colors, cx).into_any_element(),
+        Dialog::ConfirmDelete { name, .. } => confirm_panel(name, cx).into_any_element(),
         Dialog::GroupName { purpose, error, .. } => {
             group_panel(purpose, error.as_deref(), inputs?, colors, cx).into_any_element()
         }
@@ -322,48 +330,19 @@ pub(crate) fn dialog_overlay(
         Dialog::TrustHostKey { key, .. } => host_key_panel(key, colors, cx).into_any_element(),
     };
     Some(
-        div()
-            .id("dialog-scrim")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(gpui::black().opacity(0.45))
-            .occlude()
-            .child(
-                div()
-                    .id("dialog")
-                    .w(px(580.))
-                    .max_h(px(720.))
-                    .flex()
-                    .flex_col()
-                    .bg(panel_bg)
-                    .text_color(colors.fg)
-                    .border_1()
-                    .border_color(panel_border)
-                    .rounded_lg()
-                    .shadow_lg()
-                    .child(body),
-            )
+        scrim("dialog-scrim", cx)
+            .child(dialog_panel("dialog", DIALOG_W_MD, cx).child(body))
             .into_any_element(),
     )
 }
 
-fn title(text: String) -> Div {
-    div().px_4().pt_4().pb_2().text_lg().child(text)
+/// The column that holds the title, the body and the footer of a dialog.
+fn panel() -> Div {
+    div().flex().flex_col().min_h_0().gap(px(SPACE[4]))
 }
 
-fn footer(buttons: Vec<AnyElement>) -> Div {
-    div()
-        .flex()
-        .flex_row()
-        .justify_end()
-        .gap_2()
-        .p_4()
-        .children(buttons)
+fn footer(buttons: Vec<AnyElement>, cx: &App) -> Div {
+    dialog_footer(cx).children(buttons)
 }
 
 #[allow(clippy::too_many_lines)] // one declarative element tree
@@ -401,7 +380,7 @@ fn form_panel(
     if ws.drivers().is_empty() && form.driver().is_none() {
         driver_chips = driver_chips.child(
             div()
-                .text_sm()
+                .text_size(px(ui_scale(cx).sm))
                 .text_color(colors.muted)
                 .child("No database driver is compiled in."),
         );
@@ -427,20 +406,25 @@ fn form_panel(
         ));
     }
 
-    let mut swatches = div().flex().flex_row().flex_wrap().items_center().gap_1();
+    let mut swatches = div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SPACE[1]));
     let current_color = form.text(FormField::Color).trim().to_ascii_lowercase();
     for (index, &preset) in COLOR_PRESETS.iter().enumerate() {
         let Some(Rgb(value)) = Rgb::parse(preset) else {
             continue;
         };
         let selected = current_color == preset;
-        let mut swatch = div()
+        let swatch = div()
             .id(("swatch", index))
-            .size(px(20.))
+            .size(px(SWATCH))
             .rounded_full()
             .bg(rgb(value))
             .border_2()
-            .border_color(if selected { colors.fg } else { colors.border })
+            .border_color(if selected { colors.ring } else { colors.border })
             .cursor_pointer()
             .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                 view.dispatch_connection(
@@ -452,9 +436,6 @@ fn form_panel(
                 );
                 view.set_form_input(FormField::Color, preset, window, cx);
             }));
-        if selected {
-            swatch = swatch.border_color(colors.fg);
-        }
         swatches = swatches.child(swatch);
     }
 
@@ -511,13 +492,19 @@ fn form_panel(
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
-        .px_4()
         .flex()
         .flex_col()
-        .gap_3()
-        .children(text_row("Name", FormField::Name, form, inputs, colors))
-        .child(labelled("Driver", driver_chips, None, colors))
-        .children(text_row("Target", FormField::Target, form, inputs, colors))
+        .gap(px(SPACE[4]))
+        .children(text_row("Name", FormField::Name, form, inputs, colors, cx))
+        .child(labelled("Driver", driver_chips, None, colors, cx))
+        .children(text_row(
+            "Target",
+            FormField::Target,
+            form,
+            inputs,
+            colors,
+            cx,
+        ))
         .child(password_block(
             "Password",
             SecretSlot::Db,
@@ -527,12 +514,13 @@ fn form_panel(
             colors,
             cx,
         ))
-        .child(labelled("Environment", env_chips, None, colors))
+        .child(labelled("Environment", env_chips, None, colors, cx))
         .child(labelled(
             "Colour",
             swatches,
             form.error_for(FormField::Color),
             colors,
+            cx,
         ))
         .children(text_row(
             "Colour (#rrggbb)",
@@ -540,9 +528,10 @@ fn form_panel(
             form,
             inputs,
             colors,
+            cx,
         ))
-        .child(labelled("Group", group_chips, None, colors))
-        .child(labelled("TLS", tls_chips, None, colors));
+        .child(labelled("Group", group_chips, None, colors, cx))
+        .child(labelled("TLS", tls_chips, None, colors, cx));
 
     if form.tls_mode().is_some() {
         body = body
@@ -552,6 +541,7 @@ fn form_panel(
                 form,
                 inputs,
                 colors,
+                cx,
             ))
             .children(text_row(
                 "Client certificate",
@@ -559,6 +549,7 @@ fn form_panel(
                 form,
                 inputs,
                 colors,
+                cx,
             ))
             .children(text_row(
                 "Client key",
@@ -566,6 +557,7 @@ fn form_panel(
                 form,
                 inputs,
                 colors,
+                cx,
             ));
     }
 
@@ -591,6 +583,7 @@ fn form_panel(
             )),
         None,
         colors,
+        cx,
     ));
     if ssh_on {
         body = body
@@ -600,6 +593,7 @@ fn form_panel(
                 form,
                 inputs,
                 colors,
+                cx,
             ))
             .children(text_row(
                 "SSH port",
@@ -607,6 +601,7 @@ fn form_panel(
                 form,
                 inputs,
                 colors,
+                cx,
             ))
             .children(text_row(
                 "SSH user",
@@ -614,6 +609,7 @@ fn form_panel(
                 form,
                 inputs,
                 colors,
+                cx,
             ));
         let mut auth = chips();
         for (index, (label, kind)) in [
@@ -633,7 +629,7 @@ fn form_panel(
                 cx,
             ));
         }
-        body = body.child(labelled("SSH authentication", auth, None, colors));
+        body = body.child(labelled("SSH authentication", auth, None, colors, cx));
         match form.ssh_auth() {
             SshAuthKind::Password => {
                 body = body.child(password_block(
@@ -654,6 +650,7 @@ fn form_panel(
                         form,
                         inputs,
                         colors,
+                        cx,
                     ))
                     .child(password_block(
                         "Key passphrase (optional)",
@@ -672,39 +669,37 @@ fn form_panel(
     for error in form.errors().iter().filter(|e| e.field.is_none()) {
         body = body.child(
             div()
-                .text_sm()
+                .text_size(px(ui_scale(cx).sm))
                 .text_color(colors.danger)
                 .child(error.message.clone()),
         );
     }
     body = body.child(test_row(form, colors, cx));
 
-    div()
-        .flex()
-        .flex_col()
-        .min_h_0()
-        .child(title(heading))
+    panel()
+        .child(dialog_title(Some(AppIcon::Server), heading, cx))
         .child(body)
-        .child(footer(vec![
-            button(
-                "form-cancel",
-                "Cancel",
-                ConnectionAction::Cancel,
-                None,
-                colors,
-                cx,
-            )
-            .into_any_element(),
-            button(
-                "form-save",
-                "Save",
-                ConnectionAction::Save,
-                Some((colors.primary, colors.primary_fg)),
-                colors,
-                cx,
-            )
-            .into_any_element(),
-        ]))
+        .child(footer(
+            vec![
+                button(
+                    "form-cancel",
+                    "Cancel",
+                    ConnectionAction::Cancel,
+                    Look::Plain,
+                    cx,
+                )
+                .into_any_element(),
+                button(
+                    "form-save",
+                    "Save",
+                    ConnectionAction::Save,
+                    Look::Primary,
+                    cx,
+                )
+                .into_any_element(),
+            ],
+            cx,
+        ))
 }
 
 /// A masked password input with what will happen to the stored secret.
@@ -738,28 +733,43 @@ fn password_block(
         .flex()
         .flex_row()
         .items_center()
-        .gap_2()
-        .child(div().text_xs().text_color(colors.muted).child(note));
+        .gap(px(SPACE[3]))
+        .child(
+            div()
+                .text_size(px(ui_scale(cx).xs))
+                .text_color(colors.muted)
+                .child(note),
+        );
     if can_remove {
         hint = hint.child(
-            div()
-                .id(ElementId::Name(SharedString::from(format!(
-                    "remove-secret-{label}"
-                ))))
-                .text_xs()
-                .text_color(colors.danger)
-                .cursor_pointer()
-                .child("Remove")
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    view.dispatch_connection(ConnectionAction::ClearSecret(slot), cx);
-                })),
+            Button::new(ElementId::Name(SharedString::from(format!(
+                "remove-secret-{label}"
+            ))))
+            .ghost()
+            .danger()
+            .xsmall()
+            .label("Remove")
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                view.dispatch_connection(ConnectionAction::ClearSecret(slot), cx);
+            })),
         );
     }
     let input = inputs
         .fields
         .get(&field)
         .map(|i| Input::new(i).mask_toggle());
-    labelled(label, div().children(input), form.error_for(field), colors).child(hint)
+    labelled(
+        label,
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE[0]))
+            .children(input)
+            .child(hint),
+        form.error_for(field),
+        colors,
+        cx,
+    )
 }
 
 fn test_row(
@@ -767,18 +777,25 @@ fn test_row(
     colors: Colors,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement + use<> {
-    let mut row = div().flex().flex_row().items_center().gap_2().pb_2();
+    let size = ui_scale(cx).sm;
+    let status_icon =
+        |icon: AppIcon, color: Hsla| Icon::new(icon).size(px(ICON_SM)).text_color(color);
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(SPACE[3]))
+        .text_size(px(size));
     match &form.test {
         TestStatus::Running(_) => {
             row = row
-                .child(Spinner::new())
-                .child(div().text_sm().child("Testing the connection…"))
+                .child(status_icon(AppIcon::LoaderCircle, colors.muted))
+                .child(div().child("Testing the connection…"))
                 .child(button(
                     "test-cancel",
                     "Cancel test",
                     ConnectionAction::CancelTest,
-                    None,
-                    colors,
+                    Look::Plain,
                     cx,
                 ));
         }
@@ -787,27 +804,24 @@ fn test_row(
                 "test-run",
                 "Test connection",
                 ConnectionAction::Test,
-                None,
-                colors,
+                Look::Plain,
                 cx,
             ));
             match status {
                 TestStatus::Ok => {
-                    row = row.child(
-                        div()
-                            .text_sm()
-                            .text_color(colors.success)
-                            .child("Connected."),
-                    );
+                    row = row
+                        .child(status_icon(AppIcon::Check, colors.success))
+                        .child(div().text_color(colors.success).child("Connected."));
                 }
                 TestStatus::Failed(message) => {
-                    row = row.child(
-                        div()
-                            .flex_1()
-                            .text_sm()
-                            .text_color(colors.danger)
-                            .child(message.clone()),
-                    );
+                    row = row
+                        .child(status_icon(AppIcon::CircleAlert, colors.danger))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_color(colors.danger)
+                                .child(message.clone()),
+                        );
                 }
                 _ => {}
             }
@@ -816,31 +830,46 @@ fn test_row(
     row
 }
 
-fn confirm_panel(
-    name: &str,
-    colors: Colors,
-    cx: &mut Context<WorkspaceView>,
-) -> impl IntoElement + use<> {
-    div()
-        .flex()
-        .flex_col()
-        .child(title(format!("Delete connection \u{201c}{name}\u{201d}?")))
-        .child(div().px_4().text_sm().text_color(colors.muted).child(
+fn confirm_panel(name: &str, cx: &mut Context<WorkspaceView>) -> impl IntoElement + use<> {
+    let theme = cx.theme();
+    let (muted, danger) = (theme.muted_foreground, theme.danger);
+    let size = ui_scale(cx).sm;
+    panel()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(SPACE[3]))
+                .child(
+                    Icon::new(AppIcon::TriangleAlert)
+                        .size(px(crate::workspace::chrome::ICON_MD))
+                        .text_color(danger),
+                )
+                .child(dialog_title(
+                    None,
+                    format!("Delete connection \u{201c}{name}\u{201d}?"),
+                    cx,
+                )),
+        )
+        .child(div().text_size(px(size)).text_color(muted).child(
             "The connection is removed from connections.toml and its stored passwords are removed from the OS keychain. This cannot be undone. Open tabs stay open.",
         ))
-        .child(footer(vec![
-            button("delete-cancel", "Cancel", ConnectionAction::Cancel, None, colors, cx)
+        .child(footer(
+            vec![
+                button("delete-cancel", "Cancel", ConnectionAction::Cancel, Look::Plain, cx)
+                    .into_any_element(),
+                button(
+                    "delete-confirm",
+                    "Delete",
+                    ConnectionAction::ConfirmDelete,
+                    Look::Danger,
+                    cx,
+                )
                 .into_any_element(),
-            button(
-                "delete-confirm",
-                "Delete",
-                ConnectionAction::ConfirmDelete,
-                Some((colors.danger, colors.danger_fg)),
-                colors,
-                cx,
-            )
-            .into_any_element(),
-        ]))
+            ],
+            cx,
+        ))
 }
 
 fn group_panel(
@@ -855,40 +884,39 @@ fn group_panel(
         GroupPurpose::Rename(_) => "Rename group",
     };
     let input = inputs.group_name.as_ref().map(Input::new);
-    let mut body = div().px_4().flex().flex_col().gap_1().children(input);
+    let mut body = div().flex().flex_col().gap(px(SPACE[1])).children(input);
     if let Some(error) = error {
         body = body.child(
             div()
-                .text_xs()
+                .text_size(px(ui_scale(cx).xs))
                 .text_color(colors.danger)
                 .child(error.to_owned()),
         );
     }
-    div()
-        .flex()
-        .flex_col()
-        .child(title(heading.to_owned()))
+    panel()
+        .child(dialog_title(Some(AppIcon::Folder), heading, cx))
         .child(body)
-        .child(footer(vec![
-            button(
-                "group-cancel",
-                "Cancel",
-                ConnectionAction::Cancel,
-                None,
-                colors,
-                cx,
-            )
-            .into_any_element(),
-            button(
-                "group-ok",
-                "OK",
-                ConnectionAction::SubmitGroupName,
-                Some((colors.primary, colors.primary_fg)),
-                colors,
-                cx,
-            )
-            .into_any_element(),
-        ]))
+        .child(footer(
+            vec![
+                button(
+                    "group-cancel",
+                    "Cancel",
+                    ConnectionAction::Cancel,
+                    Look::Plain,
+                    cx,
+                )
+                .into_any_element(),
+                button(
+                    "group-ok",
+                    "OK",
+                    ConnectionAction::SubmitGroupName,
+                    Look::Primary,
+                    cx,
+                )
+                .into_any_element(),
+            ],
+            cx,
+        ))
 }
 
 fn move_panel(
@@ -900,11 +928,10 @@ fn move_panel(
 ) -> impl IntoElement + use<> {
     let mut list = div()
         .id("move-list")
-        .px_4()
         .flex()
         .flex_col()
-        .gap_1()
-        .max_h(px(360.))
+        .gap(px(SPACE[1]))
+        .max_h(px(LIST_MAX_H))
         .overflow_y_scroll();
     list = list.child(chip(
         "move-root",
@@ -937,22 +964,26 @@ fn move_panel(
                 )),
         );
     }
-    div()
-        .flex()
-        .flex_col()
-        .child(title("Move connection to group".to_owned()))
+    panel()
+        .child(dialog_title(
+            Some(AppIcon::Folder),
+            "Move connection to group",
+            cx,
+        ))
         .child(list)
-        .child(footer(vec![
-            button(
-                "move-cancel",
-                "Cancel",
-                ConnectionAction::Cancel,
-                None,
-                colors,
-                cx,
-            )
-            .into_any_element(),
-        ]))
+        .child(footer(
+            vec![
+                button(
+                    "move-cancel",
+                    "Cancel",
+                    ConnectionAction::Cancel,
+                    Look::Plain,
+                    cx,
+                )
+                .into_any_element(),
+            ],
+            cx,
+        ))
 }
 
 fn host_key_panel(
@@ -960,50 +991,53 @@ fn host_key_panel(
     colors: Colors,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement + use<> {
-    let line = |label: &'static str, value: String| {
-        div()
-            .flex()
-            .flex_row()
-            .gap_2()
-            .child(div().w(px(90.)).text_color(colors.muted).child(label))
-            .child(div().flex_1().min_w_0().child(value))
-    };
-    div()
-        .flex()
-        .flex_col()
-        .child(title("Trust this SSH host key?".to_owned()))
+    let scale = ui_scale(cx);
+    let line =
+        |label: &'static str, value: String| field_row(label, div().min_w_0().child(value), cx);
+    panel()
+        .child(dialog_title(
+            Some(AppIcon::TriangleAlert),
+            "Trust this SSH host key?",
+            cx,
+        ))
         .child(
             div()
-                .px_4()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .text_sm()
+                .gap(px(SPACE[1]))
+                .text_size(px(scale.sm))
                 .child(line("Server", format!("{}:{}", key.host, key.port)))
                 .child(line("Algorithm", key.algorithm.clone()))
                 .child(line("Fingerprint", key.fingerprint.clone()))
-                .child(div().pt_2().text_xs().text_color(colors.muted).child(
+                .child(
+                    div()
+                        .pt(px(SPACE[2]))
+                        .text_size(px(scale.xs))
+                        .text_color(colors.muted)
+                        .child(
                     "This server is not in known_hosts yet. Trust it only if the fingerprint matches the one the server administrator gave you. Trusting adds it to known_hosts and tries again.",
-                )),
+                ),
+                ),
         )
-        .child(footer(vec![
-            button(
-                "hostkey-reject",
-                "Cancel",
-                ConnectionAction::RejectHostKey,
-                None,
-                colors,
-                cx,
-            )
-            .into_any_element(),
-            button(
-                "hostkey-trust",
-                "Trust and continue",
-                ConnectionAction::TrustHostKey,
-                Some((colors.primary, colors.primary_fg)),
-                colors,
-                cx,
-            )
-            .into_any_element(),
-        ]))
+        .child(footer(
+            vec![
+                button(
+                    "hostkey-reject",
+                    "Cancel",
+                    ConnectionAction::RejectHostKey,
+                    Look::Plain,
+                    cx,
+                )
+                .into_any_element(),
+                button(
+                    "hostkey-trust",
+                    "Trust and continue",
+                    ConnectionAction::TrustHostKey,
+                    Look::Primary,
+                    cx,
+                )
+                .into_any_element(),
+            ],
+            cx,
+        ))
 }

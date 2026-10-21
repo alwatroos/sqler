@@ -10,6 +10,15 @@ use sqler_config::{CommandId as ConfigCommandId, KeyChord, KeybindingOverrides, 
 use super::chord::display_chord;
 use crate::command::{CommandId, CommandRegistry};
 
+/// Context keys handled outside the keymap (the sidebar's, the grid's). They never enter the
+/// keymap and are only shown as hints; see [`KeyDispatcher::hint`].
+pub(crate) const LOCAL_KEYS: &[(&str, &str)] = &[
+    ("object:open-data", "enter"),
+    ("object:show-menu", "shift+f10"),
+    ("grid:copy", "mod+c"),
+    ("grid:copy-with-headers", "mod+shift+c"),
+];
+
 /// Resolves key chords to registered commands.
 ///
 /// Built once at startup from the default keymap, the user's overrides and the command registry.
@@ -145,6 +154,18 @@ impl KeyDispatcher {
         let chords = self.live_chords(id);
         let first = chords.first()?;
         Some(display_chord(first, self.platform))
+    }
+
+    /// The hint to show next to a command: its shortcut from the keymap, else the fixed context
+    /// key of [`LOCAL_KEYS`], else `None`.
+    #[must_use]
+    pub fn hint(&self, id: &CommandId) -> Option<String> {
+        if let Some(display) = self.shortcut_display(id) {
+            return Some(display);
+        }
+        let (_, keys) = LOCAL_KEYS.iter().find(|(c, _)| *c == id.as_str())?;
+        let chord = KeyChord::parse(keys, self.platform).ok()?;
+        Some(display_chord(&chord, self.platform))
     }
 
     /// Messages for the user about the keybinding setup; empty when all is well.
@@ -348,5 +369,24 @@ mod tests {
         let o = ovr(&[("tab:close", &["ctrl+k", "mod+shift+w"])]);
         let k = KeyDispatcher::new(OTHER, Ok(o), &base());
         assert_eq!(k.shortcut_display(&cid("tab:close")).unwrap(), "Ctrl+K");
+    }
+
+    #[test]
+    fn hint_prefers_the_keymap_then_local_keys() {
+        let r = registry(&[
+            "grid:copy",
+            "grid:copy-as-json",
+            "object:open-data",
+            "query:run",
+        ]);
+        let o = ovr(&[("grid:copy-as-json", &["ctrl+j"])]);
+        let k = KeyDispatcher::new(OTHER, Ok(o), &r);
+        assert_eq!(k.hint(&cid("grid:copy-as-json")).unwrap(), "Ctrl+J");
+        assert_eq!(k.hint(&cid("grid:copy")).unwrap(), "Ctrl+C");
+        assert_eq!(k.hint(&cid("grid:nothing")), None);
+        let k = KeyDispatcher::new(MAC, Ok(KeybindingOverrides::new()), &r);
+        assert_eq!(k.hint(&cid("grid:copy")).unwrap(), "⌘C");
+        let enter = k.hint(&cid("object:open-data")).unwrap();
+        assert_eq!(enter, display_chord(&chord("enter"), MAC));
     }
 }

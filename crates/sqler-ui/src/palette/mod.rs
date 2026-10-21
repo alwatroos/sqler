@@ -6,6 +6,7 @@
 //! The palette lists the commands of the [`CommandRegistry`], filtered and ranked by its matcher,
 //! with each command's current shortcut. Key handling is in [`crate::keymap`].
 
+pub(crate) mod sections;
 #[cfg(feature = "gui")]
 pub(crate) mod view;
 
@@ -136,7 +137,7 @@ impl PaletteState {
             .map(|m| PaletteItem {
                 id: m.command.id().clone(),
                 title: m.command.title().to_owned(),
-                shortcut: keys.shortcut_label(m.command.id()),
+                shortcut: keys.shortcut_display(m.command.id()),
                 field: m.field,
                 positions: m.positions,
                 recent: false,
@@ -313,7 +314,7 @@ mod tests {
             .find(|i| i.id.as_str() == OPEN_PALETTE)
             .unwrap();
         assert_eq!(open.title, "Show Command Palette");
-        assert_eq!(open.shortcut.as_deref(), Some("ctrl+shift+p"));
+        assert_eq!(open.shortcut.as_deref(), Some("Ctrl+Shift+P"));
         let conn = items
             .iter()
             .find(|i| i.id.as_str() == "connection:open")

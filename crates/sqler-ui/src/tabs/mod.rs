@@ -9,8 +9,6 @@ mod model;
 pub(crate) mod view;
 
 pub use header::{Rgb, TabDecor, TabHeader};
-#[cfg(feature = "gui")]
-pub(crate) use model::env_badge;
 pub use model::{
     Group, GroupId, MAX_GROUPS, Tab, TabConnection, TabId, TabKind, TabMode, TabStrip,
 };

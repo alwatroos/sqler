@@ -470,3 +470,14 @@ impl WorkspaceView {
         self.settle(cx);
     }
 }
+
+impl WorkspaceView {
+    /// The shortcut hint of a command for tooltips and menus (`⌘⇧P`, `Ctrl+C`), if it has one.
+    #[allow(dead_code)] // used by the sidebar, grid and connection views of U5 W2 to W4
+    pub(crate) fn shortcut_hint(
+        &self,
+        id: &crate::command::CommandId,
+    ) -> Option<gpui::SharedString> {
+        self.keys.hint(id).map(Into::into)
+    }
+}
