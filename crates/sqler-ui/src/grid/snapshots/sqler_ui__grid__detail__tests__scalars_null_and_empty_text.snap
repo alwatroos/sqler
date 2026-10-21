@@ -1,0 +1,26 @@
+---
+source: crates/sqler-ui/src/grid/detail.rs
+expression: all
+---
+NULL [null]
+
+text · 0 bytes [text]
+note: Empty text (not NULL).
+
+date · 10 bytes [date]
+2024-02-29
+
+timestamptz · 27 bytes [timestamptz]
+2024-02-29 03:04:05.5+01:00
+
+decimal · 6 bytes [decimal]
+-12.50
+
+float · 3 bytes [float]
+1.5
+
+boolean · 5 bytes [boolean]
+false
+
+integer · 3 bytes [integer]
+-42

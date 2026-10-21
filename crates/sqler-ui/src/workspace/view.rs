@@ -868,7 +868,7 @@ impl WorkspaceView {
         }
     }
 
-    fn apply(&mut self, effect: Effect, cx: &mut Context<Self>) {
+    pub(crate) fn apply(&mut self, effect: Effect, cx: &mut Context<Self>) {
         match effect {
             // `run_command` opens the palette for the object menu; it needs the window.
             Effect::None | Effect::ShowObjectMenu => {}

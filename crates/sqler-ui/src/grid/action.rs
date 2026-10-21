@@ -89,6 +89,8 @@ pub enum GridAction {
     ToggleMatchCase,
     /// Load the next page of a result that stopped at its page limit.
     FetchMore,
+    /// Show or hide the detail pane of the active cell.
+    ToggleCellDetail,
 }
 
 const fn mv(to: Motion) -> GridAction {
@@ -101,7 +103,7 @@ const fn ext(to: Motion) -> GridAction {
 
 impl GridAction {
     /// Every action, in palette order.
-    pub const ALL: [GridAction; 37] = [
+    pub const ALL: [GridAction; 38] = [
         Self::ScrollToTop,
         Self::ScrollToEnd,
         mv(Motion::Up),
@@ -139,6 +141,7 @@ impl GridAction {
         Self::ClearFilter,
         Self::ToggleMatchCase,
         Self::FetchMore,
+        Self::ToggleCellDetail,
     ];
 
     /// The ID string of the command this action runs.
@@ -185,6 +188,7 @@ impl GridAction {
             Self::ClearFilter => "grid:clear-filter",
             Self::ToggleMatchCase => "grid:toggle-match-case",
             Self::FetchMore => "grid:fetch-more",
+            Self::ToggleCellDetail => "grid:toggle-cell-detail",
         }
     }
 
@@ -233,6 +237,7 @@ impl GridAction {
             Self::ClearFilter => "Results: Clear Filter",
             Self::ToggleMatchCase => "Results: Match Case in Sort and Filter",
             Self::FetchMore => "Fetch More Rows",
+            Self::ToggleCellDetail => "Results: Toggle Cell Detail",
         }
     }
 
@@ -280,7 +285,7 @@ mod tests {
             assert!(id.to_string().starts_with("grid:"), "{a:?}");
             assert!(seen.insert(id), "duplicate ID for {a:?}");
         }
-        assert_eq!(seen.len(), 37);
+        assert_eq!(seen.len(), 38);
     }
 
     #[test]
@@ -314,6 +319,14 @@ mod tests {
         assert_eq!(
             GridAction::FetchMore.command_id().to_string(),
             "grid:fetch-more"
+        );
+        assert_eq!(
+            GridAction::ToggleCellDetail.command_id().to_string(),
+            "grid:toggle-cell-detail"
+        );
+        assert_eq!(
+            GridAction::ToggleCellDetail.title(),
+            "Results: Toggle Cell Detail"
         );
         assert_eq!(
             GridAction::PinColumn.command_id().to_string(),
