@@ -297,3 +297,218 @@ fn the_tool_name_is_capped_and_scrubbed() {
     let e = AuditEntry::from_draft(d);
     assert!(e.tool.len() <= MAX_AUDIT_TEXT_BYTES);
 }
+
+fn user_rules() -> Redaction {
+    Redaction::new(sqler_config::RedactionList::new(["loyalty_no".to_owned()]).unwrap())
+}
+
+/// Builds a draft that carries `raw` in every text field and returns the serialized line.
+fn line_for(rules: &Redaction, dialect: Option<Dialect>, raw: &str) -> String {
+    line_with_statement(rules, dialect, raw, raw)
+}
+
+/// As [`line_for`], with `stmt` as the SQL of the one statement.
+fn line_with_statement(
+    rules: &Redaction,
+    dialect: Option<Dialect>,
+    raw: &str,
+    stmt: &str,
+) -> String {
+    let mut d = draft(
+        raw,
+        vec![st(stmt, true, true)],
+        Some(DraftError {
+            code: raw,
+            message: raw,
+            denied_index: None,
+        }),
+    );
+    d.rules = rules;
+    d.dialect = dialect;
+    d.tool = raw;
+    d.connection = Some((raw, raw));
+    String::from_utf8_lossy(&serialize_line(&AuditEntry::from_draft(d))).into_owned()
+}
+
+#[test]
+fn an_unterminated_call_keeps_no_literal() {
+    let rules = Redaction::default();
+    for raw in [
+        r#"{"sql":"update acct set ssn = '123-45-6789'"#,
+        r#"{"sql":"update acct set ssn = '123-45-6789' where id"#,
+        r#"{"sql":"update acct set ssn = \"123-45-6789\" "#,
+        r#"{"sql": "update acct set ssn = '123-45-6789"#,
+    ] {
+        for dialect in [Some(Dialect::Postgres), Some(Dialect::MySql), None] {
+            let line = line_for(&rules, dialect, raw);
+            assert!(!line.contains("123-45-6789"), "{raw}: {line}");
+        }
+    }
+    let e = AuditEntry::from_draft(draft(
+        r#"{"sql":"update acct set ssn = '123-45-6789'"#,
+        vec![],
+        None,
+    ));
+    let kept = e.arguments["_unparsed"].as_str().unwrap();
+    assert!(!kept.contains("123-45-6789"), "{kept}");
+}
+
+#[test]
+fn a_user_added_word_masks_an_unterminated_call() {
+    let rules = user_rules();
+    let line = line_for(
+        &rules,
+        Some(Dialect::Sqlite),
+        r#"{"sql":"update c set loyalty_no = 'CANARY-U1'"#,
+    );
+    assert!(!line.contains("CANARY-U1"), "{line}");
+}
+
+#[test]
+fn a_bare_array_and_nested_objects_keep_no_literal() {
+    let rules = user_rules();
+    for raw in [
+        r#"[{"sql":"update acct set ssn = 'CANARY-A1'"}]"#,
+        r#"[{"a":[{"b":{"password":"CANARY-A2"}}]}]"#,
+        r#"{"a":[{"b":[{"loyalty_no":"CANARY-A3"},{"c":{"ssn":["CANARY-A4"]}}]}]}"#,
+        r#"{"a":[{"b":[{"note":"set ssn = 'CANARY-A5'"}]}]}"#,
+    ] {
+        let line = line_for(&rules, Some(Dialect::Postgres), raw);
+        assert!(!line.contains("CANARY-A"), "{raw}: {line}");
+    }
+}
+
+#[test]
+fn keys_and_connection_texts_are_scrubbed() {
+    let rules = Redaction::default();
+    let raw = r#"{"x ssn = 'CANARY-K1'":"v"}"#;
+    let line = line_for(&rules, Some(Dialect::Postgres), raw);
+    assert!(!line.contains("CANARY-K1"), "{line}");
+}
+
+mod fuzz {
+    use proptest::prelude::*;
+    use serde_json::{Map, Value, json};
+
+    use super::*;
+
+    const CANARY: &str = "ZQXCANARY7";
+
+    fn filler() -> impl Strategy<Value = String> {
+        prop_oneof![
+            "\\PC{0,24}",
+            Just(String::new()),
+            Just("é€😀\u{0}\u{7f}\u{202e}".to_owned()),
+            Just("'\"`\\\\$q$/*--".to_owned()),
+            (0_usize..20_000).prop_map(|n| "x".repeat(n)),
+        ]
+    }
+
+    fn flag() -> impl Strategy<Value = &'static str> {
+        prop_oneof![
+            Just("ssn"),
+            Just("SSN"),
+            Just("password"),
+            Just("loyalty_no")
+        ]
+    }
+
+    /// SQL with the canary as a literal after a listed word. The filler has no quote chars: a
+    /// quote in front of the literal would make it an identifier or a comment for the server too.
+    fn body() -> impl Strategy<Value = String> {
+        (
+            flag(),
+            "[a-z0-9 _,.()]{0,12}",
+            "[a-z0-9 _,.()]{0,12}",
+            0_u8..7,
+        )
+            .prop_map(|(f, a, b, shape)| {
+                let c = CANARY;
+                let body = match shape {
+                    0 => format!("update acct set {f} = '{c}'"),
+                    1 => format!("{f}='{c}'"),
+                    2 => format!("select {f} as x, '{c}'"),
+                    3 => format!("{f} /* {c} */"),
+                    4 => format!("{f} = '{c}' -- {c}"),
+                    5 => format!("{f} = \"{c}\""),
+                    _ => format!("{f} = E'\\'{c}'"),
+                };
+                format!("{a} {body} {b}")
+            })
+    }
+
+    /// A value that carries the canary after a listed word or under a listed key.
+    fn carrier() -> impl Strategy<Value = Value> {
+        let sql = (body(), 0_u8..3)
+            .prop_map(|(body, k)| json!({ ["sql", "q", "note"][usize::from(k)]: body }));
+        let keyed = (flag(), 0_u8..3).prop_map(|(f, shape)| match shape {
+            0 => json!({ f: CANARY }),
+            1 => json!({ f: [CANARY, {"k": CANARY}] }),
+            _ => json!({ f: { "deep": [{"v": CANARY}] } }),
+        });
+        prop_oneof![sql, keyed]
+    }
+
+    fn nested() -> impl Strategy<Value = Value> {
+        carrier().prop_recursive(4, 16, 3, |inner| {
+            prop_oneof![
+                (filler(), filler(), inner.clone()).prop_map(|(k, pad, v)| {
+                    let mut m = Map::new();
+                    m.insert("pad".to_owned(), Value::String(pad));
+                    m.insert(k, v);
+                    Value::Object(m)
+                }),
+                (filler(), inner).prop_map(|(pad, v)| Value::Array(vec![Value::String(pad), v])),
+            ]
+        })
+    }
+
+    /// Shapes of the text: valid, cut off after the canary, missing the end, wrapped, prefixed.
+    fn text() -> impl Strategy<Value = String> {
+        (nested(), 0_u8..5, 0_usize..12, filler()).prop_map(|(v, mode, k, junk)| {
+            let full = v.to_string();
+            match mode {
+                0 => full,
+                1 => {
+                    let at = full
+                        .find(CANARY)
+                        .map_or(full.len(), |p| p + CANARY.len() + k);
+                    let mut at = at.min(full.len());
+                    while !full.is_char_boundary(at) {
+                        at += 1;
+                    }
+                    full[..at].to_owned()
+                }
+                2 => {
+                    let mut at = full.len().saturating_sub(k + 1);
+                    while !full.is_char_boundary(at) {
+                        at -= 1;
+                    }
+                    full[..at].to_owned()
+                }
+                3 => format!("[{full}]"),
+                _ => format!("{junk}{full}"),
+            }
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn the_canary_never_reaches_the_entry_bytes(
+            raw in text(),
+            stmt in body(),
+            dialect in prop_oneof![
+                Just(None),
+                Just(Some(Dialect::Postgres)),
+                Just(Some(Dialect::MySql)),
+                Just(Some(Dialect::Sqlite)),
+            ],
+        ) {
+            let rules = user_rules();
+            let line = line_with_statement(&rules, dialect, &raw, &stmt);
+            prop_assert!(!line.contains(CANARY), "{raw:?} {stmt:?} -> {line}");
+        }
+    }
+}

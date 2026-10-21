@@ -3,6 +3,31 @@
 
 //! Turns what a call did into an [`AuditEntry`]. All sanitizing happens here, so the caller only
 //! maps fields.
+//!
+//! # Every string of an entry, and its scrub
+//!
+//! Every text that ends up in an [`AuditEntry`] passes through [`scrub_text`], the one function
+//! that cuts, masks and redacts. A field not in this table does not hold caller text.
+//!
+//! | Field                              | Scrub                                   | Cap            |
+//! | ---------------------------------- | --------------------------------------- | -------------- |
+//! | `tool`                             | `scrub_text`                            | text           |
+//! | `connection.id`, `connection.name` | `scrub_text`                            | text           |
+//! | `arguments` object keys (any depth)| plain identifier as is, else `scrub_text`| text          |
+//! | `arguments` string values          | `scrub_text` (key `sql`: the SQL cap)   | text / SQL     |
+//! | `arguments` under a listed key     | replaced by the marker, whole subtree   | none           |
+//! | `arguments._unparsed`              | `scrub_text` on the raw text            | text           |
+//! | `statements[].sql`                 | `scrub_text`                            | SQL            |
+//! | `error.code`, `error.message`      | `scrub_text`                            | text           |
+//! | `id`, `surface`, `approval`, ...   | generated or enums, no caller text      | n/a            |
+//! | `statements[].class`, `truncated`  | fixed names from the guard              | n/a            |
+//!
+//! There are no approval notes: the approval outcome is an enum. The `scrub_text` steps are:
+//! cut to the cap; if the whole text mentions a listed word (as SQL for the dialect, or as a
+//! plain word anywhere), SQL (`statements[].sql`, the `sql` argument) has every literal, quoted
+//! identifier, number and comment masked, and any other text is replaced by the marker, as is
+//! SQL whose quotes do not close (a truncated call); credential redaction; cut again to the
+//! cap.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -98,52 +123,107 @@ fn scrub(text: &str) -> String {
     hide_auth_tokens(&redact_credentials(text))
 }
 
-/// The redaction list and dialect the SQL text is checked with.
+/// The redaction list and dialect the text is checked with.
 #[derive(Clone, Copy)]
 struct SqlRules<'a> {
     rules: &'a Redaction,
     dialect: Option<Dialect>,
 }
 
-/// Replaces every literal and comment of `text` with `?` / nothing. The statement shape, the
-/// identifiers and the placeholders stay, so the audit still says what was run.
-fn mask_literals(dialect: Option<Dialect>, text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut at = 0;
-    for t in tokenize(dialect.unwrap_or(Dialect::Postgres), text) {
-        let masked = match t.kind {
-            TokenKind::Str { .. } | TokenKind::DollarStr { .. } | TokenKind::Number => Some("?"),
-            TokenKind::LineComment
-            | TokenKind::BlockComment { .. }
-            | TokenKind::ExecComment { .. } => Some(""),
-            _ => None,
-        };
-        if let Some(mark) = masked {
-            out.push_str(&text[at..t.start]);
-            out.push_str(mark);
-            at = t.end;
+/// Which cap a text gets.
+#[derive(Clone, Copy)]
+enum Field {
+    Sql,
+    Text,
+}
+
+impl Field {
+    fn max(self) -> usize {
+        match self {
+            Self::Sql => MAX_AUDIT_SQL_BYTES,
+            Self::Text => MAX_AUDIT_TEXT_BYTES,
         }
     }
-    out.push_str(&text[at..]);
-    out
 }
 
-/// Cut, then credential-redacted (the history order). A statement that mentions a listed word
-/// (`ssn`, a user entry) keeps no literal at all, wherever the literal sits: the check runs on
-/// the whole text, the masking on the part that is kept.
-fn sql_text(text: &str, rules: SqlRules<'_>) -> (String, bool) {
-    let (cut_text, truncated) = cut(text, MAX_AUDIT_SQL_BYTES);
-    if rules.rules.statement_tainted(rules.dialect, text) {
-        return (scrub(&mask_literals(rules.dialect, cut_text)), truncated);
+/// Replaces every literal, quoted identifier and comment of `text` with `?` / nothing. The
+/// statement shape, the bare identifiers and the placeholders stay, so the audit still says what
+/// was run. Returns `None` if a quote or comment is not closed: where the literals end is then
+/// a guess, and a guess can leave a value outside the marks.
+fn mask_literals(dialect: Dialect, text: &str) -> Option<String> {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for t in tokenize(dialect, text) {
+        let (mark, closed) = match t.kind {
+            TokenKind::Str { terminated }
+            | TokenKind::DollarStr { terminated }
+            | TokenKind::QuotedIdent { terminated } => ("?", terminated),
+            TokenKind::Number => ("?", true),
+            TokenKind::LineComment => ("", true),
+            TokenKind::BlockComment { terminated } | TokenKind::ExecComment { terminated } => {
+                ("", terminated)
+            }
+            _ => continue,
+        };
+        if !closed {
+            return None;
+        }
+        out.push_str(&text[at..t.start]);
+        out.push_str(mark);
+        at = t.end;
     }
-    (scrub(cut_text), truncated)
+    out.push_str(&text[at..]);
+    Some(out)
 }
 
-/// Credential-redacted, then cut.
-fn plain_text(text: &str, max: usize) -> (String, bool) {
-    let redacted = scrub(text);
-    let (cut_text, truncated) = cut(&redacted, max);
-    (cut_text.to_owned(), truncated)
+/// Masks the literals of `text` for the dialect, or for every dialect when it is not known (the
+/// passes then agree on what a literal is, or the text is refused). `None` if any pass finds an
+/// unclosed quote.
+fn mask_for(dialect: Option<Dialect>, text: &str) -> Option<String> {
+    let dialects: &[Dialect] = match dialect {
+        Some(d) => &[d],
+        None => &Dialect::ALL,
+    };
+    let mut cur = text.to_owned();
+    for d in dialects {
+        // Each pass runs on the original too, so a dialect that reads a quote differently
+        // cannot hide an unclosed one behind another's marks.
+        mask_literals(*d, text)?;
+        cur = mask_literals(*d, &cur)?;
+    }
+    Some(cur)
+}
+
+/// The one scrub every caller-supplied text of an entry goes through: cut, masked when it
+/// mentions a listed word, credential-redacted, cut again. Returns the text and whether it was
+/// cut.
+///
+/// The word check runs on the whole text (not only the kept part), both as SQL of the dialect
+/// and as plain words, so a literal after a listed word never survives, whatever the text looks
+/// like (a statement, a JSON fragment, free text).
+fn scrub_text(raw: &str, rules: SqlRules<'_>, field: Field) -> (String, bool) {
+    let max = field.max();
+    let (kept, mut truncated) = cut(raw, max);
+    let tainted = rules.rules.statement_tainted(rules.dialect, raw)
+        || rules.rules.statement_tainted(None, raw);
+    let masked;
+    let kept = if tainted {
+        // Only SQL has literals that can be told apart from the rest. Any other text that
+        // mentions a listed word is not kept, and neither is SQL whose quotes do not close:
+        // where its literals end is then a guess, and a guess can leave a value unmarked.
+        masked = match field {
+            Field::Sql => mask_for(rules.dialect, kept),
+            Field::Text => None,
+        }
+        .unwrap_or_else(|| REDACTED.to_owned());
+        masked.as_str()
+    } else {
+        kept
+    };
+    let redacted = scrub(kept);
+    let (done, cut_again) = cut(&redacted, max);
+    truncated |= cut_again;
+    (done.to_owned(), truncated)
 }
 
 struct ArgScrub<'a> {
@@ -159,11 +239,12 @@ impl ArgScrub<'_> {
         }
         match value {
             Value::String(s) => {
-                let (text, cut) = if key == Some("sql") {
-                    sql_text(s, self.rules)
+                let field = if key == Some("sql") {
+                    Field::Sql
                 } else {
-                    plain_text(s, MAX_AUDIT_TEXT_BYTES)
+                    Field::Text
                 };
+                let (text, cut) = scrub_text(s, self.rules, field);
                 self.truncated |= cut;
                 Value::String(text)
             }
@@ -175,9 +256,27 @@ impl ArgScrub<'_> {
         }
     }
 
+    /// A key is a name. A plain identifier is kept as it is, even a listed one (its value is
+    /// replaced, and the audit says which); anything else is text and is scrubbed.
+    fn key(&self, key: &str) -> (String, bool) {
+        let plain = key.len() <= 128
+            && key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+        if plain {
+            (key.to_owned(), false)
+        } else {
+            scrub_text(key, self.rules, Field::Text)
+        }
+    }
+
     fn object(&mut self, map: &Map<String, Value>) -> Map<String, Value> {
         map.iter()
-            .map(|(k, v)| (k.clone(), self.value(Some(k), v)))
+            .map(|(k, v)| {
+                let (name, cut) = self.key(k);
+                self.truncated |= cut;
+                (name, self.value(Some(k), v))
+            })
             .collect()
     }
 }
@@ -200,7 +299,7 @@ fn arguments(raw: &str, rules: SqlRules<'_>) -> (Value, bool) {
         }
         return (out, scrub.truncated);
     }
-    let (text, truncated) = plain_text(raw, MAX_AUDIT_TEXT_BYTES);
+    let (text, truncated) = scrub_text(raw, rules, Field::Text);
     let mut map = Map::new();
     map.insert("_unparsed".to_owned(), Value::String(text));
     (Value::Object(map), truncated)
@@ -259,6 +358,7 @@ impl AuditEntry {
             rules: d.rules,
             dialect: d.dialect,
         };
+        let text = |t: &str| scrub_text(t, rules, Field::Text).0;
         let (arguments, arguments_truncated) = arguments(d.raw_arguments, rules);
         let outcomes = approvals(&d.statements, d.error.as_ref());
         let total = d.statements.len();
@@ -268,7 +368,7 @@ impl AuditEntry {
             .zip(&outcomes)
             .take(MAX_AUDIT_STATEMENTS)
             .map(|(s, &approval)| {
-                let (sql, sql_truncated) = sql_text(s.sql, rules);
+                let (sql, sql_truncated) = scrub_text(s.sql, rules, Field::Sql);
                 AuditStatement {
                     sql,
                     sql_truncated,
@@ -300,10 +400,10 @@ impl AuditEntry {
             id: new_id(ts_ms),
             ts_ms,
             surface: d.surface,
-            tool: plain_text(d.tool, MAX_AUDIT_TEXT_BYTES).0,
+            tool: text(d.tool),
             connection: d
                 .connection
-                .map(|(id, name)| AuditConnection::new(id, name)),
+                .map(|(id, name)| AuditConnection::new(text(id), text(name))),
             arguments,
             arguments_truncated,
             statements_omitted: u32::try_from(total.saturating_sub(MAX_AUDIT_STATEMENTS))
@@ -317,7 +417,7 @@ impl AuditEntry {
             },
             error: d
                 .error
-                .map(|e| AuditFailure::new(e.code, plain_text(e.message, MAX_AUDIT_TEXT_BYTES).0)),
+                .map(|e| AuditFailure::new(text(e.code), text(e.message))),
             result_bytes: u64::try_from(d.result_bytes).unwrap_or(u64::MAX),
             rows,
             duration_ms: u64::try_from(d.duration.as_millis()).unwrap_or(u64::MAX),
