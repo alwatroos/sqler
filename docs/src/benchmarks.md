@@ -327,7 +327,17 @@ Retro-application: the old p95 rule failed 2 of these 22 runs (39519279591: p95 
 
 Note on this PR's own run: the base (main) still has the old browser bench without warm-up, which is biased slow, so the PR side looks faster than the base. The bias is transitional; from the next PR on, both sides run the same code.
 
-CI reruns of this change (Bench job, interleaved scheme): pending. They need the pull request, which the PR stage opens; this section is to be filled with the PR value, limit and margin of the browser expand p50 and the grid p95 and cells p95 for at least 5 runs.
+CI reruns of this change (PR #53, run 39559885296, five attempts of the Bench job on the same commit, all green; Linux x86_64 runner, interleaved scheme, 8 browser rounds and 6 grid rounds). Each figure is the minimum over the rounds of that side; the limit is `max(base p50 * 1.25 + 250 us, 1 ms)` for the browser expand p50 and `base * 1.25 + 100 ns` / `+ 500 ns` for the grid p95 / cells p95; margin = (limit - PR) / limit. Times in ns.
+
+| Attempt | Browser PR p50 | Base | Limit | Margin | Grid PR p95 | Base | Limit | Margin | Cells PR p95 | Base | Limit | Margin |
+| ------- | -------------- | ---- | ----- | ------ | ----------- | ---- | ----- | ------ | ------------ | ---- | ----- | ------ |
+| 1 | 1,465,045 | 1,437,407 | 2,046,759 | 28.4 % | 230 | 231 | 389 | 40.8 % | 2,214 | 2,224 | 3,280 | 32.5 % |
+| 2 | 676,137 | 695,497 | 1,119,371 | 39.6 % | 141 | 141 | 276 | 49.0 % | 1,713 | 1,692 | 2,615 | 34.5 % |
+| 3 | 1,537,551 | 1,564,389 | 2,205,486 | 30.3 % | 240 | 241 | 401 | 40.2 % | 2,294 | 2,374 | 3,468 | 33.8 % |
+| 4 | 1,167,075 | 1,184,480 | 1,730,600 | 32.6 % | 191 | 201 | 351 | 45.6 % | 2,013 | 2,033 | 3,041 | 33.8 % |
+| 5 | 663,822 | 855,352 | 1,319,190 | 49.7 % | 141 | 141 | 276 | 49.0 % | 1,643 | 1,623 | 2,529 | 35.0 % |
+
+The smallest margins are 28.4 % (browser expand p50), 40.2 % (grid p95) and 32.5 % (cells p95), so none is under 10 %. The runner speed still moved by 2.3x between attempts (browser p50 664 us to 1.54 ms), but PR and base moved together within each attempt (PR/base ratio 0.78 to 1.02), which is what the interleaving is for. The base browser bench here is main's old one (no warm-up), so attempt 1 to 5 compare a warmed PR against a cold base, a bias in the PR's favour of at most the first iteration.
 
 ## Completion
 
