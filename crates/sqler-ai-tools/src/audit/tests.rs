@@ -3,7 +3,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use serde_json::json;
+use serde_json::{Value, json};
 use sqler_sql::StatementClass;
 
 use super::draft::{AuditDraft, DraftError, DraftRun, DraftStatement};
@@ -127,8 +127,6 @@ fn canaries_never_reach_the_serialized_line() {
     let line = String::from_utf8(serialize_line(&e)).unwrap();
     assert!(!line.contains("CANARY-PW"), "{line}");
     assert_eq!(e.arguments["connection"], "db");
-    assert_eq!(e.arguments["nested"]["note"], "x");
-    assert_eq!(e.arguments["password"], "<redacted>");
 }
 
 #[test]
@@ -149,7 +147,7 @@ fn the_error_message_is_redacted_and_capped() {
 #[test]
 fn caps_and_truncated_flags() {
     let big = "a".repeat(MAX_AUDIT_SQL_BYTES + 10);
-    let args = json!({"sql": big, "text": "b".repeat(5_000), "n": 3}).to_string();
+    let args = json!({"sql": big, "question": "b".repeat(5_000), "max_rows": 3}).to_string();
     let e = AuditEntry::from_draft(draft(&args, vec![st(&big, false, true)], None));
     assert!(e.arguments_truncated);
     assert_eq!(
@@ -157,10 +155,10 @@ fn caps_and_truncated_flags() {
         MAX_AUDIT_SQL_BYTES
     );
     assert_eq!(
-        e.arguments["text"].as_str().unwrap().len(),
+        e.arguments["question"].as_str().unwrap().len(),
         MAX_AUDIT_TEXT_BYTES
     );
-    assert_eq!(e.arguments["n"], 3);
+    assert_eq!(e.arguments["max_rows"], 3);
     assert!(e.statements[0].sql_truncated);
     assert_eq!(e.statements[0].sql.len(), MAX_AUDIT_SQL_BYTES);
 
@@ -298,6 +296,9 @@ fn the_tool_name_is_capped_and_scrubbed() {
     assert!(e.tool.len() <= MAX_AUDIT_TEXT_BYTES);
 }
 
+/// A secret-looking string no scrub rule has to recognise: the tests check where it may appear.
+const CANARY: &str = "ZQXCANARY7";
+
 fn user_rules() -> Redaction {
     Redaction::new(sqler_config::RedactionList::new(["loyalty_no".to_owned()]).unwrap())
 }
@@ -327,6 +328,11 @@ fn line_with_statement(
     d.dialect = dialect;
     d.tool = raw;
     d.connection = Some((raw, raw));
+    d.redaction = RedactionSummary {
+        columns: vec![format!("a{CANARY}"), raw.to_owned()],
+        tainted_statements: 1,
+        ..RedactionSummary::default()
+    };
     String::from_utf8_lossy(&serialize_line(&AuditEntry::from_draft(d))).into_owned()
 }
 
@@ -391,8 +397,6 @@ mod fuzz {
     use serde_json::{Map, Value, json};
 
     use super::*;
-
-    const CANARY: &str = "ZQXCANARY7";
 
     fn filler() -> impl Strategy<Value = String> {
         prop_oneof![
@@ -492,8 +496,52 @@ mod fuzz {
         })
     }
 
+    /// Values without the canary, objects whose keys all carry it.
+    fn keyed() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(json!(1)),
+            Just(json!(null)),
+            "[a-z ]{0,8}".prop_map(Value::String)
+        ];
+        leaf.prop_recursive(4, 16, 3, |inner| {
+            prop_oneof![
+                (filler(), filler(), inner.clone()).prop_map(|(a, b, v)| {
+                    let mut m = Map::new();
+                    m.insert(format!("{a}{CANARY}{b}"), v);
+                    m.insert(CANARY.to_owned(), json!(1));
+                    Value::Object(m)
+                }),
+                inner.prop_map(|v| Value::Array(vec![v])),
+            ]
+        })
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn a_canary_as_a_key_or_a_column_never_reaches_the_entry(
+            v in keyed(),
+            alias in filler(),
+            tainted in 0_u32..2,
+        ) {
+            let raw = Value::Object(Map::from_iter([("x".to_owned(), v)])).to_string();
+            let mut d = draft(&raw, vec![], None);
+            d.redaction = RedactionSummary {
+                columns: vec![format!("{alias}{CANARY}")],
+                tainted_statements: tainted,
+                ..RedactionSummary::default()
+            };
+            let e = AuditEntry::from_draft(d);
+            let out = format!(
+                "{}{}",
+                e.arguments,
+                serde_json::to_string(&e.redaction.columns).unwrap()
+            );
+            // An untainted column list is scrubbed text, which keeps a name no rule knows.
+            let out = if tainted == 0 { e.arguments.to_string() } else { out };
+            prop_assert!(!out.contains(CANARY), "{raw:?} -> {out}");
+        }
 
         #[test]
         fn the_canary_never_reaches_the_entry_bytes(
@@ -511,4 +559,188 @@ mod fuzz {
             prop_assert!(!line.contains(CANARY), "{raw:?} {stmt:?} -> {line}");
         }
     }
+}
+
+#[test]
+fn unknown_argument_keys_become_placeholders() {
+    let rules = Redaction::default();
+    let raw = r#"{"123-45-6789":1,"sk-live-abcdef0123":2,"hunter2":3,"connection":"db","sql":"select 1","ssn":"x","database":{"hunter2":{"sql":"select 2"}}}"#;
+    let line = line_for(&rules, Some(Dialect::Postgres), raw);
+    for secret in ["123-45-6789", "sk-live", "hunter2"] {
+        assert!(!line.contains(secret), "{secret}: {line}");
+    }
+    let e = AuditEntry::from_draft(draft(raw, vec![], None));
+    let keys: Vec<&str> = e
+        .arguments
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        keys.contains(&"connection") && keys.contains(&"sql"),
+        "{keys:?}"
+    );
+    assert!(keys.iter().any(|k| k.starts_with("<key-")), "{keys:?}");
+    // A listed word that is not an argument name is a placeholder too; its value is hidden.
+    assert!(!keys.contains(&"ssn"));
+    assert_eq!(e.arguments["database"]["<key-0>"]["sql"], "select 2");
+}
+
+#[test]
+fn every_schema_argument_name_is_known() {
+    let names = crate::schema::argument_names();
+    for n in [
+        "connection",
+        "sql",
+        "database",
+        "schema",
+        "table",
+        "max_rows",
+        "question",
+    ] {
+        assert!(names.contains(n), "{n}");
+    }
+    assert!(!names.contains("password"));
+}
+
+#[test]
+fn column_names_from_aliases_never_reach_the_entry() {
+    let mut d = draft("{}", vec![], None);
+    let long = "A".repeat(100_000);
+    d.redaction = RedactionSummary {
+        columns: std::iter::once("CANARY-ALIAS".to_owned())
+            .chain(std::iter::once(long))
+            .chain((0..500).map(|i| format!("CANARY-C{i}")))
+            .collect(),
+        tainted_statements: 1,
+        ..RedactionSummary::default()
+    };
+    let e = AuditEntry::from_draft(d);
+    let line = String::from_utf8(serialize_line(&e)).unwrap();
+    assert!(!line.contains("CANARY"), "{line}");
+    assert_eq!(e.redaction.columns.len(), 64);
+    assert_eq!(e.redaction.columns[0], "<column 0>");
+    assert!(line.len() < 4_000, "{}", line.len());
+
+    // Without a tainted statement a name is scrubbed and cut.
+    let mut d = draft("{}", vec![], None);
+    d.redaction = RedactionSummary {
+        columns: vec!["B".repeat(10_000), "password".to_owned()],
+        ..RedactionSummary::default()
+    };
+    let e = AuditEntry::from_draft(d);
+    assert!(e.redaction.columns.iter().all(|c| c.len() <= 64));
+    assert_eq!(e.redaction.columns.len(), 2);
+}
+
+/// Fields the server writes itself, as paths with array positions as `[]`: ids, timestamps,
+/// enum names, counts, fixed class names. Reviewed by hand; adding a path is a decision.
+const GENERATED: &[&str] = &[
+    "id",
+    "surface",
+    "approval",
+    "outcome",
+    "statements[].class",
+    "statements[].approval",
+    "statements[].truncated",
+];
+
+/// Fields that hold caller text; each must have been scrubbed.
+const SCRUBBED: &[&str] = &[
+    "tool",
+    "connection.id",
+    "connection.name",
+    "error.code",
+    "error.message",
+    "statements[].sql",
+    "redaction.columns[]",
+];
+
+/// Numbers, booleans and null carry no text, so only string leaves and keys are checked.
+fn walk(path: &str, value: &Value, out: &mut Vec<(String, String)>) {
+    match value {
+        Value::String(s) => out.push((path.to_owned(), s.clone())),
+        Value::Array(items) => items
+            .iter()
+            .for_each(|v| walk(&format!("{path}[]"), v, out)),
+        Value::Object(map) => {
+            for (k, v) in map {
+                let child = if path.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{path}.{k}")
+                };
+                // The key itself is text too, except the fixed names of the audit schema.
+                out.push((format!("{path}/key"), k.clone()));
+                walk(&child, v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn no_string_or_key_of_the_audit_schema_carries_caller_text() {
+    let rules = user_rules();
+    // A listed word makes every scrub apply; the canary is what must not come out.
+    let evil = format!("ssn = '{CANARY}'");
+    let sql = format!("update t set ssn = '{CANARY}', loyalty_no = '{CANARY}' where id = 1");
+    let args = json!({
+        evil.clone(): evil,
+        CANARY: [evil.clone(), {CANARY: evil.clone()}],
+        "sql": sql,
+        "connection": evil,
+        "database": {CANARY: {"ssn": evil.clone()}},
+        "password": CANARY,
+    })
+    .to_string();
+    let mut d = draft(
+        &args,
+        vec![st(&sql, true, true)],
+        Some(DraftError {
+            code: &evil,
+            message: &evil,
+            denied_index: None,
+        }),
+    );
+    d.rules = &rules;
+    d.tool = &evil;
+    d.connection = Some((&evil, &evil));
+    d.redaction = RedactionSummary {
+        columns: vec![evil.clone(), CANARY.to_owned()],
+        tainted_statements: 1,
+        ..RedactionSummary::default()
+    };
+    let line = serialize_line(&AuditEntry::from_draft(d));
+    let value: Value = serde_json::from_slice(&line).unwrap();
+
+    let mut leaves = Vec::new();
+    walk("", &value, &mut leaves);
+    assert!(leaves.len() > 20, "{leaves:?}");
+    let known_args = crate::schema::argument_names();
+    for (path, text) in &leaves {
+        if let Some(parent) = path.strip_suffix("/key") {
+            // A key is a fixed name of the audit schema, a tool argument name or a placeholder.
+            let argument_key = parent == "arguments" || parent.starts_with("arguments.");
+            let fixed = !argument_key
+                || known_args.contains(text.as_str())
+                || text.starts_with("<key-")
+                || matches!(text.as_str(), "_unparsed" | "_omitted");
+            assert!(fixed, "unreviewed key {text:?} under {parent:?}");
+            assert!(!text.contains(CANARY), "key {text:?} under {parent:?}");
+            continue;
+        }
+        let in_arguments = path.starts_with("arguments");
+        let generated = GENERATED.contains(&path.as_str());
+        let scrubbed = SCRUBBED.contains(&path.as_str()) || in_arguments;
+        assert!(
+            generated || scrubbed,
+            "new string field {path:?} is neither scrubbed nor on the generated list"
+        );
+        if !generated {
+            assert!(!text.contains(CANARY), "{path}: {text}");
+        }
+    }
+    assert!(!String::from_utf8_lossy(&line).contains(CANARY));
 }

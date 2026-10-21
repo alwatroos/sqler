@@ -13,12 +13,13 @@
 //! | ---------------------------------- | --------------------------------------- | -------------- |
 //! | `tool`                             | `scrub_text`                            | text           |
 //! | `connection.id`, `connection.name` | `scrub_text`                            | text           |
-//! | `arguments` object keys (any depth)| plain identifier as is, else `scrub_text`| text          |
+//! | `arguments` object keys (any depth)| a tool argument name as is, else `<key-N>` | n/a         |
 //! | `arguments` string values          | `scrub_text` (key `sql`: the SQL cap)   | text / SQL     |
 //! | `arguments` under a listed key     | replaced by the marker, whole subtree   | none           |
 //! | `arguments._unparsed`              | `scrub_text` on the raw text            | text           |
 //! | `statements[].sql`                 | `scrub_text`                            | SQL            |
 //! | `error.code`, `error.message`      | `scrub_text`                            | text           |
+//! | `redaction.columns`                | `<column N>` for a tainted statement, else `scrub_text` | 64 names of 64 bytes |
 //! | `id`, `surface`, `approval`, ...   | generated or enums, no caller text      | n/a            |
 //! | `statements[].class`, `truncated`  | fixed names from the guard              | n/a            |
 //!
@@ -43,6 +44,7 @@ use super::{
     MAX_AUDIT_ARGUMENTS_BYTES, MAX_AUDIT_SQL_BYTES, MAX_AUDIT_STATEMENTS, MAX_AUDIT_TEXT_BYTES,
 };
 use crate::redact::{REDACTED, Redaction, RedactionSummary};
+use crate::schema::argument_names;
 
 /// Everything the audit needs from one finished call.
 pub(crate) struct AuditDraft<'a> {
@@ -256,27 +258,21 @@ impl ArgScrub<'_> {
         }
     }
 
-    /// A key is a name. A plain identifier is kept as it is, even a listed one (its value is
-    /// replaced, and the audit says which); anything else is text and is scrubbed.
-    fn key(&self, key: &str) -> (String, bool) {
-        let plain = key.len() <= 128
-            && key
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
-        if plain {
-            (key.to_owned(), false)
+    /// The name written for an argument key: a known tool argument name as it is, anything else
+    /// the fixed placeholder `<key-N>`, `N` being the position in its object. A key is chosen by
+    /// the caller, so its text is never stored; the position keeps the structure readable.
+    fn key(index: usize, key: &str) -> String {
+        if argument_names().contains(key) {
+            key.to_owned()
         } else {
-            scrub_text(key, self.rules, Field::Text)
+            format!("<key-{index}>")
         }
     }
 
     fn object(&mut self, map: &Map<String, Value>) -> Map<String, Value> {
         map.iter()
-            .map(|(k, v)| {
-                let (name, cut) = self.key(k);
-                self.truncated |= cut;
-                (name, self.value(Some(k), v))
-            })
+            .enumerate()
+            .map(|(i, (k, v))| (Self::key(i, k), self.value(Some(k), v)))
             .collect()
     }
 }
@@ -303,6 +299,28 @@ fn arguments(raw: &str, rules: SqlRules<'_>) -> (Value, bool) {
     let mut map = Map::new();
     map.insert("_unparsed".to_owned(), Value::String(text));
     (Value::Object(map), truncated)
+}
+
+/// Most column names a summary keeps, and the longest one.
+const MAX_COLUMNS: usize = 64;
+const MAX_COLUMN_BYTES: usize = 64;
+
+/// The column names of the redaction summary. They come from the aliases of the caller's SQL, so
+/// a tainted statement keeps none (`<column N>`), and any other name is scrubbed and cut.
+fn column_names(summary: &RedactionSummary, rules: SqlRules<'_>) -> Vec<String> {
+    summary
+        .columns
+        .iter()
+        .take(MAX_COLUMNS)
+        .enumerate()
+        .map(|(i, name)| {
+            if summary.tainted_statements > 0 {
+                return format!("<column {i}>");
+            }
+            let (text, _) = scrub_text(name, rules, Field::Text);
+            cut(&text, MAX_COLUMN_BYTES).0.to_owned()
+        })
+        .collect()
 }
 
 /// The approval outcome of each statement, by position.
@@ -421,7 +439,10 @@ impl AuditEntry {
             result_bytes: u64::try_from(d.result_bytes).unwrap_or(u64::MAX),
             rows,
             duration_ms: u64::try_from(d.duration.as_millis()).unwrap_or(u64::MAX),
-            redaction: d.redaction,
+            redaction: RedactionSummary {
+                columns: column_names(&d.redaction, rules),
+                ..d.redaction
+            },
         }
     }
 }
