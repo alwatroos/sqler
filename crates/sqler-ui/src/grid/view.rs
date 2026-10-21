@@ -805,7 +805,8 @@ mod tests {
     use std::cell::RefCell;
 
     use gpui::{
-        ClipboardItem, IntoElement, Render, TestAppContext, VisualTestContext, WeakEntity, point,
+        ClipboardItem, IntoElement, Modifiers, Render, TestAppContext, VisualTestContext,
+        WeakEntity, point,
     };
     use sqler_sql::Dialect;
 
@@ -878,15 +879,18 @@ mod tests {
     /// Right-clicks the first row and clicks the menu item `index` (0 based).
     fn pick(cx: &mut VisualTestContext, index: usize) {
         let press = point(px(40.), px(40.));
-        cx.simulate_mouse_down(press, MouseButton::Right, Default::default());
-        cx.simulate_mouse_up(press, MouseButton::Right, Default::default());
+        cx.simulate_mouse_down(press, MouseButton::Right, Modifiers::default());
+        cx.simulate_mouse_up(press, MouseButton::Right, Modifiers::default());
         cx.run_until_parked();
         cx.update(|window, cx| {
             window.draw(cx).clear(cx);
         });
-        let item = point(press.x + px(30.), press.y + px(17. + 28. * index as f32));
-        cx.simulate_mouse_move(item, None, Default::default());
-        cx.simulate_click(item, Default::default());
+        let item = point(
+            press.x + px(30.),
+            press.y + px(17. + 28. * f32::from(u16::try_from(index).unwrap())),
+        );
+        cx.simulate_mouse_move(item, None, Modifiers::default());
+        cx.simulate_click(item, Modifiers::default());
         cx.run_until_parked();
     }
 
