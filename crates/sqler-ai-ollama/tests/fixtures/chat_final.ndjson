@@ -1,0 +1,2 @@
+{"model":"llama3.2","message":{"role":"assistant","content":"It is 11 degrees."},"done":false}
+{"model":"llama3.2","message":{"role":"assistant","content":""},"done_reason":"stop","done":true,"prompt_eval_count":94,"eval_count":11}

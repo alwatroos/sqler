@@ -69,6 +69,8 @@ Source commands (all rows):
 | flate2 | `flate2` | 1.1.10 | 2026-08-28 | T3, ADR-0029. Deflate and `Crc` for the streaming zip of the `XLSX` writer. `MIT OR Apache-2.0`; `rust-version` 1.67. Default backend `miniz_oxide` (pure Rust; no `zlib`/`zlib-rs`/`cloudflare_zlib` feature). Already in `Cargo.lock` through other crates; direct and optional in `sqler-export` behind feature `xlsx`. Adds `miniz_oxide`, `adler2`, `crc32fast`, `simd-adler32` over the no-format build. Checked 2026-10-21. Source: API |
 | calamine | `calamine` | 0.37.0 | 2026-10-18 | T3. Reads `.xlsx` back in the `sqler-export` tests. `MIT`; `rust-version` 1.88. `default-features = false`. Dev-dependency only, so it is not in the shipped binary; pulls `zip`, `quick-xml` and others into `Cargo.lock` (the `cargo deny` graph, which uses all features, passes). Checked 2026-10-21. Source: API |
 | bytes | `bytes` | 1.12.1 | 2026-07-08 | T3. `Bytes` as a `ChunkReader` for reading the written `Parquet` file back in tests. `MIT`; `rust-version` 1.57. Already in `Cargo.lock`; also a dependency of `parquet`. Dev-dependency of `sqler-export`. Checked 2026-10-21. Source: API |
+| reqwest | `reqwest` | 0.12.28 | 2025-12-22 | T3 (`sqler-ai-ollama`; also the HTTP client for T4 to T6). `MIT OR Apache-2.0`. Workspace line `default-features = false`, `rustls-tls-native-roots`: it resolves to `hyper-rustls` 0.27.10, `rustls` 0.23.46 on `ring` 0.17.14 and `rustls-native-certs` 0.8.5, the stack `sqlx` and `gpui-pre-reqwest` already use. No `default-tls` (OpenSSL), no `webpki-roots`, no `aws-lc` provider, no `charset`, `http2`, `json` or `stream`. Newest stable is 0.13.5; 0.13 was not chosen because its default `rustls` feature adds `aws-lc-rs` and `rustls-platform-verifier` (a second crypto provider and a second verifier), and its `rustls-no-provider` route needs a hand-built `ring` `ClientConfig`. Checked 2026-10-21: 0.12.28 is the newest 0.12.x, not yanked, no advisory in `cargo deny`. New crates in `Cargo.lock`: `reqwest`, `tower-http` 0.6.11 (`MIT`) and a second `base64` (0.23.1, see below). Source: API (`/api/v1/crates/reqwest/versions`); `cargo info reqwest@0.12` |
+| base64 | `base64` | 0.22.1 | 2024-04-30 | T3. Encodes image bytes for Ollama chat messages. `MIT OR Apache-2.0`. Kept on 0.22.1, the line `reqwest` 0.12.28 and the rest of the tree use; the newest stable is 0.23.1 (2026-08-04), which `hyper-util` 0.1.21 already pulls in once `reqwest` enables its proxy support, so `Cargo.lock` holds both. Not yanked. Checked 2026-10-21. Source: API; `cargo info base64` |
 
 ## CI tools and actions
 
@@ -112,6 +114,22 @@ Per-dependency rationale is added by the PR that introduces it.
 - `thiserror` 2.0.21: typed library errors without hand-written `Display`/`Error` impls (AGENTS.md
   §6). Used by `sqler-core` (`CoreError`) and `sqler-driver-api` (`DriverError`). Its `rust-version`
   (1.77) is below the workspace's 1.99.
+- `reqwest` 0.12.28 and `base64` 0.22.1 (T3): the first HTTP client in the tree, for the AI providers
+  (`sqler-ai-ollama` now; the cloud providers reuse the workspace line). reqwest 0.12 with
+  `default-features = false` and `rustls-tls-native-roots`; the TLS stack is the one already in
+  `Cargo.lock`, so there is no OpenSSL, `webpki-roots` or second rustls. Checks run on 2026-10-21,
+  all from the workspace root: `cargo tree -i rsa`, `-i webpki-roots`, `-i openssl-sys`,
+  `-i native-tls` and `-i rustls-platform-verifier` find no package; `cargo tree -e features -i rustls`
+  shows only the features `ring`, `std` and `tls12` (the one `aws-lc-rs` line in that output is the
+  `sqlx-mysql` feature of ADR-0018, not a feature of `rustls`); `cargo tree -d` shows one
+  `rustls`, one `hyper` and one `hyper-rustls`, and two `base64` (0.22.1 and 0.23.1, the latter from
+  `hyper-util`); `cargo deny check` is clean with no new ignore. `rustls-pemfile` (RUSTSEC-2025-0134,
+  already ignored for GPUI) is not in the `sqler-ai-ollama` tree. Size: `sqler-ai-ollama` is not linked
+  into `sqler-app` yet, so `size.yml` does not change in this change; T11 (the `ai-ollama` feature)
+  measures the delta against the 7.1 MB Linux headroom. `hyper`, `hyper-util`, `hyper-rustls`,
+  `rustls`, `ring` and `tokio` are already in the app tree through `gpui-pre-reqwest` and `sqlx`;
+  the new code is `reqwest`, `tower-http` and this crate.
+- `sqler-ai-openai` (T5) adds no crate: it reuses the T3 `reqwest` 0.12.28 and `base64` 0.22.1 rows above (same workspace line, same rustls/ring stack). Checked 2026-10-21: `cargo tree -p sqler-ai-openai -i rsa`, `-i webpki-roots`, `-i openssl-sys`, `-i native-tls` and `-i aws-lc-rs` find no package, one `rustls`, `cargo deny check` clean with no new ignore.
 - `sqlx` 0.9.0: database backend of `sqler-driver-sqlite`, `sqler-driver-postgres` and `sqler-driver-mysql` (AGENTS.md §6).
   The workspace line carries only `sqlite-bundled` (compiles SQLite from source, so Windows and macOS
   CI need no system library) and `runtime-tokio`; no `macros`, `migrate`, `json`, `any` or TLS. The
