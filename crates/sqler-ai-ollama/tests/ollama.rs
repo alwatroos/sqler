@@ -72,7 +72,46 @@ async fn lists_models_with_context_windows() {
     assert_eq!(reqs[0].method, "GET");
     assert_eq!(reqs[0].path, "/api/tags");
     assert_eq!(reqs.len(), 4);
-    assert_eq!(reqs[1].json(), json!({"model":"llama3.2:latest"}));
+    // The `show` calls run concurrently, so their order is not fixed.
+    assert!(
+        reqs[1..]
+            .iter()
+            .any(|r| r.json() == json!({"model":"llama3.2:latest"}))
+    );
+}
+
+#[tokio::test]
+async fn show_calls_run_concurrently_in_stable_order() {
+    let names: Vec<String> = (0..8).map(|i| format!("m{i}:1b")).collect();
+    let tags = format!(
+        r#"{{"models":[{}]}}"#,
+        names
+            .iter()
+            .map(|n| format!(r#"{{"name":"{n}"}}"#))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let mut routes = vec![Route::new("GET", "/api/tags", Reply::json(200, &tags))];
+    for n in &names {
+        routes.push(
+            Route::new(
+                "POST",
+                "/api/show",
+                Reply::json(200, SHOW_LLAMA).with_delay(Duration::from_millis(300)),
+            )
+            .when_body_has(&format!("\"{n}\"")),
+        );
+    }
+    let server = MockServer::start(routes).await;
+    let started = std::time::Instant::now();
+    let models = provider(&server).list_models().await.unwrap();
+    let took = started.elapsed();
+    let ids: Vec<_> = models.iter().map(|m| m.id.clone()).collect();
+    assert_eq!(ids, names);
+    assert!(models.iter().all(|m| m.context_window == Some(131_072)));
+    // Sequential calls would need 8 x 300 ms.
+    assert!(took < Duration::from_millis(2000), "{took:?}");
+    assert!(took >= Duration::from_millis(600), "{took:?}");
 }
 
 #[tokio::test]
