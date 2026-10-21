@@ -11,7 +11,6 @@ use gpui::{
 use gpui_component::ActiveTheme as _;
 use sqler_config::{FONT_SIZE_RANGE, ThemePreference};
 
-use crate::theme::Appearance;
 use crate::workspace::{Workspace, WorkspaceAction, WorkspaceView};
 
 /// A clickable chip that dispatches `action`.
@@ -38,30 +37,28 @@ fn button(
         }))
 }
 
-/// The settings header and the theme toggle, drawn at the right end of the tab strip.
+/// The Settings tab, drawn at the right end of the tab strip of the first group while it is
+/// open. The activity bar gear opens it; the theme is chosen on the page.
 pub(crate) fn strip_end(
     ws: &Workspace,
     cx: &mut Context<WorkspaceView>,
-) -> impl IntoElement + use<> {
+) -> Option<impl IntoElement + use<>> {
+    if !ws.settings_tab_open() {
+        return None;
+    }
     let theme = cx.theme();
-    let (bar, border) = (theme.tab_bar, theme.border);
-    let (rest_fill, active_fill) = (theme.tab, theme.tab_active);
+    let (border, rest_fill, active_fill) = (theme.border, theme.tab, theme.tab_active);
     let (fg, active_text, muted) = (
         theme.tab_foreground,
         theme.tab_active_foreground,
         theme.muted_foreground,
     );
-    let open = ws.settings_tab_open();
     let active = ws.settings_tab_active();
-    let target = match ws.appearance() {
-        Appearance::Light => "Dark",
-        Appearance::Dark => "Light",
-    };
-
-    let settings = if open {
+    Some(
         div()
             .id("settings-tab")
             .h_full()
+            .flex_none()
             .flex()
             .flex_row()
             .items_center()
@@ -89,48 +86,8 @@ pub(crate) fn strip_end(
                         view.dispatch(WorkspaceAction::CloseSettings, cx);
                         cx.stop_propagation();
                     })),
-            )
-    } else {
-        div()
-            .id("settings-open")
-            .h_full()
-            .flex()
-            .items_center()
-            .px_2()
-            .text_sm()
-            .text_color(fg)
-            .cursor_pointer()
-            .child("Settings")
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                view.dispatch(WorkspaceAction::OpenSettings, cx);
-            }))
-    };
-    let toggle = div()
-        .id("theme-toggle")
-        .h_full()
-        .flex()
-        .items_center()
-        .px_2()
-        .text_sm()
-        .text_color(fg)
-        .cursor_pointer()
-        .child(target)
-        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-            view.dispatch(WorkspaceAction::ToggleThemeMode, cx);
-        }));
-
-    div()
-        .id("tab-strip-end")
-        .h(px(36.))
-        .flex_none()
-        .flex()
-        .flex_row()
-        .items_center()
-        .bg(bar)
-        .border_b_1()
-        .border_color(border)
-        .child(settings)
-        .child(toggle)
+            ),
+    )
 }
 
 /// A labelled settings row.

@@ -21,6 +21,9 @@ use super::{
 use crate::browser::{BrowserAction, LoadState, MenuEntry, TreeNodeId};
 use crate::connections::ConnectionAction;
 use crate::tabs::{Rgb, env_badge};
+use crate::theme::icons::AppIcon;
+use crate::theme::widgets::{icon_button, section_header};
+use crate::workbench::view::run_command_id;
 use crate::workspace::{BrowserNote, Workspace, WorkspaceAction, WorkspaceView};
 
 /// Pixels rendered above and below the visible part of the list.
@@ -93,7 +96,7 @@ pub(crate) fn sync_list(entries: &mut Vec<ListEntry>, state: &ListState, new: Ve
 }
 
 /// Shown when there are no saved connections and no load error.
-pub(crate) const EMPTY_TEXT: &str = "No saved connections. Use New connection above, or run connection:new from the command palette.";
+pub(crate) const EMPTY_TEXT: &str = "No saved connections. Use the + button above, or run Connection: New Connection from the command palette.";
 
 /// Indentation per nesting level, in pixels.
 const INDENT: f32 = 14.;
@@ -194,17 +197,9 @@ pub(crate) fn sidebar(
         selected_bg,
         ..
     } = palette_of(cx);
-    let new_group_parent = model.selected_group().cloned();
-
     // The header is the drop target for "move to the root".
-    let header = div()
+    let header = section_header("CONNECTIONS", cx)
         .id("sidebar-header")
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .px_1()
-        .rounded_sm()
         .drag_over::<DragConnection>(move |style, _, _, _| style.bg(selected_bg))
         .on_drop(cx.listener(|view, drag: &DragConnection, _, cx| {
             view.dispatch_connection(
@@ -218,58 +213,57 @@ pub(crate) fn sidebar(
         }))
         .child(
             div()
-                .flex_1()
-                .text_xs()
-                .text_color(muted)
-                .child("CONNECTIONS"),
-        )
-        .child(text_button(
-            "new-connection",
-            "New connection",
-            fg,
-            ConnectionAction::New,
-            cx,
-        ))
-        .child(text_button(
-            "new-group",
-            "New group",
-            fg,
-            ConnectionAction::NewGroup {
-                parent: new_group_parent,
-            },
-            cx,
-        ));
+                .flex()
+                .flex_row()
+                .gap_1()
+                .child(
+                    icon_button("new-connection", AppIcon::Plus, "New connection").on_click(
+                        cx.listener(|view, _: &ClickEvent, window, cx| {
+                            run_command_id(view, "connection:new", window, cx);
+                        }),
+                    ),
+                )
+                .child(
+                    icon_button("new-group", AppIcon::Folder, "New group").on_click(cx.listener(
+                        |view, _: &ClickEvent, window, cx| {
+                            run_command_id(view, "connection-group:new", window, cx);
+                        },
+                    )),
+                ),
+        );
 
-    let mut top = div()
-        .id("sidebar-top")
-        .flex()
-        .flex_col()
-        .flex_none()
-        .gap_1()
-        .p_2()
-        .child(header);
+    let mut notes = div().flex().flex_col().flex_none().gap_1().px_2();
 
     if let Some(error) = model.load_error() {
-        top = top.child(
+        notes = notes.child(
             div()
                 .text_sm()
                 .text_color(danger)
                 .child(format!("Could not load connections: {error}")),
         );
-        top = top.child(div().text_xs().text_color(muted).child(
+        notes = notes.child(div().text_xs().text_color(muted).child(
             "Changes are not saved while the file cannot be loaded. Fix connections.toml and restart.",
         ));
     } else if model.entries().is_empty() && model.store().groups().is_empty() {
-        top = top.child(div().text_sm().text_color(muted).child(EMPTY_TEXT));
+        notes = notes.child(div().text_sm().text_color(muted).child(EMPTY_TEXT));
     }
     if let Some(error) = model.save_error() {
-        top = top.child(
+        notes = notes.child(
             div()
                 .text_xs()
                 .text_color(danger)
                 .child(format!("Could not save connections: {error}")),
         );
     }
+
+    let top = div()
+        .id("sidebar-top")
+        .flex()
+        .flex_col()
+        .flex_none()
+        .gap_1()
+        .child(header)
+        .child(notes);
 
     let rows = list(
         view.sidebar_list().clone(),
@@ -280,18 +274,16 @@ pub(crate) fn sidebar(
     div()
         .id("sidebar")
         .track_focus(view.sidebar_focus())
-        .w(px(260.))
+        .w_full()
         .h_full()
         .flex()
         .flex_col()
-        .flex_none()
         .bg(bg)
         .text_color(fg)
         .border_r_1()
         .border_color(border)
         .child(top)
         .child(div().flex_1().min_h_0().px_2().pb_2().child(rows))
-        .child(crate::history::view::saved_section(view, cx))
 }
 
 /// Builds the element of one line of the list.

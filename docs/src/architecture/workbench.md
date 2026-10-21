@@ -49,7 +49,7 @@ The product questions are taken with the recommended defaults and implemented un
 │t │ CONNECTIONS +  │ editor body              ║ editor body           │
 │i │ tree / saved   ├──────────────────────────╨───────────────────────┤
 │v │ queries        │ BOTTOM PANEL header 30: Results | Messages | History  ✕│
-│44│ 180..600 (260) │ result strip / grid / list            120..70% (280) │
+│44│ 180..600 (260) │ result strip / grid / list            120..70% (380) │
 ├──┴────────────────┴──────────────────────────────────────────────────┤
 │ STATUS 24: [PROD] ● conn  ⛁ db            Running… 1.2 s · 1,234 rows · 38 ms  ▣ ▤ │
 └──────────────────────────────────────────────────────────────────────┘
@@ -62,7 +62,7 @@ The product questions are taken with the recommended defaults and implemented un
   Overflow: the strip scrolls horizontally (`overflow_x_scroll` + `ScrollHandle::scroll_to_item(active)`), and a trailing `ChevronDown` dropdown lists all tabs of the group. The settings tab stays special and renders at the end of the first group's strip.
 - **Open/close rules**: `open`/`open_object` append to the focused group as pinned (unchanged). Browser object opens use preview: they replace the group's preview tab in place, closing it through the normal close path. Closing the active tab → right, else left neighbour in its group. An emptied group is removed (unless it is the last), and focus goes to the left neighbour group. `tab:next/previous` cycle inside the focused group.
 - **Split**: `pane:split-right` moves the active tab into a new group right of the focused one. It is refused with a notice when the group has one tab or 4 groups exist. Move semantics are used because an `InputState`/table entity can render in one place only.
-- **Bottom panel** (`v_resizable` under the editor area; clamp 120..70 % of window, default 280, `mod+j`). It has three views and follows the focused group's active tab:
+- **Bottom panel** (`v_resizable` under the editor area; clamp 120..70 % of window, default 380, `mod+j`). It has three views and follows the focused group's active tab:
   - Results: today's statement chips restyled as segmented tabs with a status icon, the paused/fetch-more line, and the grid.
   - Messages: one line per statement: title, status text, duration, error in `danger`.
   - History: the single panel-hosted History tab, bound to the active connection.
@@ -209,7 +209,7 @@ Rust names are pinned. Implementation items may add private helpers, not rename 
 pub const WORKBENCH_VERSION: u32 = 1;
 #[serde(default)] pub struct WorkbenchState { pub version: u32, pub side_panel: PanelState, pub bottom_panel: PanelState,
     pub window: Option<WindowState>, pub recent_commands: Vec<String>, pub recent_connections: Vec<String> }
-pub struct PanelState { pub visible: bool, pub size: f32, pub view: String }   // defaults: (true,260,"connections"), (false,280,"results")
+pub struct PanelState { pub visible: bool, pub size: f32, pub view: String }   // defaults: (true,260,"connections"), (false,380,"results")
 pub struct WindowState { pub width: f32, pub height: f32 }
 pub enum WorkbenchLoad { Missing, Loaded(WorkbenchState), Newer(u32), Invalid(String) }
 impl ConfigDir { pub fn workbench_path(&self) -> PathBuf; pub fn load_workbench_state(&self) -> WorkbenchLoad;
@@ -234,7 +234,7 @@ pub enum RunIndicator { Idle, Running, Cancelling }   pub struct RowInfo { pub l
 pub fn format_rows(info: RowInfo) -> String;          // "1 row", "1,234 rows", "500 of 1,234 rows", "100,000+ rows"
 pub fn database_label(driver: &DriverId, target: &str) -> Option<String>; // URL path / file name / "memory"; never user, host, password
 pub fn register_commands(r: &mut CommandRegistry) -> Result<(), CommandError>;  pub fn action_for(id: &CommandId) -> Option<WorkbenchAction>;
-pub const SIDE_MIN: f32 = 180.; SIDE_MAX = 600.; SIDE_DEFAULT = 260.; PANEL_MIN = 120.; PANEL_DEFAULT = 280.; PANEL_MAX_FRACTION = 0.7;
+pub const SIDE_MIN: f32 = 180.; SIDE_MAX = 600.; SIDE_DEFAULT = 260.; PANEL_MIN = 120.; PANEL_DEFAULT = 380.; PANEL_MAX_FRACTION = 0.7;
 ```
 ```rust
 // sqler-ui/src/tabs/ (U2): additive, existing signatures unchanged

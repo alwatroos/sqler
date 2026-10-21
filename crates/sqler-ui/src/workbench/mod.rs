@@ -5,21 +5,28 @@
 //! bar model and the `workbench:*` / `pane:*` commands. Plain Rust, no `GPUI`.
 
 mod action;
+mod chrome;
 mod layout;
+mod messages;
 mod recent;
 mod status;
+#[cfg(feature = "gui")]
+pub(crate) mod view;
+mod welcome;
 
 use sqler_config::{ConfigDir, WorkbenchLoad};
 
 pub use action::{action_for, register_commands, register_pane_commands};
+pub use chrome::{ActivityItem, status_solid};
 pub use layout::{
     PANEL_DEFAULT, PANEL_MAX_ABS, PANEL_MAX_FRACTION, PANEL_MIN, PanelView, Region, SIDE_DEFAULT,
     SIDE_MAX, SIDE_MIN, SideView, WorkbenchAction, WorkbenchLayout, next_region,
 };
+pub use messages::{MessageLine, message_lines};
 pub use recent::{RecentCommands, RecentConnections};
-#[allow(unused_imports)] // `format_duration` is for the workspace wiring in this crate
 pub(crate) use status::format_duration;
 pub use status::{RowInfo, RunIndicator, StatusBarModel, database_label, format_rows};
+pub use welcome::{MAX_WELCOME_RECENTS, RecentItem, WelcomeModel, welcome_model};
 
 /// Where `workbench.toml` lives and what it held at startup.
 #[derive(Debug, Clone)]

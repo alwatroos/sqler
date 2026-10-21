@@ -1103,6 +1103,7 @@ fn condition_chips(
 
 /// The filter bar above a grid: quick filter, scope, match case, condition editor and chips,
 /// and the status of the sort and filter. `None` before the bar exists.
+#[allow(clippy::too_many_lines)] // one declarative element tree
 fn filter_bar(table: &Table, cx: &mut Context<WorkspaceView>) -> Option<Div> {
     let (muted, border) = (cx.theme().muted_foreground, cx.theme().border);
     let id = table.entity_id().as_u64();
@@ -1144,6 +1145,7 @@ fn filter_bar(table: &Table, cx: &mut Context<WorkspaceView>) -> Option<Div> {
         act(table, GridAction::ToggleMatchCase),
         act(table, GridAction::ClearFilter),
     );
+    let filtered = !filter.is_empty();
     let add_table = table.clone();
     let chips = condition_chips(table, &filter, &chip_names, cx);
     Some(
@@ -1152,25 +1154,50 @@ fn filter_bar(table: &Table, cx: &mut Context<WorkspaceView>) -> Option<Div> {
             .flex_none()
             .flex()
             .flex_row()
-            .flex_wrap()
             .items_center()
             .gap_2()
             .px_2()
             .py_1()
+            .overflow_hidden()
             .border_b_1()
             .border_color(border)
-            .child(div().w(px(200.)).child(Input::new(&quick).small()))
-            .child(div().w(px(140.)).child(Select::new(&scope).small()))
+            .child(
+                div()
+                    .w(px(170.))
+                    .flex_none()
+                    .child(Input::new(&quick).small()),
+            )
+            .child(
+                div()
+                    .w(px(120.))
+                    .flex_none()
+                    .child(Select::new(&scope).small()),
+            )
             .child(
                 Checkbox::new(("grid-match-case", id))
                     .label("Match case")
                     .checked(case)
                     .on_click(cx.listener(move |_, _: &bool, window, cx| on_case(window, cx))),
             )
-            .child(div().w(px(1.)).h(px(18.)).bg(border))
-            .child(div().w(px(140.)).child(Select::new(&column).small()))
-            .child(div().w(px(130.)).child(Select::new(&op).small()))
-            .children(needs_operand.then(|| div().w(px(140.)).child(Input::new(&operand).small())))
+            .child(div().w(px(1.)).h(px(18.)).flex_none().bg(border))
+            .child(
+                div()
+                    .w(px(120.))
+                    .flex_none()
+                    .child(Select::new(&column).small()),
+            )
+            .child(
+                div()
+                    .w(px(120.))
+                    .flex_none()
+                    .child(Select::new(&op).small()),
+            )
+            .children(needs_operand.then(|| {
+                div()
+                    .w(px(130.))
+                    .flex_none()
+                    .child(Input::new(&operand).small())
+            }))
             .child(
                 Button::new(("grid-add-condition", id))
                     .label("Add")
@@ -1189,14 +1216,21 @@ fn filter_bar(table: &Table, cx: &mut Context<WorkspaceView>) -> Option<Div> {
                     .gap_1()
                     .children(chips),
             )
-            .child(
+            .children(filtered.then(|| {
                 Button::new(("grid-clear-filter", id))
                     .label("Clear filter")
                     .ghost()
                     .small()
-                    .on_click(cx.listener(move |_, _, window, cx| on_clear(window, cx))),
-            )
-            .children(status.map(|text| div().text_sm().text_color(muted).child(text))),
+                    .on_click(cx.listener(move |_, _, window, cx| on_clear(window, cx)))
+            }))
+            .children(status.map(|text| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_sm()
+                    .text_color(muted)
+                    .child(text)
+            })),
     )
 }
 

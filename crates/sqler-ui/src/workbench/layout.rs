@@ -14,7 +14,7 @@ pub const SIDE_DEFAULT: f32 = 260.;
 /// Smallest bottom panel height in logical pixels.
 pub const PANEL_MIN: f32 = 120.;
 /// Default bottom panel height in logical pixels.
-pub const PANEL_DEFAULT: f32 = 280.;
+pub const PANEL_DEFAULT: f32 = 380.;
 /// The bottom panel may take this fraction of the window height.
 pub const PANEL_MAX_FRACTION: f32 = 0.7;
 /// `SetPanelHeight` clamp ceiling in logical pixels.
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(l.side_width(), 260.);
         assert_eq!(l.side_view(), SideView::Connections);
         assert!(!l.panel_visible());
-        assert_eq!(l.panel_height(), 280.);
+        assert_eq!(l.panel_height(), 380.);
         assert_eq!(l.panel_view(), PanelView::Results);
         assert_eq!(l.generation(), 0);
     }
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(l.side_width(), 600.);
         assert_eq!(l.side_view(), SideView::SavedQueries);
         assert!(l.panel_visible());
-        assert_eq!(l.panel_height(), 280.);
+        assert_eq!(l.panel_height(), 380.);
         assert_eq!(l.panel_view(), PanelView::Results);
     }
 

@@ -73,11 +73,11 @@ pub struct Scene {
 pub const SCENES: &[Scene] = &[
     Scene {
         name: "welcome-empty",
-        pending: Some("welcome page (U3)"),
+        pending: None,
     },
     Scene {
         name: "welcome-recent",
-        pending: Some("recent list on the welcome page (U3)"),
+        pending: None,
     },
     Scene {
         name: "editor-results",
@@ -85,15 +85,15 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "prod-editor",
-        pending: Some("toolbar and status bar (U3, U4)"),
+        pending: Some("toolbar (U4)"),
     },
     Scene {
         name: "tabs-overflow",
-        pending: Some("preview and dirty marks (U3)"),
+        pending: None,
     },
     Scene {
         name: "split-editors",
-        pending: Some("editor groups (U3)"),
+        pending: None,
     },
     Scene {
         name: "object-browser-ddl",
@@ -105,7 +105,7 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "messages-error",
-        pending: Some("Messages panel (U3)"),
+        pending: None,
     },
     Scene {
         name: "settings",
@@ -113,7 +113,7 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "panels-collapsed",
-        pending: Some("collapsible panels (U3)"),
+        pending: None,
     },
     Scene {
         name: "connection-dialog",
@@ -189,6 +189,8 @@ enum Step {
     Select(&'static str),
     /// Closes every tab.
     CloseAll,
+    /// Marks the n-th query tab as edited (a stand-in for typing).
+    MarkDirty(usize),
     /// Waits.
     Wait(Wait),
 }
@@ -224,14 +226,31 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
         "prod-editor" => vec![
             open_step("prod", "select id, name from customers;"),
             Step::Wait(Wait::Editors(1)),
+            Step::Command("query:run-all"),
+            Step::Wait(Wait::RunDone),
         ],
         "tabs-overflow" => {
             let mut steps = editors("dev", 5, 0);
             steps.extend(editors("staging", 5, 5));
             steps.extend(editors("prod", 4, 10));
+            steps.extend([
+                Step::MarkDirty(1),
+                Step::MarkDirty(6),
+                Step::MarkDirty(12),
+                Step::Select("dev"),
+                Step::Wait(Wait::Table {
+                    conn: "dev",
+                    name: "customers",
+                }),
+                Step::Command("object:open-data"),
+            ]);
             steps
         }
-        "split-editors" => editors("dev", 2, 0),
+        "split-editors" => {
+            let mut steps = editors("dev", 2, 0);
+            steps.push(Step::Command("pane:split-right"));
+            steps
+        }
         "object-browser-ddl" => vec![
             open_step("dev", "select * from customers;"),
             Step::Wait(Wait::Editors(1)),
@@ -253,14 +272,23 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Wait(Wait::Editors(1)),
             Step::Command("query:run-all"),
             Step::Wait(Wait::RunDone),
+            Step::Command("workbench:show-messages"),
         ],
         "settings" => vec![Step::Command("settings:open")],
         "panels-collapsed" => vec![
             open_step("dev", "select * from customers;"),
             Step::Wait(Wait::Editors(1)),
+            Step::Command("workbench:toggle-side-panel"),
         ],
         "connection-dialog" => vec![Step::Command("connection:new")],
-        // `welcome-empty` and `welcome-recent` show the window as it opens.
+        "welcome-recent" => {
+            let mut steps = editors("dev", 1, 0);
+            steps.extend(editors("staging", 1, 1));
+            steps.extend(editors("prod", 1, 2));
+            steps.push(Step::CloseAll);
+            steps
+        }
+        // `welcome-empty` shows the window as it opens.
         _ => Vec::new(),
     }
 }
@@ -435,6 +463,17 @@ impl WorkspaceView {
                 for tab in tabs {
                     self.dispatch(WorkspaceAction::CloseTab(tab), cx);
                 }
+            }
+            Step::MarkDirty(n) => {
+                let tab = self
+                    .ws
+                    .tabs()
+                    .iter()
+                    .filter(|tab| tab.kind() == TabKind::Query)
+                    .map(crate::tabs::Tab::id)
+                    .nth(*n)
+                    .ok_or_else(|| format!("no query tab number {n}"))?;
+                self.editor_changed(tab, cx);
             }
             Step::Wait(_) => {}
         }

@@ -16,7 +16,7 @@ use gpui_component::input::InputState;
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
 use crate::grid::edit::GridKey;
-use crate::grid::edit::view::edit_bar;
+use crate::grid::edit::view::edit_row;
 use crate::grid::view::{Table, grid_table, new_table};
 use crate::grid::{GridTab, IngestState};
 use crate::query::{Phase, QueryTab, StatementStatus};
@@ -325,7 +325,7 @@ pub(super) fn results_area(
         }
         strip = strip.child(chip);
     }
-    strip = strip.child(div().flex_1());
+    let mut controls: Vec<AnyElement> = Vec::new();
     let running_text = match query.phase() {
         Phase::Running {
             cancelling: true, ..
@@ -334,15 +334,22 @@ pub(super) fn results_area(
         _ => None,
     };
     if let Some(text) = running_text {
-        strip = strip.child(div().text_sm().text_color(muted).child(text));
+        controls.push(
+            div()
+                .text_sm()
+                .text_color(muted)
+                .child(text)
+                .into_any_element(),
+        );
         let cancelling = text == "Cancelling…";
-        strip = strip.child(
+        controls.push(
             Button::new("query-cancel")
                 .label("Cancel")
                 .ghost()
                 .small()
                 .disabled(cancelling)
-                .on_click(cx.listener(move |view, _, _, cx| view.query_cancel(tab, cx))),
+                .on_click(cx.listener(move |view, _, _, cx| view.query_cancel(tab, cx)))
+                .into_any_element(),
         );
     }
 
@@ -354,7 +361,7 @@ pub(super) fn results_area(
         .filter(|g| matches!(g.state(), IngestState::Paused))
         .map(GridTab::status_text);
     if paused_text.is_some() {
-        strip = strip.child(
+        controls.push(
             Button::new("query-fetch-more")
                 .label("Fetch more")
                 .small()
@@ -362,10 +369,28 @@ pub(super) fn results_area(
                     if view.queries.fetch_more(tab, cx) {
                         cx.notify();
                     }
-                })),
+                }))
+                .into_any_element(),
         );
     }
 
+    let table = view
+        .queries
+        .table(tab, index)
+        .filter(|t| t.read(cx).delegate().grid().column_count() > 0);
+    let edit = table.and_then(|t| {
+        let key = GridKey {
+            tab,
+            result: Some(index),
+        };
+        edit_row(view, key, t, cx)
+    });
+    let body = match table {
+        Some(table) => grid_table(table, cx).into_any_element(),
+        None => div().flex_1().into_any_element(),
+    };
+    // One toolbar row: the result chips, the status of the shown statement, then the edit
+    // controls (which take the rest of the row) or the run controls.
     let status_color = if matches!(entry.status, StatementStatus::Failed { .. }) {
         danger
     } else {
@@ -374,33 +399,16 @@ pub(super) fn results_area(
     let status = div()
         .id("query-status")
         .flex_none()
-        .w_full()
         .px_2()
-        .py_1()
         .text_sm()
         .text_color(status_color)
-        .border_b_1()
-        .border_color(border)
         .child(paused_text.unwrap_or_else(|| entry.status_text()));
-
-    let table = view
-        .queries
-        .table(tab, index)
-        .filter(|t| t.read(cx).delegate().grid().column_count() > 0);
-    let bar = table.and_then(|t| {
-        let key = GridKey {
-            tab,
-            result: Some(index),
-        };
-        edit_bar(view, key, t, cx)
-    });
-    let body = match table {
-        Some(table) => grid_table(table, cx).into_any_element(),
-        None => div().flex_1().into_any_element(),
+    let strip = match edit {
+        Some(edit) => strip
+            .child(status)
+            .children(controls)
+            .child(edit.flex_1().min_w_0()),
+        None => strip.child(status).child(div().flex_1()).children(controls),
     };
-    area.child(strip)
-        .child(status)
-        .children(bar)
-        .child(body)
-        .into_any_element()
+    area.child(strip).child(body).into_any_element()
 }

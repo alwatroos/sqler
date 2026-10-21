@@ -113,6 +113,10 @@ impl EditorViews {
                         return;
                     }
                     shared.borrow_mut().intel.edited();
+                    if !view.workspace().tab_decor(tab).is_some_and(|d| d.dirty) {
+                        // Only the first edit of a tab costs anything.
+                        view.editor_changed(tab, cx);
+                    }
                     if let Some(v) = view.editors.views.get_mut(&tab) {
                         v.diagnose =
                             provider::diagnose_task(state, &shared, DIAGNOSE_DEBOUNCE, window, cx);
