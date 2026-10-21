@@ -24,8 +24,10 @@ driver-mysql = ["dep:sqler-driver-mysql"]
 
 [dependencies]
 sqler-driver-api.workspace = true
+sqler-export.workspace = true
+sqler-sql.workspace = true
 sqler-driver-sqlite = { workspace = true, optional = true }
 sqler-driver-postgres = { workspace = true, optional = true }
 sqler-driver-mysql = { workspace = true, optional = true }
 anyhow.workspace = true
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "signal", "macros", "sync"] }

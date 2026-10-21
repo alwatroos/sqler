@@ -7158,6 +7158,8 @@ dependencies = [
  "sqler-driver-mysql",
  "sqler-driver-postgres",
  "sqler-driver-sqlite",
+ "sqler-export",
+ "sqler-sql",
  "tokio",
 ]
 
@@ -7963,6 +7965,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
