@@ -11,8 +11,10 @@ use sqler_core::{ConnectionConfig, DriverId, Environment, TlsConfig, TlsMode as 
 use super::store::StoreError;
 use crate::secrets::{MAX_ID_LEN, SecretError, SecretRef};
 
-/// Version of the `connections.toml` format this build writes and reads up to.
-pub const CONNECTIONS_FORMAT_VERSION: u32 = 1;
+/// Highest version of the `connections.toml` format this build reads and writes. A save writes
+/// version 1 unless a connection has AI settings (`[connection.ai]`, ADR-0035), so older builds
+/// keep working until AI is used.
+pub const CONNECTIONS_FORMAT_VERSION: u32 = 2;
 
 /// Whether `s` is a valid id: lowercase letters, digits and `-` only, and
 /// within the keychain connection-id grammar (1 to 64 characters, leading
@@ -331,6 +333,50 @@ impl SshProfile {
     }
 }
 
+/// Per-connection AI settings (ADR-0035): opt-in, and whether result rows may be sent.
+///
+/// The default is off. It is stored as the optional `[connection.ai]` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct ConnectionAi {
+    /// Whether AI features may be used with this connection.
+    pub enabled: bool,
+    /// Whether result rows may be sent to the provider; `None` means the environment default
+    /// (on, except for `prod`).
+    pub send_rows: Option<bool>,
+}
+
+impl ConnectionAi {
+    /// Settings with AI on or off and the default for sending rows.
+    #[must_use]
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            send_rows: None,
+        }
+    }
+
+    /// Sets the explicit "send row data" choice.
+    #[must_use]
+    pub fn with_send_rows(mut self, yes: bool) -> Self {
+        self.send_rows = Some(yes);
+        self
+    }
+
+    /// Whether these are the defaults (AI off, no explicit choice); defaults are not written.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        !self.enabled && self.send_rows.is_none()
+    }
+
+    /// Whether result rows may be sent: AI is on and the explicit choice, or else on for every
+    /// environment except `prod`.
+    #[must_use]
+    pub fn sends_rows(&self, env: Option<Environment>) -> bool {
+        self.enabled && self.send_rows.unwrap_or(env != Some(Environment::Prod))
+    }
+}
+
 /// Everything the user edits about one connection (no id, no group).
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -351,6 +397,8 @@ pub struct ConnectionSpec {
     pub ssh: Option<SshProfile>,
     /// Whether the database password is kept in the keychain.
     pub password_in_keychain: bool,
+    /// AI settings; off by default.
+    pub ai: ConnectionAi,
 }
 
 impl ConnectionSpec {
@@ -366,6 +414,7 @@ impl ConnectionSpec {
             tls: None,
             ssh: None,
             password_in_keychain: false,
+            ai: ConnectionAi::default(),
         }
     }
 
@@ -404,6 +453,13 @@ impl ConnectionSpec {
         self
     }
 
+    /// Sets the AI settings.
+    #[must_use]
+    pub fn with_ai(mut self, ai: ConnectionAi) -> Self {
+        self.ai = ai;
+        self
+    }
+
     fn core_config(&self) -> ConnectionConfig {
         ConnectionConfig::new(self.name.clone(), self.driver.clone(), self.target.clone())
     }
@@ -425,6 +481,7 @@ impl fmt::Debug for ConnectionSpec {
             .field("tls", &self.tls)
             .field("ssh", &self.ssh)
             .field("password_in_keychain", &self.password_in_keychain)
+            .field("ai", &self.ai)
             .finish()
     }
 }
@@ -556,6 +613,18 @@ impl ConnectionProfile {
     #[must_use]
     pub fn spec(&self) -> &ConnectionSpec {
         &self.spec
+    }
+
+    /// Whether AI features are enabled for this connection.
+    #[must_use]
+    pub fn ai_enabled(&self) -> bool {
+        self.spec.ai.enabled
+    }
+
+    /// Whether result rows may be sent to an AI provider for this connection.
+    #[must_use]
+    pub fn ai_sends_rows(&self) -> bool {
+        self.spec.ai.sends_rows(self.spec.environment)
     }
 
     /// The keychain reference of the database password, when one is kept.
@@ -765,6 +834,42 @@ mod tests {
         assert!(d.contains("<redacted>") && !d.contains("hunter2"), "{d}");
         let d = format!("{:?}", ConnectionSpec::new("p", sqlite(), "app.db"));
         assert!(d.contains("app.db"));
+    }
+
+    #[test]
+    fn ai_defaults_off_and_is_not_written() {
+        let ai = ConnectionAi::default();
+        assert!(ai.is_default() && !ai.enabled && ai.send_rows.is_none());
+        assert!(!ConnectionAi::new(true).is_default());
+        assert!(!ConnectionAi::new(false).with_send_rows(true).is_default());
+        let spec = ConnectionSpec::new("c", sqlite(), "x");
+        assert!(spec.ai.is_default());
+        let p = ConnectionProfile::new(ConnectionId::from_valid("c".into()), None, spec);
+        assert!(!p.ai_enabled() && !p.ai_sends_rows());
+    }
+
+    #[test]
+    fn sends_rows_table() {
+        use Environment::{Dev, Prod, Staging};
+        for env in [None, Some(Dev), Some(Staging), Some(Prod)] {
+            for send in [None, Some(true), Some(false)] {
+                for enabled in [false, true] {
+                    let mut ai = ConnectionAi::new(enabled);
+                    ai.send_rows = send;
+                    let default = env != Some(Prod);
+                    let want = enabled && send.unwrap_or(default);
+                    assert_eq!(ai.sends_rows(env), want, "{env:?} {send:?} {enabled}");
+                }
+            }
+        }
+        let prod = ConnectionProfile::new(
+            ConnectionId::from_valid("c".into()),
+            None,
+            ConnectionSpec::new("c", sqlite(), "x")
+                .with_environment(Prod)
+                .with_ai(ConnectionAi::new(true)),
+        );
+        assert!(prod.ai_enabled() && !prod.ai_sends_rows());
     }
 
     #[test]

@@ -252,6 +252,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0031](docs/src/adr/0031-client-side-sort-and-filter.md) | Client-side sort and filter: published display order, resumable job on the UI thread | accepted |
 | [0032](docs/src/adr/0032-grid-export.md) | Grid export: loaded rows or a fresh run of a read statement, writer on the blocking pool, hidden partial file, Parquet in the app default | accepted |
 | [0033](docs/src/adr/0033-inline-editing-ui.md) | Inline editing: apply session, transaction flag, schema probe, in-place overlay and a single gate | accepted |
+| [0035](docs/src/adr/0035-ai-configuration.md) | AI configuration: `ai.toml`, provider key references, per-connection opt-in, connections format v2 | accepted |
 
 ## 9. Roadmap status
 
