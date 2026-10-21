@@ -40,6 +40,8 @@ pub struct Reply {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Body,
+    /// Wait this long before answering.
+    pub delay: Option<Duration>,
 }
 
 impl Reply {
@@ -48,6 +50,7 @@ impl Reply {
             status,
             headers: vec![("Content-Type".into(), "application/json".into())],
             body: Body::Full(body.as_bytes().to_vec()),
+            delay: None,
         }
     }
 
@@ -60,7 +63,13 @@ impl Reply {
                 chunks: data.as_bytes().chunks(size).map(<[u8]>::to_vec).collect(),
                 end,
             },
+            delay: None,
         }
+    }
+
+    pub fn with_delay(mut self, delay: Duration) -> Self {
+        self.delay = Some(delay);
+        self
     }
 
     pub fn with_header(mut self, name: &str, value: &str) -> Self {
@@ -242,6 +251,9 @@ async fn serve(
             |r| r.reply.clone(),
         );
     requests.lock().unwrap().push(req);
+    if let Some(d) = reply.delay {
+        tokio::time::sleep(d).await;
+    }
 
     let mut head = format!(
         "HTTP/1.1 {} {}\r\nConnection: close\r\n",
