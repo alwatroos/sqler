@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! The `connections.toml` wire formats: v0 (M1, unversioned) and v1, with
+//! The `connections.toml` wire formats: v0 (M1, unversioned), v1 and v2, with
 //! version dispatch, migration and serialisation.
 
 use std::collections::HashSet;
@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use sqler_core::{DriverId, Environment};
 
 use super::model::{
-    CONNECTIONS_FORMAT_VERSION, ConnectionId, ConnectionProfile, ConnectionSpec, Group, GroupId,
-    SshAuth, SshProfile, TlsMode, TlsProfile, id_problem, unique_slug, validate_spec,
+    CONNECTIONS_FORMAT_VERSION, ConnectionAi, ConnectionId, ConnectionProfile, ConnectionSpec,
+    Group, GroupId, SshAuth, SshProfile, TlsMode, TlsProfile, id_problem, unique_slug,
+    validate_spec,
 };
 use super::parse_message;
 use super::store::ConnectionStore;
@@ -38,6 +39,7 @@ struct Entry {
     environment: Option<String>,
 }
 
+/// Versions 1 and 2 share this shape; version 2 additionally allows `[connection.ai]`.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct V1File {
@@ -76,6 +78,17 @@ struct WireConnection {
     tls: Option<WireTls>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ssh: Option<WireSsh>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ai: Option<WireAi>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireAi {
+    #[serde(default, skip_serializing_if = "is_false")]
+    enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    send_rows: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -148,7 +161,7 @@ pub(super) fn parse(path: &Path, text: &str) -> Result<ConnectionStore, ConfigEr
             let file: V0File = toml::from_str(text).map_err(|e| parse_err(&e))?;
             migrate_v0(path, &file)
         }
-        Some(n) if n == i64::from(CONNECTIONS_FORMAT_VERSION) => {
+        Some(n) if n == 1 || n == i64::from(CONNECTIONS_FORMAT_VERSION) => {
             let file: V1File = toml::from_str(text).map_err(|e| parse_err(&e))?;
             convert_v1(path, &file)
         }
@@ -233,6 +246,7 @@ fn check_id(id: &str) -> Result<(), String> {
 
 fn convert_v1(path: &Path, file: &V1File) -> Result<ConnectionStore, ConfigError> {
     let groups = convert_groups(path, &file.groups)?;
+    let v1_only = file.version < 2;
     let group_ids: HashSet<&str> = groups.iter().map(|g| g.id().as_str()).collect();
     let mut ids = HashSet::new();
     let mut names = HashSet::new();
@@ -247,6 +261,9 @@ fn convert_v1(path: &Path, file: &V1File) -> Result<ConnectionStore, ConfigError
             && !group_ids.contains(g.as_str())
         {
             return Err(fail(&format!("group {g:?} does not exist")));
+        }
+        if v1_only && c.ai.is_some() {
+            return Err(fail("the ai table needs version = 2"));
         }
         let spec = spec_from_wire(c).map_err(|m| fail(&m))?;
         let spec = validate_spec(spec).map_err(|e| fail(&e.to_string()))?;
@@ -320,6 +337,10 @@ fn spec_from_wire(c: &WireConnection) -> Result<ConnectionSpec, String> {
         c.environment.as_deref(),
     )?;
     spec.password_in_keychain = c.password_in_keychain;
+    if let Some(a) = &c.ai {
+        spec.ai = ConnectionAi::new(a.enabled);
+        spec.ai.send_rows = a.send_rows;
+    }
     if let Some(t) = &c.tls {
         let mode = TlsMode::from_id(&t.mode).ok_or_else(|| {
             format!(
@@ -374,10 +395,19 @@ fn ssh_from_wire(s: &WireSsh) -> Result<SshProfile, String> {
 
 // ---- saving -------------------------------------------------------------
 
-/// Serialises the store as a `version = 1` file.
+/// Serialises the store as a `version = 2` file when any connection has AI settings, else as
+/// `version = 1` so older builds can still read it.
 pub(super) fn serialize(path: &Path, store: &ConnectionStore) -> Result<String, ConfigError> {
+    let uses_ai = store
+        .connections()
+        .iter()
+        .any(|c| !c.spec().ai.is_default());
     let file = V1File {
-        version: CONNECTIONS_FORMAT_VERSION,
+        version: if uses_ai {
+            CONNECTIONS_FORMAT_VERSION
+        } else {
+            1
+        },
         groups: store
             .groups()
             .iter()
@@ -411,6 +441,10 @@ fn wire_connection(p: &ConnectionProfile) -> WireConnection {
             ca_cert: t.ca_cert.clone(),
             client_cert: t.client_cert.clone(),
             client_key: t.client_key.clone(),
+        }),
+        ai: (!s.ai.is_default()).then_some(WireAi {
+            enabled: s.ai.enabled,
+            send_rows: s.ai.send_rows,
         }),
         ssh: s.ssh.as_ref().map(|h| {
             let (auth, key_file, passphrase) = match &h.auth {
@@ -756,9 +790,9 @@ target = "app.db"
 
     #[test]
     fn version_handling() {
-        let e = store_msg("version = 2\n");
+        let e = store_msg("version = 3\n");
         assert!(
-            e.contains("written by a newer SQLer (version 2, this build reads up to 1)"),
+            e.contains("written by a newer SQLer (version 3, this build reads up to 2)"),
             "{e}"
         );
         assert!(store_msg("version = 0\n").contains("unsupported version 0"));
@@ -767,6 +801,79 @@ target = "app.db"
         let r = load_store("version = -1\n");
         assert!(matches!(r, Err(ConfigError::Parse { .. })), "{r:?}");
         assert_eq!(load_store("version = 1\n").unwrap().connections().len(), 0);
+        assert_eq!(load_store("version = 2\n").unwrap().connections().len(), 0);
+    }
+
+    #[test]
+    fn v1_without_ai_loads_with_default_and_stays_version_1() {
+        let s = load_store(V1).unwrap();
+        assert!(s.connections().iter().all(|c| c.spec().ai.is_default()));
+        let text = serialize(Path::new("c.toml"), &s).unwrap();
+        assert!(text.starts_with("version = 1\n"), "{text}");
+        assert!(!text.contains("[connection.ai]"), "{text}");
+    }
+
+    const V2: &str = r#"version = 2
+
+[[connection]]
+id = "a"
+name = "A"
+driver = "sqlite"
+target = "a.db"
+
+[connection.ai]
+enabled = true
+send_rows = false
+
+[[connection]]
+id = "b"
+name = "B"
+driver = "sqlite"
+target = "b.db"
+environment = "prod"
+
+[connection.ai]
+enabled = true
+
+[[connection]]
+id = "c"
+name = "C"
+driver = "sqlite"
+target = "c.db"
+"#;
+
+    #[test]
+    fn v2_with_ai_round_trips_as_version_2() {
+        let s = load_store(V2).unwrap();
+        let a = s.connections()[0].spec().ai;
+        assert!(a.enabled && a.send_rows == Some(false));
+        let b = &s.connections()[1];
+        assert!(b.ai_enabled() && !b.ai_sends_rows());
+        assert!(s.connections()[2].spec().ai.is_default());
+        let text = serialize(Path::new("c.toml"), &s).unwrap();
+        assert!(text.starts_with("version = 2\n"), "{text}");
+        assert_eq!(text.matches("[connection.ai]").count(), 2, "{text}");
+        assert_eq!(parse(Path::new("c.toml"), &text).unwrap(), s);
+    }
+
+    #[test]
+    fn ai_table_in_version_1_is_rejected() {
+        let text = V2.replacen("version = 2", "version = 1", 1);
+        let e = store_msg(&text);
+        assert!(
+            e.contains("connection[0] \"A\": the ai table needs version = 2"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn ai_table_rejects_unknown_keys() {
+        let text = V2.replacen(
+            "enabled = true\nsend_rows",
+            "enabled = true\nkey = \"x\"\nsend_rows",
+            1,
+        );
+        assert!(store_msg(&text).contains("unknown field"));
     }
 
     #[test]

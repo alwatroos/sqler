@@ -180,9 +180,9 @@ fn newer_version_is_refused_with_a_clear_message() {
     let sc = Scratch::new("newer");
     let d = sc.dir();
     fs::create_dir_all(&sc.0).unwrap();
-    fs::write(d.connections_path(), "version = 2\n").unwrap();
+    fs::write(d.connections_path(), "version = 3\n").unwrap();
     let e = d.load_connection_store().unwrap_err().to_string();
-    assert!(e.contains("newer SQLer") && e.contains("version 2"), "{e}");
+    assert!(e.contains("newer SQLer") && e.contains("version 3"), "{e}");
 }
 
 #[test]
