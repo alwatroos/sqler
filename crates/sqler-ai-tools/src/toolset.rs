@@ -5,19 +5,26 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Instant, SystemTime};
 
 use serde_json::{Value, json};
 use sqler_ai_api::{ToolCall, ToolDefinition, ToolResult};
 use sqler_catalog::Catalog;
+use sqler_config::{AiConfig, RedactionList};
 use sqler_driver_api::sqler_core::DbObject;
-use sqler_sql::StatementClass;
+use sqler_sql::{Dialect, StatementClass};
 
 use crate::approve::Approver;
+use crate::audit::{
+    AuditDraft, AuditEntry, AuditSink, DraftError, DraftRun, DraftStatement, Surface,
+};
 use crate::error::ToolError;
 use crate::limits::Limits;
+use crate::redact::{RedactScope, Redaction, RedactionSummary};
 use crate::schema::{self, names};
 use crate::source::{ConnectionInfo, SessionSource};
 use crate::ui::UiHost;
+use crate::untrusted::wrap_untrusted;
 use crate::{catalog_tools, query_tools};
 
 /// The most entries of the function-definition cache; it is cleared when full.
@@ -58,10 +65,12 @@ pub struct ExecutedStatement {
     pub rows: u64,
     /// Whether and why the rows were cut.
     pub truncated: Option<Truncation>,
+    /// Whether the database reported an error for this statement.
+    pub failed: bool,
 }
 
 /// A tool result plus what an audit log needs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct CallReport {
     /// The result to give back to the model.
@@ -70,6 +79,10 @@ pub struct CallReport {
     pub connection: Option<String>,
     /// The statements sent to the driver, in order.
     pub executed: Vec<ExecutedStatement>,
+    /// The audit entry of this call (built with or without a sink).
+    pub audit: AuditEntry,
+    /// What the redaction hid in the result.
+    pub redaction: RedactionSummary,
 }
 
 /// What a dispatched call leaves behind besides its content.
@@ -77,6 +90,9 @@ pub struct CallReport {
 pub(crate) struct Ran {
     pub connection: Option<String>,
     pub executed: Vec<ExecutedStatement>,
+    pub info: Option<ConnectionInfo>,
+    /// Every planned statement: its SQL, class and whether it needs approval.
+    pub planned: Vec<(String, StatementClass, bool)>,
 }
 
 type DefinitionKey = (String, DbObject);
@@ -86,6 +102,9 @@ pub(crate) struct Inner {
     pub limits: Limits,
     pub approver: Option<Arc<dyn Approver>>,
     pub ui: Option<Arc<dyn UiHost>>,
+    pub redaction: Redaction,
+    pub audit: Option<Arc<dyn AuditSink>>,
+    pub surface: Surface,
     definitions: Mutex<HashMap<DefinitionKey, Option<String>>>,
 }
 
@@ -171,9 +190,18 @@ impl ToolSet {
                 limits,
                 approver: None,
                 ui: None,
+                redaction: Redaction::default(),
+                audit: None,
+                surface: Surface::Unspecified,
                 definitions: Mutex::new(HashMap::new()),
             }),
         }
+    }
+
+    /// A tool set with the limits and the redaction list of `config`.
+    #[must_use]
+    pub fn configured(source: Arc<dyn SessionSource>, config: &AiConfig) -> Self {
+        Self::new(source, Limits::from(&config.limits)).with_redaction(config.redaction.clone())
     }
 
     fn rebuilt(&self, change: impl FnOnce(&mut Inner)) -> Self {
@@ -182,6 +210,9 @@ impl ToolSet {
             limits: self.inner.limits,
             approver: self.inner.approver.clone(),
             ui: self.inner.ui.clone(),
+            redaction: self.inner.redaction.clone(),
+            audit: self.inner.audit.clone(),
+            surface: self.inner.surface,
             definitions: Mutex::new(HashMap::new()),
         };
         change(&mut inner);
@@ -202,6 +233,21 @@ impl ToolSet {
         self.rebuilt(|i| i.ui = Some(ui))
     }
 
+    /// Sets the redaction list (the default is the built-in list).
+    #[must_use]
+    pub fn with_redaction(&self, list: RedactionList) -> Self {
+        self.rebuilt(|i| i.redaction = Redaction::new(list))
+    }
+
+    /// Sets the audit sink and the surface written to every entry.
+    #[must_use]
+    pub fn with_audit(&self, sink: Arc<dyn AuditSink>, surface: Surface) -> Self {
+        self.rebuilt(|i| {
+            i.audit = Some(sink);
+            i.surface = surface;
+        })
+    }
+
     /// The tool definitions to export to providers and MCP.
     #[must_use]
     pub fn definitions(&self) -> Vec<ToolDefinition> {
@@ -215,16 +261,92 @@ impl ToolSet {
 
     /// Runs one tool call and reports what ran.
     pub async fn call_detailed(&self, call: &ToolCall) -> CallReport {
+        let started_at = SystemTime::now();
+        let started = Instant::now();
         let mut ran = Ran::default();
         let outcome = self.run(call, &mut ran).await;
-        let result = match outcome {
-            Ok(content) => ToolResult::ok(&call.id, content.to_string()),
-            Err(err) => ToolResult::error(&call.id, error_json(&err).to_string()),
+        self.finish(call, started_at, started, outcome, ran)
+    }
+
+    /// The one exit of every call: redact, wrap, build the result, audit.
+    fn finish(
+        &self,
+        call: &ToolCall,
+        started_at: SystemTime,
+        started: Instant,
+        outcome: Result<Value, ToolError>,
+        ran: Ran,
+    ) -> CallReport {
+        let denied_index = match &outcome {
+            Err(ToolError::Denied { index }) => Some(*index),
+            _ => None,
         };
+        let code = outcome.as_ref().err().map(ToolError::code);
+        let failed = outcome.is_err();
+        let mut body = match outcome {
+            Ok(content) => content,
+            Err(err) => error_json(&err),
+        };
+        let (send_rows, dialect) = ran.info.as_ref().map_or((false, None), |i| {
+            (i.send_rows, Dialect::from_driver_id(i.driver.as_str()))
+        });
+        let summary = self
+            .inner
+            .redaction
+            .apply(&mut body, RedactScope::new(send_rows, dialect));
+        let message = body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let content = wrap_untrusted(&body);
+        let result_bytes = content.len();
+        let result = if failed {
+            ToolResult::error(&call.id, content)
+        } else {
+            ToolResult::ok(&call.id, content)
+        };
+        let statements = ran
+            .planned
+            .iter()
+            .enumerate()
+            .map(|(i, (sql, class, needs_approval))| DraftStatement {
+                sql,
+                class: *class,
+                needs_approval: *needs_approval,
+                ran: ran.executed.get(i).map(|e| DraftRun {
+                    rows: e.rows,
+                    truncated: e.truncated.map(Truncation::as_str),
+                    failed: e.failed,
+                }),
+            })
+            .collect();
+        let audit = AuditEntry::from_draft(AuditDraft {
+            started: started_at,
+            duration: started.elapsed(),
+            surface: self.inner.surface,
+            tool: &call.name,
+            connection: ran.info.as_ref().map(|i| (i.id.as_str(), i.name.as_str())),
+            raw_arguments: &call.arguments,
+            statements,
+            error: code.map(|code| DraftError {
+                code,
+                message: &message,
+                denied_index,
+            }),
+            result_bytes,
+            redaction: summary.clone(),
+            rules: &self.inner.redaction,
+            dialect,
+        });
+        if let Some(sink) = &self.inner.audit {
+            sink.record(&audit);
+        }
         CallReport {
             result,
             connection: ran.connection,
             executed: ran.executed,
+            audit,
+            redaction: summary,
         }
     }
 
@@ -288,11 +410,16 @@ impl ToolSet {
             }
             names::OPEN_IN_EDITOR => {
                 let a: schema::OpenInEditorArgs = schema::parse(args)?;
-                query_tools::open_in_editor(ts, &a).await
+                let info = match &a.connection {
+                    Some(name) => Some(self.connection(name, ran)?),
+                    None => None,
+                };
+                query_tools::open_in_editor(ts, info.as_ref(), &a).await
             }
             names::OPEN_RESULTS_TAB => {
                 let a: schema::OpenResultsTabArgs = schema::parse(args)?;
-                query_tools::open_results_tab(ts, &a).await
+                let info = self.connection(&a.connection, ran)?;
+                query_tools::open_results_tab(ts, &info, &a).await
             }
             names::SEARCH_DATA => Err(ToolError::NotAvailable(
                 "search_data is not available in this host".to_owned(),
@@ -304,6 +431,7 @@ impl ToolSet {
     fn connection(&self, name: &str, ran: &mut Ran) -> Result<ConnectionInfo, ToolError> {
         let info = self.inner.resolve(name)?;
         ran.connection = Some(info.id.clone());
+        ran.info = Some(info.clone());
         Ok(info)
     }
 }

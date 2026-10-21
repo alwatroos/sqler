@@ -357,6 +357,33 @@ pub(crate) fn search_data_schema() -> Value {
     )
 }
 
+/// Every argument name of every tool schema (including the tools a host may add later), sorted.
+/// The audit keeps an argument key only when it is in this set.
+pub(crate) fn argument_names() -> &'static std::collections::BTreeSet<String> {
+    static NAMES: std::sync::OnceLock<std::collections::BTreeSet<String>> =
+        std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        [
+            list_connections_schema(),
+            list_schemas_schema(),
+            list_tables_schema(),
+            describe_table_schema(),
+            describe_function_schema(),
+            search_schema_schema(),
+            sample_rows_schema(),
+            run_query_schema(),
+            explain_query_schema(),
+            open_in_editor_schema(),
+            open_results_tab_schema(),
+            search_data_schema(),
+        ]
+        .iter()
+        .filter_map(|s| s.get("properties").and_then(Value::as_object))
+        .flat_map(|p| p.keys().cloned())
+        .collect()
+    })
+}
+
 /// The tools every host offers, as `(name, description, schema)`.
 fn core_tools() -> Vec<(&'static str, &'static str, Value)> {
     vec![
