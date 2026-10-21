@@ -277,11 +277,16 @@ async fn clean_eof_before_a_finish_reason_is_a_protocol_error() {
     let server = MockServer::start(chat_route(Reply::sse(&partial, 64, Finish::Clean))).await;
     let p = provider(&server);
     let mut s = p.stream(request());
-    // The role chunk has empty content, so the first item is the error.
+    // Drain the stream: whatever was delivered first, the last item is the error.
+    let mut items = Vec::new();
+    while let Some(item) = s.next_event().await {
+        items.push(item);
+    }
     assert_eq!(
-        s.next_event().await.unwrap().unwrap_err(),
+        items.pop().unwrap().unwrap_err(),
         AiError::Protocol("stream ended before [DONE]".into())
     );
+    assert!(items.iter().all(Result::is_ok));
     assert!(s.next_event().await.is_none());
 }
 
