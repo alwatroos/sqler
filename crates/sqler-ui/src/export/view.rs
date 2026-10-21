@@ -5,16 +5,27 @@
 //! in `Workspace`; every button calls back into `WorkspaceView` (`workspace/view/export.rs`).
 
 use gpui::{
-    AnyElement, ClickEvent, Context, Div, ElementId, InteractiveElement as _, IntoElement as _,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
+    AnyElement, App, ClickEvent, Context, Div, ElementId, InteractiveElement as _,
+    IntoElement as _, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    Styled as _, div, px,
 };
-use gpui_component::ActiveTheme as _;
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
+use gpui_component::radio::Radio;
+use gpui_component::spinner::Spinner;
+use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
 use super::{Delimiter, ExportDialog, ExportScope, FreshRun, LoadedRows};
 use crate::grid::group_thousands;
 use crate::tabs::TabId;
+use crate::theme::SPACE;
+use crate::theme::icons::AppIcon;
 use crate::workspace::WorkspaceView;
+use crate::workspace::chrome::{
+    DIALOG_W_MD, TOOLBAR_HEIGHT, dialog_footer, dialog_panel, dialog_title, field_row, scrim,
+    ui_scale,
+};
 
 /// The label of a scope choice.
 fn scope_label(dialog: &ExportDialog, scope: ExportScope) -> String {
@@ -47,20 +58,6 @@ fn offered_scopes(dialog: &ExportDialog) -> Vec<ExportScope> {
     scopes
 }
 
-fn scrim() -> gpui::Stateful<Div> {
-    div()
-        .id("export-scrim")
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(gpui::black().opacity(0.45))
-        .occlude()
-}
-
 /// A button-like choice; the selected one has a filled background.
 fn choice(
     id: impl Into<ElementId>,
@@ -69,15 +66,16 @@ fn choice(
     cx: &Context<WorkspaceView>,
 ) -> gpui::Stateful<Div> {
     let theme = cx.theme();
-    let (border, active) = (theme.border, theme.list_active);
+    let (border, active, ring) = (theme.border, theme.list_active, theme.ring);
+    let radius = theme.radius;
     let mut chip = div()
         .id(id)
-        .px_3()
-        .py_1()
-        .rounded_md()
+        .px(px(SPACE[3]))
+        .py(px(SPACE[1]))
+        .rounded(radius)
         .border_1()
-        .border_color(border)
-        .text_sm()
+        .border_color(if selected { ring } else { border })
+        .text_size(px(ui_scale(cx).sm))
         .cursor_pointer()
         .child(label.into());
     if selected {
@@ -86,14 +84,8 @@ fn choice(
     chip
 }
 
-fn labelled(label: &'static str, input: &gpui::Entity<InputState>) -> Div {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .child(div().w(px(120.)).flex_none().text_sm().child(label))
-        .child(div().flex_1().child(Input::new(input)))
+fn labelled(label: &'static str, input: &gpui::Entity<InputState>, cx: &App) -> Div {
+    field_row(label, Input::new(input), cx)
 }
 
 /// The export dialog; `None` when none is open.
@@ -105,16 +97,11 @@ pub(crate) fn export_overlay(
     let dialog = view.workspace().export_dialog()?;
     let inputs = view.export_inputs();
     let theme = cx.theme();
-    let (panel_bg, border, fg, muted, danger) = (
-        theme.popover,
-        theme.border,
-        theme.popover_foreground,
-        theme.muted_foreground,
-        theme.danger,
-    );
+    let (muted, danger) = (theme.muted_foreground, theme.danger);
+    let scale = ui_scale(cx);
     let form = &dialog.form;
 
-    let mut formats = div().flex().flex_row().flex_wrap().gap_2();
+    let mut formats = div().flex().flex_row().flex_wrap().gap(px(SPACE[2]));
     for (i, (id, label, _)) in dialog.formats.iter().enumerate() {
         let id = *id;
         formats = formats.child(
@@ -124,36 +111,30 @@ pub(crate) fn export_overlay(
         );
     }
 
-    let mut scopes = div().flex().flex_col().gap_1();
+    let mut scopes = div().flex().flex_col().gap(px(SPACE[1]));
     for (i, scope) in offered_scopes(dialog).into_iter().enumerate() {
-        let mark = if form.scope == scope {
-            "(\u{2022})"
-        } else {
-            "( )"
-        };
         scopes = scopes.child(
-            div()
-                .id(("export-scope", i))
-                .flex()
-                .flex_row()
-                .gap_2()
-                .text_sm()
-                .cursor_pointer()
-                .child(mark)
-                .child(scope_label(dialog, scope))
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            Radio::new(("export-scope", i))
+                .label(scope_label(dialog, scope))
+                .checked(form.scope == scope)
+                .on_click(cx.listener(move |view, _: &bool, _, cx| {
                     view.export_set_scope(scope, cx);
                 })),
         );
     }
     if let FreshRun::Refused(reason) = &dialog.fresh {
-        scopes = scopes.child(div().text_xs().text_color(muted).child(reason.clone()));
+        scopes = scopes.child(
+            div()
+                .text_size(px(scale.xs))
+                .text_color(muted)
+                .child(reason.clone()),
+        );
     }
 
-    let mut options = div().flex().flex_col().gap_2();
+    let mut options = div().flex().flex_col().gap(px(SPACE[2]));
     match form.format.as_str() {
         sqler_export::CSV => {
-            let mut delimiters = div().flex().flex_row().gap_2();
+            let mut delimiters = div().flex().flex_row().gap(px(SPACE[2]));
             for (i, delimiter) in Delimiter::ALL.into_iter().enumerate() {
                 delimiters = delimiters.child(
                     choice(
@@ -168,78 +149,47 @@ pub(crate) fn export_overlay(
                 );
             }
             let header = form.header;
-            options = options
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_2()
-                        .child(div().w(px(120.)).flex_none().text_sm().child("Delimiter"))
-                        .child(delimiters),
-                )
-                .child(
-                    div()
-                        .id("export-header")
-                        .flex()
-                        .flex_row()
-                        .gap_2()
-                        .text_sm()
-                        .cursor_pointer()
-                        .child(if header { "[x]" } else { "[ ]" })
-                        .child("Header row")
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            view.export_set_header(!header, cx);
-                        })),
-                );
+            options = options.child(field_row("Delimiter", delimiters, cx)).child(
+                Checkbox::new("export-header")
+                    .label("Header row")
+                    .checked(header)
+                    .on_click(cx.listener(move |view, checked: &bool, _, cx| {
+                        view.export_set_header(*checked, cx);
+                    })),
+            );
             if let Some(inputs) = inputs {
-                options = options.child(labelled("NULL text", &inputs.null_text));
+                options = options.child(labelled("NULL text", &inputs.null_text, cx));
             }
         }
         sqler_export::MARKDOWN => {
             if let Some(inputs) = inputs {
-                options = options.child(labelled("NULL text", &inputs.null_text));
+                options = options.child(labelled("NULL text", &inputs.null_text, cx));
             }
         }
         sqler_export::SQL => {
             if let Some(inputs) = inputs {
                 options = options
-                    .child(labelled("Table", &inputs.table))
-                    .child(labelled("Schema (optional)", &inputs.schema))
-                    .child(labelled("Rows per INSERT", &inputs.rows_per_insert));
+                    .child(labelled("Table", &inputs.table, cx))
+                    .child(labelled("Schema (optional)", &inputs.schema, cx))
+                    .child(labelled("Rows per INSERT", &inputs.rows_per_insert, cx));
             }
         }
         _ => {}
     }
 
-    let footer = div()
-        .flex()
-        .flex_row()
-        .justify_end()
-        .gap_2()
-        .p_4()
+    let footer = dialog_footer(cx)
         .child(
-            div()
-                .id("export-cancel")
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(border)
-                .cursor_pointer()
-                .child("Cancel")
+            Button::new("export-cancel")
+                .label("Cancel")
+                .small()
+                .outline()
                 .on_click(cx.listener(|view, _: &ClickEvent, _, cx| view.export_dismiss(cx))),
         )
         .child(
-            div()
-                .id("export-run")
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(border)
-                .cursor_pointer()
-                .child("Export\u{2026}")
+            Button::new("export-run")
+                .label("Export\u{2026}")
+                .small()
+                .primary()
                 .on_click(cx.listener(|view, event: &ClickEvent, _, cx| {
                     if event.click_count() == 1 {
                         view.export_submit(cx);
@@ -250,31 +200,23 @@ pub(crate) fn export_overlay(
     let mut body = div()
         .flex()
         .flex_col()
-        .gap_3()
-        .px_4()
-        .py_2()
+        .gap(px(SPACE[3]))
         .child(formats)
         .child(scopes)
         .child(options);
     if let Some(error) = &dialog.error {
-        body = body.child(div().text_sm().text_color(danger).child(error.clone()));
+        body = body.child(
+            div()
+                .text_size(px(scale.sm))
+                .text_color(danger)
+                .child(error.clone()),
+        );
     }
     Some(
-        scrim()
+        scrim("export-scrim", cx)
             .child(
-                div()
-                    .id("export-dialog")
-                    .w(px(520.))
-                    .max_h(px(640.))
-                    .flex()
-                    .flex_col()
-                    .bg(panel_bg)
-                    .text_color(fg)
-                    .border_1()
-                    .border_color(border)
-                    .rounded_lg()
-                    .shadow_lg()
-                    .child(div().px_4().pt_4().pb_1().text_lg().child("Export results"))
+                dialog_panel("export-dialog", DIALOG_W_MD, cx)
+                    .child(dialog_title(None, "Export results", cx))
                     .child(body)
                     .child(footer),
             )
@@ -291,37 +233,38 @@ pub(crate) fn export_bar(
     let status = view.workspace().export_status(tab)?;
     let theme = cx.theme();
     let (border, muted) = (theme.border, theme.muted_foreground);
+    let scale = ui_scale(cx);
     let cancelling = status.cancelling;
-    let mut cancel = div()
-        .id("export-bar-cancel")
-        .px_2()
-        .rounded_md()
-        .border_1()
-        .border_color(border)
-        .text_sm()
-        .child("Cancel");
-    if !cancelling {
-        cancel = cancel
-            .cursor_pointer()
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| view.export_cancel(tab, cx)));
-    }
+    let cancel = Button::new("export-bar-cancel")
+        .label("Cancel")
+        .icon(AppIcon::CircleStop)
+        .ghost()
+        .small()
+        .disabled(cancelling)
+        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| view.export_cancel(tab, cx)));
     Some(
         div()
             .id("export-bar")
             .flex_none()
             .w_full()
+            .h(px(TOOLBAR_HEIGHT))
             .flex()
             .flex_row()
             .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
+            .gap(px(SPACE[3]))
+            .px(px(SPACE[3]))
             .border_b_1()
             .border_color(border)
             .child(
+                Spinner::new()
+                    .icon(AppIcon::LoaderCircle)
+                    .color(muted)
+                    .xsmall(),
+            )
+            .child(
                 div()
                     .flex_1()
-                    .text_sm()
+                    .text_size(px(scale.sm))
                     .text_color(muted)
                     .child(status.status_text()),
             )

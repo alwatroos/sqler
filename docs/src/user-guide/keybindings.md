@@ -12,7 +12,7 @@ Every action in SQLer is a command with an ID such as `tab:close`. You can run a
 | Enter | Run the selected command and close the palette. |
 | Esc | Close the palette without running anything. |
 
-Each row shows the command title, its ID and its current shortcut. The palette shows the effective shortcut in canonical form, with `mod` resolved for your platform. For example, `mod+k` in `keybindings.toml` is shown as `cmd+k` on macOS and `ctrl+k` elsewhere, and modifiers are put in a fixed order. A shortcut that lost a conflict is not shown. Clicking a row also runs it.
+Each row shows the command title, its ID and its current shortcut as key chips. The palette shows the effective shortcut with `mod` resolved for your platform and the modifiers in a fixed order. For example, `mod+k` in `keybindings.toml` is shown as `⌘K` on macOS and `Ctrl+K` elsewhere. With an empty search box the commands you used last are listed first under "Recently used" (up to 10), followed by "All commands"; once you type, the list is one ranked list. When nothing matches, the palette says "No matching commands". A shortcut that lost a conflict is not shown. Clicking a row also runs it.
 
 The palette lists commands that need no argument. `connection:select`, `tab:activate`, `settings:set-theme` and `settings:set-ui-font-size` are not listed, because they need a value (an entry, a tab, a theme or a size) and are driven by clicks and the Settings tab. `connection:open` opens the connection selected in the sidebar and does nothing when none is selected. It has no default shortcut.
 

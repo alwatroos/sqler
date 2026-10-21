@@ -6,25 +6,38 @@
 //! header, the root) moves it.
 
 use gpui::{
-    AnyElement, AppContext as _, ClickEvent, Context, ElementId, Hsla, InteractiveElement as _,
-    IntoElement, ListAlignment, ListState, MouseButton, MouseDownEvent, ParentElement as _, Render,
-    StatefulInteractiveElement as _, Styled as _, Window, div, list, px, rgb,
+    AnyElement, AnyView, App, AppContext as _, ClickEvent, Context, Div, ElementId, Hsla,
+    InteractiveElement as _, IntoElement, ListAlignment, ListState, MouseButton, MouseDownEvent,
+    ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Window, div, list, px, rgb,
 };
-use gpui_component::ActiveTheme as _;
-use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::menu::ContextMenuExt as _;
+use gpui_component::spinner::Spinner;
+use gpui_component::tooltip::Tooltip;
+use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
 use sqler_config::{ConnectionId, GroupId};
-use sqler_driver_api::sqler_core::Environment;
+use sqler_driver_api::sqler_core::{Environment, ObjectKind};
 
 use super::{
     ConnectionStatus, RowKind, Selection, SidebarEntry, SidebarItem, SidebarRow, changed_range,
 };
-use crate::browser::{BrowserAction, LoadState, MenuEntry, TreeNodeId};
+use crate::browser::{BrowserAction, LoadState, MenuEntry, TreeNodeId, TreeNodeKind};
 use crate::connections::ConnectionAction;
-use crate::tabs::{Rgb, env_badge};
+use crate::tabs::Rgb;
 use crate::theme::icons::AppIcon;
-use crate::theme::widgets::{icon_button, section_header};
+use crate::theme::widgets::{empty_state, env_chip, icon_button, section_header};
+use crate::theme::{Appearance, SPACE, env_accent, tooltip_text};
 use crate::workbench::view::run_command_id;
+use crate::workspace::chrome::{ICON_SM, INDENT, RowState, hinted_item, list_row, ui_scale};
 use crate::workspace::{BrowserNote, Workspace, WorkspaceAction, WorkspaceView};
+
+/// Width of the failure message on an object row.
+const FAIL_W: f32 = 110.;
+/// Diameter of the colour dot of a connection.
+const DOT: f32 = 8.;
+/// Opacity of the tint behind a production connection that is not selected.
+const PROD_TINT: f32 = 0.08;
 
 /// Pixels rendered above and below the visible part of the list.
 const OVERDRAW: f32 = 240.;
@@ -95,12 +108,6 @@ pub(crate) fn sync_list(entries: &mut Vec<ListEntry>, state: &ListState, new: Ve
     *entries = new;
 }
 
-/// Shown when there are no saved connections and no load error.
-pub(crate) const EMPTY_TEXT: &str = "No saved connections. Use the + button above, or run Connection: New Connection from the command palette.";
-
-/// Indentation per nesting level, in pixels.
-const INDENT: f32 = 14.;
-
 /// The indentation of a nesting depth, in pixels.
 pub(crate) fn indent(depth: usize) -> f32 {
     INDENT * u16::try_from(depth).map_or(0., f32::from)
@@ -133,7 +140,6 @@ impl Render for DragConnection {
 /// The colours a row needs, copied out of the theme.
 #[derive(Clone, Copy)]
 struct Palette {
-    border: Hsla,
     muted: Hsla,
     danger: Hsla,
     selected_bg: Hsla,
@@ -144,33 +150,10 @@ fn group_id(name: &str, key: &str) -> ElementId {
     ElementId::Name(format!("{name}-{key}").into())
 }
 
-/// A small text button that dispatches a connection action.
-fn text_button(
-    id: impl Into<ElementId>,
-    label: &'static str,
-    color: Hsla,
-    action: ConnectionAction,
-    cx: &mut Context<WorkspaceView>,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .text_xs()
-        .px_1()
-        .rounded_sm()
-        .text_color(color)
-        .cursor_pointer()
-        .child(label)
-        .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
-            view.dispatch_connection(action.clone(), cx);
-            cx.stop_propagation();
-        }))
-}
-
 /// The colours of the current theme, as the rows need them.
 fn palette_of(cx: &Context<WorkspaceView>) -> Palette {
     let theme = cx.theme();
     Palette {
-        border: theme.sidebar_border,
         muted: theme.muted_foreground,
         danger: theme.danger,
         selected_bg: theme.sidebar_accent,
@@ -245,7 +228,7 @@ pub(crate) fn sidebar(
             "Changes are not saved while the file cannot be loaded. Fix connections.toml and restart.",
         ));
     } else if model.entries().is_empty() && model.store().groups().is_empty() {
-        notes = notes.child(div().text_sm().text_color(muted).child(EMPTY_TEXT));
+        notes = notes.child(connections_empty(view, cx));
     }
     if let Some(error) = model.save_error() {
         notes = notes.child(
@@ -267,7 +250,7 @@ pub(crate) fn sidebar(
 
     let rows = list(
         view.sidebar_list().clone(),
-        cx.processor(|view, ix: usize, _window, cx| item(view, ix, cx)),
+        cx.processor(|view, ix: usize, window, cx| item(view, ix, window, cx)),
     )
     .size_full();
 
@@ -286,12 +269,113 @@ pub(crate) fn sidebar(
         .child(div().flex_1().min_h_0().px_2().pb_2().child(rows))
 }
 
+/// The icon of a tree node, 14 px, muted.
+fn node_icon(kind: &TreeNodeKind, expanded: bool) -> AppIcon {
+    let folder = if expanded {
+        AppIcon::FolderOpen
+    } else {
+        AppIcon::Folder
+    };
+    match kind {
+        TreeNodeKind::Root => AppIcon::Server,
+        TreeNodeKind::Folder(_) | TreeNodeKind::Columns(_) => folder,
+        TreeNodeKind::Column { .. } => AppIcon::Columns2,
+        TreeNodeKind::Object(object) => match object.kind {
+            ObjectKind::Database => AppIcon::Database,
+            ObjectKind::Schema => AppIcon::ListTree,
+            ObjectKind::Table => AppIcon::Table,
+            ObjectKind::View => AppIcon::Eye,
+            ObjectKind::MaterializedView => AppIcon::Table2,
+            ObjectKind::Function | ObjectKind::Procedure => AppIcon::SquareFunction,
+            ObjectKind::Trigger => AppIcon::SquarePlay,
+            ObjectKind::Sequence => AppIcon::FileText,
+            ObjectKind::Type => AppIcon::FileCode,
+            ObjectKind::Extension => AppIcon::Plug,
+            // `Index` and `Role` share the key icon; so does any future kind.
+            _ => AppIcon::KeyRound,
+        },
+    }
+}
+
+/// The icon of a menu entry; destructive `Drop` has none.
+fn entry_icon(entry: MenuEntry) -> Option<AppIcon> {
+    match entry {
+        MenuEntry::OpenData => Some(AppIcon::Table),
+        MenuEntry::OpenInEditor => Some(AppIcon::FileCode),
+        MenuEntry::GenerateCreate
+        | MenuEntry::GenerateSelect
+        | MenuEntry::GenerateInsert
+        | MenuEntry::GenerateDrop => Some(AppIcon::FileText),
+        MenuEntry::CopyName => Some(AppIcon::Copy),
+        MenuEntry::Refresh => Some(AppIcon::RefreshCw),
+        MenuEntry::Properties => Some(AppIcon::SlidersHorizontal),
+        _ => None,
+    }
+}
+
+/// A muted icon of the row size.
+fn row_icon(icon: AppIcon, color: Hsla) -> Icon {
+    Icon::new(icon).size(px(ICON_SM)).text_color(color)
+}
+
+/// The animated "running" indicator, sized like a row icon.
+fn running_spinner(color: Hsla) -> Spinner {
+    Spinner::new()
+        .icon(AppIcon::LoaderCircle)
+        .color(color)
+        .xsmall()
+}
+
+/// The space where a chevron would be, for rows that cannot expand.
+fn chevron_spacer() -> Div {
+    div().w(px(ICON_SM)).flex_none()
+}
+
+/// The text size for `xs` secondary lines.
+fn xs(cx: &App) -> Pixels {
+    px(ui_scale(cx).xs)
+}
+
+/// A tooltip with the given text.
+fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text: SharedString = text.into();
+    move |window, cx| Tooltip::new(text.clone()).build(window, cx)
+}
+
+/// The left padding of a row at `depth`.
+fn row_pad(depth: usize) -> Pixels {
+    px(SPACE[3] + indent(depth))
+}
+
+/// A small ghost button that dispatches a connection action from the action line of a row.
+fn action_button(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    action: ConnectionAction,
+    cx: &mut Context<WorkspaceView>,
+) -> Button {
+    // Destructive actions stay neutral at rest; the confirm dialog carries the danger colour.
+    Button::new(id)
+        .ghost()
+        .xsmall()
+        .label(label)
+        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            view.dispatch_connection(action.clone(), cx);
+            cx.stop_propagation();
+        }))
+}
+
 /// Builds the element of one line of the list.
-fn item(view: &WorkspaceView, ix: usize, cx: &mut Context<WorkspaceView>) -> AnyElement {
+fn item(
+    view: &WorkspaceView,
+    ix: usize,
+    window: &mut Window,
+    cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
     let Some(entry) = view.list_entries().get(ix) else {
         return div().into_any_element();
     };
-    let palette = palette_of(cx);
+    let focused = view.sidebar_focus().contains_focused(window, cx);
     let ws = view.workspace();
     let model = ws.sidebar();
     match &entry.item {
@@ -307,8 +391,11 @@ fn item(view: &WorkspaceView, ix: usize, cx: &mut Context<WorkspaceView>) -> Any
                 *depth,
                 *expanded,
                 *empty,
-                entry.selected,
-                palette,
+                RowState {
+                    selected: entry.selected,
+                    focused,
+                    disabled: false,
+                },
                 cx,
             )
             .into_any_element(),
@@ -329,15 +416,18 @@ fn item(view: &WorkspaceView, ix: usize, cx: &mut Context<WorkspaceView>) -> Any
                     *index,
                     *depth,
                     sidebar_entry,
-                    selected,
-                    palette,
+                    RowState {
+                        selected,
+                        focused,
+                        disabled: false,
+                    },
                     browser,
                     cx,
                 )
             }
         },
         SidebarItem::Object { conn, row_index } => {
-            object_row(view, conn, *row_index, entry.depth, palette, cx)
+            object_row(view, conn, *row_index, entry.depth, focused, cx)
         }
     }
 }
@@ -352,7 +442,8 @@ struct ConnectionBrowser {
     root_selected: bool,
 }
 
-/// A context menu with the given entries; each runs its command on `node` of `conn`.
+/// A context menu with the given entries; each runs its command on `node` of `conn`. The
+/// shortcut hints are read when the menu opens.
 fn with_menu(
     row: gpui::Stateful<gpui::Div>,
     conn: &ConnectionId,
@@ -365,15 +456,24 @@ fn with_menu(
     }
     let weak = cx.weak_entity();
     let conn = conn.clone();
-    row.context_menu(move |mut menu, _, _| {
+    row.context_menu(move |mut menu, _, cx| {
         for entry in &entries {
             let (weak, conn, entry) = (weak.clone(), conn.clone(), *entry);
-            menu = menu.item(PopupMenuItem::new(entry.label()).on_click(move |_, _, cx| {
-                weak.update(cx, |view, cx| {
-                    view.dispatch_object(&conn, node, BrowserAction::Entry(entry), cx);
-                })
-                .ok();
-            }));
+            let hint = weak.upgrade().and_then(|view| {
+                view.read(cx)
+                    .shortcut_hint(&BrowserAction::Entry(entry).command_id())
+            });
+            if entry.starts_group() {
+                menu = menu.separator();
+            }
+            menu = menu.item(
+                hinted_item(entry.label(), entry_icon(entry), hint).on_click(move |_, _, cx| {
+                    weak.update(cx, |view, cx| {
+                        view.dispatch_object(&conn, node, BrowserAction::Entry(entry), cx);
+                    })
+                    .ok();
+                }),
+            );
         }
         menu
     })
@@ -386,15 +486,11 @@ fn object_row(
     conn: &ConnectionId,
     row_index: usize,
     base: usize,
-    palette: Palette,
+    focused: bool,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    let Palette {
-        muted,
-        danger,
-        selected_bg,
-        ..
-    } = palette;
+    let theme = cx.theme();
+    let (muted, danger) = (theme.muted_foreground, theme.danger);
     let ws = view.workspace();
     let Some(tree) = ws.browser(conn) else {
         return div().into_any_element();
@@ -408,17 +504,14 @@ fn object_row(
     let click_conn = conn.clone();
     let toggle_conn = conn.clone();
     let press_conn = conn.clone();
-    let mut line = div()
-        .id(ElementId::Name(key.clone().into()))
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .h(px(24.))
-        .pl(px(8. + indent(base + row.depth)))
-        .pr_2()
-        .rounded_md()
-        .cursor_pointer()
+    let state = RowState {
+        selected,
+        focused,
+        disabled: false,
+    };
+    let mut line = list_row(ElementId::Name(key.clone().into()), state, cx)
+        .w_full()
+        .pl(row_pad(base + row.depth))
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |view, _: &MouseDownEvent, window, cx| {
@@ -428,45 +521,50 @@ fn object_row(
         .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
             view.click_object(&click_conn, node, event.click_count() >= 2, window, cx);
         }));
-    if selected {
-        line = line.bg(selected_bg);
-    }
-    let chevron = div()
-        .id(ElementId::Name(format!("{key}-toggle").into()))
-        .w(px(14.))
-        .flex_none()
-        .text_color(muted)
-        .child(match (row.expandable, row.expanded) {
-            (false, _) => "",
-            (true, true) => "▾",
-            (true, false) => "▸",
-        });
     let chevron = if row.expandable {
-        chevron
+        let icon = if row.expanded {
+            AppIcon::ChevronDown
+        } else {
+            AppIcon::ChevronRight
+        };
+        chevron_spacer()
+            .id(ElementId::Name(format!("{key}-toggle").into()))
             .cursor_pointer()
+            .child(row_icon(icon, muted))
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 view.dispatch_object(&toggle_conn, node, BrowserAction::Toggle, cx);
                 cx.stop_propagation();
             }))
+            .into_any_element()
     } else {
-        chevron
+        chevron_spacer().into_any_element()
     };
-    line = line
-        .child(chevron)
-        .child(div().flex_1().min_w_0().truncate().child(row.label.clone()));
+    if let Some(kind) = tree.kind(node) {
+        line = line
+            .child(chevron)
+            .child(row_icon(node_icon(kind, row.expanded), muted));
+    } else {
+        line = line.child(chevron);
+    }
+    line = line.child(div().flex_1().min_w_0().truncate().child(row.label.clone()));
     if let Some(kind) = row.kind {
-        line = line.child(div().text_xs().text_color(muted).child(kind.as_str()));
+        line = line.tooltip(tip(format!("{} ({})", row.label, kind.as_str())));
     }
     match &row.state {
         LoadState::Loading => {
-            line = line.child(div().text_xs().text_color(muted).child("loading…"));
-        }
-        LoadState::Failed(message) => {
             line = line.child(
                 div()
-                    .text_xs()
+                    .id(ElementId::Name(format!("{key}-loading").into()))
+                    .child(running_spinner(muted))
+                    .tooltip(tip("Loading…")),
+            );
+        }
+        LoadState::Failed(message) => {
+            line = line.child(row_icon(AppIcon::CircleAlert, danger)).child(
+                div()
+                    .text_size(xs(cx))
                     .text_color(danger)
-                    .max_w(px(110.))
+                    .max_w(px(FAIL_W))
                     .truncate()
                     .child(message.clone()),
             );
@@ -478,58 +576,46 @@ fn object_row(
         line = line
             .child(
                 div()
-                    .text_xs()
+                    .text_size(xs(cx))
                     .text_color(muted)
                     .child(format!("{done}/{total}")),
             )
             .child(
-                div()
-                    .id(ElementId::Name(format!("{key}-cancel").into()))
-                    .text_xs()
-                    .text_color(danger)
-                    .cursor_pointer()
-                    .child("cancel")
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.dispatch_object(&cancel_conn, node, BrowserAction::CancelRefresh, cx);
-                        cx.stop_propagation();
-                    })),
+                icon_button(
+                    ElementId::Name(format!("{key}-cancel").into()),
+                    AppIcon::X,
+                    "Cancel Refresh",
+                )
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    view.dispatch_object(&cancel_conn, node, BrowserAction::CancelRefresh, cx);
+                    cx.stop_propagation();
+                })),
             );
     }
     with_menu(line, conn, node, ws.menu_entries(conn, node), cx)
 }
 
-#[allow(clippy::too_many_arguments)] // theme colours are bundled in `Palette`; the rest is row data
 fn group_row(
     id: &GroupId,
     name: &str,
     depth: usize,
     expanded: bool,
     empty: bool,
-    selected: bool,
-    palette: Palette,
+    state: RowState,
     cx: &mut Context<WorkspaceView>,
 ) -> impl IntoElement + use<> {
-    let Palette {
-        muted,
-        danger,
-        selected_bg,
-        ..
-    } = palette;
+    let theme = cx.theme();
+    let (muted, drag_bg) = (theme.muted_foreground, theme.list_hover);
     let key = id.to_string();
     let click_id = id.clone();
     let toggle_id = id.clone();
     let drop_id = id.clone();
-    let mut row = div()
+    let mut container = div()
         .id(group_id("group", &key))
+        .w_full()
         .flex()
         .flex_col()
-        .gap_0p5()
-        .pl(px(8. + indent(depth)))
-        .pr_2()
-        .py_1()
-        .rounded_md()
-        .cursor_pointer()
-        .drag_over::<DragConnection>(move |style, _, _, _| style.bg(selected_bg))
+        .drag_over::<DragConnection>(move |style, _, _, _| style.bg(drag_bg))
         .on_drop(cx.listener(move |view, drag: &DragConnection, _, cx| {
             view.dispatch_connection(
                 ConnectionAction::MoveConnection {
@@ -539,66 +625,73 @@ fn group_row(
                 },
                 cx,
             );
-        }))
-        .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
-            view.dispatch_connection(ConnectionAction::SelectGroup(click_id.clone()), cx);
         }));
-    if selected {
-        row = row.bg(selected_bg);
-    }
-    let chevron = div()
+    let chevron = chevron_spacer()
         .id(group_id("group-toggle", &key))
-        .w(px(14.))
-        .text_color(muted)
         .cursor_pointer()
-        .child(if expanded { "▾" } else { "▸" })
-        .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
+        .child(row_icon(
+            if expanded {
+                AppIcon::ChevronDown
+            } else {
+                AppIcon::ChevronRight
+            },
+            muted,
+        ))
+        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
             view.dispatch_connection(ConnectionAction::ToggleGroup(toggle_id.clone()), cx);
             cx.stop_propagation();
         }));
-    let mut title = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
+    let mut line = list_row(group_id("group-line", &key), state, cx)
+        .pl(row_pad(depth))
+        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            view.dispatch_connection(ConnectionAction::SelectGroup(click_id.clone()), cx);
+        }))
         .child(chevron)
-        .child(div().flex_1().truncate().child(name.to_owned()));
+        .child(row_icon(node_group_icon(expanded), muted))
+        .child(div().flex_1().min_w_0().truncate().child(name.to_owned()));
     if empty {
-        title = title.child(div().text_xs().text_color(muted).child("empty"));
+        line = line.child(div().text_size(xs(cx)).text_color(muted).child("empty"));
     }
-    row = row.child(title);
-    if selected {
-        row = row.child(
+    container = container.child(line);
+    if state.selected {
+        container = container.child(
             div()
                 .flex()
                 .flex_row()
-                .gap_1()
-                .child(text_button(
+                .gap(px(SPACE[1]))
+                .pl(row_pad(depth + 1))
+                .child(action_button(
                     group_id("group-new", &key),
                     "New subgroup",
-                    muted,
                     ConnectionAction::NewGroup {
                         parent: Some(id.clone()),
                     },
                     cx,
                 ))
-                .child(text_button(
+                .child(action_button(
                     group_id("group-rename", &key),
                     "Rename",
-                    muted,
                     ConnectionAction::RenameGroup(id.clone()),
                     cx,
                 ))
-                .child(text_button(
+                .child(action_button(
                     group_id("group-delete", &key),
                     "Delete",
-                    danger,
                     ConnectionAction::DeleteGroup(id.clone()),
                     cx,
                 )),
         );
     }
-    row
+    container
+}
+
+/// The icon of a connection group.
+fn node_group_icon(expanded: bool) -> AppIcon {
+    if expanded {
+        AppIcon::FolderOpen
+    } else {
+        AppIcon::Folder
+    }
 }
 
 #[allow(clippy::too_many_lines)] // one declarative element tree
@@ -606,42 +699,43 @@ fn connection_row(
     index: usize,
     depth: usize,
     entry: &SidebarEntry,
-    selected: bool,
-    palette: Palette,
+    state: RowState,
     browser: Option<ConnectionBrowser>,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    let Palette {
-        border,
-        muted,
-        danger,
-        selected_bg,
-    } = palette;
+    let theme = cx.theme();
+    let (muted, danger) = (theme.muted_foreground, theme.danger);
+    let appearance = if theme.mode.is_dark() {
+        Appearance::Dark
+    } else {
+        Appearance::Light
+    };
     let config = entry.config();
     let is_prod = config.environment == Some(Environment::Prod);
     let dot = config
         .color
         .as_deref()
         .and_then(Rgb::parse)
-        .map_or(border, |Rgb(c)| rgb(c).into());
+        .map(|Rgb(c)| Hsla::from(rgb(c)));
     let drag = DragConnection {
         id: entry.id().clone(),
         name: config.name.clone(),
     };
-    let mut row = div()
+    let mut container = div()
         .id(("connection", index))
+        .w_full()
         .flex()
         .flex_col()
-        .gap_0p5()
-        .ml(px(indent(depth)))
-        .px_2()
-        .py_1()
-        .rounded_md()
-        .border_l_2()
-        // Prod rows keep a danger-coloured edge and tint so they stand out in a long list.
-        .border_color(if is_prod { danger } else { border.opacity(0.) })
-        .cursor_pointer()
-        .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+        .rounded(cx.theme().radius)
+        .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()));
+    // Prod rows carry a faint tint so they stand out in a long list; the left edge belongs to
+    // the focus indicator.
+    if is_prod && !state.selected {
+        let fg = env_accent(Environment::Prod, appearance).fg;
+        container = container.bg(Hsla::from(rgb(fg.0)).opacity(PROD_TINT));
+    }
+    let mut line = list_row(("connection-line", index), state, cx)
+        .pl(row_pad(depth))
         .on_click(
             cx.listener(move |view, event: &gpui::ClickEvent, window, cx| {
                 view.focus_sidebar(window, cx);
@@ -652,111 +746,119 @@ fn connection_row(
                 };
                 view.dispatch(action, cx);
             }),
-        );
-    if is_prod {
-        row = row.bg(danger.opacity(0.12));
+        )
+        .tooltip(tip(format!("{} · {}", config.name, config.driver)));
+    line = match &browser {
+        Some(browser) => {
+            let (conn, root) = (browser.conn.clone(), browser.root);
+            line.child(
+                chevron_spacer()
+                    .id(("connection-toggle", index))
+                    .cursor_pointer()
+                    .child(row_icon(
+                        if browser.expanded {
+                            AppIcon::ChevronDown
+                        } else {
+                            AppIcon::ChevronRight
+                        },
+                        muted,
+                    ))
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.dispatch_object(&conn, root, BrowserAction::Toggle, cx);
+                        cx.stop_propagation();
+                    })),
+            )
+        }
+        None => line.child(chevron_spacer()),
+    };
+    // The slot is always reserved so the names of all connections line up.
+    let mut dot_slot = div().size(px(DOT)).flex_none().rounded_full();
+    if let Some(color) = dot {
+        dot_slot = dot_slot.bg(color);
     }
-    if selected {
-        row = row.bg(if is_prod {
-            danger.opacity(0.28)
-        } else {
-            selected_bg
-        });
-    }
-    let mut title = div().flex().flex_row().items_center().gap_2();
-    if let Some(browser) = &browser {
-        let (conn, root) = (browser.conn.clone(), browser.root);
-        title = title.child(
-            div()
-                .id(("connection-toggle", index))
-                .w(px(14.))
-                .flex_none()
-                .text_color(muted)
-                .cursor_pointer()
-                .child(if browser.expanded { "▾" } else { "▸" })
-                .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
-                    view.dispatch_object(&conn, root, BrowserAction::Toggle, cx);
-                    cx.stop_propagation();
-                })),
-        );
-    }
-    title = title
-        .child(div().size(px(8.)).flex_none().rounded_full().bg(dot))
-        .child(div().flex_1().truncate().child(config.name.clone()));
-    if let Some(badge) = env_badge(config.environment) {
-        title = title.child(
-            div()
-                .text_xs()
-                .text_color(if is_prod { danger } else { muted })
-                .child(badge),
-        );
-    }
-    row = row.child(title).child(
+    line = line.child(dot_slot);
+    line = line.child(row_icon(AppIcon::Server, muted)).child(
         div()
-            .text_xs()
-            .text_color(muted)
-            .child(config.driver.to_string()),
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_size(px(ui_scale(cx).sm))
+            .child(config.name.clone()),
     );
+    if let Some(env) = config.environment {
+        line = line.child(env_chip(env, cx));
+    }
     match entry.status() {
         ConnectionStatus::Idle => {}
         ConnectionStatus::Connecting => {
-            row = row.child(div().text_xs().text_color(muted).child("connecting…"));
+            line = line.child(running_spinner(muted));
+        }
+        ConnectionStatus::Failed(_) => {
+            line = line.child(row_icon(AppIcon::CircleAlert, danger));
+        }
+    }
+    container = container.child(line);
+
+    let note_pad = row_pad(depth + 1);
+    let note = |text: String, color: Hsla, cx: &App| {
+        div()
+            .pl(note_pad)
+            .pr(px(SPACE[3]))
+            .text_size(xs(cx))
+            .text_color(color)
+            .child(text)
+    };
+    match entry.status() {
+        ConnectionStatus::Idle => {}
+        ConnectionStatus::Connecting => {
+            container = container.child(note("connecting…".to_owned(), muted, cx));
         }
         ConnectionStatus::Failed(message) => {
-            row = row.child(div().text_xs().text_color(danger).child(message.clone()));
+            container = container.child(note(message.clone(), danger, cx));
         }
     }
     match browser.as_ref().and_then(|b| b.note.as_ref()) {
         Some(BrowserNote::Busy(text)) => {
-            row = row.child(div().text_xs().text_color(muted).child(*text));
+            container = container.child(note((*text).to_owned(), muted, cx));
         }
         Some(BrowserNote::Failed(message)) => {
-            row = row.child(
-                div()
-                    .text_xs()
-                    .text_color(danger)
-                    .child(format!("Browser: {message}")),
-            );
+            container = container.child(note(format!("Browser: {message}"), danger, cx));
         }
         None => {}
     }
-    if selected {
+    if state.selected {
         let id = entry.id().clone();
-        row = row.child(
+        container = container.child(
             div()
                 .flex()
                 .flex_row()
-                .gap_1()
+                .gap(px(SPACE[1]))
+                .pl(note_pad)
                 .child(
-                    div()
-                        .id(("open-connection", index))
-                        .text_xs()
-                        .px_1()
-                        .cursor_pointer()
-                        .child("Open")
-                        .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
+                    Button::new(("open-connection", index))
+                        .ghost()
+                        .xsmall()
+                        .label("Open")
+                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                             view.dispatch(WorkspaceAction::OpenConnection(index), cx);
                             cx.stop_propagation();
                         })),
                 )
-                .child(text_button(
+                .child(action_button(
                     ("edit-connection", index),
                     "Edit",
-                    muted,
                     ConnectionAction::Edit(id.clone()),
                     cx,
                 ))
-                .child(text_button(
+                .child(action_button(
                     ("move-connection", index),
                     "Move",
-                    muted,
                     ConnectionAction::OpenMoveTo(id.clone()),
                     cx,
                 ))
-                .child(text_button(
+                .child(action_button(
                     ("delete-connection", index),
                     "Delete",
-                    danger,
                     ConnectionAction::Delete(id),
                     cx,
                 )),
@@ -765,8 +867,100 @@ fn connection_row(
     match browser {
         Some(b) => {
             let conn = b.conn.clone();
-            with_menu(row, &conn, b.root, b.menu, cx)
+            with_menu(container, &conn, b.root, b.menu, cx)
         }
-        None => row.into_any_element(),
+        None => container.into_any_element(),
+    }
+}
+
+/// The empty state of the connection list: what to do next, with the action at hand.
+pub(crate) fn connections_empty(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> Div {
+    let hint = view.shortcut_hint(&ConnectionAction::New.command_id());
+    empty_state(
+        AppIcon::Database,
+        "No connections yet",
+        "Add a database connection to browse its objects and run queries.",
+        cx,
+    )
+    .py(px(SPACE[5]))
+    .px(px(SPACE[4]))
+    .text_center()
+    .child(
+        div().pt(px(SPACE[3])).child(
+            // Outline: a welcome screen next to this list owns the one primary action.
+            Button::new("empty-new-connection")
+                .outline()
+                .small()
+                .icon(AppIcon::Plus)
+                .label("New Connection")
+                .tooltip(tooltip_text("New Connection", hint.as_deref()))
+                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                    view.dispatch_connection(ConnectionAction::New, cx);
+                })),
+        ),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use sqler_catalog::NodeKey;
+    use sqler_driver_api::sqler_core::{ColumnInfo, DataType, DbObject, ObjectPath};
+
+    use super::*;
+
+    fn object(kind: ObjectKind) -> TreeNodeKind {
+        TreeNodeKind::Object(DbObject::new(
+            kind,
+            ObjectPath::root().in_schema("public").in_table("t"),
+            "x",
+        ))
+    }
+
+    #[test]
+    fn node_icon_table() {
+        let cases = [
+            (ObjectKind::Database, AppIcon::Database),
+            (ObjectKind::Schema, AppIcon::ListTree),
+            (ObjectKind::Table, AppIcon::Table),
+            (ObjectKind::View, AppIcon::Eye),
+            (ObjectKind::MaterializedView, AppIcon::Table2),
+            (ObjectKind::Function, AppIcon::SquareFunction),
+            (ObjectKind::Procedure, AppIcon::SquareFunction),
+            (ObjectKind::Trigger, AppIcon::SquarePlay),
+            (ObjectKind::Sequence, AppIcon::FileText),
+            (ObjectKind::Type, AppIcon::FileCode),
+            (ObjectKind::Index, AppIcon::KeyRound),
+            (ObjectKind::Extension, AppIcon::Plug),
+            (ObjectKind::Role, AppIcon::KeyRound),
+        ];
+        for (kind, icon) in cases {
+            assert_eq!(node_icon(&object(kind), false), icon, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn node_icon_structure_nodes() {
+        let folder = TreeNodeKind::Folder(NodeKey::new(ObjectPath::root(), ObjectKind::Table));
+        assert_eq!(node_icon(&folder, false), AppIcon::Folder);
+        assert_eq!(node_icon(&folder, true), AppIcon::FolderOpen);
+        let columns = TreeNodeKind::Columns(DbObject::new(
+            ObjectKind::Table,
+            ObjectPath::root().in_schema("public"),
+            "t",
+        ));
+        assert_eq!(node_icon(&columns, true), AppIcon::FolderOpen);
+        assert_eq!(node_icon(&TreeNodeKind::Root, true), AppIcon::Server);
+        let column = TreeNodeKind::Column {
+            table: DbObject::new(ObjectKind::Table, ObjectPath::root(), "t"),
+            column: ColumnInfo::new("id", DataType::Integer),
+        };
+        assert_eq!(node_icon(&column, false), AppIcon::Columns2);
+    }
+
+    #[test]
+    fn entry_icons() {
+        assert_eq!(entry_icon(MenuEntry::OpenData), Some(AppIcon::Table));
+        assert_eq!(entry_icon(MenuEntry::Drop), None);
+        assert_eq!(entry_icon(MenuEntry::Refresh), Some(AppIcon::RefreshCw));
     }
 }
