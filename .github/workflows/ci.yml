@@ -49,6 +49,12 @@ jobs:
           tool: cargo-nextest@0.9.148
       - name: Test
         run: cargo nextest run --workspace --no-tests=pass
+      - name: Check sqler-export feature sets
+        if: runner.os == 'Linux'
+        run: |
+          cargo check -p sqler-export --no-default-features
+          cargo check -p sqler-export --no-default-features --features parquet
+          cargo check -p sqler-export --no-default-features --features xlsx
 
   db:
     name: db

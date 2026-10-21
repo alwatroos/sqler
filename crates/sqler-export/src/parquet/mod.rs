@@ -136,6 +136,42 @@ impl ParquetWriter<'_> {
 
 impl RowWriter for ParquetWriter<'_> {
     fn begin(&mut self, columns: &[Column]) -> Result<(), ExportError> {
+        let result = self.start(columns);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    fn write_batch(&mut self, rows: &[Row]) -> Result<(), ExportError> {
+        if self.failed {
+            return Err(ExportError::State("the writer failed earlier"));
+        }
+        if self.file.is_none() {
+            return Err(ExportError::State("write_batch was called before begin"));
+        }
+        let result = self.write_rows(rows);
+        self.failed = result.is_err();
+        result
+    }
+
+    fn finish(mut self: Box<Self>) -> Result<(), ExportError> {
+        if self.failed {
+            return Err(ExportError::State("the writer failed earlier"));
+        }
+        self.flush_group()?;
+        let file = self
+            .file
+            .take()
+            .ok_or(ExportError::State("finish was called before begin"))?;
+        let mut sink = file.into_inner().map_err(encode)?;
+        sink.flush()?;
+        Ok(())
+    }
+}
+
+impl ParquetWriter<'_> {
+    fn start(&mut self, columns: &[Column]) -> Result<(), ExportError> {
         if columns.is_empty() {
             return Err(ExportError::InvalidOptions(
                 "a Parquet file needs at least one column".to_owned(),
@@ -162,31 +198,6 @@ impl RowWriter for ParquetWriter<'_> {
         Ok(())
     }
 
-    fn write_batch(&mut self, rows: &[Row]) -> Result<(), ExportError> {
-        if self.failed {
-            return Err(ExportError::State("the writer failed earlier"));
-        }
-        let result = self.write_rows(rows);
-        self.failed = result.is_err();
-        result
-    }
-
-    fn finish(mut self: Box<Self>) -> Result<(), ExportError> {
-        if self.failed {
-            return Err(ExportError::State("the writer failed earlier"));
-        }
-        self.flush_group()?;
-        let file = self
-            .file
-            .take()
-            .ok_or(ExportError::State("finish was called before begin"))?;
-        let mut sink = file.into_inner().map_err(encode)?;
-        sink.flush()?;
-        Ok(())
-    }
-}
-
-impl ParquetWriter<'_> {
     fn write_rows(&mut self, rows: &[Row]) -> Result<(), ExportError> {
         for row in rows {
             for ((buf, value), name) in self.columns.iter_mut().zip(&row.0).zip(&self.names) {

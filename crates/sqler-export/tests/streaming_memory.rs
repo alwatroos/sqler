@@ -5,7 +5,7 @@
 //! resident set stays flat. This file is its own test binary with a single `#[test]`, so no other
 //! test thread allocates in the process while RSS is sampled.
 //!
-//! The resident size after batch 1,000 (1M rows) must be at most 32 MiB above the one after
+//! The resident size after batch 1,000 (1M rows) must be at most 12 MiB above the one after
 //! batch 100. A writer that kept rows, or the whole output, would grow by hundreds of MiB.
 
 // Helpers of an integration test are outside the `allow-unwrap-in-tests` scope of clippy.toml.

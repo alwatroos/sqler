@@ -468,3 +468,40 @@ fn a_failed_write_locks_the_writer() {
     ));
     assert!(e.finish().is_err());
 }
+
+#[test]
+fn write_batch_and_finish_before_begin_are_state_errors() {
+    let mut out = Vec::new();
+    let mut e = Exporter::new(
+        &ParquetFormat,
+        &ExportOptions::default(),
+        Box::new(&mut out),
+        ExportControl::default(),
+    )
+    .unwrap();
+    let row = Row(vec![Value::Int(1)]);
+    assert!(matches!(
+        e.write_batch(std::slice::from_ref(&row)),
+        Err(ExportError::State(_))
+    ));
+    assert!(matches!(e.finish(), Err(ExportError::State(_))));
+}
+
+#[test]
+fn a_failed_begin_locks_the_writer() {
+    let mut out = Vec::new();
+    let mut e = Exporter::new(
+        &ParquetFormat,
+        &ExportOptions::default(),
+        Box::new(&mut out),
+        ExportControl::default(),
+    )
+    .unwrap();
+    assert!(e.begin(&[]).is_err());
+    let row = Row(vec![Value::Int(1)]);
+    assert!(matches!(
+        e.write_batch(std::slice::from_ref(&row)),
+        Err(ExportError::State(_))
+    ));
+    assert!(matches!(e.finish(), Err(ExportError::State(_))));
+}

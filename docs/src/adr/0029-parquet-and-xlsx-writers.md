@@ -82,18 +82,18 @@ Limits, each an `ExportError::Limit` whose message suggests `CSV` or `Parquet` (
 
 ### Measured cost
 
-All numbers are real, taken on 2026-10-21 with `rustc 1.99.1`, `cargo build --release --locked` (no `[profile.release]` overrides in the workspace: no LTO, symbols kept). macOS: Apple M4 Pro, 14 cores, arm64. Linux: Docker image `rust:1.99.1` (Debian, `aarch64` because the host is arm64; no `x86_64` build was run), container `sqler-t3-w4-linux`. `sqler-export` has no GPUI, so the system libraries `sqler-app` needs are not involved.
+All numbers are real, taken on 2026-10-21 with `rustc 1.99.1`, `cargo build --release --locked` with the workspace `[profile.release]` of T14 (`strip = "symbols"`, `codegen-units = 1`, no LTO), re-measured after merging `main` (the first measurement, before T14, had the default profile: symbols kept, 16 codegen units). macOS: Apple M4 Pro, 14 cores, arm64. Linux: Docker image `rust:1.99.1` (Debian, `aarch64` because the host is arm64; no `x86_64` build was run), container `sqler-t3-w4-linux`. `sqler-export` has no GPUI, so the system libraries `sqler-app` needs are not involved.
 
 Binary size: the `export_throughput` bench binary (it links the whole `Registry`, so every enabled format is live code), built with `cargo build --release -p sqler-export --bench export_throughput <features>`. `strip` is `strip` on a copy.
 
-| Features | macOS bytes | macOS stripped | Linux aarch64 bytes | Linux stripped |
-| -------- | ----------- | -------------- | ------------------- | -------------- |
-| none (`--no-default-features`, four text formats) | 632,464 | 498,152 | 738,064 | 529,240 |
-| `xlsx` | 784,912 (+152,448) | 632,168 (+134,016) | 909,088 (+171,024) | 660,312 (+131,072) |
-| `parquet` | 1,527,648 (+895,184) | 1,208,184 (+710,032) | 1,655,392 (+917,328) | 1,184,624 (+655,384) |
-| `xlsx` + `parquet` (default) | 1,645,360 (+1,012,896) | 1,308,984 (+810,832) | 1,823,928 (+1,085,864) | 1,315,696 (+786,456) |
+| Features | macOS bytes | Linux aarch64 bytes |
+| -------- | ----------- | ------------------- |
+| none (`--no-default-features`, four text formats) | 497,488 | 529,240 |
+| `xlsx` | 598,544 (+101,056) | 594,776 (+65,536) |
+| `parquet` | 1,157,536 (+660,048) | 1,184,624 (+655,384) |
+| `xlsx` + `parquet` (default) | 1,241,856 (+744,368) | 1,315,696 (+786,456) |
 
-So `xlsx` costs about 0.15 MB and `parquet` about 0.9 MB (0.65 to 0.7 MB stripped); both together about 1.0 to 1.1 MB (0.8 MB stripped). A real app binary is built with `strip` or not by the release process (T14); the unstripped delta is the safe figure for a size budget.
+The binaries are already stripped by the profile, so there is no separate stripped column. So `xlsx` costs about 0.07 to 0.1 MB and `parquet` about 0.66 MB; both together about 0.75 to 0.79 MB. Before T14 (symbols kept, 16 codegen units) the same bench binaries were 632,464 / 784,912 / 1,527,648 / 1,645,360 bytes on macOS and 738,064 / 909,088 / 1,655,392 / 1,823,928 on Linux, which was +0.15 MB for `xlsx` and +0.9 MB for `parquet` unstripped.
 
 Desktop app, `cargo build --release --locked -p sqler-app` on macOS (the base is `HEAD` of the branch before T3, commit `16b816e`):
 
@@ -103,11 +103,13 @@ Desktop app, `cargo build --release --locked -p sqler-app` on macOS (the base is
 | T3, default (`export-xlsx`) | 44,362,448 (+0) |
 | T3, `--features export-parquet` | 44,376,272 (+13,824) |
 
-The app delta is about 0 because nothing in `sqler-app` or `sqler-ui` calls `sqler-export` yet, so the linker drops it. T9 links the registry and then the bench-binary figures above are the projected cost (about +0.15 MB for `xlsx`, +0.9 MB more for `parquet`). The Linux app binary was not measured here; it was 79.6 MiB before T3 (T14 is working on it).
+The app delta is about 0 because nothing in `sqler-app` or `sqler-ui` calls `sqler-export` yet, so the linker drops it. T9 links the registry and then the bench-binary figures above are the projected cost (about +0.1 MB for `xlsx`, +0.66 MB more for `parquet`). The Linux app binary was not measured here; it was 79.6 MiB before T3 and T14, with the default release profile (T14 measured 51.1 MiB for the x86_64 build with its profile; see `benchmarks.md`).
 
 Compile time: `cargo build --release -p sqler-export --lib` from an empty `CARGO_TARGET_DIR`, wall clock, macOS: none 2.3 s, `xlsx` 2.6 s, `parquet` 7.0 s, both 7.2 s. The Linux container timings (8.1, 4.6, 15.3 and 6.7 s) include crate downloads and a rustup sync on first use, so they are not comparable and are not used.
 
 Throughput and peak RSS: `export_throughput --rows N --format ID`, one process per format and row count, 5 columns, batches of 1,000, sink that discards, row generation included, `/usr/bin/time -l` (macOS) and `-v` (Linux). Run-to-run noise is about 10 % (two runs of the same macOS `xlsx` binary gave 550 and 604 thousand rows/s).
+
+The rows below come from the build with both formats (default features) unless a column says otherwise; the single-format `xlsx` build peaks at 3.3 MB on macOS (re-measured after the merge of `main`) and 2.8 MB on Linux, the figures in `benchmarks.md`.
 
 | Format | macOS 1M rows/s | macOS MiB/s | macOS peak RSS 100k / 1M | Linux 1M rows/s | Linux peak RSS 100k / 1M |
 | ------ | --------------- | ----------- | ------------------------ | --------------- | ------------------------ |
@@ -126,7 +128,7 @@ The test fails above +12 MiB (about twice the worst measured growth, +5.8 MB, an
 
 ### Whether Parquet is in the app default
 
-`export-parquet` is not in the `sqler-app` default. The binary delta is small (about 0.9 MB), but the Linux app binary is already 79.6 MiB, 19.6 MiB over the 60 MB budget, before any export code is linked; adding a format to an over-budget binary hides the real problem. **Flip condition:** `export-parquet` goes into the `sqler-app` default when, after T14, the Linux release binary of `sqler-app` built with the `export-parquet` feature is under 60 MB, and there is at least the measured Parquet delta (0.9 MB unstripped; use 1 MiB) of room left without it. Until then Parquet is available to a build that asks for it and to the CLI (T4). `export-xlsx` is in the default because its cost is 0.15 MB.
+`export-parquet` is not in the `sqler-app` default. The binary delta is small (about 0.66 MB), but the Linux app binary was 79.6 MiB, 19.6 MiB over the 60 MB budget, before T14 and before any export code was linked (T14 brought it down; the CI figure with the profile applied is not confirmed here); adding a format to an over-budget binary hides the real problem. **Flip condition:** `export-parquet` goes into the `sqler-app` default when, after T14, the Linux release binary of `sqler-app` built with the `export-parquet` feature is under 60 MB, and there is at least the measured Parquet delta (0.66 MB with the T14 profile; use 1 MiB) of room left without it. Until then Parquet is available to a build that asks for it and to the CLI (T4). `export-xlsx` is in the default because its cost is about 0.1 MB.
 
 ## Consequences
 

@@ -317,14 +317,16 @@ Measured on 2026-10-21 with `rustc 1.99.1`, release profile, `--locked`. macOS: 
 
 (Parquet and `xlsx` rows come from the single-format builds; the `csv`, `json`, `sql` and Markdown figures and the build with both formats are in ADR-0029.) Peak RSS at 100,000 and at 1,000,000 rows is the same within the size of one row group, which is the point: memory does not depend on the row count. The run-to-run noise is about 10 %.
 
-Size cost of the formats, bench binary, release, bytes (stripped in brackets):
+Size cost of the formats, bench binary, release profile with T14's `strip = "symbols"` and `codegen-units = 1` (so the binaries are already stripped), bytes:
 
 | Features | macOS | Linux aarch64 |
 | -------- | ----- | ------------- |
-| none | 632,464 (498,152) | 738,064 (529,240) |
-| `xlsx` | 784,912 (632,168) | 909,088 (660,312) |
-| `parquet` | 1,527,648 (1,208,184) | 1,655,392 (1,184,624) |
-| both | 1,645,360 (1,308,984) | 1,823,928 (1,315,696) |
+| none | 497,488 | 529,240 |
+| `xlsx` | 598,544 | 594,776 |
+| `parquet` | 1,157,536 | 1,184,624 |
+| both | 1,241,856 | 1,315,696 |
+
+(Before T14, with symbols kept and 16 codegen units: macOS 632,464 / 784,912 / 1,527,648 / 1,645,360, Linux 738,064 / 909,088 / 1,655,392 / 1,823,928.)
 
 `sqler-app` on macOS, `cargo build --release --locked -p sqler-app`: 44,362,448 bytes before T3, 44,362,448 with the default (`export-xlsx`), 44,376,272 with `export-parquet`. The delta is about 0 until the UI links the registry (T9). Clean `cargo build --release -p sqler-export --lib` on macOS: none 2.3 s, `xlsx` 2.6 s, `parquet` 7.0 s, both 7.2 s.
 
