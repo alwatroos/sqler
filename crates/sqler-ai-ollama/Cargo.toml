@@ -11,3 +11,14 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-ai-api.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time", "sync"] }
+serde_json.workspace = true

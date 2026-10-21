@@ -1,0 +1,5 @@
+{"models":[
+  {"name":"llama3.2:latest","model":"llama3.2:latest","size":2019393189,"details":{"family":"llama","parameter_size":"3.2B"}},
+  {"name":"broken:1b","model":"broken:1b","size":1},
+  {"name":"plain:7b","model":"plain:7b","size":2}
+]}

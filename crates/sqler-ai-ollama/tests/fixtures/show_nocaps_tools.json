@@ -1,0 +1,4 @@
+{
+  "model_info":{"general.architecture":"gemma","gemma.context_length":8192},
+  "capabilities":["completion"]
+}
