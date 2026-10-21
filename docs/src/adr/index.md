@@ -37,3 +37,4 @@ consequences. SQLer uses the MADR format.
 | [0025](0025-sql-editor-component.md) | SQL editor component: `gpui-component` editor with headless logic | accepted |
 | [0026](0026-editor-intellisense.md) | Editor intellisense: completion, hover and diagnostics in the SQL editor | accepted |
 | [0028](0028-export-writer-api.md) | Export writer API: push-style row writers, a format registry and SQL literals | accepted |
+| [0029](0029-parquet-and-xlsx-writers.md) | Parquet and XLSX writers: own streaming zip, low-level Parquet API, two cargo features | accepted |

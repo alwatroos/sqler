@@ -56,6 +56,7 @@
   - [ADR-0025: SQL editor component](adr/0025-sql-editor-component.md)
   - [ADR-0026: Editor intellisense](adr/0026-editor-intellisense.md)
   - [ADR-0028: Export writer API](adr/0028-export-writer-api.md)
+  - [ADR-0029: Parquet and XLSX writers](adr/0029-parquet-and-xlsx-writers.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
 - [Benchmarks](benchmarks.md)

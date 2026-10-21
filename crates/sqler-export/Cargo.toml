@@ -12,15 +12,25 @@ readme = "README.md"
 [lints]
 workspace = true
 
+[features]
+default = ["parquet", "xlsx"]
+parquet = ["dep:parquet"]
+xlsx = ["dep:flate2"]
+
 [dependencies]
 sqler-core.workspace = true
 sqler-sql.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+parquet = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 insta.workspace = true
 proptest.workspace = true
+calamine.workspace = true
+memory-stats.workspace = true
+bytes.workspace = true
 
 [[bench]]
 name = "export_throughput"

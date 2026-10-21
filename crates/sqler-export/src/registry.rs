@@ -14,6 +14,11 @@ pub const SQL: &str = "sql";
 /// The id of the Markdown table format.
 pub const MARKDOWN: &str = "markdown";
 
+/// The id of the `Parquet` format.
+pub const PARQUET: &str = "parquet";
+/// The id of the Excel (`XLSX`) format.
+pub const XLSX: &str = "xlsx";
+
 /// A list of formats by id, in registration order.
 #[derive(Default)]
 pub struct Registry {
@@ -27,15 +32,20 @@ impl Registry {
         Self::default()
     }
 
-    /// A registry with the built-in formats: `csv`, `json`, `sql` and `markdown`.
+    /// A registry with the built-in formats: `csv`, `json`, `sql` and `markdown`, then
+    /// `parquet` and `xlsx` when their cargo features are on.
     #[must_use]
     pub fn with_builtin() -> Self {
         let mut registry = Self::new();
-        let builtin: [Box<dyn Format>; 4] = [
+        let builtin: Vec<Box<dyn Format>> = vec![
             Box::new(CsvFormat),
             Box::new(JsonFormat),
             Box::new(SqlFormat),
             Box::new(MarkdownFormat),
+            #[cfg(feature = "parquet")]
+            Box::new(crate::ParquetFormat),
+            #[cfg(feature = "xlsx")]
+            Box::new(crate::XlsxFormat),
         ];
         for format in builtin {
             // The ids are distinct, so this cannot fail.
@@ -77,12 +87,24 @@ mod tests {
     fn builtin_formats_in_order() {
         let r = Registry::with_builtin();
         let ids: Vec<_> = r.formats().map(Format::id).collect();
-        assert_eq!(ids, [CSV, JSON, SQL, MARKDOWN]);
+        let mut want = vec![CSV, JSON, SQL, MARKDOWN];
+        let mut want_ext = vec!["csv", "json", "sql", "md"];
+        if cfg!(feature = "parquet") {
+            want.push(PARQUET);
+            want_ext.push("parquet");
+        }
+        if cfg!(feature = "xlsx") {
+            want.push(XLSX);
+            want_ext.push("xlsx");
+        }
+        assert_eq!(ids, want);
         let ext: Vec<_> = r.formats().map(Format::extension).collect();
-        assert_eq!(ext, ["csv", "json", "sql", "md"]);
+        assert_eq!(ext, want_ext);
         assert!(r.formats().all(|f| !f.label().is_empty()));
         assert_eq!(r.get("json").unwrap().id(), "json");
-        assert!(r.get("xlsx").is_none());
+        assert_eq!(r.get(XLSX).is_some(), cfg!(feature = "xlsx"));
+        assert_eq!(r.get(PARQUET).is_some(), cfg!(feature = "parquet"));
+        assert!(r.get("nope").is_none());
         assert_eq!(Registry::new().formats().count(), 0);
     }
 
@@ -93,6 +115,11 @@ mod tests {
             r.register(Box::new(CsvFormat)),
             Err(ExportError::DuplicateFormat(id)) if id == "csv"
         ));
-        assert_eq!(r.formats().count(), 4);
+        let n = r.formats().count();
+        assert!(matches!(
+            r.register(Box::new(CsvFormat)),
+            Err(ExportError::DuplicateFormat(_))
+        ));
+        assert_eq!(r.formats().count(), n);
     }
 }

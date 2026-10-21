@@ -260,6 +260,38 @@ The popup the editor shows most often (a column behind an alias) takes microseco
 2. Six scenarios as listed above. The run fails if the qualified scenario does not list the loaded columns or the hover finds nothing.
 3. Output is `key=value` lines: `<scenario>_p50_ns` and `<scenario>_p95_ns`, and `worst_p95_ns`, the largest p95. p50 and p95 are nearest-rank percentiles. Exit code 0 passes, 1 when the worst p95 exceeds the budget or the setup fails, 2 is a usage error.
 
+## Export writers
+
+`cargo bench -p sqler-export --bench export_throughput -- [--rows N --batch N --format ID]` streams synthetic rows (5 columns: integer, text, float, null, timestamp; batches of 1,000) into a sink that discards the bytes, for every format the enabled features compile, and prints `<id>_rows_per_sec=` and `<id>_mib_per_sec=`. Row generation is included. `--format` runs one format, for a per-format peak RSS. Not in `bench.yml`. Decisions: [ADR-0029](adr/0029-parquet-and-xlsx-writers.md).
+
+Measured on 2026-10-21 with `rustc 1.99.1`, release profile, `--locked`. macOS: Apple M4 Pro, arm64. Linux: Docker `rust:1.99.1` on the same arm64 host (`aarch64`).
+
+| Format | OS | Rows | Rows/s | MiB/s | Peak RSS (MB) |
+| ------ | -- | ---- | ------ | ----- | ------------- |
+| `parquet` (Snappy) | macOS | 100,000 | 3.19 M | 55.9 | 27.6 |
+| `parquet` (Snappy) | macOS | 1,000,000 | 4.38 M | 76.3 | 34.1 |
+| `xlsx` | macOS | 100,000 | 0.76 M | 18.8 | 3.3 |
+| `xlsx` | macOS | 1,000,000 | 0.55 M | 13.6 | 3.3 |
+| `parquet` (Snappy) | Linux aarch64 | 100,000 | 4.37 M | 76.6 | 15.3 |
+| `parquet` (Snappy) | Linux aarch64 | 1,000,000 | 5.31 M | 92.3 | 16.5 |
+| `xlsx` | Linux aarch64 | 100,000 | 0.83 M | 20.4 | 2.8 |
+| `xlsx` | Linux aarch64 | 1,000,000 | 0.77 M | 19.1 | 2.8 |
+
+(Parquet and `xlsx` rows come from the single-format builds; the `csv`, `json`, `sql` and Markdown figures and the build with both formats are in ADR-0029.) Peak RSS at 100,000 and at 1,000,000 rows is the same within the size of one row group, which is the point: memory does not depend on the row count. The run-to-run noise is about 10 %.
+
+Size cost of the formats, bench binary, release, bytes (stripped in brackets):
+
+| Features | macOS | Linux aarch64 |
+| -------- | ----- | ------------- |
+| none | 632,464 (498,152) | 738,064 (529,240) |
+| `xlsx` | 784,912 (632,168) | 909,088 (660,312) |
+| `parquet` | 1,527,648 (1,208,184) | 1,655,392 (1,184,624) |
+| both | 1,645,360 (1,308,984) | 1,823,928 (1,315,696) |
+
+`sqler-app` on macOS, `cargo build --release --locked -p sqler-app`: 44,362,448 bytes before T3, 44,362,448 with the default (`export-xlsx`), 44,376,272 with `export-parquet`. The delta is about 0 until the UI links the registry (T9). Clean `cargo build --release -p sqler-export --lib` on macOS: none 2.3 s, `xlsx` 2.6 s, `parquet` 7.0 s, both 7.2 s.
+
+Memory proof at 1M rows (`tests/streaming_memory.rs`, `cargo test --release`; RSS after batch 1,000 minus RSS after batch 100): Parquet +5.8 MB on macOS and +2.2 MB on Linux, `XLSX` +0 on both; the test allows +12 MiB.
+
 ## UI framework spike
 
 Data, not pass/fail; spike build, not the product. Measured on `spikes/ui-framework` (ADR-0001), release profile
