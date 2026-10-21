@@ -42,4 +42,4 @@ Rejected:
 
 - Linux screenshots use DejaVu fonts and look different from macOS; they are not goldens.
 - A scene that needs a real database falls back to the synthetic grid and fixture state if tokio work proves flaky; the scene list does not change.
-- The harness adds a dev-dependency and a feature but no production code.
+- The harness adds a dev-dependency and a feature. One production change came with it: the bracket-match observer of the editor (`editor/view.rs`) no longer sets bracket frames that already hold the wanted ranges, because setting them notifies the state and ran the observer again, an endless loop in a headless window. It compares the ranges the collection holds, not the last pair set, since an edit deforms the anchored frames.

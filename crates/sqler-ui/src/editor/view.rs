@@ -325,15 +325,27 @@ impl EditorViews {
         } else {
             None
         };
-        let frames = match pair {
-            Some((open, close)) => vec![
-                RangeDecoration::new(open..open + 1),
-                RangeDecoration::new(close..close + 1),
-            ],
-            None => Vec::new(),
-        };
-        view.frames.set(frames, cx);
+        set_frames(&view.frames, pair, cx);
     }
+}
+
+/// Frames `pair`, or clears the frames. Setting the frames notifies the state, which runs the
+/// bracket observer again, so frames that already hold the wanted ranges are left alone. The
+/// collection is compared, not the last pair set: the ranges are anchored and an edit moves and
+/// stretches them, so the same pair offsets can sit on deformed frames.
+fn set_frames(
+    frames: &RangeDecorationCollection,
+    pair: Option<(usize, usize)>,
+    cx: &mut gpui::App,
+) {
+    let want: Vec<std::ops::Range<usize>> = match pair {
+        Some((open, close)) => vec![open..open + 1, close..close + 1],
+        None => Vec::new(),
+    };
+    if frames.get_ranges(cx) == want {
+        return;
+    }
+    frames.set(want.into_iter().map(RangeDecoration::new).collect(), cx);
 }
 
 /// Whether the cursor of the editor stands right before or after a bracket. Reads the two bytes
@@ -379,5 +391,37 @@ mod tests {
         assert!(!window_touches_bracket(b.last().copied(), None));
         assert!(window_touches_bracket(None, Some(b'(')));
         assert!(!window_touches_bracket(None, None));
+    }
+
+    #[gpui::test]
+    fn an_edit_across_a_framed_pair_resets_the_frames(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (state, cx) = cx.add_window_view(|window, cx| {
+            EditorState::new(window, cx)
+                .language(LANGUAGE)
+                .line_number(true)
+        });
+        let frames = state.update(cx, |s, cx| {
+            s.create_range_decorations_collection(Vec::new(), cx)
+        });
+        let frame = |cx: &mut gpui::VisualTestContext| cx.update(|_, cx| frames.get_ranges(cx));
+        let two = vec![1..2, 3..4];
+        cx.update(|window, cx| state.update(cx, |s, cx| s.set_value("f(x)", window, cx)));
+        cx.update(|_, cx| set_frames(&frames, Some((1, 3)), cx));
+        assert_eq!(frame(cx), two);
+        // Replacing `(x)` with `(y)` stretches both anchored frames over the new text.
+        cx.update(|window, cx| {
+            state.update(cx, |s, cx| {
+                s.set_value("f(y)", window, cx);
+            });
+        });
+        assert_ne!(frame(cx), two, "the edit deformed the anchored frames");
+        cx.update(|_, cx| set_frames(&frames, Some((1, 3)), cx));
+        assert_eq!(frame(cx), two);
+        // The same pair again changes nothing.
+        cx.update(|_, cx| set_frames(&frames, Some((1, 3)), cx));
+        assert_eq!(frame(cx), two);
+        cx.update(|_, cx| set_frames(&frames, None, cx));
+        assert_eq!(frame(cx), Vec::<std::ops::Range<usize>>::new());
     }
 }

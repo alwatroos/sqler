@@ -67,6 +67,8 @@ gpui-component = { version = "0.8.0", features = ["tree-sitter-sql"] }
 # Same 0.97 line as gpui-component 0.8.0 (its CompletionProvider/HoverProvider speak these types); AGENTS.md section 10.
 lsp-types = "0.97.0"
 gpui = { version = "=0.3.9", package = "gpui-pre" }
+# Dev only: PNG encode and downscale in the screenshot harness (already in the lockfile through gpui-pre).
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 gpui_platform = { version = "=0.3.9", package = "gpui-pre-platform", features = ["font-kit", "x11", "wayland"] }
 
 [workspace.lints.rust]
