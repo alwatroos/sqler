@@ -130,6 +130,16 @@ Per-dependency rationale is added by the PR that introduces it.
   `rustls`, `ring` and `tokio` are already in the app tree through `gpui-pre-reqwest` and `sqlx`;
   the new code is `reqwest`, `tower-http` and this crate.
 - `sqler-ai-openai` (T5) adds no crate: it reuses the T3 `reqwest` 0.12.28 and `base64` 0.22.1 rows above (same workspace line, same rustls/ring stack). Checked 2026-10-21: `cargo tree -p sqler-ai-openai -i rsa`, `-i webpki-roots`, `-i openssl-sys`, `-i native-tls` and `-i aws-lc-rs` find no package, one `rustls`, `cargo deny check` clean with no new ignore.
+- `log` 0.4.34 and `tracing` 0.1.44 (T4, dev-dependencies of `sqler-ai-anthropic` only): `tests/secrets.rs`
+  installs a capturing `log::Log` and `tracing::Subscriber` to prove the API key reaches no log or trace
+  output. Both are already in `Cargo.lock` (`reqwest` uses `log`, `hyper` uses `tracing`), so no new
+  package; the workspace line for `tracing` is `default-features = false` with `std`. Checks on
+  2026-10-21: `cargo tree -p sqler-ai-anthropic` shows no `rsa`, `webpki-roots`, `openssl-sys`,
+  `native-tls`, `rustls-platform-verifier` or `aws-lc-rs`; `rustls` has only `ring`, `std`, `tls12` and the
+  native-roots features, one `rustls`, one `hyper`, one `hyper-rustls`, two `base64` (as for T3);
+  `cargo deny check` is clean with no new ignore. `sqler-ai-anthropic` reuses `reqwest` and `base64`
+  from T3 and is not linked into `sqler-app` yet, so `size.yml` does not change; T11 (the `ai-anthropic`
+  feature) measures the delta.
 - `sqlx` 0.9.0: database backend of `sqler-driver-sqlite`, `sqler-driver-postgres` and `sqler-driver-mysql` (AGENTS.md §6).
   The workspace line carries only `sqlite-bundled` (compiles SQLite from source, so Windows and macOS
   CI need no system library) and `runtime-tokio`; no `macros`, `migrate`, `json`, `any` or TLS. The
