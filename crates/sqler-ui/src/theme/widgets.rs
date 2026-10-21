@@ -4,7 +4,7 @@
 //! Small shared widgets: toolbar buttons, the environment chip, key hints, section headers and
 //! empty states. Each returns a `gpui-component` `Button` or a GPUI `Div`, so callers keep
 //! chaining `.on_click`, `.child` and `.disabled`. Colours come from the active theme or
-//! [`super::tokens`]; sizes from [`SPACE`] and [`type_scale`].
+//! `super::tokens`; sizes from [`SPACE`] and [`type_scale`].
 
 use gpui::{
     App, Div, ElementId, FontWeight, ParentElement as _, SharedString, Styled as _, div, px, rgb,
