@@ -98,14 +98,12 @@ fn item_button(
 
 /// The caret next to Run: a menu of Run Selection, Run Statement at Cursor and Run All.
 fn run_menu(
-    view: &WorkspaceView,
     tab: TabId,
     reason: Option<&'static str>,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     let weak = cx.weak_entity();
-    let hint = view.shortcut_hint(&ToolbarItem::Run.command_id());
-    let tooltip = crate::theme::tooltip_text("More Run Options", hint.as_deref());
+    let tooltip = "More Run Options".to_owned();
     icon_button(
         ElementId::from(("query-run-menu", tab.raw())),
         AppIcon::ChevronDown,
@@ -176,7 +174,7 @@ pub(super) fn query_toolbar(
         });
     let actions = vec![
         item_button(view, tab, ToolbarItem::Run, ctx, cx).into_any_element(),
-        run_menu(view, tab, ctx.disabled_reason(ToolbarItem::Run), cx),
+        run_menu(tab, ctx.disabled_reason(ToolbarItem::Run), cx),
         item_button(view, tab, ToolbarItem::RunAll, ctx, cx).into_any_element(),
         item_button(view, tab, ToolbarItem::Cancel, ctx, cx).into_any_element(),
         divider(cx).into_any_element(),

@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn the_gate_still_sees_the_write() {
-        for d in [Dialect::Postgres, Dialect::Sqlite] {
+        for d in [Dialect::Postgres, Dialect::Sqlite, Dialect::MySql] {
             let write = explain_text(d, "delete from t").unwrap();
             assert_eq!(classify(d, &write), StatementClass::Write, "{write}");
             let read = explain_text(d, "select 1").unwrap();

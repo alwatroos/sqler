@@ -401,6 +401,7 @@ pub(super) fn results_area(
                 .tab_stop(true)
                 .focus_visible(move |s| s.border_color(ring))
                 .role(Role::Tab)
+                .aria_selected(active)
                 .aria_label(format!("{}, {}", e.title, status_word(tone)))
                 .tooltip(move |window, cx| Tooltip::new(status_text.clone()).build(window, cx))
                 .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
