@@ -18,6 +18,9 @@
 mod action;
 mod cell;
 mod control;
+mod detail;
+#[cfg(feature = "gui")]
+pub(crate) mod detail_view;
 mod ingest;
 mod layout;
 mod model;
@@ -33,6 +36,10 @@ mod viewport;
 pub use action::{GridAction, grid_key_action, register_commands};
 pub use cell::{ColumnHeader, MAX_CELL_CHARS, cell_text, group_thousands, type_label};
 pub use control::{Applied, GridControls};
+pub use detail::{
+    CellDetail, DETAIL_BINARY_CAP, DETAIL_LINE_CHARS, DETAIL_TEXT_CAP, DetailCap, DetailKind,
+    DetailLine, HEX_BYTES_PER_LINE, JSON_PRETTY_CAP, copy_text, human_bytes,
+};
 pub use ingest::{IngestSummary, ingest, spawn_ingest};
 pub use layout::{ColumnLayout, MAX_COLUMN_PX, MIN_COLUMN_PX, default_width, widest_text};
 pub use model::{

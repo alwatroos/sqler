@@ -9,7 +9,7 @@ use super::action::GridAction;
 use super::cell::{self, ColumnHeader, group_thousands};
 use super::stats::RenderStats;
 use super::{
-    GridCancel, GridLimits, GridModel, IngestState, SyntheticSource, grid_channel_with,
+    CellRef, GridCancel, GridLimits, GridModel, IngestState, SyntheticSource, grid_channel_with,
     spawn_ingest,
 };
 
@@ -117,6 +117,12 @@ impl GridTab {
     #[must_use]
     pub fn header(&self, col: usize) -> Option<&ColumnHeader> {
         self.headers.get(col)
+    }
+
+    /// The cell at a model row and column, if both exist.
+    #[must_use]
+    pub fn cell(&self, row: usize, col: usize) -> Option<CellRef<'_>> {
+        self.model.row(row)?.get(col)
     }
 
     /// The display text of a cell; empty when the row or column does not exist.

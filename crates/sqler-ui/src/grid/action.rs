@@ -79,6 +79,8 @@ pub enum GridAction {
     ResetLayout,
     /// Load the next page of a result that stopped at its page limit.
     FetchMore,
+    /// Show or hide the detail pane of the active cell.
+    ToggleCellDetail,
 }
 
 const fn mv(to: Motion) -> GridAction {
@@ -91,7 +93,7 @@ const fn ext(to: Motion) -> GridAction {
 
 impl GridAction {
     /// Every action, in palette order.
-    pub const ALL: [GridAction; 32] = [
+    pub const ALL: [GridAction; 33] = [
         Self::ScrollToTop,
         Self::ScrollToEnd,
         mv(Motion::Up),
@@ -124,6 +126,7 @@ impl GridAction {
         Self::AutofitColumn,
         Self::ResetLayout,
         Self::FetchMore,
+        Self::ToggleCellDetail,
     ];
 
     /// The ID string of the command this action runs.
@@ -165,6 +168,7 @@ impl GridAction {
             Self::AutofitColumn => "grid:autofit-column",
             Self::ResetLayout => "grid:reset-layout",
             Self::FetchMore => "grid:fetch-more",
+            Self::ToggleCellDetail => "grid:toggle-cell-detail",
         }
     }
 
@@ -208,6 +212,7 @@ impl GridAction {
             Self::AutofitColumn => "Results: Autofit Column",
             Self::ResetLayout => "Results: Reset Column Layout",
             Self::FetchMore => "Fetch More Rows",
+            Self::ToggleCellDetail => "Results: Toggle Cell Detail",
         }
     }
 
@@ -255,7 +260,7 @@ mod tests {
             assert!(id.to_string().starts_with("grid:"), "{a:?}");
             assert!(seen.insert(id), "duplicate ID for {a:?}");
         }
-        assert_eq!(seen.len(), 32);
+        assert_eq!(seen.len(), 33);
     }
 
     #[test]
@@ -289,6 +294,14 @@ mod tests {
         assert_eq!(
             GridAction::FetchMore.command_id().to_string(),
             "grid:fetch-more"
+        );
+        assert_eq!(
+            GridAction::ToggleCellDetail.command_id().to_string(),
+            "grid:toggle-cell-detail"
+        );
+        assert_eq!(
+            GridAction::ToggleCellDetail.title(),
+            "Results: Toggle Cell Detail"
         );
         assert_eq!(
             GridAction::PinColumn.command_id().to_string(),

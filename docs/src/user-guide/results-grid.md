@@ -12,7 +12,7 @@ The command needs a connection: it uses the connection of the active tab, or the
 ## What you see
 
 - **Headers.** Each column header shows the column name and, in a muted smaller font, its type (`integer`, `text`, `float` and so on).
-- **Cells.** NULL shows as `NULL`. Line breaks and tabs in a value are shown as spaces, and a value longer than 256 characters is cut and ends with `…`. Text that does not fit the column is cut with an ellipsis.
+- **Cells.** NULL shows as `NULL`. Line breaks and tabs in a value are shown as spaces, and a value longer than 256 characters is cut and ends with `…`. Text that does not fit the column is cut with an ellipsis. To read a whole value, use the [cell detail](#cell-detail) pane.
 - **Status line.** Above the table: `Waiting for columns…`, then `Loading… 1,024 rows` while rows arrive, and `1,000,000 rows` when loading is done. A cancelled load shows `(loading cancelled)` and a failed one `(failed: <message>)`. Next to it, `Rows 1–25 of 1,000,000` follows the visible range.
 - **Paused.** A result is loaded one page at a time. When a page is full and the query has more rows, the status line shows `100,000 rows loaded; more rows available` and a **Fetch more** button appears (in the grid toolbar, and next to Cancel in a query tab). It loads the next page. The same action is the palette command `grid:fetch-more` ("Fetch More Rows"); with nothing paused it shows "No more rows to fetch." A result that ends exactly at a page boundary shows its row count, not the paused text.
 - **Top and End.** The buttons jump to the first and the last row. The same actions are the palette commands `grid:scroll-to-top` and `grid:scroll-to-end`, which act on the active grid tab. They have no default shortcut.
@@ -47,6 +47,24 @@ When the grid has the focus (click a cell, or run a grid command from the palett
 | Shift+arrows, Shift+Home and so on | Extend the selection |
 
 The view scrolls to keep the active cell visible. Ctrl+Space belongs to the grid only while a results table has the focus; in the SQL editor it still triggers completion. The same actions are palette commands (`grid:move-*`, `grid:extend-*`, `grid:select-all`, `grid:select-row`, `grid:select-column`); see [Keybindings](keybindings.md#results-grid).
+
+## Cell detail
+
+Run `grid:toggle-cell-detail` ("Results: Toggle Cell Detail") from the palette to open a pane to the right of the table that shows the active cell in full. Run it again to close it. The pane is open or closed for the whole session (it starts closed and is not remembered after a restart), also across tabs and query reruns. Drag its left edge to resize it (240 to 1,200 pixels, 360 by default). The command has no default shortcut: the obvious chord, Mod+Shift+I, is already taken by the GPUI inspector (Ctrl+Shift+I) on Linux and Windows. Bind it in `keybindings.toml` if you want one (see [Keybindings](keybindings.md)).
+
+The pane shows the column name, its type, the size of the value in bytes, and the value:
+
+- **NULL** is shown as `NULL`. A text of zero length says `Empty text (not NULL).`
+- **Text** is shown as stored, with its line breaks, split at every `\n` (a `\r` before it is dropped). Tabs are shown as spaces up to the next multiple of 4 columns, other control characters as their symbol (for example `␀` or `␍`), and the characters that switch the text direction as `�`, so a value cannot rearrange what you read. A line longer than 1,000 columns (a tab counts as the columns it takes) continues on the next row, marked `↪`.
+- **JSON** is indented with two spaces. Key order, number text and escapes are kept as stored. JSON that is not valid, or nested at depth 128 or deeper, is shown as stored with a note. A JSON document over 8 MiB is never indented (the note says `Too large to format; shown as stored.`). Only JSON-typed columns are formatted: a text column that holds JSON is shown as text.
+- **Binary** is a hex dump, 16 bytes a row, with the offset and an ASCII column.
+- **Numbers, booleans, dates and times** are shown as the grid shows them.
+
+Nothing in a value is interpreted: there are no links and no markup.
+
+**Large values.** The pane shows at most 1 MiB of a text, a JSON document (before or after indenting) or a binary value, and says so in a note (`Showing the first 1.0 MiB of 10.0 MiB.`). A JSON document over 1 MiB is shown as stored, not indented, until you use Show all; over 8 MiB it stays as stored (it is still split into lines of at most 1,000 columns and scrolled the same way). **Show all** loads the rest in the background, so the window keeps responding; it keeps working on the value you selected, and selecting another cell cancels the wait. While a value is shown in full, SQLer holds the value, a copy of it for the background job and the lines of the pane. Measured with 50 MB values: a 50 MB text takes about 60 MB more, a 50 MB binary about 55 MB more, and a worst case of 52 million one-character lines about 260 MB more (a 4-byte offset per line). Formatted JSON in full is cut at 64 MiB.
+
+**Copy value** puts the full value on the clipboard as plain text, whatever the pane shows: the stored text (also JSON, as stored, not indented), `0x` followed by the hex digits for binary, and a scalar as the grid shows it. The button is disabled for NULL. Copying a binary value builds a text twice its size in hex (about 30 ms for 50 MB).
 
 ## Close a grid
 

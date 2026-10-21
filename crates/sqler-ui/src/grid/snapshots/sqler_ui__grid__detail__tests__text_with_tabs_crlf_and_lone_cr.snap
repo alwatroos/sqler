@@ -1,0 +1,10 @@
+---
+source: crates/sqler-ui/src/grid/detail.rs
+expression: render(&d)
+---
+text · 24 bytes [text]
+a   b
+    x   yz
+lone␍cr
+
+last

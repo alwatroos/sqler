@@ -88,7 +88,7 @@ These in-grid keys are fixed: they are not in `keybindings.toml` and cannot be r
 
 The grid takes these keys before the global chords, but only while a results table has the focus. That is why Ctrl+Space, which is bound to `editor:trigger-completion` by default, selects the column in a results grid and still triggers completion in the SQL editor. A key the grid does not use (for example Mod+W or Ctrl+Tab) goes on to your global chords as usual. While the palette or a dialog is open, the grid takes no keys.
 
-The commands without an in-grid key are `grid:pin-column`, `grid:unpin-column`, `grid:move-column-left`, `grid:move-column-right`, `grid:autofit-column`, `grid:reset-layout`, `grid:scroll-to-top`, `grid:scroll-to-end` and `grid:fetch-more`. All `grid:*` commands act on the active results grid, or on the result a query tab shows. See [Results grid](results-grid.md).
+The commands without an in-grid key are `grid:pin-column`, `grid:unpin-column`, `grid:move-column-left`, `grid:move-column-right`, `grid:autofit-column`, `grid:reset-layout`, `grid:scroll-to-top`, `grid:scroll-to-end`, `grid:fetch-more` and `grid:toggle-cell-detail` (opens the [cell detail](results-grid.md#cell-detail) pane; it has no default chord because Mod+Shift+I is the GPUI inspector on Linux and Windows). All `grid:*` commands act on the active results grid, or on the result a query tab shows. See [Results grid](results-grid.md).
 
 ## Rebind a shortcut
 

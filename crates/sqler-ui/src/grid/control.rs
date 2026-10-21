@@ -141,8 +141,8 @@ impl GridControls {
                 out.relayout = true;
                 out.repaint = true;
             }
-            // Handled by the tab: it owns the model and the fetch.
-            GridAction::FetchMore => {}
+            // Handled by the tab (it owns the model and the fetch) and the view (the pane).
+            GridAction::FetchMore | GridAction::ToggleCellDetail => {}
         }
         out
     }

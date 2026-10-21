@@ -18,16 +18,18 @@ use gpui::{
     SharedString, Stateful, Styled as _, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
 use gpui_component::{ActiveTheme as _, Sizable as _};
 
+use super::detail_view::{self, CellDetailView, CopyCellValue};
 use super::layout::{MIN_COLUMN_PX, widest_text};
 use super::{
-    ColumnHeader, GridAction, GridControls, GridTab, IngestState, POLL_BUDGET, ProbeReport,
+    CellPos, ColumnHeader, GridAction, GridControls, GridTab, IngestState, POLL_BUDGET, ProbeReport,
 };
 use crate::command::CommandId;
 use crate::tabs::{TabId, TabStrip};
-use crate::workspace::{WorkspaceAction, WorkspaceView};
+use crate::workspace::{Effect, WorkspaceAction, WorkspaceView};
 
 /// How often the pending messages of a grid are applied.
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
@@ -36,6 +38,11 @@ const POLL_INTERVAL: Duration = Duration::from_millis(16);
 pub(crate) fn action_for_command(id: &CommandId) -> Option<GridAction> {
     GridAction::from_command_id(id)
 }
+
+/// Default, smallest and largest width of the cell detail pane, in pixels.
+const DETAIL_WIDTH_PX: f32 = 360.;
+const DETAIL_MIN_PX: f32 = 240.;
+const DETAIL_MAX_PX: f32 = 1200.;
 
 /// The key context of the data table.
 const TABLE_CONTEXT: &str = "DataTable";
@@ -69,6 +76,7 @@ pub(crate) struct GridDelegate {
     tab: GridTab,
     controls: GridControls,
     columns: Vec<Column>,
+    detail: Option<Entity<CellDetailView>>,
 }
 
 impl GridDelegate {
@@ -77,7 +85,18 @@ impl GridDelegate {
             tab,
             controls: GridControls::default(),
             columns: Vec::new(),
+            detail: None,
         }
+    }
+
+    /// The active cell, in model coordinates.
+    pub(crate) fn active_cell(&self) -> Option<CellPos> {
+        self.controls.selection().active()
+    }
+
+    /// The cell detail pane of this table.
+    pub(crate) fn detail(&self) -> Option<&Entity<CellDetailView>> {
+        self.detail.as_ref()
     }
 
     /// The grid the table shows.
@@ -439,6 +458,14 @@ pub(crate) fn new_table(
         }
     })
     .detach();
+    let pane = cx.new(|cx| CellDetailView::new(&table, cx));
+    table.update(cx, |state, _| {
+        state.delegate_mut().detail = Some(pane.clone());
+    });
+    cx.subscribe(&pane, |view, _, e: &CopyCellValue, cx| {
+        view.apply(Effect::Copy(e.0.clone()), cx);
+    })
+    .detach();
     start_polling(&table, cx);
     table
 }
@@ -451,6 +478,11 @@ pub(crate) fn apply_action(
     window: &mut Window,
     cx: &mut Context<TableState<GridDelegate>>,
 ) -> bool {
+    if action == GridAction::ToggleCellDetail {
+        detail_view::toggle(cx);
+        cx.notify();
+        return true;
+    }
     if action == GridAction::FetchMore {
         let fetched = state.delegate_mut().grid_mut().fetch_more();
         if fetched {
@@ -485,11 +517,23 @@ pub(crate) fn apply_action(
 
 /// The table. Its keys are routed by the workspace (`WorkspaceView::grid_key`), before the
 /// global chord router, because that router would otherwise take Ctrl+Space for completion.
-pub(crate) fn grid_table(table: &Table, _cx: &mut Context<WorkspaceView>) -> Div {
-    div()
-        .flex_1()
-        .min_h_0()
-        .child(DataTable::new(table).stripe(true).bordered(true))
+pub(crate) fn grid_table(table: &Table, cx: &mut Context<WorkspaceView>) -> Div {
+    let data = DataTable::new(table).stripe(true).bordered(true);
+    let pane = table.read(cx).delegate().detail().cloned();
+    match pane {
+        Some(pane) if detail_view::is_open(cx) => div().flex_1().min_h_0().child(
+            h_resizable("grid-detail-split")
+                .child(resizable_panel().child(div().size_full().min_w_0().child(data)))
+                .child(
+                    resizable_panel()
+                        .size(px(DETAIL_WIDTH_PX))
+                        .size_range(px(DETAIL_MIN_PX)..px(DETAIL_MAX_PX))
+                        .fixed()
+                        .child(pane),
+                ),
+        ),
+        _ => div().flex_1().min_h_0().child(data),
+    }
 }
 
 /// Applies the pending ingestion messages every [`POLL_INTERVAL`] until the grid ends or goes.

@@ -1,0 +1,8 @@
+---
+source: crates/sqler-ui/src/grid/detail.rs
+expression: render(&d)
+---
+binary · 37 bytes [binary]
+00000000  1e 25 2c 33 3a 41 48 4f  56 5d 64 6b 72 79 80 87  |.%,3:AHOV]dkry..|
+00000010  8e 95 9c a3 aa b1 b8 bf  c6 cd d4 db e2 e9 f0 f7  |................|
+00000020  fe 05 0c 13 1a                                    |.....|
