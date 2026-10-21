@@ -250,7 +250,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0029](docs/src/adr/0029-parquet-and-xlsx-writers.md) | Parquet and XLSX writers: own streaming zip, low-level Parquet API, two cargo features | accepted |
 | [0030](docs/src/adr/0030-staged-edits-and-dml.md) | Staged edits and DML: bound statements, single-table editability, one-transaction apply | accepted |
 | [0031](docs/src/adr/0031-client-side-sort-and-filter.md) | Client-side sort and filter: published display order, resumable job on the UI thread | accepted |
-| [0032](docs/src/adr/0032-grid-export.md) | Grid export: loaded rows or a fresh read-only run, writer on the blocking pool, hidden partial file, Parquet in the app default | accepted |
+| [0032](docs/src/adr/0032-grid-export.md) | Grid export: loaded rows or a fresh run of a read statement, writer on the blocking pool, hidden partial file, Parquet in the app default | accepted |
 
 ## 9. Roadmap status
 
