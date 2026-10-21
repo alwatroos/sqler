@@ -97,6 +97,29 @@ jobs:
           else
             cargo bench -p sqler-catalog --bench catalog_index -- --save "$GITHUB_WORKSPACE/target/catalog-index-pr.txt"
           fi
+      - name: Baseline grid sort bench on the base commit
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/target"
+          if [ -f ../base/crates/sqler-ui/benches/grid_sort.rs ]; then
+            # Older base benches reject --reps (exit 2); pass it only if the base source knows it.
+            REPS=""
+            if grep -q -- '--reps' ../base/crates/sqler-ui/benches/grid_sort.rs; then REPS="--reps 3"; fi
+            cd ../base
+            # Exit 1 means the base itself broke a budget; the file is saved first.
+            cargo bench -p sqler-ui --bench grid_sort -- $REPS --save "$GITHUB_WORKSPACE/target/grid-sort-base.txt" || [ $? -eq 1 ]
+          else
+            echo "::notice::no grid sort baseline bench on base"
+          fi
+      - name: Bench the grid sort on the PR (or branch) commit
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/target"
+          if [ -f "$GITHUB_WORKSPACE/target/grid-sort-base.txt" ]; then
+            cargo bench -p sqler-ui --bench grid_sort -- --reps 3 --save "$GITHUB_WORKSPACE/target/grid-sort-pr.txt" --compare "$GITHUB_WORKSPACE/target/grid-sort-base.txt" --sort-slack-ns 20000000 --filter-slack-ns 10000000 --viewport-slack-ns 500
+          else
+            cargo bench -p sqler-ui --bench grid_sort -- --reps 3 --save "$GITHUB_WORKSPACE/target/grid-sort-pr.txt"
+          fi
       - name: Baseline browser tree bench on the base commit
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
@@ -143,7 +166,7 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          for f in "$GITHUB_WORKSPACE/target/bench-base.txt" "$GITHUB_WORKSPACE/target/bench-pr.txt" "$GITHUB_WORKSPACE/target/catalog-base.txt" "$GITHUB_WORKSPACE/target/catalog-pr.txt" "$GITHUB_WORKSPACE/target/catalog-index-base.txt" "$GITHUB_WORKSPACE/target/catalog-index-pr.txt" "$GITHUB_WORKSPACE/target/browser-base.txt" "$GITHUB_WORKSPACE/target/browser-pr.txt" "$GITHUB_WORKSPACE/target/completion-base.txt" "$GITHUB_WORKSPACE/target/completion-pr.txt"; do
+          for f in "$GITHUB_WORKSPACE/target/bench-base.txt" "$GITHUB_WORKSPACE/target/bench-pr.txt" "$GITHUB_WORKSPACE/target/grid-sort-base.txt" "$GITHUB_WORKSPACE/target/grid-sort-pr.txt" "$GITHUB_WORKSPACE/target/catalog-base.txt" "$GITHUB_WORKSPACE/target/catalog-pr.txt" "$GITHUB_WORKSPACE/target/catalog-index-base.txt" "$GITHUB_WORKSPACE/target/catalog-index-pr.txt" "$GITHUB_WORKSPACE/target/browser-base.txt" "$GITHUB_WORKSPACE/target/browser-pr.txt" "$GITHUB_WORKSPACE/target/completion-base.txt" "$GITHUB_WORKSPACE/target/completion-pr.txt"; do
             if [ -f "$f" ]; then
               echo "### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
