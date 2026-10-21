@@ -157,7 +157,7 @@ impl KeyDispatcher {
     }
 
     /// The hint to show next to a command: its shortcut from the keymap, else the fixed context
-    /// key of [`LOCAL_KEYS`], else `None`.
+    /// key of `LOCAL_KEYS`, else `None`.
     #[must_use]
     pub fn hint(&self, id: &CommandId) -> Option<String> {
         if let Some(display) = self.shortcut_display(id) {

@@ -6,6 +6,7 @@
 //! The palette lists the commands of the [`CommandRegistry`], filtered and ranked by its matcher,
 //! with each command's current shortcut. Key handling is in [`crate::keymap`].
 
+#[cfg_attr(not(feature = "gui"), allow(dead_code))] // only the overlay reads it
 pub(crate) mod sections;
 #[cfg(feature = "gui")]
 pub(crate) mod view;

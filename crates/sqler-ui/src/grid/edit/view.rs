@@ -326,7 +326,7 @@ pub(crate) fn editor_element(
         _ => None,
     };
     let nullable = editor.nullable;
-    let mut row = div().flex().flex_row().items_center().gap_1();
+    let mut row = div().flex().flex_row().items_center().gap(px(SPACE[1]));
     for (ix, (label, value)) in [("true", Some(true)), ("false", Some(false)), ("NULL", None)]
         .into_iter()
         .enumerate()

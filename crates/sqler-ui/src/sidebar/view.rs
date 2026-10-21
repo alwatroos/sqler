@@ -875,16 +875,20 @@ pub(crate) fn connections_empty(view: &WorkspaceView, cx: &mut Context<Workspace
         cx,
     )
     .py(px(SPACE[5]))
+    .px(px(SPACE[4]))
+    .text_center()
     .child(
-        Button::new("empty-new-connection")
-            .primary()
-            .small()
-            .icon(AppIcon::Plus)
-            .label("New Connection")
-            .tooltip(tooltip_text("New Connection", hint.as_deref()))
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                view.dispatch_connection(ConnectionAction::New, cx);
-            })),
+        div().pt(px(SPACE[3])).child(
+            Button::new("empty-new-connection")
+                .primary()
+                .small()
+                .icon(AppIcon::Plus)
+                .label("New Connection")
+                .tooltip(tooltip_text("New Connection", hint.as_deref()))
+                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                    view.dispatch_connection(ConnectionAction::New, cx);
+                })),
+        ),
     )
 }
 
