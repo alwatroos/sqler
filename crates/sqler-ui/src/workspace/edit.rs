@@ -286,6 +286,18 @@ impl EditFlow {
         self.applies.contains_key(&tab)
     }
 
+    /// Marks `tab` as applying, for tests of the guards around a running apply.
+    #[cfg(test)]
+    pub(super) fn mark_applying(&mut self, tab: TabId) {
+        self.applies.insert(
+            tab,
+            ActiveApply {
+                run: ApplyId::new(1),
+                stop: ApplyStop::new(),
+            },
+        );
+    }
+
     pub(super) fn pending_notice(&self, tab: TabId) -> Option<String> {
         let n = self.pending_for_tab(tab);
         (n > 0).then(|| format!("Apply or discard the {n} pending change(s) first."))

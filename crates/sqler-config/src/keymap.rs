@@ -233,6 +233,14 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("tab:next", &["ctrl+tab"]),
     ("tab:previous", &["ctrl+shift+tab"]),
     ("app:quit", &["mod+q"]),
+    ("workbench:toggle-side-panel", &["mod+b"]),
+    ("workbench:show-connections", &["mod+shift+e"]),
+    ("workbench:toggle-bottom-panel", &["mod+j"]),
+    ("workbench:focus-next-region", &["f6"]),
+    ("workbench:focus-previous-region", &["shift+f6"]),
+    ("pane:split-right", &["mod+\\"]),
+    ("tab:move-left", &["mod+shift+pageup"]),
+    ("tab:move-right", &["mod+shift+pagedown"]),
     ("query:run-selection", &["mod+e"]),
     ("query:run-statement", &["mod+enter"]),
     ("query:run-all", &["mod+shift+enter"]),
@@ -591,6 +599,35 @@ mod tests {
             ("query:run-statement", "cmd+enter", "ctrl+enter"),
             ("query:run-all", "shift+cmd+enter", "ctrl+shift+enter"),
             ("query:cancel", "cmd+.", "ctrl+."),
+        ] {
+            assert_eq!(
+                Keymap::defaults(MAC).chords_for(&id(cmd)),
+                [chord(mac, MAC)],
+                "{cmd}"
+            );
+            assert_eq!(
+                Keymap::defaults(OTHER).chords_for(&id(cmd)),
+                [chord(other, OTHER)],
+                "{cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn workbench_commands_have_default_chords() {
+        for (cmd, mac, other) in [
+            ("workbench:toggle-side-panel", "cmd+b", "ctrl+b"),
+            ("workbench:show-connections", "shift+cmd+e", "ctrl+shift+e"),
+            ("workbench:toggle-bottom-panel", "cmd+j", "ctrl+j"),
+            ("workbench:focus-next-region", "f6", "f6"),
+            ("workbench:focus-previous-region", "shift+f6", "shift+f6"),
+            ("pane:split-right", "cmd+\\", "ctrl+\\"),
+            ("tab:move-left", "shift+cmd+pageup", "ctrl+shift+pageup"),
+            (
+                "tab:move-right",
+                "shift+cmd+pagedown",
+                "ctrl+shift+pagedown",
+            ),
         ] {
             assert_eq!(
                 Keymap::defaults(MAC).chords_for(&id(cmd)),
