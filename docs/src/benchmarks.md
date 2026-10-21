@@ -137,6 +137,38 @@ In-app probe: `SQLER_GRID_PROBE=1` on `sqler`, with a `connections.toml` that ho
 
 The frame interval is bound by the display (8.3 ms is a 120 Hz screen), so it shows responsiveness, not data cost. RSS with 1,000,000 rows open is above the 150 MB idle target, which is defined for an idle app with three connections and no large result, so it is recorded and not gated. The RSS rows above were measured before the compact model (the synthetic grid then held about 235 MB); the heap estimate of the same 1,000,000 rows is now 108.6 MB (see the model bench above). The in-app probe was not repeated in T1: it needs a display (maintainer check). The maintainer's interactive check (scrolling by hand) is still pending.
 
+## Results grid sort and filter
+
+Client-side sort and filter of the rows the model holds (PR #50, ADR-0031), measured headless on the 1M-row, 6-column synthetic model above (`GridLimits::UNBOUNDED`; columns: integer, text `r{i}c1`, float, boolean, integer, text). Each `*_p95_ns` is the p95 of `--samples` (5) full `GridOrder::step(None)` runs from a fresh order; `viewport_sorted_p95_ns` is the p95 of 100,000 random 50-row windows of the text-sorted order, each mapped through `RowOrder::model_row` and reading every cell; `slice_max_ns` is the longest single `step(Some(6 ms))` call of a text sort. All keys are the minimum over `--reps 3`. A second 1M-row model with three columns (decimal `-9999999.9999..9999999.9999`, URL-like text `https://example.com/api/v1/customers/{8 digits}/orders` in pseudo-random order, and a column of ints and floats in equal parts) covers the sorts the 8-byte key cache cannot always decide: `sort_dec_p95_ns`, `sort_url_p95_ns`, `sort_mixed_p95_ns` (p95 of 3 full sorts) and the longest 6 ms step of each, `slice_dec_max_ns`, `slice_url_max_ns`, `slice_mixed_max_ns`. The machine was shared with other builds (load average 9 to 16) during these runs; the three runs agree within 3 %.
+
+| Date | Commit | OS | Rows | Key | Measurement | Budget | Gated |
+| ---- | ------ | -- | ---- | --- | ----------- | ------ | ----- |
+| 2026-10-21 | 2ead2b5 (PR #50) | macOS 27.0.1 arm64, Apple M4 Pro | 1,000,000 | `sort_p95_ns` (column 1 text, ascending) | 68.4 ms (68.4 to 70.5 over 3 runs) | 1.5 s | yes |
+| | | | | `sort_int_p95_ns` (column 0 integer, descending) | 32.4 ms | | no |
+| | | | | `sort_multi_p95_ns` (column 3 boolean up, column 1 text down) | 132.4 ms | | no |
+| | | | | `filter_p95_ns` (quick filter "99", all columns) | 112.1 ms (112.1 to 117.3) | 500 ms | yes |
+| | | | | `filter_cond_p95_ns` (column 2 `>` 500000 and column 1 contains 7) | 10.0 ms | | no |
+| | | | | `viewport_sorted_p95_ns` | 1.9 us | 1 ms | yes |
+| | | | | `slice_max_ns` | 6.03 ms | 16 ms | budget only |
+| | | | | `order_heap_bytes` (text sort, published) | 17,000,000 (17 B per row) | | no |
+| | | | | `order_peak_heap_bytes` (a text sort replacing another, longest point of the job) | 25,194,632 (about 25 B per row) | | no |
+| | | | | `sort_dec_p95_ns` (decimal column) | 111.3 ms | 500 ms | budget only |
+| | | | | `sort_mixed_p95_ns` (ints and floats) | 104.8 ms | 500 ms | budget only |
+| | | | | `sort_url_p95_ns` (text with a 37-byte shared prefix) | 2.20 s | 15 s | yes |
+| | | | | `slice_dec_max_ns` / `slice_mixed_max_ns` / `slice_url_max_ns` | 6.20 ms / 6.21 ms / 8.03 ms | 16 ms each | budget only |
+
+All budgets are met (the text sort uses 5 % of its budget, the quick filter 23 %, the sorted viewport 0.2 %, the decimal and mixed sorts 22 % and 21 % of 500 ms, the URL sort 15 % of 15 s). The longest step is 6.0 to 6.4 ms for a 6 ms budget on the columns the key cache decides (text with distinct prefixes, decimals, ints and floats) and 8.0 ms on the URL column, where each comparison reads two cells; all are under the 16 ms frame budget on this machine. A step is the budget plus one unit of work (a sorted run of about 2 ms, 1,024 scanned rows or merged elements), so a slower machine or a slower comparison lengthens it by that unit, not by a whole run. The URL sort is 30 times slower than the text sort with distinct prefixes because the 8-byte key cannot decide any comparison there; it is the known slow case. The quick filter is slower than the text sort because it formats the non-text cells (integer, float, boolean) of every row into the scratch buffer for the substring test. Shared Linux CI runners can be several times slower than this machine, which is why the absolute budget of the URL sort is 15 s (a guard against a catastrophe, about 7 times the figure here); a regression of that sort is caught by the relative comparison against the base commit measured in the same job.
+
+### Method
+
+1. `cargo bench -p sqler-ui --bench grid_sort` (release profile). Flags: `--rows` (1000000), `--columns` (6, at least 4), `--batch` (1024), `--viewport` (50), `--samples` (5), `--window-samples` (100000), `--reps` (3), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--sort-slack-ns` (20000000), `--filter-slack-ns` (10000000), `--viewport-slack-ns` (500), `--budget-sort-ns` (1500000000), `--budget-filter-ns` (500000000), `--budget-viewport-ns` (1000000), `--budget-slice-ns` (16000000), `--budget-sort-slow-ns` (500000000, decimals and mixed), `--budget-sort-url-ns` (15000000000). Exit 0 ok, 1 budget or regression, 2 usage error or unreadable baseline.
+2. The bench ingests the rows with `spawn_ingest(SyntheticSource)`, then times full jobs of a new `GridOrder` (case-insensitive collation) with `Instant`. Window positions come from a fixed-seed xorshift64 generator.
+3. `order_heap_bytes` is `GridOrder::heap_bytes()` after a text sort: 4 bytes per row of order, 4 per covered model row of inverse and 9 per row for the one sort key (tag and bits). `order_peak_heap_bytes` is the largest `heap_bytes()` seen between 6 ms steps while a second text sort (descending) replaces a published one: it adds the kept rows, the two merge buffers and the new inverse.
+
+### Regression rule
+
+`bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job (rule of PR #33). The bench takes the minimum over `--reps 3` for every key, on the base and on the PR alike (noise on a shared runner only adds time). `--compare` fails a gated key when the PR figure is above the baseline times 1.25 plus an absolute slack: 20 ms for `sort_p95_ns`, 10 ms for `filter_p95_ns`, 500 ns for `viewport_sorted_p95_ns` (about one cold cache line per visible row), and the same 25 % plus 20 ms for `sort_url_p95_ns`. A key that the baseline file lacks is not compared; the bench prints a skip note, so the rule is inert on the PR that adds it (the base has no `grid_sort` bench) and applies from the next PR on. The base step passes `--reps 3` only if the base source of the bench knows the flag. The budgets (1.5 s, 500 ms, 1 ms, 16 ms, and for the three added columns 500 ms, 500 ms, 15 s and 16 ms per longest step) fail the run with or without a baseline. `sort_int_p95_ns`, `sort_multi_p95_ns`, `filter_cond_p95_ns`, `order_heap_bytes`, `order_peak_heap_bytes` and the other keys of the added columns are reported, not gated (they only have their budgets; `sort_url_p95_ns` has its budget and the relative rule). Checked by hand: a baseline of `sort_p95_ns=1` with no slack exits 1; a baseline without the keys exits 0 with four notes; an unknown flag exits 2.
+
 ## Catalog tree
 
 `sqler-catalog` on a synthetic 5,000-table schema (one schema `main`, 8 columns per table). Source `fake` is an in-memory `Introspect` that returns ready futures, so it measures the catalog and not a database. Source `sqlite` builds the same 5,000 tables in a `:memory:` `SQLite` session and is a reference figure only (20 samples, no budget).

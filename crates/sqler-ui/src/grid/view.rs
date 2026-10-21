@@ -15,27 +15,72 @@ use std::time::{Duration, Instant};
 use gpui::{
     App, AppContext as _, Context, Div, Entity, Focusable as _, InteractiveElement as _,
     IntoElement, KeyBinding, MouseButton, MouseDownEvent, NoAction, ParentElement as _, Pixels,
-    SharedString, Stateful, Styled as _, Window, div, px,
+    SharedString, Stateful, Styled as _, Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::checkbox::Checkbox;
+use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::menu::{PopupMenu, PopupMenuItem};
+use gpui_component::resizable::{h_resizable, resizable_panel};
+use gpui_component::select::{Select, SelectState};
 use gpui_component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
-use gpui_component::{ActiveTheme as _, Sizable as _};
+use gpui_component::{ActiveTheme as _, IndexPath, Sizable as _};
 
+use super::detail_view::{self, CellDetailView, CopyCellValue};
 use super::layout::{MIN_COLUMN_PX, widest_text};
 use super::{
-    ColumnHeader, GridAction, GridControls, GridTab, IngestState, POLL_BUDGET, ProbeReport,
+    CellPos, Collation, ColumnHeader, Condition, CopyError, CopyFormat, CopyJob, CopyLimits,
+    DisplayMap, FilterOp, FilterSpec, GridAction, GridControls, GridTab, IngestState, InsertTarget,
+    OrderProgress, POLL_BUDGET, ProbeReport, QuickFilter,
 };
 use crate::command::CommandId;
 use crate::tabs::{TabId, TabStrip};
-use crate::workspace::{WorkspaceAction, WorkspaceView};
+use crate::workspace::{Effect, WorkspaceAction, WorkspaceView};
 
 /// How often the pending messages of a grid are applied.
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
+
+/// The work of one pass of the sort and filter job on the UI thread.
+const ORDER_SLICE: Duration = Duration::from_millis(6);
+
+/// The pause between two passes, so that input and painting get their turn.
+const ORDER_YIELD: Duration = Duration::from_millis(1);
+
+/// How long after the last keystroke the quick filter is applied.
+const QUICK_FILTER_DELAY: Duration = Duration::from_millis(150);
+
+/// The operators of the condition editor, in the order of its select.
+const OPS: [(FilterOp, &str); 7] = [
+    (FilterOp::Equals, "= Equals"),
+    (FilterOp::NotEquals, "≠ Not equals"),
+    (FilterOp::Contains, "Contains"),
+    (FilterOp::Greater, "> Greater"),
+    (FilterOp::Less, "< Less"),
+    (FilterOp::IsNull, "Is NULL"),
+    (FilterOp::NotNull, "Is not NULL"),
+];
+
+/// The entities of the filter bar of one grid; their subscriptions live and die with it.
+struct FilterBar {
+    quick: Entity<InputState>,
+    scope: Entity<SelectState<Vec<SharedString>>>,
+    column: Entity<SelectState<Vec<SharedString>>>,
+    op: Entity<SelectState<Vec<SharedString>>>,
+    operand: Entity<InputState>,
+    /// Counts the edits of the quick filter, so that only the last one of a burst applies.
+    edits: u64,
+    _subscriptions: Vec<Subscription>,
+}
 
 /// The grid action a command ID stands for, if it is one.
 pub(crate) fn action_for_command(id: &CommandId) -> Option<GridAction> {
     GridAction::from_command_id(id)
 }
+
+/// Default, smallest and largest width of the cell detail pane, in pixels.
+const DETAIL_WIDTH_PX: f32 = 360.;
+const DETAIL_MIN_PX: f32 = 240.;
+const DETAIL_MAX_PX: f32 = 1200.;
 
 /// The key context of the data table.
 const TABLE_CONTEXT: &str = "DataTable";
@@ -69,15 +114,46 @@ pub(crate) struct GridDelegate {
     tab: GridTab,
     controls: GridControls,
     columns: Vec<Column>,
+    detail: Option<Entity<CellDetailView>>,
+    /// Runs a copy of the selection; set by the owner, which holds the clipboard path.
+    on_copy: Option<CopyHook>,
+    /// The workspace to repaint while the sort and filter job runs.
+    workspace: WeakEntity<WorkspaceView>,
+    /// Whether a pump task is running for the sort and filter job.
+    pumping: bool,
+    bar: Option<FilterBar>,
 }
 
+/// What a copy-menu item does: starts the copy of the selection in the given format.
+pub(crate) type CopyHook = std::rc::Rc<dyn Fn(CopyFormat, &mut Window, &mut App)>;
+
 impl GridDelegate {
-    pub(crate) fn new(tab: GridTab) -> Self {
+    pub(crate) fn new(tab: GridTab, workspace: WeakEntity<WorkspaceView>) -> Self {
         Self {
             tab,
             controls: GridControls::default(),
             columns: Vec::new(),
+            detail: None,
+            on_copy: None,
+            workspace,
+            pumping: false,
+            bar: None,
         }
+    }
+
+    /// The active cell, in model coordinates.
+    pub(crate) fn active_cell(&self) -> Option<CellPos> {
+        self.controls.selection().active()
+    }
+
+    /// The cell detail pane of this table.
+    pub(crate) fn detail(&self) -> Option<&Entity<CellDetailView>> {
+        self.detail.as_ref()
+    }
+
+    /// Sets what the copy menu items do.
+    pub(crate) fn set_copy_hook(&mut self, hook: CopyHook) {
+        self.on_copy = Some(hook);
     }
 
     /// The grid the table shows.
@@ -90,10 +166,37 @@ impl GridDelegate {
         &mut self.tab
     }
 
+    /// Plans the copy of the selection in display order.
+    pub(crate) fn copy_job(
+        &self,
+        format: CopyFormat,
+        target: InsertTarget,
+    ) -> Result<CopyJob, CopyError> {
+        // The grid's own row order, so a sort and a filter apply to the copy.
+        let rows = self.tab.rows();
+        let map = DisplayMap {
+            rows: &rows,
+            columns: self.controls.layout(),
+        };
+        CopyJob::new(
+            self.tab.model(),
+            &map,
+            self.controls.selection(),
+            format,
+            target,
+            CopyLimits::DEFAULT,
+        )
+    }
+
+    /// Reads the next rows of a copy from the model. `true` once every row is in.
+    pub(crate) fn gather_copy(&self, job: &mut CopyJob, max_cells: usize) -> bool {
+        job.gather(self.tab.model(), max_cells)
+    }
+
     /// Whether the motion would change the active cell.
     pub(crate) fn motion_moves(&self, to: super::selection::Motion) -> bool {
         self.controls
-            .motion_moves(to, self.tab.row_count(), self.tab.visible())
+            .motion_moves(to, &self.tab.rows(), self.tab.visible())
     }
 
     /// Rebuilds the column list, in display order, from the tab's headers and the layout.
@@ -130,12 +233,33 @@ impl GridDelegate {
 }
 
 impl TableDelegate for GridDelegate {
+    /// The copy menu of a right click. The click does not change the selection.
+    fn context_menu(
+        &mut self,
+        _row_ix: usize,
+        mut menu: PopupMenu,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        let Some(hook) = self.on_copy.clone() else {
+            return menu;
+        };
+        for format in CopyFormat::ALL {
+            let hook = hook.clone();
+            menu = menu.item(
+                PopupMenuItem::new(format.menu_label())
+                    .on_click(move |_, window, cx| hook(format, window, cx)),
+            );
+        }
+        menu
+    }
+
     fn columns_count(&self, _: &App) -> usize {
         self.columns.len()
     }
 
     fn rows_count(&self, _: &App) -> usize {
-        self.tab.row_count()
+        self.tab.display_count()
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
@@ -153,7 +277,10 @@ impl TableDelegate for GridDelegate {
             .tab
             .header(self.model_col(col_ix))
             .map_or(("", ""), |h| (h.name.as_str(), h.type_label));
-        let rows = self.tab.row_count();
+        let model_col = self.model_col(col_ix);
+        let indicator = self.tab.order().sort().indicator(model_col);
+        let sorted = indicator.is_some();
+        let fg = cx.theme().foreground;
         div()
             .size_full()
             .flex()
@@ -165,11 +292,9 @@ impl TableDelegate for GridDelegate {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |state, e: &MouseDownEvent, window, cx| {
-                    let hit =
-                        state
-                            .delegate_mut()
-                            .controls
-                            .click_header(col_ix, rows, e.modifiers.shift);
+                    let d = state.delegate_mut();
+                    let rows = d.tab.rows();
+                    let hit = d.controls.click_header(col_ix, &rows, e.modifiers.shift);
                     if hit {
                         window.focus(&state.focus_handle(cx), cx);
                         cx.notify();
@@ -178,6 +303,28 @@ impl TableDelegate for GridDelegate {
             )
             .child(name.to_owned())
             .child(div().text_xs().text_color(muted).child(label.to_owned()))
+            .child(div().flex_1())
+            .child(
+                // The sort indicator: a click on it sorts; the rest of the header selects the
+                // column.
+                div()
+                    .px_1()
+                    .text_xs()
+                    .cursor_pointer()
+                    .text_color(if sorted { fg } else { muted })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |state, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            let d = state.delegate_mut();
+                            let mut spec = d.tab.order().sort().clone();
+                            spec.click(model_col, e.modifiers.shift);
+                            d.tab.order_mut().set_sort(spec);
+                            ensure_pump(state, cx);
+                        }),
+                    )
+                    .child(indicator.unwrap_or_else(|| "↕".to_owned())),
+            )
     }
 
     fn render_tr(
@@ -186,7 +333,7 @@ impl TableDelegate for GridDelegate {
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
-        let rows = self.tab.row_count();
+        let rows = self.tab.display_count();
         self.tab.stats_mut().row_rendered(row_ix, rows);
         div().id(("row", row_ix))
     }
@@ -198,10 +345,10 @@ impl TableDelegate for GridDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let rows = self.tab.row_count();
-        let selected = self.controls.is_selected(row_ix, col_ix, rows);
+        let model_row = self.tab.model_row(row_ix);
+        let selected = self.controls.is_selected(row_ix, col_ix, &self.tab.rows());
         let active = self.controls.selection().active().is_some_and(|c| {
-            c.row == row_ix && self.controls.layout().display_column(c.col) == Some(col_ix)
+            Some(c.row) == model_row && self.controls.layout().display_column(c.col) == Some(col_ix)
         });
         let tokens = &cx.theme().tokens;
         let (fill, border) = (tokens.table_active, tokens.table_active_border);
@@ -213,12 +360,11 @@ impl TableDelegate for GridDelegate {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |state, e: &MouseDownEvent, window, cx| {
-                    let hit = state.delegate_mut().controls.click_cell(
-                        row_ix,
-                        col_ix,
-                        rows,
-                        e.modifiers.shift,
-                    );
+                    let d = state.delegate_mut();
+                    let rows = d.tab.rows();
+                    let hit = d
+                        .controls
+                        .click_cell(row_ix, col_ix, &rows, e.modifiers.shift);
                     if hit {
                         window.focus(&state.focus_handle(cx), cx);
                         cx.notify();
@@ -231,7 +377,9 @@ impl TableDelegate for GridDelegate {
         if active {
             cell = cell.border_1().border_color(border);
         }
-        cell.child(self.tab.cell_text(row_ix, self.model_col(col_ix)))
+        cell.child(model_row.map_or_else(String::new, |row| {
+            self.tab.cell_text(row, self.model_col(col_ix))
+        }))
     }
 
     fn visible_rows_changed(
@@ -244,7 +392,9 @@ impl TableDelegate for GridDelegate {
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
-        self.tab.cell_text(row_ix, self.model_col(col_ix))
+        self.tab.model_row(row_ix).map_or_else(String::new, |row| {
+            self.tab.cell_text(row, self.model_col(col_ix))
+        })
     }
 
     fn move_column(
@@ -271,6 +421,7 @@ impl TableDelegate for GridDelegate {
         let cells: Vec<String> = self
             .tab
             .visible()
+            .filter_map(|row| self.tab.model_row(row))
             .map(|row| self.tab.cell_text(row, model))
             .collect();
         let widest = widest_text(
@@ -419,8 +570,18 @@ pub(crate) fn new_table(
     window: &mut Window,
     cx: &mut Context<WorkspaceView>,
 ) -> Table {
+    let owner = cx.weak_entity();
+    let workspace = cx.entity().downgrade();
     let table = cx.new(|cx| {
-        TableState::new(GridDelegate::new(grid), window, cx)
+        let mut delegate = GridDelegate::new(grid, workspace);
+        delegate.set_copy_hook(std::rc::Rc::new(move |format, window, cx| {
+            owner
+                .update(cx, |view, cx| {
+                    view.run_command(&format.command_id(), window, cx);
+                })
+                .ok();
+        }));
+        TableState::new(delegate, window, cx)
             .col_movable(true)
             .col_resizable(true)
             .sortable(false)
@@ -439,7 +600,20 @@ pub(crate) fn new_table(
         }
     })
     .detach();
-    start_polling(&table, cx);
+    let pane = cx.new(|cx| CellDetailView::new(&table, cx));
+    table.update(cx, |state, _| {
+        state.delegate_mut().detail = Some(pane.clone());
+    });
+    cx.subscribe(&pane, |view, _, e: &CopyCellValue, cx| {
+        view.apply(Effect::Copy(e.0.clone()), cx);
+    })
+    .detach();
+    let bar = new_filter_bar(&table, window, cx);
+    table.update(cx, |state, cx| {
+        state.delegate_mut().bar = Some(bar);
+        sync_bar(state, window, cx);
+    });
+    start_polling(&table, window, cx);
     table
 }
 
@@ -451,6 +625,11 @@ pub(crate) fn apply_action(
     window: &mut Window,
     cx: &mut Context<TableState<GridDelegate>>,
 ) -> bool {
+    if action == GridAction::ToggleCellDetail {
+        detail_view::toggle(cx);
+        cx.notify();
+        return true;
+    }
     if action == GridAction::FetchMore {
         let fetched = state.delegate_mut().grid_mut().fetch_more();
         if fetched {
@@ -458,19 +637,44 @@ pub(crate) fn apply_action(
         }
         return fetched;
     }
+    if matches!(
+        action,
+        GridAction::SortAscending
+            | GridAction::SortDescending
+            | GridAction::ClearSort
+            | GridAction::ClearFilter
+            | GridAction::ToggleMatchCase
+    ) {
+        let d = state.delegate_mut();
+        let active_col = d.controls.selection().active().map(|c| c.col);
+        let changed = d.tab.apply_order_action(action, active_col);
+        if changed {
+            if action == GridAction::ClearFilter
+                && let Some(bar) = &d.bar
+            {
+                let (quick, operand) = (bar.quick.clone(), bar.operand.clone());
+                for input in [quick, operand] {
+                    input.update(cx, |input, cx| input.set_value("", window, cx));
+                }
+            }
+            order_changed(state, cx);
+        }
+        return changed;
+    }
     let delegate = state.delegate_mut();
-    let (rows, visible) = (delegate.tab.row_count(), delegate.tab.visible());
-    let applied = delegate.controls.apply(action, rows, visible);
+    let visible = delegate.tab.visible();
+    let rows = delegate.tab.rows();
+    let applied = delegate.controls.apply(action, &rows, visible);
     if applied.relayout {
         state.delegate_mut().rebuild_columns();
         state.refresh(cx);
     }
     if let Some(row) = applied.scroll_row {
-        // Strict: `row` is the first row to show; the lazy scroll does nothing when the target
-        // is already on screen, which would leave a row below the view unreached.
+        // `row` is a display row; scroll the least that shows it, and not at all when it is
+        // already fully visible.
         state
             .vertical_scroll_handle
-            .scroll_to_item_strict(row, gpui::ScrollStrategy::Top);
+            .scroll_to_item(row, gpui::ScrollStrategy::Nearest);
         cx.notify();
     }
     if let Some(col) = applied.scroll_col {
@@ -483,26 +687,62 @@ pub(crate) fn apply_action(
     applied != super::Applied::default()
 }
 
-/// The table. Its keys are routed by the workspace (`WorkspaceView::grid_key`), before the
-/// global chord router, because that router would otherwise take Ctrl+Space for completion.
-pub(crate) fn grid_table(table: &Table, _cx: &mut Context<WorkspaceView>) -> Div {
+/// The table under its filter bar, with the cell detail pane to its right. Its keys are routed
+/// by the workspace (`WorkspaceView::grid_key`), before the global chord router, because that
+/// router would otherwise take Ctrl+Space for completion. The right-click copy menu is the delegate's
+/// `context_menu`: the table has its own trigger that takes every right click, so a menu on a
+/// wrapper would never open.
+pub(crate) fn grid_table(table: &Table, cx: &mut Context<WorkspaceView>) -> Div {
+    let data = DataTable::new(table).stripe(true).bordered(true);
+    let pane = table.read(cx).delegate().detail().cloned();
+    let body = match pane {
+        Some(pane) if detail_view::is_open(cx) => div().flex_1().min_h_0().child(
+            h_resizable("grid-detail-split")
+                .child(resizable_panel().child(div().size_full().min_w_0().child(data)))
+                .child(
+                    resizable_panel()
+                        .size(px(DETAIL_WIDTH_PX))
+                        .size_range(px(DETAIL_MIN_PX)..px(DETAIL_MAX_PX))
+                        .fixed()
+                        .child(pane),
+                ),
+        ),
+        _ => div().flex_1().min_h_0().child(data),
+    };
     div()
         .flex_1()
         .min_h_0()
-        .child(DataTable::new(table).stripe(true).bordered(true))
+        .flex()
+        .flex_col()
+        .children(filter_bar(table, cx))
+        .child(body)
 }
 
 /// Applies the pending ingestion messages every [`POLL_INTERVAL`] until the grid ends or goes.
-pub(crate) fn start_polling(table: &Table, cx: &mut Context<WorkspaceView>) {
+pub(crate) fn start_polling(table: &Table, window: &mut Window, cx: &mut Context<WorkspaceView>) {
     let weak = table.downgrade();
-    cx.spawn(async move |this, cx| {
+    cx.spawn_in(window, async move |this, cx| {
         loop {
             cx.background_executor().timer(POLL_INTERVAL).await;
-            let polled = weak.update(cx, |state, cx| {
+            let polled = weak.update_in(cx, |state, window, cx| {
                 let outcome = state.delegate_mut().tab.poll(POLL_BUDGET);
                 if outcome.columns_changed {
                     state.delegate_mut().rebuild_columns();
+                    sync_bar(state, window, cx);
                     state.refresh(cx);
+                }
+                // The poll tick is also the timer of the 500 ms merge trigger: rows that wait while
+                // the stream is quiet are merged once due. It ends with this task (result done,
+                // tab closed), so nothing outlives the grid.
+                if state.delegate().tab.order().is_active()
+                    && (outcome.terminal
+                        || state
+                            .delegate()
+                            .tab
+                            .next_extend_check(Instant::now())
+                            .is_some_and(|wait| wait.is_zero()))
+                {
+                    ensure_pump(state, cx);
                 }
                 if outcome.applied > 0 || outcome.terminal {
                     cx.notify();
@@ -521,6 +761,387 @@ pub(crate) fn start_polling(table: &Table, cx: &mut Context<WorkspaceView>) {
         }
     })
     .detach();
+}
+
+/// The sort or filter changed: show the rows at once (an inactive order is the identity) and
+/// run the job.
+fn order_changed(state: &mut TableState<GridDelegate>, cx: &mut Context<TableState<GridDelegate>>) {
+    state.refresh(cx);
+    ensure_pump(state, cx);
+    cx.notify();
+}
+
+/// Starts the task that runs the sort and filter job in slices of [`ORDER_SLICE`] with a pause
+/// of [`ORDER_YIELD`] between them, unless it is running. It ends when the job is done.
+fn ensure_pump(state: &mut TableState<GridDelegate>, cx: &mut Context<TableState<GridDelegate>>) {
+    if state.delegate().pumping {
+        return;
+    }
+    state.delegate_mut().pumping = true;
+    cx.spawn(async move |this, cx| {
+        loop {
+            let step = this.update(cx, |state, cx| {
+                let d = state.delegate_mut();
+                let progress = d.tab.step_order(Some(ORDER_SLICE));
+                if progress == OrderProgress::Idle {
+                    d.pumping = false;
+                }
+                let workspace = d.workspace.clone();
+                if progress == OrderProgress::Published {
+                    state.refresh(cx);
+                }
+                cx.notify();
+                (progress, workspace)
+            });
+            let Ok((progress, workspace)) = step else {
+                break;
+            };
+            // The status text and the filter bar live in the workspace's render.
+            workspace.update(cx, |_, cx| cx.notify()).ok();
+            if progress == OrderProgress::Idle {
+                break;
+            }
+            cx.background_executor().timer(ORDER_YIELD).await;
+        }
+    })
+    .detach();
+}
+
+// ---- filter bar ------------------------------------------------------------------------------
+
+/// A select over a list of titles, with the first one chosen.
+fn list_select(
+    items: Vec<SharedString>,
+    window: &mut Window,
+    cx: &mut Context<WorkspaceView>,
+) -> Entity<SelectState<Vec<SharedString>>> {
+    cx.new(|cx| SelectState::new(items, Some(IndexPath::default().row(0)), window, cx))
+}
+
+/// The row of a select's choice.
+fn chosen(select: &Entity<SelectState<Vec<SharedString>>>, cx: &App) -> usize {
+    select.read(cx).selected_index(cx).map_or(0, |ix| ix.row)
+}
+
+/// Creates the inputs of a grid's filter bar and subscribes to them.
+fn new_filter_bar(
+    table: &Table,
+    window: &mut Window,
+    cx: &mut Context<WorkspaceView>,
+) -> FilterBar {
+    let quick = cx.new(|cx| InputState::new(window, cx).placeholder("Filter rows…"));
+    let operand = cx.new(|cx| InputState::new(window, cx).placeholder("Value"));
+    let scope = list_select(vec!["All columns".into()], window, cx);
+    let column = list_select(Vec::new(), window, cx);
+    let ops = OPS
+        .iter()
+        .map(|(_, title)| SharedString::from(*title))
+        .collect();
+    let op = list_select(ops, window, cx);
+    let weak = table.downgrade();
+    let mut subscriptions = Vec::new();
+    let on_quick = weak.clone();
+    subscriptions.push(cx.subscribe(&quick, move |_, _, event: &InputEvent, cx| {
+        if matches!(event, InputEvent::Change) {
+            on_quick.update(cx, schedule_quick_filter).ok();
+        }
+    }));
+    let on_scope = weak;
+    subscriptions.push(cx.subscribe(
+        &scope,
+        move |_, _, _: &gpui_component::select::SelectEvent<Vec<SharedString>>, cx| {
+            on_scope
+                .update(cx, |state, cx| edit_filter(state, cx, |_| {}))
+                .ok();
+        },
+    ));
+    // A change of the operator shows or hides the operand.
+    subscriptions.push(cx.subscribe(
+        &op,
+        |_, _, _: &gpui_component::select::SelectEvent<Vec<SharedString>>, cx| {
+            cx.notify();
+        },
+    ));
+    FilterBar {
+        quick,
+        scope,
+        column,
+        op,
+        operand,
+        edits: 0,
+        _subscriptions: subscriptions,
+    }
+}
+
+/// Fills the column selects from the grid's headers and empties the quick filter: called when
+/// the column set arrives or changes (the order was reset with it).
+fn sync_bar(
+    state: &mut TableState<GridDelegate>,
+    window: &mut Window,
+    cx: &mut Context<TableState<GridDelegate>>,
+) {
+    let d = state.delegate();
+    let Some(bar) = &d.bar else {
+        return;
+    };
+    let names: Vec<SharedString> = (0..d.tab.column_count())
+        .filter_map(|ix| d.tab.header(ix))
+        .map(|h| SharedString::from(h.name.clone()))
+        .collect();
+    let (quick, scope, column) = (bar.quick.clone(), bar.scope.clone(), bar.column.clone());
+    let mut all = vec![SharedString::from("All columns")];
+    all.extend(names.iter().cloned());
+    let first = Some(IndexPath::default().row(0));
+    scope.update(cx, |select, cx| {
+        select.set_items(all, window, cx);
+        select.set_selected_index(first, window, cx);
+    });
+    column.update(cx, |select, cx| {
+        let any = !names.is_empty();
+        select.set_items(names, window, cx);
+        if any {
+            select.set_selected_index(first, window, cx);
+        }
+    });
+    quick.update(cx, |input, cx| input.set_value("", window, cx));
+}
+
+/// Applies the quick filter once typing paused for [`QUICK_FILTER_DELAY`].
+fn schedule_quick_filter(
+    state: &mut TableState<GridDelegate>,
+    cx: &mut Context<TableState<GridDelegate>>,
+) {
+    let Some(bar) = state.delegate_mut().bar.as_mut() else {
+        return;
+    };
+    bar.edits += 1;
+    let edit = bar.edits;
+    cx.spawn(async move |this, cx| {
+        cx.background_executor().timer(QUICK_FILTER_DELAY).await;
+        this.update(cx, |state, cx| {
+            if state
+                .delegate()
+                .bar
+                .as_ref()
+                .is_some_and(|bar| bar.edits == edit)
+            {
+                edit_filter(state, cx, |_| {});
+            }
+        })
+        .ok();
+    })
+    .detach();
+}
+
+/// Rebuilds the filter from the quick filter inputs and the conditions (changed by `edit`),
+/// and runs the job.
+fn edit_filter(
+    state: &mut TableState<GridDelegate>,
+    cx: &mut Context<TableState<GridDelegate>>,
+    edit: impl FnOnce(&mut Vec<Condition>),
+) {
+    let d = state.delegate_mut();
+    let Some(bar) = &d.bar else {
+        return;
+    };
+    let text = bar.quick.read(cx).value().to_string();
+    let scope = chosen(&bar.scope, cx);
+    let mut conditions = d.tab.order().filter().conditions.clone();
+    edit(&mut conditions);
+    let quick = (!text.is_empty()).then_some(QuickFilter {
+        text,
+        column: scope.checked_sub(1),
+    });
+    d.tab
+        .order_mut()
+        .set_filter(FilterSpec { quick, conditions });
+    order_changed(state, cx);
+}
+
+/// Adds the condition the editor shows.
+fn add_condition(
+    state: &mut TableState<GridDelegate>,
+    window: &mut Window,
+    cx: &mut Context<TableState<GridDelegate>>,
+) {
+    let Some(bar) = &state.delegate().bar else {
+        return;
+    };
+    let column = chosen(&bar.column, cx);
+    let Some((op, _)) = OPS.get(chosen(&bar.op, cx)).copied() else {
+        return;
+    };
+    let operand = bar.operand.read(cx).value().to_string();
+    if state.delegate().tab.column_count() == 0 || (op.needs_operand() && operand.trim().is_empty())
+    {
+        return;
+    }
+    let operand_input = bar.operand.clone();
+    operand_input.update(cx, |input, cx| input.set_value("", window, cx));
+    let operand = if op.needs_operand() {
+        operand
+    } else {
+        String::new()
+    };
+    edit_filter(state, cx, move |conditions| {
+        conditions.push(Condition {
+            column,
+            op,
+            operand,
+        });
+    });
+}
+
+/// One chip per filter condition, with a button that removes it.
+fn condition_chips(
+    table: &Table,
+    filter: &FilterSpec,
+    names: &[String],
+    cx: &mut Context<WorkspaceView>,
+) -> Vec<Div> {
+    let border = cx.theme().border;
+    filter
+        .conditions
+        .iter()
+        .enumerate()
+        .map(|(ix, c)| {
+            let title = OPS
+                .iter()
+                .find(|(op, _)| *op == c.op)
+                .map_or("", |(_, title)| title);
+            let text = if c.op.needs_operand() {
+                format!("{} {} {}", names[ix], title, c.operand)
+            } else {
+                format!("{} {title}", names[ix])
+            };
+            let remove = table.clone();
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .px_1()
+                .border_1()
+                .border_color(border)
+                .rounded_sm()
+                .text_sm()
+                .child(text)
+                .child(
+                    Button::new(("grid-chip-x", ix as u64))
+                        .label("×")
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            remove.update(cx, |state, cx| {
+                                edit_filter(state, cx, |conditions| {
+                                    if ix < conditions.len() {
+                                        conditions.remove(ix);
+                                    }
+                                });
+                            });
+                        })),
+                )
+        })
+        .collect()
+}
+
+/// The filter bar above a grid: quick filter, scope, match case, condition editor and chips,
+/// and the status of the sort and filter. `None` before the bar exists.
+fn filter_bar(table: &Table, cx: &mut Context<WorkspaceView>) -> Option<Div> {
+    let (muted, border) = (cx.theme().muted_foreground, cx.theme().border);
+    let id = table.entity_id().as_u64();
+    let (quick, scope, column, op, operand, filter, status, case, chip_names) = {
+        let d = table.read(cx).delegate();
+        let bar = d.bar.as_ref()?;
+        let filter = d.tab.order().filter().clone();
+        let names: Vec<String> = filter
+            .conditions
+            .iter()
+            .map(|c| {
+                d.tab
+                    .header(c.column)
+                    .map_or_else(String::new, |h| h.name.clone())
+            })
+            .collect();
+        (
+            bar.quick.clone(),
+            bar.scope.clone(),
+            bar.column.clone(),
+            bar.op.clone(),
+            bar.operand.clone(),
+            filter,
+            d.tab.order_text(),
+            d.tab.order().collation() == Collation::CodePoint,
+            names,
+        )
+    };
+    let needs_operand = OPS
+        .get(chosen(&op, cx))
+        .is_none_or(|(op, _)| op.needs_operand());
+    let act = |table: &Table, action: GridAction| {
+        let table = table.clone();
+        move |window: &mut Window, cx: &mut App| {
+            table.update(cx, |state, cx| apply_action(state, action, window, cx));
+        }
+    };
+    let (on_case, on_clear) = (
+        act(table, GridAction::ToggleMatchCase),
+        act(table, GridAction::ClearFilter),
+    );
+    let add_table = table.clone();
+    let chips = condition_chips(table, &filter, &chip_names, cx);
+    Some(
+        div()
+            .w_full()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(border)
+            .child(div().w(px(200.)).child(Input::new(&quick).small()))
+            .child(div().w(px(140.)).child(Select::new(&scope).small()))
+            .child(
+                Checkbox::new(("grid-match-case", id))
+                    .label("Match case")
+                    .checked(case)
+                    .on_click(cx.listener(move |_, _: &bool, window, cx| on_case(window, cx))),
+            )
+            .child(div().w(px(1.)).h(px(18.)).bg(border))
+            .child(div().w(px(140.)).child(Select::new(&column).small()))
+            .child(div().w(px(130.)).child(Select::new(&op).small()))
+            .children(needs_operand.then(|| div().w(px(140.)).child(Input::new(&operand).small())))
+            .child(
+                Button::new(("grid-add-condition", id))
+                    .label("Add")
+                    .small()
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        add_table.update(cx, |state, cx| add_condition(state, window, cx));
+                    })),
+            )
+            .child(
+                // The parent id scopes the chip buttons to this table.
+                div()
+                    .id(("grid-chips", id))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .children(chips),
+            )
+            .child(
+                Button::new(("grid-clear-filter", id))
+                    .label("Clear filter")
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(move |_, _, window, cx| on_clear(window, cx))),
+            )
+            .children(status.map(|text| div().text_sm().text_color(muted).child(text))),
+    )
 }
 
 // ---- probe -----------------------------------------------------------------------------------
@@ -726,4 +1347,133 @@ fn rss_mb() -> Option<f64> {
         return None;
     };
     Some(kb / 1024.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use gpui::{
+        ClipboardItem, IntoElement, Modifiers, Render, TestAppContext, VisualTestContext,
+        WeakEntity, point,
+    };
+    use sqler_sql::Dialect;
+
+    use super::*;
+
+    /// A window with only the table in it.
+    struct Root(Table);
+
+    impl Render for Root {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(DataTable::new(&self.0))
+        }
+    }
+
+    /// A synthetic grid in a table whose copy hook copies like the workspace does (plan, read,
+    /// render, clipboard) and records the format. The whole result is selected.
+    fn open(
+        cx: &mut TestAppContext,
+    ) -> (Table, Rc<RefCell<Vec<CopyFormat>>>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+        });
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let slot: Rc<RefCell<Option<WeakEntity<TableState<GridDelegate>>>>> = Rc::default();
+        let (root, cx) = cx.add_window_view({
+            let (seen, slot) = (seen.clone(), slot.clone());
+            move |window, cx| {
+                let (mut tab, _cancel) = GridTab::spawn_synthetic(6, 3, 6);
+                while tab.row_count() < 6 {
+                    tab.poll(usize::MAX);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let mut delegate = GridDelegate::new(tab, WeakEntity::new_invalid());
+                delegate.rebuild_columns();
+                let rows = delegate.tab.row_count();
+                let order = delegate.tab.rows();
+                delegate
+                    .controls
+                    .apply(GridAction::SelectAll, &order, 0..rows);
+                let hook_slot = slot.clone();
+                delegate.set_copy_hook(Rc::new(move |format, _, cx| {
+                    seen.borrow_mut().push(format);
+                    let table = hook_slot
+                        .borrow()
+                        .as_ref()
+                        .and_then(WeakEntity::upgrade)
+                        .unwrap();
+                    let target = InsertTarget::placeholder(Some(Dialect::Postgres));
+                    let mut job = table.read(cx).delegate().copy_job(format, target).unwrap();
+                    table.read(cx).delegate().gather_copy(&mut job, usize::MAX);
+                    let text = job.render().unwrap().text;
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }));
+                let table = cx.new(|cx| {
+                    TableState::new(delegate, window, cx)
+                        .row_selectable(false)
+                        .col_selectable(false)
+                        .cell_selectable(false)
+                });
+                *slot.borrow_mut() = Some(table.downgrade());
+                Root(table)
+            }
+        });
+        let table = root.read_with(cx, |root, _| root.0.clone());
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        (table, seen, cx)
+    }
+
+    /// Right-clicks the first row and clicks the menu item `index` (0 based).
+    fn pick(cx: &mut VisualTestContext, index: usize) {
+        let press = point(px(40.), px(40.));
+        cx.simulate_mouse_down(press, MouseButton::Right, Modifiers::default());
+        cx.simulate_mouse_up(press, MouseButton::Right, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let item = point(
+            press.x + px(30.),
+            press.y + px(17. + 28. * f32::from(u16::try_from(index).unwrap())),
+        );
+        cx.simulate_mouse_move(item, None, Modifiers::default());
+        cx.simulate_click(item, Modifiers::default());
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn a_right_click_on_a_row_opens_the_five_copy_items(cx: &mut TestAppContext) {
+        let (table, seen, cx) = open(cx);
+        let selection = table.read_with(cx, |t, _| t.delegate().controls.selection().clone());
+        for index in 0..CopyFormat::ALL.len() {
+            pick(cx, index);
+        }
+        assert_eq!(
+            *seen.borrow(),
+            CopyFormat::ALL,
+            "one click per item, in order"
+        );
+        // A right click leaves the selection as it was.
+        let after = table.read_with(cx, |t, _| t.delegate().controls.selection().clone());
+        assert_eq!(after, selection);
+    }
+
+    #[gpui::test]
+    fn clicking_an_item_puts_the_text_on_the_clipboard(cx: &mut TestAppContext) {
+        let (table, _, cx) = open(cx);
+        pick(cx, 2);
+        let want = table.read_with(cx, |t, cx| {
+            let target = InsertTarget::placeholder(Some(Dialect::Postgres));
+            let mut job = t.delegate().copy_job(CopyFormat::ALL[2], target).unwrap();
+            t.delegate().gather_copy(&mut job, usize::MAX);
+            let _ = cx;
+            job.render().unwrap().text
+        });
+        let got = cx.read_from_clipboard().and_then(|item| item.text());
+        assert_eq!(got.as_deref(), Some(want.as_str()));
+        assert!(want.starts_with('|'), "the third item is Markdown: {want}");
+    }
 }
