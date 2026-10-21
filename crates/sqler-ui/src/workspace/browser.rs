@@ -604,22 +604,10 @@ impl Workspace {
         }
     }
 
-    /// Opens a tab on `conn` for an object and makes it the active one.
-    fn open_object_tab(&mut self, conn: &ConnectionId, kind: TabKind, name: &str) -> Option<TabId> {
-        let index = self.sidebar.index_of(conn)?;
-        let connection = tab_connection(self.sidebar.entries().get(index)?.config());
-        let tab = self.tabs.open_object(connection, kind, name);
-        self.tab_conns.insert(tab, conn.clone());
-        self.show_connection_tabs();
-        Some(tab)
-    }
-
     /// Opens a preview tab on `conn` for an object and makes it the active one. The focused
     /// group's older preview is replaced: closed through the normal close path, with the new tab
     /// taking its place. An older preview with unsaved text or pending edits is pinned instead
     /// and the new one goes to the end. Returns the tab and the effect of the close.
-    // The browser callers still open pinned tabs; the workbench shell switches them.
-    #[allow(dead_code)]
     pub(super) fn open_object_preview(
         &mut self,
         conn: &ConnectionId,
@@ -647,6 +635,15 @@ impl Workspace {
         self.show_connection_tabs();
         let effect = replaced.map_or(Effect::None, |old| self.close_tab_now(old));
         Some((tab, effect))
+    }
+
+    /// The close effect of a replaced preview, then the effect that opens its successor.
+    fn after_close(close: Effect, open: Effect) -> Effect {
+        match (close, open) {
+            (Effect::None, open) => open,
+            (close, Effect::None) => close,
+            (close, open) => Effect::Batch(vec![close, open]),
+        }
     }
 
     #[allow(clippy::too_many_lines)] // one arm per menu entry
@@ -700,27 +697,32 @@ impl Workspace {
                     return self.notify("The object browser is not ready.");
                 };
                 let name = display_name(dialect, &obj);
-                let Some(tab) = self.open_object_tab(conn, TabKind::Properties, &name) else {
+                let Some((tab, close)) = self.open_object_preview(conn, TabKind::Properties, &name)
+                else {
                     return Effect::None;
                 };
                 let object_tab = ObjectTab::loading(format!("Properties: {name}"));
                 self.object_tabs.insert(tab, object_tab);
-                Effect::RunJob(BrowserJob::Properties {
-                    tab,
-                    catalog,
-                    object: obj,
-                })
+                Self::after_close(
+                    close,
+                    Effect::RunJob(BrowserJob::Properties {
+                        tab,
+                        catalog,
+                        object: obj,
+                    }),
+                )
             }
             (MenuEntry::Properties, TreeNodeKind::Column { table, column }) => {
                 let name = format!("{}.{}", display_name(dialect, &table), column.name);
-                let Some(tab) = self.open_object_tab(conn, TabKind::Properties, &name) else {
+                let Some((tab, close)) = self.open_object_preview(conn, TabKind::Properties, &name)
+                else {
                     return Effect::None;
                 };
                 let mut object_tab = ObjectTab::loading(format!("Properties: {name}"));
                 object_tab.content =
                     ObjectTabContent::Properties(column_properties(&table, &column));
                 self.object_tabs.insert(tab, object_tab);
-                Effect::None
+                close
             }
             (entry, _) => self.notify(format!("\"{}\" does not apply here.", entry.label())),
         }
@@ -739,7 +741,7 @@ impl Workspace {
             Err(message) => return self.notify(message),
         };
         let name = display_name(Some(dialect), obj);
-        let Some(tab) = self.open_object_tab(conn, TabKind::Grid, &name) else {
+        let Some((tab, close)) = self.open_object_preview(conn, TabKind::Grid, &name) else {
             return Effect::None;
         };
         // The grid edits this object (the editing flow reads it back).
@@ -748,11 +750,14 @@ impl Workspace {
         let (model, sink) = grid_channel_with(limits);
         self.grid_cancels.insert(tab, sink.canceller());
         self.grid_objects.insert(tab, obj.clone());
-        Effect::OpenData {
-            tab,
-            grid: GridTab::new(model),
-            job: OpenDataJob { request, sql, sink },
-        }
+        Self::after_close(
+            close,
+            Effect::OpenData {
+                tab,
+                grid: GridTab::new(model),
+                job: OpenDataJob { request, sql, sink },
+            },
+        )
     }
 
     /// Opens an editor on `conn` that starts with the `SELECT *` of the object.
@@ -789,21 +794,24 @@ impl Workspace {
             Err(message) => return self.notify(message),
         };
         let name = display_name(Some(dialect), &obj);
-        let Some(tab) = self.open_object_tab(conn, TabKind::Ddl, &name) else {
+        let Some((tab, close)) = self.open_object_preview(conn, TabKind::Ddl, &name) else {
             return Effect::None;
         };
         let object_tab = ObjectTab::loading(format!("DDL: {name}"));
         let cancel = object_tab.cancel.clone();
         self.object_tabs.insert(tab, object_tab);
-        Effect::RunJob(BrowserJob::Script {
-            tab,
-            request,
-            catalog,
-            dialect,
-            object: obj,
-            script,
-            cancel,
-        })
+        Self::after_close(
+            close,
+            Effect::RunJob(BrowserJob::Script {
+                tab,
+                request,
+                catalog,
+                dialect,
+                object: obj,
+                script,
+                cancel,
+            }),
+        )
     }
 
     fn copy_tab_text(&mut self) -> Effect {
@@ -1236,11 +1244,13 @@ mod tests {
     fn a_second_preview_replaces_the_first_in_its_slot() {
         let mut w = workspace(Environment::Dev);
         let conn = conn_id(&w);
-        let pinned = w.open_object_tab(&conn, TabKind::Ddl, "a").unwrap();
+        let (pinned, _) = w.open_object_preview(&conn, TabKind::Ddl, "a").unwrap();
+        w.tabs.pin(pinned);
+        let (after, _) = w.open_object_preview(&conn, TabKind::Ddl, "b").unwrap();
+        w.tabs.pin(after);
         let (first, _) = w
             .open_object_preview(&conn, TabKind::Grid, "main.users")
             .unwrap();
-        let _after = w.open_object_tab(&conn, TabKind::Ddl, "b").unwrap();
         w.tabs.activate(first);
         let (_grid, cancel) = crate::grid::GridTab::spawn_synthetic(100, 2, 50);
         w.grid_cancels.insert(first, cancel.clone());
@@ -1602,6 +1612,106 @@ mod tests {
         let tab = h.w.tabs().get(tab).unwrap();
         assert_eq!(tab.kind(), TabKind::Grid);
         assert_eq!(tab.title(), "Results: \"main\".\"users\"");
+    }
+
+    /// Expands the sqlite tree of `Harness` down to the `Tables` level.
+    fn expand_tables(h: &mut Harness) {
+        h.open();
+        h.click("Schemas (1)", BrowserAction::Expand);
+        h.click("main", BrowserAction::Expand);
+        h.click("Tables (2)", BrowserAction::Expand);
+    }
+
+    #[test]
+    fn object_opens_are_previews_and_a_second_one_replaces_the_first() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        expand_tables(&mut h);
+        let query_tab = h.w.tabs().active().unwrap().id();
+
+        // Open data.
+        h.click("users", BrowserAction::Entry(MenuEntry::OpenData));
+        let (first, _) = h.seen.grids.remove(0);
+        assert_eq!(h.w.tabs().mode(first), Some(crate::tabs::TabMode::Preview));
+        assert_eq!(
+            h.w.tabs().mode(query_tab),
+            Some(crate::tabs::TabMode::Pinned)
+        );
+        let cancel = h.w.grid_cancels.get(&first).cloned().unwrap();
+        assert!(!cancel.is_cancelled());
+
+        // DDL replaces it through the close path: the grid cancel fires and its state is gone.
+        h.click("users", BrowserAction::Entry(MenuEntry::GenerateCreate));
+        assert!(cancel.is_cancelled());
+        assert!(h.w.tabs().get(first).is_none());
+        assert!(!h.w.grid_cancels.contains_key(&first));
+        assert!(!h.w.grid_objects.contains_key(&first));
+        let ddl = h.w.tabs().active().unwrap();
+        assert_eq!(ddl.kind(), TabKind::Ddl);
+        assert_eq!(ddl.mode(), crate::tabs::TabMode::Preview);
+        let ddl = ddl.id();
+        assert_eq!(h.w.tabs().len(), 2);
+
+        // Properties replaces the DDL preview and clears its object tab.
+        h.click("users", BrowserAction::Entry(MenuEntry::Properties));
+        assert!(h.w.tabs().get(ddl).is_none());
+        assert!(h.w.object_tab(ddl).is_none());
+        let props = h.w.tabs().active().unwrap();
+        assert_eq!(props.kind(), TabKind::Properties);
+        assert_eq!(props.mode(), crate::tabs::TabMode::Preview);
+        assert_eq!(h.w.tabs().len(), 2);
+        assert_eq!(h.seen.jobs.len(), 2, "each open still starts its job");
+    }
+
+    #[test]
+    fn a_preview_with_pending_edits_is_pinned_by_the_next_object_open() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        expand_tables(&mut h);
+        h.click("users", BrowserAction::Entry(MenuEntry::OpenData));
+        let (first, _) = h.seen.grids.remove(0);
+        h.w.set_pending_edits(
+            crate::grid::edit::GridKey {
+                tab: first,
+                result: None,
+            },
+            1,
+        );
+        h.click("orders", BrowserAction::Entry(MenuEntry::OpenData));
+        let (second, _) = h.seen.grids.remove(0);
+        assert_eq!(h.w.tabs().mode(first), Some(crate::tabs::TabMode::Pinned));
+        assert_eq!(h.w.tabs().mode(second), Some(crate::tabs::TabMode::Preview));
+        assert!(h.w.tabs().get(first).is_some());
+    }
+
+    #[test]
+    fn the_active_tab_follows_the_focused_group() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        expand_tables(&mut h);
+        let query_tab = h.w.tabs().active().unwrap().id();
+        h.click("users", BrowserAction::Entry(MenuEntry::OpenData));
+        let (grid, _) = h.seen.grids.remove(0);
+        h.w.dispatch(WorkspaceAction::SplitRight);
+        let groups: Vec<_> =
+            h.w.tabs()
+                .groups()
+                .iter()
+                .map(crate::tabs::Group::id)
+                .collect();
+        assert_eq!(groups.len(), 2);
+        // The preview grid went to group 2, which has the focus.
+        assert_eq!(h.w.tabs().active().map(crate::tabs::Tab::id), Some(grid));
+        h.w.dispatch(WorkspaceAction::FocusGroup(groups[0]));
+        assert_eq!(
+            h.w.tabs().active().map(crate::tabs::Tab::id),
+            Some(query_tab)
+        );
+        assert_eq!(
+            h.w.tabs().active_in(groups[1]).map(crate::tabs::Tab::id),
+            Some(grid)
+        );
+        h.w.dispatch(WorkspaceAction::FocusGroup(groups[1]));
+        let active = h.w.tabs().active().unwrap();
+        assert_eq!(active.id(), grid);
+        assert_eq!(active.kind(), TabKind::Grid);
     }
 
     #[test]

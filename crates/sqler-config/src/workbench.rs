@@ -42,7 +42,7 @@ pub const SIDE_VIEWS: [&str; 2] = ["connections", "saved-queries"];
 pub const BOTTOM_VIEWS: [&str; 3] = ["results", "messages", "history"];
 
 const DEFAULT_SIDE_SIZE: f32 = 260.0;
-const DEFAULT_BOTTOM_SIZE: f32 = 280.0;
+const DEFAULT_BOTTOM_SIZE: f32 = 380.0;
 
 /// One collapsible panel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -338,7 +338,7 @@ mod tests {
             s.bottom_panel,
             PanelState {
                 visible: false,
-                size: 280.0,
+                size: 380.0,
                 view: "results".into()
             }
         );

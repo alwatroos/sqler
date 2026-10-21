@@ -3,11 +3,13 @@
 
 //! The tab strip: state (always built) and the `GPUI` view (feature `gui`).
 
+mod bar;
 mod header;
 mod model;
 #[cfg(feature = "gui")]
 pub(crate) mod view;
 
+pub use bar::{MENU, MenuEntry, Trailing, trailing};
 pub use header::{Rgb, TabDecor, TabHeader};
 #[cfg(feature = "gui")]
 pub(crate) use model::env_badge;

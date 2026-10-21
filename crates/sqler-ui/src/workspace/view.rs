@@ -13,21 +13,24 @@ use gpui::Focusable as _;
 use gpui::{
     App, AppContext as _, Bounds, ClipboardItem, Context, Entity, FocusHandle,
     InteractiveElement as _, IntoElement, KeyDownEvent, ListState, ParentElement as _, Render,
-    Styled as _, Subscription, Task, Window, WindowBounds, WindowOptions, div, px, size,
+    ScrollHandle, Styled as _, Subscription, Task, Window, WindowBounds, WindowOptions, div, px,
+    size,
 };
 use gpui_component::input::{
     Enter as InputEnter, Escape as InputEscape, IndentInline, InputEvent, InputState, MoveDown,
     MoveUp, OutdentInline,
 };
+use gpui_component::resizable::ResizableState;
 use gpui_component::{ActiveTheme as _, Root, WindowExt as _};
 use sqler_catalog::{CacheKey, RefreshEvent};
 use sqler_config::{
     ConfigDir, ConnectionId, ConnectionStore, HistoryOptions, KeybindingOverrides, Modifiers,
-    Platform, SecretStore,
+    Platform, SecretStore, WINDOW_SIZE_RANGE, WindowState, WorkbenchLoad, WorkbenchState,
 };
 use tokio::sync::oneshot;
 
 mod edit_ui;
+mod shell;
 
 use super::action::WorkspaceAction;
 use super::bridge::SessionBridge;
@@ -40,7 +43,7 @@ use crate::connections::FormField;
 use crate::connections::view::{DialogInputs, dialog_overlay};
 use crate::connections::{self, ConnectionAction, Connector, Dialog};
 use crate::editor::{self, EditorAction, view::EditorViews};
-use crate::export::view::{export_bar, export_overlay};
+use crate::export::view::export_overlay;
 use crate::grid::edit::EditorKey;
 use crate::grid::view::{
     GridProbe, GridViews, Table, action_for_command as grid_action_for, apply_action,
@@ -52,18 +55,21 @@ use crate::grid::{
 use crate::history::view::HistoryViews;
 use crate::history::{self, HistoryCommand, HistoryService};
 use crate::keymap::input::key_input;
-use crate::keymap::{KeyDispatcher, KeyOutcome, action_for, chord_from_input, route_key};
+use crate::keymap::{
+    KeyDispatcher, KeyOutcome, action_for, chord_from_input, pane_action_for, route_key,
+};
 use crate::palette::{self, OPEN_PALETTE, PaletteState};
-use crate::query::view::{OverlayChange, QueryViews, query_overlay, query_tab_body};
+use crate::query::view::{OverlayChange, QueryViews, query_overlay};
 use crate::query::{self, ParamInput, ParamKind, QueryCommand, RunEvent};
-use crate::settings::{self, SettingsModel};
+use crate::settings::SettingsModel;
 use crate::sidebar::view::{ListEntry, build_entries, new_list_state, sync_list};
-use crate::sidebar::{self, SidebarModel, key_command};
-use crate::tabs;
-use crate::tabs::TabId;
+use crate::sidebar::{SidebarModel, key_command};
+use crate::tabs::{GroupId, TabId};
 use crate::theme::apply::{appearance_of, apply};
 use crate::theme::icons::AppAssets;
 use crate::theme::resolve;
+use crate::workbench::view::Hints;
+use crate::workbench::{self, PanelView, RecentCommands, Region, WorkbenchAction};
 use edit_ui::EditUi;
 
 mod export;
@@ -137,7 +143,8 @@ pub fn run(startup: Startup) {
                 }
             })
             .detach();
-            let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+            let (width, height) = startup_window_size(&startup.workbench.load);
+            let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
             let opened = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -155,7 +162,19 @@ pub fn run(startup: Startup) {
         });
 }
 
-/// The root view: sidebar on the left, tab strip and tab body on the right.
+/// The window size to open at: the remembered one when both sides are plausible, else 1280x800.
+fn startup_window_size(load: &WorkbenchLoad) -> (f32, f32) {
+    match load {
+        WorkbenchLoad::Loaded(WorkbenchState {
+            window: Some(w), ..
+        }) if WINDOW_SIZE_RANGE.contains(&w.width) && WINDOW_SIZE_RANGE.contains(&w.height) => {
+            (w.width, w.height)
+        }
+        _ => (1280., 800.),
+    }
+}
+
+/// The root view: activity bar, side panel, editor groups, bottom panel and status bar.
 pub(crate) struct WorkspaceView {
     ws: Workspace,
     bridge: SessionBridge,
@@ -193,6 +212,36 @@ pub(crate) struct WorkspaceView {
     edit_ui: EditUi,
     /// The text inputs of the export dialog on screen.
     export_inputs: Option<export::ExportInputs>,
+    /// The resizable split of the side panel and the rest, and of the editors and the bottom panel.
+    side_split: Entity<ResizableState>,
+    panel_split: Entity<ResizableState>,
+    /// The layout generation the splits were created for.
+    split_generation: u64,
+    /// Keeps the split subscriptions alive.
+    split_subs: Vec<Subscription>,
+    /// The focus handles of the activity bar, the bottom panel and the status bar.
+    activity_focus: FocusHandle,
+    /// One handle per activity bar item (Connections, Saved Queries, History, Settings).
+    activity_items: Vec<FocusHandle>,
+    /// The first action item of the status bar.
+    status_first: FocusHandle,
+    panel_focus: FocusHandle,
+    status_focus: FocusHandle,
+    /// The handle that had the focus when a region was left (`F6`).
+    region_memory: HashMap<Region, FocusHandle>,
+    /// The scroll position of the tab row of each group, and the tab that was active last.
+    tab_scroll: HashMap<GroupId, ScrollHandle>,
+    last_active: HashMap<GroupId, TabId>,
+    /// The shortcut texts the chrome shows.
+    hints: Hints,
+    /// Where `workbench.toml` is written; the size of the window; what is on disk.
+    workbench_dir: Option<ConfigDir>,
+    window_size: Option<WindowState>,
+    saved_state: Option<WorkbenchState>,
+    save_task: Option<Task<()>>,
+    save_failed: bool,
+    /// Keeps the window size observer alive.
+    _bounds: Subscription,
     /// Keeps the OS appearance observer alive.
     _appearance: Subscription,
     /// Keeps the quit hook (closes sessions when the app quits any way) alive.
@@ -211,7 +260,8 @@ impl WorkspaceView {
         }
         let mut ws = Workspace::new(sidebar)
             .with_settings(startup.settings)
-            .with_drivers(startup.connector.driver_ids());
+            .with_drivers(startup.connector.driver_ids())
+            .with_workbench(&startup.workbench.load);
         ws.set_system_appearance(appearance_of(window.appearance()));
         apply(ws.appearance(), ws.settings().settings().ui_font_size, cx);
         // Follow the OS while the preference is "follow system". Nothing changes in the
@@ -260,7 +310,25 @@ impl WorkspaceView {
         if let Err(err) = history::register_commands(&mut commands) {
             eprintln!("sqler: could not register the history commands: {err}");
         }
+        if let Err(err) = workbench::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the workbench commands: {err}");
+        }
+        if let Err(err) = workbench::register_pane_commands(&mut commands) {
+            eprintln!("sqler: could not register the pane commands: {err}");
+        }
         let keys = KeyDispatcher::new(Platform::current(), startup.keybindings, &commands);
+        let hints = Hints::build(|id| keys.shortcut_display(id));
+        let mut palette = PaletteState::default();
+        let mut window_size = None;
+        if let WorkbenchLoad::Loaded(state) = &startup.workbench.load {
+            palette.set_recent(RecentCommands::from_strings(
+                &state.recent_commands,
+                &commands,
+            ));
+            window_size.clone_from(&state.window);
+        }
+        // What is on disk already; startup writes nothing.
+        let saved_state = ws.workbench_state(palette.recent(), window_size.clone());
         for notice in keys.notices() {
             eprintln!("sqler: {notice}");
         }
@@ -287,6 +355,7 @@ impl WorkspaceView {
         // Any way of quitting (window close, the OS menu) closes the open sessions, within the
         // short time the platform allows. The `app:quit` command waits longer (`CLOSE_LIMIT`).
         let quit = cx.on_app_quit(|view, _| {
+            view.save_workbench_now();
             view.ws.cancel_all_exports();
             for handle in view.ws.cancel_all_queries() {
                 drop(view.bridge.spawn(async move {
@@ -303,12 +372,26 @@ impl WorkspaceView {
             }
         });
         let history = HistoryService::new(startup.history_dir, HistoryOptions::default());
+        let bounds =
+            cx.observe_window_bounds(window, |view, window, cx| {
+                let b = window.bounds().size;
+                let (width, height) = (f32::from(b.width), f32::from(b.height));
+                if view.window_size.as_ref().is_none_or(|w| {
+                    (w.width - width).abs() > 0.5 || (w.height - height).abs() > 0.5
+                }) {
+                    view.window_size = Some(WindowState { width, height });
+                    view.schedule_save(cx);
+                }
+            });
+        let side_split = cx.new(|_| ResizableState::default());
+        let panel_split = cx.new(|_| ResizableState::default());
+        let split_generation = ws.layout().generation();
         let mut view = Self {
             ws,
             bridge: SessionBridge::new(startup.connector, startup.secrets, startup.runtime),
             commands,
             keys,
-            palette: PaletteState::default(),
+            palette,
             palette_input,
             focus,
             grids: GridViews::default(),
@@ -326,10 +409,30 @@ impl WorkspaceView {
             history_views: HistoryViews::default(),
             edit_ui: EditUi::new(cx),
             export_inputs: None,
+            side_split,
+            panel_split,
+            split_generation,
+            split_subs: Vec::new(),
+            activity_focus: cx.focus_handle(),
+            activity_items: (0..4).map(|_| cx.focus_handle().tab_stop(true)).collect(),
+            status_first: cx.focus_handle().tab_stop(true),
+            panel_focus: cx.focus_handle(),
+            status_focus: cx.focus_handle(),
+            region_memory: HashMap::new(),
+            tab_scroll: HashMap::new(),
+            last_active: HashMap::new(),
+            hints,
+            workbench_dir: startup.workbench.dir,
+            window_size,
+            saved_state,
+            save_task: None,
+            save_failed: false,
+            _bounds: bounds,
             _appearance: appearance,
             _quit: quit,
         };
         GridProbe::start_if_requested(window, cx);
+        view.bind_splits(cx);
         view.sync_sidebar();
         view.load_history(cx);
         view
@@ -476,6 +579,10 @@ impl WorkspaceView {
             cx.stop_propagation();
             return;
         }
+        if !was_open && self.region_key(&chord, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let outcome = route_key(&chord, &mut self.palette, &self.keys, &self.commands);
         if outcome != KeyOutcome::Ignored {
             cx.stop_propagation();
@@ -590,6 +697,7 @@ impl WorkspaceView {
     }
 
     /// Carries out a command: the palette opener, a workspace action, or nothing known.
+    #[allow(clippy::too_many_lines)] // one routing chain
     pub(crate) fn run_command(
         &mut self,
         id: &CommandId,
@@ -607,6 +715,13 @@ impl WorkspaceView {
                 self.palette_input
                     .update(cx, |input, cx| input.set_value("", window, cx));
             }
+        } else if let Some(action) = workbench::action_for(id) {
+            self.palette.close();
+            self.run_workbench(action, window, cx);
+        } else if let Some(action) = pane_action_for(id, &self.ws) {
+            self.palette.close();
+            self.dispatch(action, cx);
+            editor_focus = true;
         } else if let Some(action) = action_for(id, &self.ws) {
             self.palette.close();
             self.dispatch(action, cx);
@@ -679,6 +794,10 @@ impl WorkspaceView {
         } else {
             self.palette.close();
             eprintln!("sqler: no handler for command {id}");
+        }
+        if was_open && id.as_str() != OPEN_PALETTE {
+            self.palette.record(id);
+            self.schedule_save(cx);
         }
         self.sync_palette_focus(was_open, window, cx);
         if editor_focus && let Some(tab) = self.ws_active_editor() {
@@ -796,6 +915,19 @@ impl WorkspaceView {
         let effect = self.ws.dispatch(action);
         self.apply(effect, cx);
         self.settle(cx);
+    }
+
+    /// Runs a layout action through the workspace and carries out the effect.
+    pub(crate) fn dispatch_workbench(&mut self, action: WorkbenchAction, cx: &mut Context<Self>) {
+        let effect = self.ws.dispatch_workbench(action);
+        self.apply(effect, cx);
+        self.settle(cx);
+    }
+
+    /// The text of an editor changed for the first time since it was saved or opened.
+    pub(crate) fn editor_changed(&mut self, tab: TabId, cx: &mut Context<Self>) {
+        self.ws.editor_edited(tab);
+        cx.notify();
     }
 
     /// Runs a connection-manager action through the workspace and carries out the effect.
@@ -918,6 +1050,7 @@ impl WorkspaceView {
         self.queries.retain(self.ws.tabs());
         self.history_views.retain(&self.ws);
         self.sync_sidebar();
+        self.schedule_save(cx);
         cx.notify();
     }
 
@@ -1074,6 +1207,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         let (tab, run) = (job.tab, job.run);
+        self.dispatch_workbench(WorkbenchAction::ShowPanelView(PanelView::Results), cx);
         self.queries.insert_grids(tab, grids);
         self.ws.remember_run(tab, &job.statements);
         let done = self.bridge.spawn(job.run());
@@ -1440,37 +1574,7 @@ impl Render for WorkspaceView {
         }
         let theme = cx.theme();
         let (bg, fg) = (theme.background, theme.foreground);
-        let sidebar = sidebar::view::sidebar(self, cx);
-        let settings_active = self.ws.settings_tab_active();
-        let strip = tabs::view::tab_strip(self.ws.tabs(), !settings_active, cx);
-        let strip_end = settings::view::strip_end(&self.ws, cx);
-        let body = if settings_active {
-            settings::view::page(&self.ws, cx).into_any_element()
-        } else if let Some((tab, editor)) = self
-            .active_query_tab()
-            .and_then(|t| self.editors.body(t).map(|e| (t, e.into_any_element())))
-        {
-            query_tab_body(editor, tab, self, cx)
-        } else if let Some(tab) = self
-            .ws
-            .tabs()
-            .active()
-            .map(crate::tabs::Tab::id)
-            .filter(|id| self.ws.history_tab(*id).is_some())
-        {
-            history::view::history_body(self, tab, cx)
-        } else if let Some(grid) = self.ws_active_grid() {
-            self.grids.body(self, grid, cx).into_any_element()
-        } else if let Some(tab) = self
-            .ws
-            .tabs()
-            .active()
-            .and_then(|tab| self.ws.object_tab(tab.id()))
-        {
-            tabs::view::object_tab_body(tab, cx).into_any_element()
-        } else {
-            tabs::view::tab_body(self.ws.tabs(), cx).into_any_element()
-        };
+        let shell = self.shell(window, cx);
         let dialog = dialog_overlay(&self.ws, self.inputs.as_ref(), cx);
         let drop_dialog = drop_overlay(self.ws.drop_dialog(), cx);
         let query_dialog = self
@@ -1479,11 +1583,6 @@ impl Render for WorkspaceView {
         let history_dialog = history::view::history_overlay(self, cx);
         let edit_dialog = crate::grid::edit::view::edit_overlay(self, cx);
         let export_dialog = export_overlay(self, cx);
-        let export_progress = self
-            .ws
-            .tabs()
-            .active()
-            .and_then(|tab| export_bar(self, tab.id(), cx));
         let palette = self.palette.is_open().then(|| {
             let items = self.palette.items(&self.commands, &self.keys);
             palette::view::palette_overlay(
@@ -1528,25 +1627,7 @@ impl Render for WorkspaceView {
             .flex_row()
             .bg(bg)
             .text_color(fg)
-            .child(sidebar)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .w_full()
-                            .child(div().flex_1().min_w_0().child(strip))
-                            .child(strip_end),
-                    )
-                    .children(export_progress)
-                    .child(body),
-            )
+            .child(shell)
             .children(dialog)
             .children(drop_dialog)
             .children(query_dialog)
@@ -1554,5 +1635,27 @@ impl Render for WorkspaceView {
             .children(edit_dialog)
             .children(export_dialog)
             .children(palette)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sqler_config::{WindowState, WorkbenchLoad, WorkbenchState};
+
+    use super::startup_window_size;
+
+    fn loaded(width: f32, height: f32) -> WorkbenchLoad {
+        WorkbenchLoad::Loaded(WorkbenchState {
+            window: Some(WindowState { width, height }),
+            ..WorkbenchState::default()
+        })
+    }
+
+    #[test]
+    fn the_window_opens_at_the_remembered_size_when_plausible() {
+        assert_eq!(startup_window_size(&loaded(900., 700.)), (900., 700.));
+        assert_eq!(startup_window_size(&loaded(10., 700.)), (1280., 800.));
+        assert_eq!(startup_window_size(&loaded(900., 99_999.)), (1280., 800.));
+        assert_eq!(startup_window_size(&WorkbenchLoad::Missing), (1280., 800.));
     }
 }
