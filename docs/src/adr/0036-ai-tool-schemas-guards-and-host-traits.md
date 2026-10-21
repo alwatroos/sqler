@@ -71,7 +71,7 @@ A failed call returns `ToolResult::error` with `{"error":{"code":..,"message":..
 3. Approvals are collected for all statements, in order, before the first one runs. The `Approver` gets an `ApprovalRequest` (tool, connection, SQL, class, reason, stage, index, count). On a `prod` connection each statement is asked twice: `Confirm`, then `ProdSecond`.
 4. A `Deny` returns `denied` with the zero-based statement index (`ApprovalRequest.index` is zero-based too) and nothing runs. A `read_only` connection refuses any statement that needs approval (`read_only`).
 5. Without an `Approver`, any statement that needs approval is refused (`no_approver`). There is no default-allow.
-6. `open_results_tab` accepts only statements classified `Read`; the UI tools are absent from `definitions()` and answer `not_available` when no `UiHost` is set.
+6. `open_results_tab` accepts only statements that are `Read` and carry no approval reason (so `EXPLAIN ANALYZE` and every statement that would need approval are refused, because the tool has no approval path); every tool applies the same rule through one helper, `Planned::requires_approval`; the UI tools are absent from `definitions()` and answer `not_available` when no `UiHost` is set.
 
 ### Limits
 
@@ -81,6 +81,7 @@ A failed call returns `ToolResult::error` with `{"error":{"code":..,"message":..
 
 - Static classification cannot see the side effects of a function called inside a `SELECT` (`select pg_terminate_backend(1)`, `select nextval('s')`). Approval and, once it lands, the read-only connection mode are the controls; the read-only mode arrives with a later work item.
 - `INSERT ... RETURNING` and similar statements stream rows: the row cap cuts the stream after the cap, but the write itself is not undone, and the driver may have applied more rows than the tool returned.
+- The call deadline starts after the approvals and covers acquiring the session and running the statements. Approvals are not under it (a person decides at their own pace), and neither is the `release`, which has its own 2 s bound.
 
 ### Host interfaces
 

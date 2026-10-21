@@ -21,6 +21,28 @@ pub(crate) struct Planned {
     pub reason: Option<ApprovalReason>,
 }
 
+impl Planned {
+    /// Whether this statement may only run after an approval.
+    ///
+    /// The one rule every tool uses: a statement is free only when it is a plain `Read` with no
+    /// approval reason. Tools that hand SQL to a host or a session must ask this (or go through
+    /// [`approve_all`]) and never look at `class` or `reason` alone.
+    pub(crate) fn requires_approval(&self) -> bool {
+        self.class != StatementClass::Read || self.reason.is_some()
+    }
+}
+
+/// Refuses a plan in which any statement needs approval (for tools that cannot ask for it).
+pub(crate) fn require_unapproved_free(tool: &str, plan: &[Planned]) -> Result<(), ToolError> {
+    if plan.iter().any(Planned::requires_approval) {
+        return Err(ToolError::InvalidArguments(format!(
+            "{tool} accepts only plain read statements; this one needs approval \
+             (a write, DDL, an unknown statement or EXPLAIN ANALYZE)"
+        )));
+    }
+    Ok(())
+}
+
 fn reason_of(class: StatementClass) -> Option<ApprovalReason> {
     match class {
         StatementClass::Read => None,
@@ -137,10 +159,11 @@ pub(crate) async fn approve_all(
 ) -> Result<Vec<bool>, ToolError> {
     let mut granted = Vec::with_capacity(plan.len());
     for (index, statement) in plan.iter().enumerate() {
-        let Some(reason) = statement.reason else {
+        if !statement.requires_approval() {
             granted.push(false);
             continue;
-        };
+        }
+        let reason = statement.reason.unwrap_or(ApprovalReason::Unknown);
         if info.read_only {
             return Err(ToolError::ReadOnly);
         }

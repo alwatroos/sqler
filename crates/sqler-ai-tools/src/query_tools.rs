@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 use sqler_driver_api::sqler_core::{DbObject, ObjectKind};
-use sqler_sql::{Dialect, StatementClass, qualified_name};
+use sqler_sql::{Dialect, qualified_name};
 
 use crate::approve::ApprovalReason;
 use crate::error::ToolError;
@@ -35,8 +35,18 @@ async fn run_sql(
     let approved = guard::approve_all(tool, ts.approver.as_deref(), info, &plan).await?;
     let caps = ts.limits.effective(info.environment);
     let row_cap = caps.rows_for(requested_rows);
-    let mut session = ts.source.acquire(&info.id).await?;
-    let execution = exec::execute(&mut *session, &plan, caps.timeout, row_cap).await;
+    // The deadline covers the call from here: acquiring the session counts, approvals (a person
+    // may take as long as they need) do not.
+    let deadline = caps.timeout.map(|t| tokio::time::Instant::now() + t);
+    let mut session = match exec::bounded(deadline, ts.source.acquire(&info.id)).await {
+        Ok(acquired) => acquired?,
+        Err(exec::TimedOut) => {
+            return Err(ToolError::Host(
+                "no session was available within the time limit; nothing was run".to_owned(),
+            ));
+        }
+    };
+    let execution = exec::execute(&mut *session, &plan, deadline, row_cap).await;
     if execution
         .statements
         .iter()
@@ -225,11 +235,7 @@ pub(crate) async fn open_results_tab(
     let ui = ts.ui()?;
     let info = ts.resolve(&args.connection)?;
     let plan = guard::plan(&info, &args.sql, None)?;
-    if plan.iter().any(|s| s.class != StatementClass::Read) {
-        return Err(ToolError::InvalidArguments(
-            "open_results_tab shows read-only statements only".to_owned(),
-        ));
-    }
+    guard::require_unapproved_free(crate::schema::names::OPEN_RESULTS_TAB, &plan)?;
     ui.open_results_tab(&info.id, &args.sql, args.title.as_deref())
         .await?;
     Ok(json!({"opened": true}))

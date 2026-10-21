@@ -16,7 +16,7 @@ SQLer gives a model a fixed set of tools to read a database schema and run SQL. 
 | `run_query` | Runs SQL | per statement unless `Read` |
 | `explain_query` | `EXPLAIN` of one statement | `analyze` needs approval |
 | `open_in_editor` | Opens SQL in an editor tab (UI hosts only) | no |
-| `open_results_tab` | Opens and runs a read statement in a results tab (UI hosts only) | `Read` only |
+| `open_results_tab` | Opens and runs a read statement in a results tab (UI hosts only) | refused unless every statement is `Read` with no approval reason (so never `EXPLAIN ANALYZE`) |
 | `search_data` | Natural-language question to SQL and rows (planned, T9) | like `run_query` |
 
 Catalog tools answer from the schema cache and do not open a session. Only the definition text of `describe_function` reads the database; it is cached.
@@ -49,7 +49,7 @@ A host implements:
 
 ## Limits
 
-Defaults come from `ai.toml` (1000 rows, 30 seconds; see [AI configuration](../user-guide/ai.md)). The row cap applies per statement, the deadline per call. On a timeout the driver is asked to cancel and the statement reports `time_limit`; at the row cap it reports `row_limit` with a notice. The `unlimited` setting lifts both caps, but never on `prod`.
+Defaults come from `ai.toml` (1000 rows, 30 seconds; see [AI configuration](../user-guide/ai.md)). The row cap applies per statement, the deadline per call. The deadline starts once the approvals are in and covers acquiring the session and running the statements; time spent waiting for a person to approve does not count. On a timeout the driver is asked to cancel and the statement reports `time_limit`; at the row cap it reports `row_limit` with a notice. The `unlimited` setting lifts both caps, but never on `prod`.
 
 ## Results and errors
 

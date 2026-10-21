@@ -36,10 +36,13 @@ pub(crate) struct Execution {
 /// How long the cleanup after the deadline (cancel, release) may take.
 pub(crate) const GRACE: Duration = Duration::from_secs(2);
 
-struct TimedOut;
+pub(crate) struct TimedOut;
 
 /// Awaits `fut` until `deadline`, if there is one.
-async fn bounded<F: Future>(deadline: Option<Instant>, fut: F) -> Result<F::Output, TimedOut> {
+pub(crate) async fn bounded<F: Future>(
+    deadline: Option<Instant>,
+    fut: F,
+) -> Result<F::Output, TimedOut> {
     match deadline {
         Some(at) => timeout_at(at, fut).await.map_err(|_| TimedOut),
         None => Ok(fut.await),
@@ -91,7 +94,7 @@ async fn read_stream(
 
 /// Runs the planned statements on `session`, in order.
 ///
-/// The deadline starts now and covers the whole call. On a timeout the driver is cancelled
+/// The `deadline` covers the whole call (the caller starts it before it acquires the session). On a timeout the driver is cancelled
 /// through its [`CancelHandle`](sqler_driver_api::CancelHandle) (an error from the cancel is
 /// ignored, and the cancel itself gets at most [`GRACE`]), the statement is marked [`Truncation::TimeLimit`] and the rest are counted in
 /// `not_run`. A driver error is kept on its statement and also stops the call. A statement that
@@ -99,10 +102,9 @@ async fn read_stream(
 pub(crate) async fn execute(
     session: &mut dyn Session,
     plan: &[Planned],
-    timeout: Option<Duration>,
+    deadline: Option<Instant>,
     row_cap: Option<u32>,
 ) -> Execution {
-    let deadline = timeout.map(|t| Instant::now() + t);
     let row_cap = row_cap.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
     let mut execution = Execution::default();
     for (index, statement) in plan.iter().enumerate() {
@@ -232,7 +234,13 @@ mod tests {
             executes: Arc::clone(&executes),
         };
         let plan = [planned("select 1"), planned("select 2")];
-        let run = execute(&mut session, &plan, Some(Duration::from_millis(50)), None).await;
+        let run = execute(
+            &mut session,
+            &plan,
+            Some(Instant::now() + Duration::from_millis(50)),
+            None,
+        )
+        .await;
         assert_eq!(
             cancels.load(Ordering::SeqCst),
             1,
