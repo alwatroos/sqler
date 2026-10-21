@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::path::PathBuf;
 
 use sqler_catalog::{CacheKey, CatalogWorker, RefreshHandle};
 use sqler_config::{
@@ -16,6 +17,7 @@ use sqler_sql::Dialect;
 
 use super::action::WorkspaceAction;
 use super::browser::{BrowserJob, BrowserState, OpenDataJob};
+use super::export::ExportCenter;
 use super::history::HistoryWorkspace;
 use super::query::ActiveRun;
 use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
@@ -24,6 +26,7 @@ use crate::connections::{
     GroupPurpose, HostKeyPrompt, SecretField, TestStatus, from_profile_secret,
 };
 use crate::editor::{EditorDocs, EditorKey, TextEdit};
+use crate::export::ExportJob;
 use crate::grid::{
     GridCancel, GridTab, InsertTarget, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS,
 };
@@ -205,6 +208,19 @@ pub enum Effect {
         /// The queries to write.
         queries: SavedQueries,
     },
+    /// Ask for the target file of an export (the native save dialog), then report with
+    /// [`Workspace::export_path_chosen`].
+    PickExportPath {
+        /// The folder to start in.
+        directory: PathBuf,
+        /// The suggested file name.
+        suggested_name: String,
+        /// The dialog this prompt belongs to; hand it back to `export_path_chosen`.
+        dialog: u64,
+    },
+    /// Start this export; report with [`Workspace::export_progress`] and
+    /// [`Workspace::export_finished`].
+    RunExport(ExportJob),
 }
 
 impl std::fmt::Debug for Effect {
@@ -313,6 +329,9 @@ impl std::fmt::Debug for Effect {
                 .field("generation", generation)
                 .field("queries", &queries.queries().len())
                 .finish(),
+            // Never the folder or the file name.
+            Self::PickExportPath { .. } => f.write_str("PickExportPath"),
+            Self::RunExport(job) => f.debug_tuple("RunExport").field(&job.tab).finish(),
         }
     }
 }
@@ -382,6 +401,8 @@ pub struct Workspace {
     pub(super) next_run: u64,
     /// The history tabs, saved queries and their dialogs.
     pub(super) history: HistoryWorkspace,
+    /// The export dialog and the exports in progress.
+    pub(super) exports: ExportCenter,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -434,6 +455,7 @@ impl Workspace {
             query_runs: HashMap::new(),
             next_run: 0,
             history: HistoryWorkspace::new(),
+            exports: ExportCenter::default(),
         }
     }
 
@@ -619,6 +641,7 @@ impl Workspace {
             }
             WorkspaceAction::OpenSyntheticGrid => self.open_synthetic_grid(),
             WorkspaceAction::Quit => {
+                self.cancel_all_exports();
                 let cancels = self.cancel_all_queries();
                 // Ends every grid ingestion, waking one that is paused on a full page.
                 for (_, grid) in self.grid_cancels.drain() {
@@ -767,6 +790,7 @@ impl Workspace {
         self.tab_conns.remove(&id);
         self.queries.remove(&id);
         self.history.forget_tab(id);
+        self.cancel_tab_export(id);
         let cancel = self.cancel_query_run(id);
         if self.tabs.is_empty() && self.settings_tab == SettingsTab::Background {
             self.settings_tab = SettingsTab::Active;

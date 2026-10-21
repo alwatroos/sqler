@@ -24,7 +24,7 @@ sqler-driver-api.workspace = true
 sqler-export.workspace = true
 sqler-sql.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 gpui-component = { workspace = true, optional = true }
 gpui = { workspace = true, optional = true }
 gpui_platform = { workspace = true, optional = true }
@@ -35,6 +35,8 @@ serde_json.workspace = true
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 sqler-driver-sqlite.workspace = true
+sqler-export = { workspace = true, features = ["parquet", "xlsx"] }
+serde_json.workspace = true
 insta.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
@@ -60,4 +62,8 @@ harness = false
 
 [[bench]]
 name = "editor_intellisense"
+harness = false
+
+[[bench]]
+name = "grid_export"
 harness = false

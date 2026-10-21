@@ -60,6 +60,7 @@
   - [ADR-0029: Parquet and XLSX writers](adr/0029-parquet-and-xlsx-writers.md)
   - [ADR-0030: Staged edits and DML](adr/0030-staged-edits-and-dml.md)
   - [ADR-0031: Client-side sort and filter](adr/0031-client-side-sort-and-filter.md)
+  - [ADR-0032: Grid export](adr/0032-grid-export.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
 - [Benchmarks](benchmarks.md)

@@ -78,7 +78,7 @@ Limits, each an `ExportError::Limit` whose message suggests `CSV` or `Parquet` (
 
 **Cross-type policy.** `Parquet` follows the declared column type; `XLSX` follows the value. An `Int` in a `Text`, `Decimal` or `Json` column is stringified in `Parquet` and a number in `XLSX`. Rejecting it was considered and not chosen: sources report some `Decimal` columns whose values arrive as integers, and `tests/parquet_roundtrip.rs` fixes that text columns take any value. A value that cannot be stored in its typed column (text in a `Timestamp` column) is `Unsupported` in `Parquet`.
 
-**Cargo features.** `sqler-export` has `parquet = ["dep:parquet"]` and `xlsx = ["dep:flate2"]`; both are in the crate's own `default`, so its tests run in CI. The workspace line is `default-features = false`, so a dependent gets only the formats it asks for. The option and error types (`ParquetOptions`, `ParquetCompression`, `Limit`, `Unsupported`, `Encode`) and the ids `PARQUET` and `XLSX` are always compiled; only `ParquetFormat` and `XlsxFormat` and their registry lines depend on a feature. `--no-default-features`, `--features parquet`, `--features xlsx` and the default all build, lint and pass their tests. `sqler-app` forwards `export-xlsx` (in its `default`) and `export-parquet` (opt-in). T4 enables both formats in `sqler-cli`.
+**Cargo features.** `sqler-export` has `parquet = ["dep:parquet"]` and `xlsx = ["dep:flate2"]`; both are in the crate's own `default`, so its tests run in CI. The workspace line is `default-features = false`, so a dependent gets only the formats it asks for. The option and error types (`ParquetOptions`, `ParquetCompression`, `Limit`, `Unsupported`, `Encode`) and the ids `PARQUET` and `XLSX` are always compiled; only `ParquetFormat` and `XlsxFormat` and their registry lines depend on a feature. `--no-default-features`, `--features parquet`, `--features xlsx` and the default all build, lint and pass their tests. `sqler-app` forwards `export-xlsx` (in its `default`) and `export-parquet` (opt-in at the time; in the default since [ADR-0032](0032-grid-export.md)). T4 enables both formats in `sqler-cli`.
 
 ### Measured cost
 
@@ -140,3 +140,5 @@ The test fails above +12 MiB (about twice the worst measured growth, +5.8 MB, an
 - Bad: a cancelled or failed export leaves a corrupt partial `.parquet` or `.xlsx` (no footer, no central directory); the ADR-0028 rule applies, the caller deletes the file.
 - Bad: for `Parquet`, `Progress.bytes` moves once per row group, not per chunk; a progress bar fed by bytes will be flat for 65,536 rows at a time (`rows` still moves per chunk).
 - Bad: on macOS `parquet` brings `chrono` and `core-foundation-sys` into the graph.
+
+**Update (ADR-0032, T9).** The flip condition above was met: `export-parquet` is now in the `sqler-app` default. Measured Linux aarch64 release sizes and the decision are in [ADR-0032](0032-grid-export.md).

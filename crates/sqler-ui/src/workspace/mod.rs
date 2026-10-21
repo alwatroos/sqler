@@ -12,6 +12,7 @@ mod browser;
 #[cfg(feature = "gui")]
 mod drop_dialog;
 mod editor;
+mod export;
 mod history;
 mod query;
 mod state;

@@ -166,6 +166,11 @@ impl GridDelegate {
         &mut self.tab
     }
 
+    /// The layout and the selection of the table.
+    pub(crate) fn controls(&self) -> &GridControls {
+        &self.controls
+    }
+
     /// Plans the copy of the selection in display order.
     pub(crate) fn copy_job(
         &self,

@@ -3,7 +3,9 @@
 `sqler-export` (L2) turns columns and rows into `CSV`, `JSON`, `SQL` `INSERT` statements, a
 Markdown table, a `Parquet` file or an `Excel` (`.xlsx`) workbook. It is a pure library: no async, no UI, no I/O beyond the `io::Write` it is given.
 The decisions are in [ADR-0028](../adr/0028-export-writer-api.md) (the API) and
-[ADR-0029](../adr/0029-parquet-and-xlsx-writers.md) (`Parquet` and `XLSX`).
+[ADR-0029](../adr/0029-parquet-and-xlsx-writers.md) (`Parquet` and `XLSX`). The desktop app's
+**Export Results...** is built on it in `sqler_ui::export` ([ADR-0032](../adr/0032-grid-export.md),
+see "Export from the grid" below).
 
 ## Shape
 
@@ -86,8 +88,8 @@ and infinity become `NULL`; negative zero is stored as `+0.0` by `MariaDB` and b
 
 ## Parquet
 
-Feature `parquet` (on in the crate default; `sqler-app` forwards it as the opt-in
-`export-parquet`). It uses the low-level `SerializedFileWriter` of the `parquet` crate without the
+Feature `parquet` (on in the crate default; `sqler-app` forwards it as `export-parquet`, which
+is in the app default since [ADR-0032](../adr/0032-grid-export.md)). It uses the low-level `SerializedFileWriter` of the `parquet` crate without the
 `arrow` feature, over the `Seek`-less sink. The writer buffers one typed vector per column and
 writes a row group every `row_group_rows` rows (default 65,536) or every 32 MiB of estimated buffer,
 so memory is one row group. `finish` writes the last group and the footer. Compression is Snappy by
@@ -166,6 +168,26 @@ release, 1,000,000 rows, row generation included): `csv` 4.1 M rows/s, `json` 5.
 `tests/streaming_memory.rs` runs `Parquet` and `XLSX` over 1,000,000 rows in its own process and
 fails if the resident set grows by more than 12 MiB between batch 100 and batch 1,000, or if the sink
 does not grow within 66 batches (`Parquet`) or 10 (`XLSX`). The bench is not in `bench.yml`.
+
+## Export from the grid
+
+`sqler_ui::export` (no GPUI except `export::view`) connects a result grid to the writers above. One export is one **producer** and one **writer** joined by a bounded channel.
+
+```text
+producer --> Feed (tokio mpsc, FEED_CAPACITY = 4 batches) --> write_feed --> Exporter --> .<name>.<pid>-<job>.partial --rename--> target
+  loaded rows: LoadedCursor (UI thread, time-boxed slices)        blocking pool (SessionBridge::blocking)
+  fresh run:   fresh_rows (own session through the Connector)
+```
+
+- **Feed** is `Columns`, `Rows`, `Done` or `Failed(ExportFailure)`. The channel holds at most four batches, so a slow disk stops the producer (backpressure) and memory does not depend on the row count. A test pushes 1,000,000 rows and checks the rows in flight.
+- **Writer.** `write_feed` runs on tokio's blocking pool, never on the GPUI thread. It creates a `PartialFile` (a hidden sibling, `create_new`), drives the `Exporter`, and on success fsyncs and renames it over the target. A symlink target is replaced by a regular file; on Unix a replaced regular file keeps its permissions (best effort). Any failure or cancel drops the partial file. The protocol is the one of `sqler-cli export`, re-implemented because that type is private.
+- **Loaded rows.** The `GridModel` belongs to the UI thread, so `LoadedCursor` copies rows from it in slices of a few milliseconds and feeds them to the channel. A selection copies the selected rectangle in display order (`LoadedRows::Picked`). The loaded-rows scope follows the grid's sort and filter: with one set, `GridFacts::displayed` lists the displayed model rows and the copy is a `Picked` over all columns; otherwise `LoadedRows::All { rows }` copies the first `rows` model rows.
+- **Fresh run.** `fresh_rows` opens a short-lived session through the `Connector` (as the object browser does for table data), runs the statement and streams the batches with `pump_stream`. It is allowed only when `sqler_sql::classify_each` gives exactly one `Read` statement the class recorded when the tab ran it is also `Read`, and the connection has a dialect (`fresh_gate`), and `Workspace::fresh_check` then checks that the tab still has its connection; otherwise the dialog says why and offers only the loaded rows. Nothing but a statement classified as a read is run a second time. The gate is lexical (no write syntax found), and behind it the fresh session is made read-only before the statement runs (`PRAGMA query_only` on `SQLite`, a read-only session characteristic on PostgreSQL and MySQL), so the database refuses a write the classifier missed. `DuckDB` and SQL Server have no session setting for it: there only the lexical gate applies, and a view, user-defined operator or cast that writes is a known blind spot.
+- **Cancel.** `ExportStop` wraps a `CancelToken` and a watch channel; it stops the producer, the connect and the writer. Closing the tab or quitting cancels its export.
+- **State.** The dialog, the form, the running job and the progress live in `Workspace` (`workspace/export.rs`, headless, tested without a window). It emits two effects, `PickExportPath` (the native save dialog) and `RunExport`; `workspace/view/export.rs` and `export/view.rs` carry them out and draw the dialog and the progress bar.
+- **Errors.** `ExportFailure` carries a user text per kind. `Connect` and `Driver` hold the text the connect pipeline or the driver shows the user (`connect_text`, `driver_text`: built from `Display` only, with the `Tunnel`, `Target`, `Secret`, `invalid ... target` and `Backend` variants mapped to fixed texts); no variant carries the SQL, the path or a credential. The database's own message can quote a token of the statement, as in the query tab.
+
+`cargo bench -p sqler-ui --bench grid_export` measures both producers; figures are on the [Benchmarks](../benchmarks.md) page.
 
 ## Tests
 

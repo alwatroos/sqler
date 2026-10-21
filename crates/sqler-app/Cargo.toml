@@ -17,7 +17,7 @@ path = "src/main.rs"
 workspace = true
 
 [features]
-default = ["driver-sqlite", "driver-postgres", "driver-mysql", "export-xlsx"]
+default = ["driver-sqlite", "driver-postgres", "driver-mysql", "export-xlsx", "export-parquet"]
 driver-sqlite = ["dep:sqler-driver-sqlite"]
 driver-postgres = ["dep:sqler-driver-postgres"]
 driver-mysql = ["dep:sqler-driver-mysql"]
