@@ -21,9 +21,10 @@ sqler-catalog.workspace = true
 sqler-completion.workspace = true
 sqler-config.workspace = true
 sqler-driver-api.workspace = true
+sqler-export.workspace = true
 sqler-sql.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 gpui-component = { workspace = true, optional = true }
 gpui = { workspace = true, optional = true }
 gpui_platform = { workspace = true, optional = true }
@@ -31,6 +32,8 @@ lsp-types = { workspace = true, optional = true }
 
 [dev-dependencies]
 sqler-driver-sqlite.workspace = true
+sqler-export = { workspace = true, features = ["parquet", "xlsx"] }
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
 [[bench]]
@@ -47,4 +50,8 @@ harness = false
 
 [[bench]]
 name = "editor_intellisense"
+harness = false
+
+[[bench]]
+name = "grid_export"
 harness = false
