@@ -63,6 +63,17 @@ pub(crate) struct AuditDraft<'a> {
     pub rules: &'a Redaction,
     /// The dialect of the connection, if the driver has one.
     pub dialect: Option<Dialect>,
+    /// Set when the call was dropped before it finished: how far it had got.
+    pub cancel: Option<CancelPoint>,
+}
+
+/// How far a cancelled call had got.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CancelPoint {
+    /// No statement was planned and approved yet; approval, if asked, was not granted.
+    BeforeApproval,
+    /// Every needed approval was granted.
+    AfterApproval,
 }
 
 pub(crate) struct DraftStatement<'a> {
@@ -327,7 +338,18 @@ fn column_names(summary: &RedactionSummary, rules: SqlRules<'_>) -> Vec<String> 
 fn approvals(
     statements: &[DraftStatement<'_>],
     error: Option<&DraftError<'_>>,
+    cancel: Option<CancelPoint>,
 ) -> Vec<ApprovalOutcome> {
+    if let Some(point) = cancel {
+        return statements
+            .iter()
+            .map(|s| match (s.needs_approval, point) {
+                (false, _) => ApprovalOutcome::NotNeeded,
+                (true, CancelPoint::AfterApproval) => ApprovalOutcome::Approved,
+                (true, CancelPoint::BeforeApproval) => ApprovalOutcome::NotAsked,
+            })
+            .collect();
+    }
     let code = error.map(|e| e.code);
     let needing: Vec<usize> = statements
         .iter()
@@ -378,7 +400,7 @@ impl AuditEntry {
         };
         let text = |t: &str| scrub_text(t, rules, Field::Text).0;
         let (arguments, arguments_truncated) = arguments(d.raw_arguments, rules);
-        let outcomes = approvals(&d.statements, d.error.as_ref());
+        let outcomes = approvals(&d.statements, d.error.as_ref(), d.cancel);
         let total = d.statements.len();
         let statements: Vec<AuditStatement> = d
             .statements
@@ -406,6 +428,8 @@ impl AuditEntry {
             ApprovalOutcome::Refused
         } else if has(ApprovalOutcome::Approved) {
             ApprovalOutcome::Approved
+        } else if has(ApprovalOutcome::NotAsked) {
+            ApprovalOutcome::NotAsked
         } else {
             ApprovalOutcome::NotNeeded
         };
@@ -428,7 +452,9 @@ impl AuditEntry {
                 .unwrap_or(u32::MAX),
             statements,
             approval,
-            outcome: if d.error.is_some() {
+            outcome: if d.cancel.is_some() {
+                CallOutcome::Cancelled
+            } else if d.error.is_some() {
                 CallOutcome::Error
             } else {
                 CallOutcome::Ok
