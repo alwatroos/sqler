@@ -614,6 +614,41 @@ impl Workspace {
         Some(tab)
     }
 
+    /// Opens a preview tab on `conn` for an object and makes it the active one. The focused
+    /// group's older preview is replaced: closed through the normal close path, with the new tab
+    /// taking its place. An older preview with unsaved text or pending edits is pinned instead
+    /// and the new one goes to the end. Returns the tab and the effect of the close.
+    // The browser callers still open pinned tabs; the workbench shell switches them.
+    #[allow(dead_code)]
+    pub(super) fn open_object_preview(
+        &mut self,
+        conn: &ConnectionId,
+        kind: TabKind,
+        name: &str,
+    ) -> Option<(TabId, Effect)> {
+        let index = self.sidebar.index_of(conn)?;
+        let connection = tab_connection(self.sidebar.entries().get(index)?.config());
+        let old = self.tabs.preview_in(self.tabs.focused_group());
+        let mut at = None;
+        let mut replaced = None;
+        if let Some(old) = old {
+            if self.editors.is_dirty(old)
+                || self.edit.pending_notice(old).is_some()
+                || self.edit.is_applying(old)
+            {
+                self.tabs.pin(old);
+            } else {
+                at = self.tabs.position_in_group(old).map(|p| p + 1);
+                replaced = Some(old);
+            }
+        }
+        let tab = self.tabs.open_preview(connection, kind, name, at);
+        self.tab_conns.insert(tab, conn.clone());
+        self.show_connection_tabs();
+        let effect = replaced.map_or(Effect::None, |old| self.close_tab_now(old));
+        Some((tab, effect))
+    }
+
     #[allow(clippy::too_many_lines)] // one arm per menu entry
     fn run_entry(&mut self, conn: &ConnectionId, node: TreeNodeId, entry: MenuEntry) -> Effect {
         let Some(b) = self.browsers.get(conn) else {
@@ -1195,6 +1230,75 @@ mod tests {
         Workspace::new(SidebarModel::from_connections(vec![
             ConnectionConfig::new("dev", driver, ":memory:").with_environment(environment),
         ]))
+    }
+
+    #[test]
+    fn a_second_preview_replaces_the_first_in_its_slot() {
+        let mut w = workspace(Environment::Dev);
+        let conn = conn_id(&w);
+        let pinned = w.open_object_tab(&conn, TabKind::Ddl, "a").unwrap();
+        let (first, _) = w
+            .open_object_preview(&conn, TabKind::Grid, "main.users")
+            .unwrap();
+        let _after = w.open_object_tab(&conn, TabKind::Ddl, "b").unwrap();
+        w.tabs.activate(first);
+        let (_grid, cancel) = crate::grid::GridTab::spawn_synthetic(100, 2, 50);
+        w.grid_cancels.insert(first, cancel.clone());
+        let slot = w.tabs.position_in_group(first).unwrap();
+        let (second, effect) = w
+            .open_object_preview(&conn, TabKind::Grid, "main.orders")
+            .unwrap();
+        assert!(matches!(effect, Effect::None));
+        assert!(cancel.is_cancelled(), "the first grid is cancelled");
+        assert!(w.tabs.get(first).is_none());
+        assert_eq!(w.tabs.position_in_group(second), Some(slot));
+        assert_eq!(w.tabs.preview_in(w.tabs.focused_group()), Some(second));
+        assert_eq!(w.tabs.len(), 3);
+        assert!(w.tabs.get(pinned).is_some());
+    }
+
+    #[test]
+    fn a_dirty_preview_is_pinned_not_replaced() {
+        let mut w = workspace(Environment::Dev);
+        let conn = conn_id(&w);
+        let (first, _) = w
+            .open_object_preview(&conn, TabKind::Ddl, "main.users")
+            .unwrap();
+        // Pending edits, staged without going through `editor_edited` (which pins by itself),
+        // so the preview is still a preview when the next one opens.
+        w.set_pending_edits(
+            crate::grid::edit::GridKey {
+                tab: first,
+                result: None,
+            },
+            2,
+        );
+        assert_eq!(w.tabs.mode(first), Some(crate::tabs::TabMode::Preview));
+        let (second, effect) = w
+            .open_object_preview(&conn, TabKind::Ddl, "main.orders")
+            .unwrap();
+        assert!(matches!(effect, Effect::None));
+        assert_eq!(w.tabs.mode(first), Some(crate::tabs::TabMode::Pinned));
+        assert_eq!(w.tabs.mode(second), Some(crate::tabs::TabMode::Preview));
+        assert_eq!(w.tabs.len(), 2);
+    }
+
+    #[test]
+    fn an_applying_preview_is_pinned_not_replaced() {
+        let mut w = workspace(Environment::Dev);
+        let conn = conn_id(&w);
+        let (first, _) = w
+            .open_object_preview(&conn, TabKind::Grid, "main.users")
+            .unwrap();
+        w.edit.mark_applying(first);
+        let (second, effect) = w
+            .open_object_preview(&conn, TabKind::Grid, "main.orders")
+            .unwrap();
+        assert!(matches!(effect, Effect::None));
+        assert!(w.tabs.get(first).is_some(), "the applying tab stays");
+        assert_eq!(w.tabs.mode(first), Some(crate::tabs::TabMode::Pinned));
+        assert_eq!(w.tabs.mode(second), Some(crate::tabs::TabMode::Preview));
+        assert_eq!(w.tabs.len(), 2);
     }
 
     fn conn_id(w: &Workspace) -> ConnectionId {

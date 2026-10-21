@@ -17,6 +17,7 @@ use sqler_config::{ConfigDir, KeychainStore, Platform, SecretStore};
 use sqler_driver_api::{DriverError, DriverRegistry};
 use sqler_ui::connections::Connector;
 use sqler_ui::settings::SettingsModel;
+use sqler_ui::workbench::WorkbenchStartup;
 use sqler_ui::workspace::{Startup, run};
 
 use crate::args::{Command, USAGE, UsageError};
@@ -91,6 +92,7 @@ fn start(exit_after_first_frame: bool, open_sessions: bool) -> ExitCode {
             .map_err(|_| ());
         open_sessions::spawn(runtime.handle(), Arc::clone(&connector), profiles);
     }
+    let workbench = WorkbenchStartup::load(dir.as_ref().ok().cloned());
     run(Startup {
         connections,
         config_dir,
@@ -101,6 +103,7 @@ fn start(exit_after_first_frame: bool, open_sessions: bool) -> ExitCode {
         settings: SettingsModel::load(dir),
         keybindings,
         history_dir,
+        workbench,
     });
     ExitCode::SUCCESS
 }

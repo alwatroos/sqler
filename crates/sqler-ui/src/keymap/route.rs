@@ -76,6 +76,31 @@ pub fn action_for(id: &CommandId, ws: &Workspace) -> Option<WorkspaceAction> {
         "theme:toggle-mode" => Some(WorkspaceAction::ToggleThemeMode),
         "connection:open" => ws.sidebar().selected().map(WorkspaceAction::OpenConnection),
         "dev:open-synthetic-grid" => Some(WorkspaceAction::OpenSyntheticGrid),
+        "tab:pin" => active_tab(ws).map(WorkspaceAction::PinTab),
+        "tab:close-others" => active_tab(ws).map(WorkspaceAction::CloseOtherTabs),
+        "tab:close-to-the-right" => active_tab(ws).map(WorkspaceAction::CloseTabsToRight),
+        "tab:close-all" => Some(WorkspaceAction::CloseAllTabs),
+        "tab:move-left" => Some(WorkspaceAction::MoveActiveTabLeft),
+        "tab:move-right" => Some(WorkspaceAction::MoveActiveTabRight),
+        _ => None,
+    }
+}
+
+fn active_tab(ws: &Workspace) -> Option<crate::tabs::TabId> {
+    ws.tabs().active().map(crate::tabs::Tab::id)
+}
+
+/// The workspace action a `pane:*` command stands for, or `None` for other IDs and for the
+/// commands that take an argument. Not part of [`action_for`]: the `pane:*` commands are
+/// registered by the workbench shell.
+#[must_use]
+pub fn pane_action_for(id: &CommandId, _ws: &Workspace) -> Option<WorkspaceAction> {
+    match id.as_str() {
+        "pane:split-right" => Some(WorkspaceAction::SplitRight),
+        "pane:focus-next" => Some(WorkspaceAction::FocusNextGroup),
+        "pane:focus-previous" => Some(WorkspaceAction::FocusPreviousGroup),
+        "pane:move-tab-to-next" => Some(WorkspaceAction::MoveActiveTabToNextGroup),
+        "pane:move-tab-to-previous" => Some(WorkspaceAction::MoveActiveTabToPreviousGroup),
         _ => None,
     }
 }
@@ -234,6 +259,70 @@ mod tests {
             act("dev:open-synthetic-grid", &w),
             Some(WorkspaceAction::OpenSyntheticGrid)
         );
+    }
+
+    #[test]
+    fn tab_commands_map_to_actions() {
+        let mut w = ws(Some(0));
+        assert_eq!(act("tab:pin", &w), None);
+        assert_eq!(act("tab:close-others", &w), None);
+        assert_eq!(act("tab:close-to-the-right", &w), None);
+        assert_eq!(
+            act("tab:close-all", &w),
+            Some(WorkspaceAction::CloseAllTabs)
+        );
+        assert_eq!(
+            act("tab:move-left", &w),
+            Some(WorkspaceAction::MoveActiveTabLeft)
+        );
+        assert_eq!(
+            act("tab:move-right", &w),
+            Some(WorkspaceAction::MoveActiveTabRight)
+        );
+        let crate::workspace::Effect::Connect { request, .. } =
+            w.dispatch(WorkspaceAction::OpenConnection(0))
+        else {
+            panic!("expected Connect");
+        };
+        let (session, _) = crate::workspace::testing::FakeSession::boxed();
+        let _ = w.connect_finished(request, Ok(session));
+        let id = w.tabs().active().unwrap().id();
+        assert_eq!(act("tab:pin", &w), Some(WorkspaceAction::PinTab(id)));
+        assert_eq!(
+            act("tab:close-others", &w),
+            Some(WorkspaceAction::CloseOtherTabs(id))
+        );
+        assert_eq!(
+            act("tab:close-to-the-right", &w),
+            Some(WorkspaceAction::CloseTabsToRight(id))
+        );
+        assert_eq!(act("tab:move", &w), None);
+    }
+
+    #[test]
+    fn pane_actions_are_separate() {
+        let w = ws(None);
+        let pane = |id: &str| pane_action_for(&CommandId::new(id).unwrap(), &w);
+        assert_eq!(pane("pane:split-right"), Some(WorkspaceAction::SplitRight));
+        assert_eq!(
+            pane("pane:focus-next"),
+            Some(WorkspaceAction::FocusNextGroup)
+        );
+        assert_eq!(
+            pane("pane:focus-previous"),
+            Some(WorkspaceAction::FocusPreviousGroup)
+        );
+        assert_eq!(
+            pane("pane:move-tab-to-next"),
+            Some(WorkspaceAction::MoveActiveTabToNextGroup)
+        );
+        assert_eq!(
+            pane("pane:move-tab-to-previous"),
+            Some(WorkspaceAction::MoveActiveTabToPreviousGroup)
+        );
+        assert_eq!(pane("pane:focus"), None);
+        assert_eq!(pane("tab:close"), None);
+        assert_eq!(act("pane:split-right", &w), None);
     }
 
     #[test]

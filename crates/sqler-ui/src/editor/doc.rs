@@ -18,6 +18,7 @@ pub struct EditorDoc {
     dialect: Option<Dialect>,
     seed: Option<String>,
     chain: Option<OccurrenceChain>,
+    dirty: bool,
 }
 
 impl EditorDoc {
@@ -28,7 +29,24 @@ impl EditorDoc {
             dialect,
             seed,
             chain: None,
+            dirty: false,
         }
+    }
+
+    /// Whether the text changed since the tab was opened or last saved.
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Marks the text as changed.
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Marks the text as saved.
+    pub fn mark_clean(&mut self) {
+        self.dirty = false;
     }
 
     /// The SQL dialect of the tab's connection.
@@ -94,6 +112,12 @@ impl EditorDocs {
         self.docs.remove(&tab)
     }
 
+    /// Whether `tab` is an editor tab with unsaved text.
+    #[must_use]
+    pub fn is_dirty(&self, tab: TabId) -> bool {
+        self.docs.get(&tab).is_some_and(EditorDoc::is_dirty)
+    }
+
     /// Whether `tab` is an editor tab.
     #[must_use]
     pub fn contains(&self, tab: TabId) -> bool {
@@ -151,6 +175,19 @@ mod tests {
         assert!(docs.remove(tab).is_some());
         assert!(docs.is_empty());
         assert!(docs.get(tab).is_none());
+    }
+
+    #[test]
+    fn dirty_flag_is_set_and_cleared() {
+        let tab = tab_id();
+        let mut docs = EditorDocs::new();
+        docs.open(tab, None, None);
+        assert!(!docs.is_dirty(tab));
+        docs.get_mut(tab).unwrap().mark_dirty();
+        assert!(docs.is_dirty(tab));
+        docs.get_mut(tab).unwrap().mark_clean();
+        assert!(!docs.is_dirty(tab));
+        assert!(!docs.is_dirty(tab_id()));
     }
 
     #[test]

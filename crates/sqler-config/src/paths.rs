@@ -188,5 +188,6 @@ mod tests {
             d.connections_path(),
             Path::new("cfg").join("connections.toml")
         );
+        assert_eq!(d.workbench_path(), Path::new("cfg").join("workbench.toml"));
     }
 }

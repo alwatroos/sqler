@@ -67,6 +67,8 @@ use crate::theme::resolve;
 use edit_ui::EditUi;
 
 mod export;
+#[cfg(feature = "screenshots")]
+pub mod scene;
 
 /// How long quitting waits for open sessions to close.
 const CLOSE_LIMIT: Duration = Duration::from_secs(2);
@@ -93,6 +95,8 @@ pub struct Startup {
     pub keybindings: Result<KeybindingOverrides, String>,
     /// Where the query history and the saved queries live; `None` without a config directory.
     pub history_dir: Option<ConfigDir>,
+    /// Workbench layout state, loaded by the binary.
+    pub workbench: crate::workbench::WorkbenchStartup,
 }
 
 impl std::fmt::Debug for Startup {
