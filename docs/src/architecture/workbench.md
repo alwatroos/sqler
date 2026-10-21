@@ -17,7 +17,7 @@ SQLer keeps its own headless workbench model and draws it with GPUI plus `gpui-c
 
 The product questions are taken with the recommended defaults and implemented unless the owner answers otherwise; every answer below is a default taken, not an owner decision: the owner may overrule any of them by a follow-up (recorded in ADR-0042, ADR-0043 and ADR-0046, and listed as awaiting owner veto in the PR).
 
-- Q1: Query results move from below each editor into the shared bottom panel, which follows the focused editor (VS Code/owner wording; ADS keeps them inside the editor). Decision: yes (default taken; owner may overrule by follow-up).
+- Q1: Query results move from below each editor into the shared bottom panel, which follows the focused editor (VS Code/owner wording; ADS keeps them inside the editor). Decision: yes (default taken; owner may overrule by follow-up). Refinement: the batch close commands (Close Others, Close to the Right, Close All) treat an editor with unsaved text as pending changes and prompt for it like staged grid edits; the single-tab close is unchanged.
 - Q2: `history:open` shows History in the bottom panel instead of opening an editor tab (ID unchanged). Decision: yes (default taken; owner may overrule by follow-up).
 - Q3: Closing an editor with unsaved text (dirty dot) does NOT prompt (unchanged behaviour; the pending-edits prompt stays). Decision: no prompt (unchanged behaviour); a prompt waits until tab restore exists (default taken; owner may overrule by follow-up).
 - Q4: When the focused tab's connection is `prod`, the whole status bar turns solid red (white text) in addition to the tab top border and PROD chips. Decision: yes (default taken; owner may overrule by follow-up).

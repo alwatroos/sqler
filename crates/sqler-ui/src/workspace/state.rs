@@ -502,7 +502,8 @@ impl Workspace {
             WorkbenchLoad::Newer(_) => self.workbench_newer = true,
             WorkbenchLoad::Invalid(message) => {
                 self.notice = Some(format!(
-                    "Could not read workbench.toml, using the default layout: {message}"
+                    "Could not read workbench.toml, using the default layout \
+                     (the file is copied to workbench.toml.bak before it is replaced): {message}"
                 ));
             }
         }
@@ -621,11 +622,19 @@ impl Workspace {
     }
 
     /// Closes `ids` one by one through the normal close path; stops at the first pending-changes
-    /// prompt so later tabs do not close behind the dialog.
+    /// prompt so later tabs do not close behind the dialog. Unlike closing a single tab, a batch
+    /// also treats an editor with unsaved text as pending changes (refinement of Q3).
     fn close_many(&mut self, ids: Vec<TabId>) -> Effect {
         let mut effects = Vec::new();
         for id in ids {
             if self.close_prompt().is_some() {
+                break;
+            }
+            if self.tabs.get(id).is_some()
+                && !self.edit.is_applying(id)
+                && self.editors.is_dirty(id)
+            {
+                self.edit.text_prompt(id);
                 break;
             }
             match self.request_close_tab(id) {
@@ -2157,6 +2166,51 @@ mod tests {
         assert!(w.tabs().get(t[3]).is_some());
     }
 
+    fn dirty_editor(w: &mut Workspace, tab: TabId) {
+        w.editors.get_mut(tab).expect("an editor").mark_dirty();
+    }
+
+    #[test]
+    fn a_batch_close_prompts_for_a_dirty_editor_and_a_single_close_does_not() {
+        for action in [
+            |t: &[TabId]| WorkspaceAction::CloseOtherTabs(t[0]),
+            |_: &[TabId]| WorkspaceAction::CloseAllTabs,
+        ] {
+            let mut w = ws();
+            let t = open_tabs(&mut w, 3);
+            dirty_editor(&mut w, t[1]);
+            w.dispatch(action(&t));
+            let prompt = *w.close_prompt().expect("a prompt");
+            assert_eq!(prompt.target, CloseTarget::Tab(t[1]));
+            assert!(prompt.unsaved_text);
+            assert!(w.tabs().get(t[1]).is_some());
+            assert!(w.tabs().get(t[2]).is_some(), "later tabs stay behind it");
+            w.confirm_close();
+            assert!(w.tabs().get(t[1]).is_none());
+            assert!(
+                w.tabs().get(t[2]).is_some(),
+                "confirm closes only the prompted tab"
+            );
+        }
+        // To the right.
+        let mut w = ws();
+        let t = open_tabs(&mut w, 4);
+        dirty_editor(&mut w, t[2]);
+        w.dispatch(WorkspaceAction::CloseTabsToRight(t[0]));
+        assert_eq!(w.close_prompt().unwrap().target, CloseTarget::Tab(t[2]));
+        assert!(w.tabs().get(t[1]).is_none());
+        assert!(w.tabs().get(t[3]).is_some());
+        // Cancel stops the batch and keeps every remaining tab.
+        w.dismiss_close();
+        assert!(w.close_prompt().is_none());
+        assert!(w.tabs().get(t[2]).is_some());
+        assert!(w.tabs().get(t[3]).is_some());
+        // A single close of a dirty editor is unchanged (Q3): no prompt.
+        w.dispatch(WorkspaceAction::CloseTab(t[2]));
+        assert!(w.close_prompt().is_none());
+        assert!(w.tabs().get(t[2]).is_none());
+    }
+
     #[test]
     fn a_real_run_decorates_the_tab_sets_the_status_and_reveals_results() {
         let mut w = ws();
@@ -2247,15 +2301,44 @@ mod tests {
                 .is_none()
         );
 
+        // An invalid file gives defaults and a notice; the config layer copies the file to
+        // `workbench.toml.bak` before the first save replaces it.
         let mut w = ws().with_workbench(&WorkbenchLoad::Invalid("bad".into()));
         assert_eq!(
             w.take_notice().as_deref(),
-            Some("Could not read workbench.toml, using the default layout: bad")
+            Some(
+                "Could not read workbench.toml, using the default layout \
+                 (the file is copied to workbench.toml.bak before it is replaced): bad"
+            )
         );
         assert!(
             w.workbench_state(&RecentCommands::default(), None)
                 .is_some()
         );
+    }
+
+    #[test]
+    fn the_startup_load_reaches_the_workspace() {
+        use crate::workbench::WorkbenchStartup;
+        use sqler_config::ConfigDir;
+        let dir = std::env::temp_dir().join(format!("sqler-ui-startup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = ConfigDir::new(&dir);
+
+        let mut state = WorkbenchState::default();
+        state.side_panel.visible = false;
+        config.save_workbench_state(&state).unwrap();
+        let w = ws().with_workbench(&WorkbenchStartup::load(Some(config.clone())).load);
+        assert!(!w.layout().side_visible());
+
+        std::fs::write(config.workbench_path(), "side_panel = [oops").unwrap();
+        let mut w = ws().with_workbench(&WorkbenchStartup::load(Some(config)).load);
+        assert!(w.layout().side_visible());
+        assert!(
+            w.take_notice()
+                .is_some_and(|n| n.contains("workbench.toml"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

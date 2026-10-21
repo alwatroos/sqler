@@ -943,13 +943,20 @@ pub(crate) fn edit_overlay(
             CloseTarget::Tab(_) => "Closing this tab",
             CloseTarget::Quit => "Quitting",
         };
-        let body = vec![note(
+        let text = if prompt.unsaved_text && prompt.pending == 0 {
+            format!("{what} discards the unsaved text of the editor.")
+        } else if prompt.unsaved_text {
+            format!(
+                "{what} discards the unsaved text of the editor and {} pending change(s). Nothing has been written to the database.",
+                prompt.pending
+            )
+        } else {
             format!(
                 "{what} discards {} pending change(s). Nothing has been written to the database.",
                 prompt.pending
-            ),
-            muted,
-        )];
+            )
+        };
+        let body = vec![note(text, muted)];
         let keep = dialog_button(
             "edit-close-keep",
             "Keep open",

@@ -26,7 +26,7 @@ Option 2. `sqler-config/src/workbench.rs` defines `WorkbenchState` (`version = 1
 
 - **Read is lenient.** Unknown keys are ignored; out-of-range or unknown values fall back per field to the default or the clamp. A missing file gives defaults.
 - **Newer is read-only.** `version > 1` gives defaults and the file is never written (same rule as settings).
-- **Invalid is replaced.** An unparsable file gives defaults and one notice; the next save replaces it, because it is application state and not user configuration.
+- **Invalid is backed up, then replaced.** An unparsable or unreadable file gives defaults and one notice. Before the first save over it, the file is copied to `workbench.toml.bak` (one backup; a later one replaces it). If the copy fails, nothing is overwritten and the save reports an error that the caller shows as a notice. A file from a newer version is never touched.
 - **Writes.** `write_atomic` on the GPUI background executor, debounced 500 ms after the last layout change (never per drag frame), plus one synchronous write in the quit hook.
 - **Unchanged.** `settings.toml`, `keybindings.toml`, `connections.toml`, history and saved-query files. Users only gain new commands and defaults; an override still replaces or unbinds them.
 - **Not persisted.** Open tabs (tab restore is carried over to a later milestone) and editor groups.

@@ -251,11 +251,22 @@ impl ConfigDir {
         }
     }
 
+    /// Path of the backup `workbench.toml.bak`.
+    #[must_use]
+    pub fn workbench_backup_path(&self) -> std::path::PathBuf {
+        self.root().join("workbench.toml.bak")
+    }
+
     /// Writes `workbench.toml`, creating the directory when missing.
+    ///
+    /// A file that does not load ([`WorkbenchLoad::Invalid`]) is never destroyed silently: it
+    /// is copied to `workbench.toml.bak` (one backup, replaced by a later one) before it is
+    /// overwritten. When the copy fails, nothing is overwritten and the error is returned.
     ///
     /// # Errors
     /// [`ConfigError::Invalid`] when `state.version` is not [`WORKBENCH_VERSION`] (a newer
-    /// file is never overwritten), [`ConfigError::Serialize`] or [`ConfigError::Write`].
+    /// file is never overwritten), [`ConfigError::Serialize`] or [`ConfigError::Write`] (also
+    /// when the backup of an invalid file cannot be made).
     pub fn save_workbench_state(&self, state: &WorkbenchState) -> Result<(), ConfigError> {
         let path = self.workbench_path();
         if state.version != WORKBENCH_VERSION {
@@ -271,6 +282,13 @@ impl ConfigDir {
             path: path.clone(),
             message: e.to_string(),
         })?;
+        if matches!(self.load_workbench_state(), WorkbenchLoad::Invalid(_)) {
+            let backup = self.workbench_backup_path();
+            std::fs::copy(&path, &backup).map_err(|source| ConfigError::Write {
+                path: backup,
+                source,
+            })?;
+        }
         write_atomic(&path, &text)
     }
 }
@@ -468,6 +486,53 @@ mod tests {
             Err(ConfigError::Invalid { .. })
         ));
         assert!(!d.workbench_path().exists());
+    }
+
+    #[test]
+    fn save_over_an_invalid_file_keeps_a_backup() {
+        let (_t, d) = dir();
+        let bad = "side_panel = [oops\n";
+        std::fs::write(d.workbench_path(), bad).unwrap();
+        assert!(matches!(
+            d.load_workbench_state(),
+            WorkbenchLoad::Invalid(_)
+        ));
+        let s = WorkbenchState::default();
+        d.save_workbench_state(&s).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.workbench_backup_path()).unwrap(),
+            bad
+        );
+        assert_eq!(d.load_workbench_state(), WorkbenchLoad::Loaded(s.clone()));
+        // A later save over a valid file leaves the backup alone.
+        d.save_workbench_state(&s).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.workbench_backup_path()).unwrap(),
+            bad
+        );
+    }
+
+    #[test]
+    fn save_does_not_overwrite_when_the_backup_fails() {
+        let (_t, d) = dir();
+        let bad = "version = 0\n";
+        std::fs::write(d.workbench_path(), bad).unwrap();
+        // A directory where the backup goes makes the copy fail.
+        std::fs::create_dir(d.workbench_backup_path()).unwrap();
+        assert!(matches!(
+            d.save_workbench_state(&WorkbenchState::default()),
+            Err(ConfigError::Write { .. })
+        ));
+        assert_eq!(std::fs::read_to_string(d.workbench_path()).unwrap(), bad);
+    }
+
+    #[test]
+    fn save_over_an_unreadable_file_fails_and_keeps_it() {
+        let (_t, d) = dir();
+        // A directory in place of the file cannot be read or copied.
+        std::fs::create_dir(d.workbench_path()).unwrap();
+        assert!(d.save_workbench_state(&WorkbenchState::default()).is_err());
+        assert!(d.workbench_path().is_dir());
     }
 
     #[test]

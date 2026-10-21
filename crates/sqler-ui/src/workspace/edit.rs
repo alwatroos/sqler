@@ -137,6 +137,8 @@ pub struct ClosePrompt {
     pub target: CloseTarget,
     /// The number of pending changes that would be lost.
     pub pending: usize,
+    /// The tab's editor also holds unsaved text that would be lost (batch close only).
+    pub unsaved_text: bool,
 }
 
 /// The result of [`Workspace::apply_finished`].
@@ -311,6 +313,7 @@ impl EditFlow {
         let prompt = ClosePrompt {
             target: CloseTarget::Quit,
             pending,
+            unsaved_text: false,
         };
         self.close_prompt = Some(prompt);
         Some(prompt)
@@ -324,9 +327,21 @@ impl EditFlow {
         let prompt = ClosePrompt {
             target: CloseTarget::Tab(tab),
             pending,
+            unsaved_text: false,
         };
         self.close_prompt = Some(prompt);
         Some(prompt)
+    }
+
+    /// Asks before a batch close discards the unsaved editor text of `tab`.
+    pub(super) fn text_prompt(&mut self, tab: TabId) -> ClosePrompt {
+        let prompt = ClosePrompt {
+            target: CloseTarget::Tab(tab),
+            pending: self.pending_for_tab(tab),
+            unsaved_text: true,
+        };
+        self.close_prompt = Some(prompt);
+        prompt
     }
 }
 
