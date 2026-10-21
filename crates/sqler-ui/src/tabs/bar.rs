@@ -19,16 +19,17 @@ pub enum Trailing {
     None,
 }
 
-/// The trailing slot of a tab: a running tab shows the spinner; otherwise a hovered or active tab
-/// shows the close button, a dirty one the dot, and any other nothing.
+/// The trailing slot of a tab: a running tab shows the spinner; otherwise a dirty tab shows the dot
+/// (the view swaps in the close button on hover), a hovered or active one the close button, and any
+/// other nothing.
 #[must_use]
 pub fn trailing(decor: &TabDecor, hovered: bool, active: bool) -> Trailing {
     if decor.running {
         Trailing::Spinner
-    } else if hovered || active {
-        Trailing::Close
     } else if decor.dirty {
         Trailing::Dirty
+    } else if hovered || active {
+        Trailing::Close
     } else {
         Trailing::None
     }
@@ -126,8 +127,9 @@ mod tests {
         for (dirty, running, hovered, active, want) in [
             (true, true, true, true, Trailing::Spinner),
             (false, true, false, false, Trailing::Spinner),
-            (true, false, true, false, Trailing::Close),
-            (true, false, false, true, Trailing::Close),
+            (true, false, true, false, Trailing::Dirty),
+            (true, false, false, true, Trailing::Dirty),
+            (false, false, false, true, Trailing::Close),
             (false, false, true, false, Trailing::Close),
             (true, false, false, false, Trailing::Dirty),
             (false, false, false, false, Trailing::None),

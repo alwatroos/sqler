@@ -488,6 +488,8 @@ impl WorkspaceView {
             return;
         };
         if self.saved_state.as_ref() == Some(&state) {
+            // A save scheduled for a state the user has since undone must not land.
+            self.save_task = None;
             return;
         }
         self.save_task = Some(cx.spawn(async move |this, cx| {
