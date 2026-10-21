@@ -181,6 +181,9 @@ The tab offers three choices:
 | Dark | Always the dark theme. |
 | Follow system | Light or dark, as the OS appearance says. |
 
+Light and dark are the two SQLer looks, "SQLer Light" and "SQLer Dark": flat surfaces, thin borders,
+one blue accent and Lucide line icons.
+
 "Follow system" also follows OS changes while SQLer is running. On Linux this depends on the desktop
 portal. Without it, SQLer cannot read the OS appearance and uses the light theme.
 

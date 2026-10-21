@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use sqler_config::{CommandId as ConfigCommandId, KeyChord, KeybindingOverrides, Keymap, Platform};
 
+use super::chord::display_chord;
 use crate::command::{CommandId, CommandRegistry};
 
 /// Resolves key chords to registered commands.
@@ -16,6 +17,7 @@ use crate::command::{CommandId, CommandRegistry};
 /// collected as a notice for the user.
 #[derive(Debug)]
 pub struct KeyDispatcher {
+    platform: Platform,
     keymap: Keymap,
     by_chord: HashMap<KeyChord, CommandId>,
     notices: Vec<String>,
@@ -96,6 +98,7 @@ impl KeyDispatcher {
         }
 
         Self {
+            platform: p,
             keymap,
             by_chord,
             notices,
@@ -108,22 +111,40 @@ impl KeyDispatcher {
         self.by_chord.get(chord)
     }
 
-    /// The command's chords as text (`shift+cmd+p, ctrl+k`), or `None` when it is unbound.
-    #[must_use]
-    pub fn shortcut_label(&self, id: &CommandId) -> Option<String> {
-        let config_id = ConfigCommandId::new(id.as_str()).ok()?;
-        // A chord lost in a conflict runs another command, so it is not shown here.
-        let chords: Vec<String> = self
-            .keymap
+    /// The command's effective chords, without those lost in a conflict.
+    fn live_chords(&self, id: &CommandId) -> Vec<&KeyChord> {
+        let Ok(config_id) = ConfigCommandId::new(id.as_str()) else {
+            return Vec::new();
+        };
+        // A chord lost in a conflict runs another command, so it is not shown.
+        self.keymap
             .chords_for(&config_id)
             .iter()
             .filter(|c| self.by_chord.get(*c) == Some(id))
+            .collect()
+    }
+
+    /// The command's chords as text (`shift+cmd+p, ctrl+k`), or `None` when it is unbound.
+    #[must_use]
+    pub fn shortcut_label(&self, id: &CommandId) -> Option<String> {
+        let chords: Vec<String> = self
+            .live_chords(id)
+            .into_iter()
             .map(ToString::to_string)
             .collect();
         if chords.is_empty() {
             return None;
         }
         Some(chords.join(", "))
+    }
+
+    /// The command's first effective chord as a platform label (`⌘⇧P`, `Ctrl+Shift+P`), or
+    /// `None` when it is unbound.
+    #[must_use]
+    pub fn shortcut_display(&self, id: &CommandId) -> Option<String> {
+        let chords = self.live_chords(id);
+        let first = chords.first()?;
+        Some(display_chord(first, self.platform))
     }
 
     /// Messages for the user about the keybinding setup; empty when all is well.
@@ -306,5 +327,26 @@ mod tests {
             "ctrl+shift+p"
         );
         assert_eq!(k.shortcut_label(&cid("query:run")), None);
+    }
+
+    #[test]
+    fn shortcut_display_per_platform() {
+        let r = base();
+        let open = cid("workspace:open-command-palette");
+        let k = KeyDispatcher::new(MAC, Ok(KeybindingOverrides::new()), &r);
+        assert_eq!(k.shortcut_display(&open).unwrap(), "⌘⇧P");
+        let k = KeyDispatcher::new(OTHER, Ok(KeybindingOverrides::new()), &r);
+        assert_eq!(k.shortcut_display(&open).unwrap(), "Ctrl+Shift+P");
+        assert_eq!(k.shortcut_display(&cid("app:nothing")), None);
+    }
+
+    #[test]
+    fn shortcut_display_hides_lost_chords_and_shows_first_only() {
+        let k = KeyDispatcher::new(OTHER, Ok(ovr(&[("query:run", &["ctrl+w"])])), &base());
+        assert_eq!(k.shortcut_display(&cid("query:run")).unwrap(), "Ctrl+W");
+        assert_eq!(k.shortcut_display(&cid("tab:close")), None);
+        let o = ovr(&[("tab:close", &["ctrl+k", "mod+shift+w"])]);
+        let k = KeyDispatcher::new(OTHER, Ok(o), &base());
+        assert_eq!(k.shortcut_display(&cid("tab:close")).unwrap(), "Ctrl+K");
     }
 }

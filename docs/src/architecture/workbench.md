@@ -182,7 +182,7 @@ The product questions are taken with the recommended defaults and implemented un
   - idle RSS ≤ +5 MiB
   - binary ≤ +300 KiB total (themes ~10 KiB, icons ~20-60 KiB; report `size.yml`)
   - `grid_viewport`, `grid_sort`, `browser_tree` gates green (grid styling must not touch `grid/model.rs`, `viewport.rs`, `order.rs`)
-  - theme JSON parse + workbench read ≤ 1 ms each
+  - theme JSON parse + workbench read ≤ 1 ms each (a measurement target, not a unit-test gate; the `parsing_is_fast` test only asserts a 50 ms ceiling)
 
 ## 6. Screenshot strategy
 - **Harness**: `crates/sqler-ui/tests/screenshots.rs`, `harness = false`, `required-features = ["screenshots"]`, feature `screenshots = ["gui", "gpui/test-support", "gpui_platform/test-support"]`. It runs on the main thread and uses `gpui::HeadlessAppContext::with_platform(gpui_platform::current_platform(true).text_system(), Arc::new(()), gpui_platform::current_headless_renderer)`. `()` is GPUI's empty asset source: U6 ships no `AppAssets` (it merges before U1 and must not depend on it), so the "before" set shows today's look including the blank icons. U1 switches this one line to `AppAssets`.
