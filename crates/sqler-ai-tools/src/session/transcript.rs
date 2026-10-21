@@ -1,0 +1,353 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+//! The typed, in-memory transcript of a session.
+//!
+//! Everything in it comes from redacted [`CallReport`] data or from the user's and the model's
+//! text. Nothing is written to disk.
+
+use std::time::Duration;
+
+use serde_json::Value;
+use sqler_ai_api::ToolCall;
+use sqler_sql::StatementClass;
+
+use crate::session::LimitKind;
+use crate::toolset::{CallReport, Truncation};
+use crate::untrusted::unwrap_untrusted;
+
+/// Why a call the model asked for did not run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NotRunReason {
+    /// A session limit was reached first.
+    Limit(LimitKind),
+    /// The same call had already run too often in this turn.
+    Repeated,
+    /// The turn was cancelled.
+    Cancelled,
+}
+
+/// How a tool call ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ToolCallStatus {
+    /// The tool returned a result.
+    Ok,
+    /// The tool returned an error result (the code and message are from the audit entry).
+    Error {
+        /// The stable error code, such as `denied` or `invalid_arguments`.
+        code: String,
+        /// The credential-redacted, capped message.
+        message: String,
+    },
+    /// The session did not run the call. The model never saw it.
+    NotRun(NotRunReason),
+}
+
+/// One tool call of the model.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ToolCallEntry {
+    /// The call id given by the model.
+    pub call_id: String,
+    /// The tool name as called.
+    pub tool: String,
+    /// The arguments, credential-redacted and capped (the audit entry's copy). `Null` for a call
+    /// that did not run, because nothing has redacted it.
+    pub arguments: Value,
+    /// How it ended.
+    pub status: ToolCallStatus,
+    /// The result content with the untrusted-data envelope removed; `Null` if there is none.
+    pub result: Value,
+}
+
+/// A statement the database ran for a tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SqlEntry {
+    /// The call that ran it.
+    pub call_id: String,
+    /// The id of the connection.
+    pub connection: String,
+    /// The exact SQL that was sent, for a re-run.
+    pub sql: String,
+    /// The SQL to show: the audit copy (credential-redacted, capped), or `sql` beyond the
+    /// audit statement cap.
+    pub display_sql: String,
+    /// The statement class.
+    pub class: StatementClass,
+    /// Whether the user approved it explicitly (a plain read needs none).
+    pub approved: bool,
+    /// Rows kept.
+    pub rows: u64,
+    /// Whether and why the rows were cut.
+    pub truncated: Option<Truncation>,
+    /// Whether the database reported an error.
+    pub failed: bool,
+}
+
+/// What the UI feeds to the run flow (ADR-0024) to run a statement again. The session itself
+/// runs nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RerunRequest {
+    /// The id of the connection.
+    pub connection: String,
+    /// The exact SQL.
+    pub sql: String,
+}
+
+impl SqlEntry {
+    /// The request that runs this statement again.
+    #[must_use]
+    pub fn rerun(&self) -> RerunRequest {
+        RerunRequest {
+            connection: self.connection.clone(),
+            sql: self.sql.clone(),
+        }
+    }
+}
+
+/// A line the engine adds on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Notice {
+    /// A model step is retried after `delay`.
+    Retrying {
+        /// The retry number, from 1.
+        attempt: u32,
+        /// The wait before it.
+        delay: Duration,
+    },
+    /// The turn stopped at a limit.
+    LimitReached(LimitKind),
+    /// The model repeated a call; the turn stopped.
+    LoopDetected {
+        /// The tool that was repeated.
+        tool: String,
+    },
+    /// The turn was cancelled.
+    Cancelled,
+    /// The provider failed; the turn stopped.
+    ProviderError {
+        /// The provider error text.
+        message: String,
+    },
+    /// The model stopped because of its output cap, so its answer may be cut.
+    OutputTruncated,
+}
+
+/// One line of the transcript.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum TranscriptEntry {
+    /// What the user typed.
+    User {
+        /// The text.
+        text: String,
+    },
+    /// What the model answered.
+    Assistant {
+        /// The text.
+        text: String,
+    },
+    /// A tool call.
+    ToolCall(ToolCallEntry),
+    /// A statement that ran.
+    Sql(SqlEntry),
+    /// An engine line.
+    Notice(Notice),
+}
+
+/// Everything said and done in a session, in order.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Transcript {
+    entries: Vec<TranscriptEntry>,
+}
+
+impl Transcript {
+    /// All entries, oldest first.
+    #[must_use]
+    pub fn entries(&self) -> &[TranscriptEntry] {
+        &self.entries
+    }
+
+    /// The statements that ran, oldest first.
+    pub fn sql(&self) -> impl Iterator<Item = &SqlEntry> {
+        self.entries.iter().filter_map(|e| match e {
+            TranscriptEntry::Sql(s) => Some(s),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn push(&mut self, entry: TranscriptEntry) {
+        self.entries.push(entry);
+    }
+
+    /// Appends the entry of a call that did not run.
+    pub(crate) fn push_not_run(&mut self, call: &ToolCall, reason: NotRunReason) {
+        self.entries.push(TranscriptEntry::ToolCall(ToolCallEntry {
+            call_id: call.id.clone(),
+            tool: call.name.clone(),
+            arguments: Value::Null,
+            status: ToolCallStatus::NotRun(reason),
+            result: Value::Null,
+        }));
+    }
+
+    /// Appends the `ToolCall` entry of a call that ran, then one `Sql` entry per statement.
+    pub(crate) fn push_report(&mut self, call: &ToolCall, report: &CallReport) {
+        let status = match &report.audit.error {
+            Some(failure) => ToolCallStatus::Error {
+                code: failure.code.clone(),
+                message: failure.message.clone(),
+            },
+            None => ToolCallStatus::Ok,
+        };
+        let result = unwrap_untrusted(&report.result.content)
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or(Value::Null);
+        self.entries.push(TranscriptEntry::ToolCall(ToolCallEntry {
+            call_id: call.id.clone(),
+            tool: call.name.clone(),
+            arguments: report.audit.arguments.clone(),
+            status,
+            result,
+        }));
+        let connection = report.connection.clone().unwrap_or_default();
+        for (i, run) in report.executed.iter().enumerate() {
+            let display_sql = report
+                .audit
+                .statements
+                .get(i)
+                .map_or_else(|| run.sql.clone(), |s| s.sql.clone());
+            self.entries.push(TranscriptEntry::Sql(SqlEntry {
+                call_id: call.id.clone(),
+                connection: connection.clone(),
+                sql: run.sql.clone(),
+                display_sql,
+                class: run.class,
+                approved: run.approved,
+                rows: run.rows,
+                truncated: run.truncated,
+                failed: run.failed,
+            }));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::field_reassign_with_default)]
+
+    use serde_json::json;
+    use sqler_ai_api::ToolResult;
+
+    use super::*;
+    use crate::audit::{AuditEntry, AuditFailure, AuditStatement};
+    use crate::redact::RedactionSummary;
+    use crate::toolset::ExecutedStatement;
+    use crate::untrusted::wrap_untrusted;
+
+    fn executed(sql: &str) -> ExecutedStatement {
+        ExecutedStatement {
+            sql: sql.to_owned(),
+            class: StatementClass::Read,
+            approved: false,
+            rows: 3,
+            truncated: Some(Truncation::RowLimit),
+            failed: false,
+        }
+    }
+
+    fn report(statements: Vec<ExecutedStatement>, audit: AuditEntry) -> CallReport {
+        CallReport {
+            result: ToolResult::ok("c1", wrap_untrusted(&json!({"n": 1}))),
+            connection: Some("db".to_owned()),
+            executed: statements,
+            audit,
+            redaction: RedactionSummary::default(),
+        }
+    }
+
+    #[test]
+    fn maps_a_report_to_entries() {
+        let mut audit = AuditEntry::default();
+        audit.arguments = json!({"sql": "select 1"});
+        let mut st = AuditStatement::default();
+        st.sql = "select 1 /* shown */".to_owned();
+        audit.statements = vec![st];
+        let call = ToolCall::new("c1", "run_query", "{}");
+        let mut t = Transcript::default();
+        t.push_report(&call, &report(vec![executed("select 1")], audit));
+        let [TranscriptEntry::ToolCall(tc), TranscriptEntry::Sql(sql)] = t.entries() else {
+            panic!("{:?}", t.entries());
+        };
+        assert_eq!(tc.status, ToolCallStatus::Ok);
+        assert_eq!(tc.arguments, json!({"sql": "select 1"}));
+        assert_eq!(tc.result, json!({"n": 1}));
+        assert_eq!(sql.display_sql, "select 1 /* shown */");
+        assert_eq!(sql.sql, "select 1");
+        assert_eq!(sql.rows, 3);
+        assert_eq!(sql.truncated, Some(Truncation::RowLimit));
+        assert_eq!(t.sql().count(), 1);
+    }
+
+    #[test]
+    fn display_sql_falls_back_beyond_the_audit_cap() {
+        let call = ToolCall::new("c1", "run_query", "{}");
+        let mut t = Transcript::default();
+        t.push_report(
+            &call,
+            &report(vec![executed("select 1"), executed("select 2")], {
+                let mut a = AuditEntry::default();
+                a.statements = vec![AuditStatement::default()];
+                a.statements[0].sql = "select 1".to_owned();
+                a
+            }),
+        );
+        let sql: Vec<_> = t.sql().collect();
+        assert_eq!(sql[1].display_sql, "select 2");
+    }
+
+    #[test]
+    fn error_code_and_message_come_from_the_audit() {
+        let mut audit = AuditEntry::default();
+        audit.error = Some(AuditFailure::new("denied", "statement 0 was not approved"));
+        let call = ToolCall::new("c1", "run_query", "{}");
+        let mut t = Transcript::default();
+        t.push_report(&call, &report(vec![], audit));
+        let TranscriptEntry::ToolCall(tc) = &t.entries()[0] else {
+            panic!()
+        };
+        assert_eq!(
+            tc.status,
+            ToolCallStatus::Error {
+                code: "denied".into(),
+                message: "statement 0 was not approved".into()
+            }
+        );
+    }
+
+    #[test]
+    fn rerun_copies_the_exact_sql() {
+        let call = ToolCall::new("c1", "run_query", "{}");
+        let mut t = Transcript::default();
+        t.push_report(
+            &call,
+            &report(vec![executed("select  1 -- x")], AuditEntry::default()),
+        );
+        let r = t.sql().next().unwrap().rerun();
+        assert_eq!(r.connection, "db");
+        assert_eq!(r.sql, "select  1 -- x");
+    }
+
+    #[test]
+    fn not_run_calls_carry_no_arguments() {
+        let call = ToolCall::new("c9", "run_query", r#"{"password":"hunter2"}"#);
+        let mut t = Transcript::default();
+        t.push_not_run(&call, NotRunReason::Repeated);
+        assert!(!format!("{t:?}").contains("hunter2"));
+    }
+}
