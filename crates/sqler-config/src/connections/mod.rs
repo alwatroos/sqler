@@ -8,8 +8,8 @@ mod model;
 mod store;
 
 pub use model::{
-    CONNECTIONS_FORMAT_VERSION, ConnectionId, ConnectionProfile, ConnectionSpec, Group, GroupId,
-    ProfileSecret, ProfileSecretKind, SshAuth, SshProfile, TlsMode, TlsProfile,
+    CONNECTIONS_FORMAT_VERSION, ConnectionAi, ConnectionId, ConnectionProfile, ConnectionSpec,
+    Group, GroupId, ProfileSecret, ProfileSecretKind, SshAuth, SshProfile, TlsMode, TlsProfile,
 };
 pub use store::{ConnectionStore, StoreError};
 
@@ -39,7 +39,8 @@ impl ConfigDir {
         file::parse(&path, &text)
     }
 
-    /// Writes the store to `connections.toml` as `version = 1`, creating the
+    /// Writes the store to `connections.toml`, as `version = 2` when any connection has AI
+    /// settings and as `version = 1` otherwise, creating the
     /// directory when missing. The write is atomic: a temporary file is flushed
     /// and renamed over the target. No secret is ever written.
     ///

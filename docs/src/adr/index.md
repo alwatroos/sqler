@@ -44,3 +44,4 @@ consequences. SQLer uses the MADR format.
 | [0032](0032-grid-export.md) | Grid export: loaded rows or a fresh run of a read statement, writer on the blocking pool, hidden partial file, Parquet in the app default | accepted |
 | [0033](0033-inline-editing-ui.md) | Inline editing: apply session, transaction flag, schema probe, in-place overlay and a single gate | accepted |
 | [0034](0034-ai-provider-api.md) | AI provider API: boxed futures, crate-owned event stream, cancel by drop, increment usage | accepted |
+| [0035](0035-ai-configuration.md) | AI configuration: `ai.toml`, provider key references, per-connection opt-in, connections format v2 | accepted |

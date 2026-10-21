@@ -46,7 +46,7 @@ The order of the `[[group]]` entries and of the `[[connection]]` entries is the 
 
 | Key | Required | Rule |
 | --- | -------- | ---- |
-| `version` | no | `1`. A file without it is the old format, see [Older files](#older-files). Any other number, including 0, is rejected. |
+| `version` | no | `1` or `2`. SQLer writes `2` only when a connection has AI settings. A file without it is the old format, see [Older files](#older-files). Any other number, including 0, is rejected; a larger one reads "written by a newer SQLer". |
 | `[[group]]` | no | a folder, see below |
 | `[[connection]]` | no | a saved connection, see below |
 
@@ -74,6 +74,7 @@ Groups can nest as deep as you like. A group cannot be its own ancestor.
 | `password_in_keychain` | no | `true` when the database password is in the system keychain; default `false` |
 | `[connection.tls]` | no | TLS settings, below |
 | `[connection.ssh]` | no | SSH tunnel, below |
+| `[connection.ai]` | no | AI opt-in, below; needs `version = 2` |
 
 The `id` is made from the name when SQLer creates the connection and does not change when you rename
 it. Keep it when you edit the file by hand.
@@ -101,6 +102,16 @@ database user in the target as a parameter, for example `?user=app`.
 | `auth` | yes | `password`, `key-file` or `agent` |
 | `key_file` | with `key-file` | path to the private key; not allowed with the other methods |
 | `passphrase_in_keychain` | no | `true` when the key passphrase is in the system keychain; only with `key-file`; default `false` |
+
+### `[connection.ai]`
+
+| Key | Required | Rule |
+| --- | -------- | ---- |
+| `enabled` | no | `true` lets the AI features use this connection; default `false` |
+| `send_rows` | no | `true` or `false`; whether row data may be sent to the model. If unset: `true` except on `prod` connections, `false` on `prod` |
+
+The table needs `version = 2`; a `version = 1` file that contains it is rejected. A connection without
+the table has AI off. See [AI](ai.md) for the providers.
 
 ## Secrets
 
@@ -192,7 +203,7 @@ See [ADR-0016](../adr/0016-connect-pipeline.md) for the connect pipeline.
 A file without `version` is the format of the first release, a plain list of `[[connection]]` entries
 with `name`, `driver`, `target`, `color` and `environment`. It still loads: each `id` is made from the
 name, every connection is at the top level, and there are no TLS or SSH settings. SQLer does not
-change the file when it loads it. The next time SQLer saves the connections, it writes `version = 1`.
+change the file when it loads it. The next time SQLer saves the connections, it writes `version = 1`, or `version = 2` if a connection has AI settings.
 
 ## Saving
 
