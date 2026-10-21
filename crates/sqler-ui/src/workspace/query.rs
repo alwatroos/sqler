@@ -116,6 +116,13 @@ impl Workspace {
         if self.tabs.get(tab).map(crate::tabs::Tab::kind) != Some(TabKind::Query) {
             return self.query_notice("Open a query tab first.");
         }
+        if self
+            .queries
+            .get(&tab)
+            .is_some_and(|q| *q.phase() != Phase::Idle)
+        {
+            return self.query_notice(RunError::Busy.to_string());
+        }
         let plan = match plan(dialect, &buf, RunMode::Statement) {
             Ok(plan) => plan,
             Err(err) => return self.query_notice(err.to_string()),
@@ -658,6 +665,16 @@ mod tests {
         assert!(w.has_session(tab));
         w.explain_query(tab, buf("delete from t"));
         assert!(matches!(w.confirm_query(tab), Effect::RunQuery { .. }));
+    }
+
+    #[test]
+    fn explain_while_busy_reports_busy_before_planning() {
+        let mut w = ws();
+        let (tab, _) = open(&mut w, 0);
+        let _first = start(&mut w, tab, "select 1");
+        let effect = w.explain_query(tab, buf("select from where ("));
+        assert!(matches!(effect, Effect::None));
+        assert_eq!(w.take_notice().unwrap(), RunError::Busy.to_string());
     }
 
     #[test]

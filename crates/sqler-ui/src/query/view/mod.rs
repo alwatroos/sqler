@@ -9,6 +9,7 @@
 
 mod dialogs;
 mod results;
+mod toolbar;
 
 use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement as _, ParentElement as _,
@@ -23,17 +24,30 @@ use crate::theme::icons::AppIcon;
 use crate::theme::widgets::{empty_state, kbd};
 use crate::workspace::WorkspaceView;
 
-/// The body of a query tab: the SQL editor at full height. The results live in the bottom panel.
+/// The body of a query tab: the toolbar, then the SQL editor at full height. The results live in
+/// the bottom panel.
 pub(crate) fn query_editor_body(
+    view: &WorkspaceView,
+    tab: TabId,
     editor: AnyElement,
-    _cx: &mut Context<WorkspaceView>,
+    cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     div()
-        .id("query-editor")
+        .id("query-editor-body")
         .flex_1()
         .min_h_0()
         .w_full()
-        .child(editor)
+        .flex()
+        .flex_col()
+        .child(toolbar::query_toolbar(view, tab, cx))
+        .child(
+            div()
+                .id("query-editor")
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .child(editor),
+        )
         .into_any_element()
 }
 

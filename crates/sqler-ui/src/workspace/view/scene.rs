@@ -85,7 +85,7 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "prod-editor",
-        pending: Some("toolbar (U4)"),
+        pending: None,
     },
     Scene {
         name: "tabs-overflow",
@@ -226,7 +226,10 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Wait(Wait::RunDone),
         ],
         "prod-editor" => vec![
-            open_step("prod", "select id, name from customers;"),
+            open_step(
+                "prod",
+                "select id, name from customers;\nselect count(*) as total from customers;",
+            ),
             Step::Wait(Wait::Editors(1)),
             Step::Command("query:run-all"),
             Step::Wait(Wait::RunDone),
@@ -273,7 +276,7 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Command(OPEN_PALETTE),
         ],
         "messages-error" => vec![
-            open_step("dev", "select * from missing_table;"),
+            open_step("dev", "select 1 as ok;\nselect * from missing_table;"),
             Step::Wait(Wait::Editors(1)),
             Step::Command("query:run-all"),
             Step::Wait(Wait::RunDone),
