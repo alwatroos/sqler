@@ -279,7 +279,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if position == 0 && self.ws.settings_tab_active() {
-            return settings::view::page(&self.ws, cx).into_any_element();
+            return settings::view::page(self, cx).into_any_element();
         }
         let Some(tab) = active else {
             return self.fallback_body(group, cx);

@@ -36,7 +36,7 @@ pub const MAX_RECENT_COMMANDS: usize = 10;
 pub const MAX_RECENT_CONNECTIONS: usize = 5;
 
 /// The known views of the side panel.
-pub const SIDE_VIEWS: [&str; 2] = ["connections", "saved-queries"];
+pub const SIDE_VIEWS: [&str; 3] = ["connections", "saved-queries", "ai"];
 
 /// The known views of the bottom panel.
 pub const BOTTOM_VIEWS: [&str; 3] = ["results", "messages", "history"];
@@ -440,6 +440,14 @@ mod tests {
         assert_eq!(s.side_panel, PanelState::side());
         assert_eq!(s.bottom_panel.view, "messages");
         assert!(s.bottom_panel.visible);
+    }
+
+    #[test]
+    fn the_ai_side_view_loads_and_older_files_are_unchanged() {
+        assert_eq!(loaded("[side_panel]\nview = \"ai\"").side_panel.view, "ai");
+        let old = loaded("[side_panel]\nview = \"saved-queries\"\nsize = 300");
+        assert_eq!(old.side_panel.view, "saved-queries");
+        assert_eq!(old.side_panel.size, 300.0);
     }
 
     #[test]

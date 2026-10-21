@@ -19,7 +19,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::spinner::Spinner;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
-use sqler_config::{GroupId, TlsMode};
+use sqler_config::{ConnectionAi, GroupId, TlsMode};
 use sqler_driver_api::sqler_core::{DriverId, Environment};
 
 use super::action::ConnectionAction;
@@ -667,6 +667,70 @@ fn form_panel(
         }
     }
 
+    let ai_on = form.ai_enabled();
+    // The note sits under the chips in the field column, like the password note.
+    let ai_note = div()
+        .text_size(px(ui_scale(cx).xs))
+        .text_color(colors.muted)
+        .child(
+            "Off by default. When on, the schema (and result rows, if allowed) can be sent \
+             to the AI provider chosen in Settings > AI.",
+        );
+    body = body.child(labelled(
+        "AI",
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE[1]))
+            .child(
+                chips()
+                    .child(chip(
+                        "ai-off",
+                        "Off",
+                        !ai_on,
+                        ConnectionAction::SetAiEnabled(false),
+                        colors,
+                        cx,
+                    ))
+                    .child(chip(
+                        "ai-on",
+                        "On",
+                        ai_on,
+                        ConnectionAction::SetAiEnabled(true),
+                        colors,
+                        cx,
+                    )),
+            )
+            .child(ai_note),
+        None,
+        colors,
+        cx,
+    ));
+    if ai_on {
+        let rows = form.ai_send_rows();
+        let mut choices = chips();
+        // What the default resolves to, through the same resolver the sends use.
+        let resolved = if ConnectionAi::new(true).sends_rows(form.environment()) {
+            "Environment default: yes"
+        } else {
+            "Environment default: no"
+        };
+        for (id, label, value) in [
+            ("ai-rows-default", resolved, None),
+            ("ai-rows-yes", "Yes", Some(true)),
+            ("ai-rows-no", "No", Some(false)),
+        ] {
+            choices = choices.child(chip(
+                id,
+                label,
+                rows == value,
+                ConnectionAction::SetAiSendRows(value),
+                colors,
+                cx,
+            ));
+        }
+        body = body.child(labelled("Send result rows", choices, None, colors, cx));
+    }
     for error in form.errors().iter().filter(|e| e.field.is_none()) {
         body = body.child(
             div()

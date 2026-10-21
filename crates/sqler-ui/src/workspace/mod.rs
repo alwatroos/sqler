@@ -7,6 +7,7 @@
 //! and `run` exist with the `gui` feature.
 
 mod action;
+mod ai;
 mod bridge;
 mod browser;
 #[cfg(feature = "gui")]

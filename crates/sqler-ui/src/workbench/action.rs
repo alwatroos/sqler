@@ -12,6 +12,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("workbench:toggle-side-panel", "View: Toggle Side Panel"),
     ("workbench:show-connections", "View: Show Connections"),
     ("workbench:show-saved-queries", "View: Show Saved Queries"),
+    ("workbench:show-ai", "View: Show AI"),
     ("workbench:toggle-bottom-panel", "View: Toggle Panel"),
     ("workbench:show-results", "View: Show Results"),
     ("workbench:show-messages", "View: Show Messages"),
@@ -70,6 +71,7 @@ pub fn action_for(id: &CommandId) -> Option<WorkbenchAction> {
         "workbench:toggle-side-panel" => WorkbenchAction::ToggleSidePanel,
         "workbench:show-connections" => WorkbenchAction::ShowSideView(SideView::Connections),
         "workbench:show-saved-queries" => WorkbenchAction::ShowSideView(SideView::SavedQueries),
+        "workbench:show-ai" => WorkbenchAction::ShowSideView(SideView::Ai),
         "workbench:toggle-bottom-panel" => WorkbenchAction::ToggleBottomPanel,
         "workbench:show-results" => WorkbenchAction::ShowPanelView(PanelView::Results),
         "workbench:show-messages" => WorkbenchAction::ShowPanelView(PanelView::Messages),
@@ -122,6 +124,10 @@ mod tests {
         for (id, _) in PANE_COMMANDS {
             assert_eq!(action_for(&CommandId::new(id).unwrap()), None);
         }
+        assert_eq!(
+            action_for(&CommandId::new("workbench:show-ai").unwrap()),
+            Some(WorkbenchAction::ShowSideView(SideView::Ai))
+        );
         assert_eq!(
             action_for(&CommandId::new("workbench:show-messages").unwrap()),
             Some(WorkbenchAction::ShowPanelView(PanelView::Messages))

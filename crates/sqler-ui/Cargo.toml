@@ -16,9 +16,10 @@ workspace = true
 # GPUI views. Off by default so `cargo test -p sqler-ui` never builds GPUI; `sqler-app` turns it on.
 gui = ["dep:gpui-component", "dep:gpui", "dep:gpui_platform", "dep:lsp-types", "dep:gpui-kit-assets"]
 # The headless screenshot harness (`tests/screenshots.rs`, `workspace::scene`); never part of the app.
-screenshots = ["gui", "gpui/test-support", "gpui_platform/test-support"]
+screenshots = ["gui", "gpui/test-support", "gpui_platform/test-support", "sqler-ai-api/test-support"]
 
 [dependencies]
+sqler-ai-api.workspace = true
 sqler-catalog.workspace = true
 sqler-completion.workspace = true
 sqler-config.workspace = true
@@ -36,6 +37,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+sqler-ai-api = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 sqler-driver-mysql.workspace = true
 sqler-driver-postgres.workspace = true
