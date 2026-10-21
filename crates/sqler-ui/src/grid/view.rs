@@ -303,7 +303,7 @@ impl TableDelegate for GridDelegate {
                 MouseButton::Left,
                 cx.listener(move |state, e: &MouseDownEvent, window, cx| {
                     let d = state.delegate_mut();
-                    let rows = d.tab.rows();
+                    let rows = d.tab.grid_rows();
                     let hit = d.controls.click_header(col_ix, &rows, e.modifiers.shift);
                     if hit {
                         window.focus(&state.focus_handle(cx), cx);

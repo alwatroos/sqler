@@ -528,7 +528,9 @@ impl WorkspaceView {
             || self.ws.export_dialog().is_some();
         let editing = self.cell_editing(cx);
         let input = key_input(&event.keystroke);
-        if let Some(format) = copy_key_format(&input, Platform::current(), focused, overlay) {
+        if let Some(format) =
+            copy_key_format(&input, Platform::current(), focused, overlay, editing)
+        {
             self.copy_grid(format, window, cx);
             return true;
         }

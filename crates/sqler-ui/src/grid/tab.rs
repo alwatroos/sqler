@@ -963,6 +963,84 @@ mod tests {
         assert_eq!(tab.display_cell(0, 1).mark, CellMark::None);
     }
 
+    /// AC7 with a real sort and filter: the displayed rows are the filtered, sorted ones, and an
+    /// edit, a delete and an added row (all addressed by display row through `grid_row`) target
+    /// the keys of the rows behind them.
+    #[test]
+    fn edits_on_a_sorted_and_filtered_view_target_the_right_keys() {
+        let names = ["a1", "b2", "a3", "b4", "a5", "b6"];
+        let rows = (1..=6)
+            .zip(names)
+            .map(|(i, n)| row(i, Some(n)))
+            .collect::<Vec<_>>();
+        let mut tab = GridTab::new(model_of(
+            rows,
+            IngestState::Done {
+                rows_affected: None,
+            },
+        ));
+        tab.poll(POLL_BUDGET);
+        tab.set_edit_context(edit_ctx());
+        tab.order_mut().set_filter(FilterSpec {
+            quick: Some(QuickFilter {
+                text: "a".to_owned(),
+                column: Some(1),
+            }),
+            conditions: vec![],
+        });
+        assert!(tab.apply_order_action(GridAction::SortDescending, Some(0)));
+        while tab.step_order(None) != OrderProgress::Published {}
+        // Displayed: ids 5, 3, 1.
+        assert_eq!(tab.display_count(), 3);
+        assert_eq!(tab.model_row(0), Some(4));
+        assert_eq!(tab.model_row(1), Some(2));
+        assert_eq!(tab.model_row(2), Some(0));
+        let at = |tab: &GridTab, display: usize, col: usize| CellPos {
+            row: tab.grid_row(display).unwrap(),
+            col,
+        };
+        let (edit_pos, del_pos) = (at(&tab, 1, 1), at(&tab, 2, 0));
+        {
+            let (model, edit) = tab.edit_parts();
+            edit.start_edit(model, edit_pos).unwrap();
+            edit.commit_edit(model, EditorInput::Text("X".to_owned()))
+                .unwrap();
+            assert_eq!(edit.delete_rows(model, &[del_pos.row]), Ok(1));
+            assert_eq!(edit.add_row(model), Ok(6));
+        }
+        // The added row is shown below the three displayed rows.
+        assert_eq!(tab.display_row_count(), 4);
+        let new_pos = at(&tab, 3, 1);
+        assert_eq!(new_pos.row, 6);
+        {
+            let (model, edit) = tab.edit_parts();
+            edit.start_edit(model, new_pos).unwrap();
+            edit.commit_edit(model, EditorInput::Text("new".to_owned()))
+                .unwrap();
+        }
+        let plan = tab.edit().plan().unwrap();
+        let params: Vec<Vec<Value>> = plan
+            .statements()
+            .iter()
+            .map(|s| s.query.params.clone())
+            .collect();
+        assert_eq!(params.len(), 3);
+        // The update is keyed by id 3 (display row 1), the delete by id 1 (display row 2).
+        assert!(params.contains(&vec![Value::Text("X".to_owned()), Value::Int(3)]));
+        assert!(params.contains(&vec![Value::Int(1)]));
+        assert!(params.iter().all(|p| !p.contains(&Value::Int(5))));
+        assert!(
+            params
+                .iter()
+                .any(|p| p.contains(&Value::Text("new".to_owned())))
+        );
+        // The marks sit on the same display rows.
+        assert_eq!(tab.display_cell(1, 1).mark, CellMark::Changed);
+        assert_eq!(tab.display_cell(2, 0).mark, CellMark::Deleted);
+        assert_eq!(tab.display_cell(0, 1).mark, CellMark::None);
+        assert_eq!(tab.display_cell(0, 1).text, "a5");
+    }
+
     #[test]
     fn new_rows_extend_the_display_and_block_fetch_more() {
         let mut tab = edit_tab(IngestState::Paused);
