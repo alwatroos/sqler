@@ -19,7 +19,7 @@ use crate::export::{
     FEED_CAPACITY, Feed, GridFacts, LoadedCursor, LoadedRows, fresh_rows, write_feed,
 };
 use crate::grid::view::Table;
-use crate::grid::{DisplayMap, GridModel, IdentityRows, IngestState, RowOrder};
+use crate::grid::{DisplayMap, GridModel, IngestState, RowOrder};
 use crate::tabs::TabId;
 use crate::workspace::Effect;
 
@@ -54,9 +54,8 @@ fn grid_facts(table: &Table, cx: &App) -> GridFacts {
     let rows = grid.row_count();
     let controls = delegate.controls();
     let layout = controls.layout();
-    // MERGE POINT (T6, sort and filter): replace `IdentityRows` with the delegate's real
-    // `RowOrder`, so a selection export follows the order on screen.
-    let order = IdentityRows(rows);
+    // The grid's own row order, so a sort and a filter apply to a selection export.
+    let order = grid.rows();
     let map = DisplayMap {
         rows: &order,
         columns: layout,

@@ -83,12 +83,14 @@ While a results grid has the focus, these keys select cells. `Mod` is Cmd on mac
 | Mod+A | `grid:select-all` |
 | Shift+Space | `grid:select-row` |
 | Ctrl+Space | `grid:select-column` (Ctrl on every system, also on macOS) |
+| Mod+C | `grid:copy` (the selection as tab-separated text) |
+| Mod+Shift+C | `grid:copy-with-headers` |
 
-These in-grid keys are fixed: they are not in `keybindings.toml` and cannot be rebound. The commands they run are palette commands, and you can also give them global chords. The grid gets no global default shortcut, because every useful chord (Mod+A, Alt or Mod with arrows, Mod+Home and Mod+End) is a text-editing chord in the SQL editor.
+These in-grid keys are fixed: they are not in `keybindings.toml` and cannot be rebound. The commands they run are palette commands, and you can also give them global chords. The grid gets no global default shortcut, because every useful chord (Mod+A, Mod+C, Alt or Mod with arrows, Mod+Home and Mod+End) is a text-editing chord in the SQL editor. Mod+C and Mod+Shift+C are therefore not default chords either: the grid takes them only while a results table has the focus, so copying in the SQL editor is unchanged.
 
 The grid takes these keys before the global chords, but only while a results table has the focus. That is why Ctrl+Space, which is bound to `editor:trigger-completion` by default, selects the column in a results grid and still triggers completion in the SQL editor. A key the grid does not use (for example Mod+W or Ctrl+Tab) goes on to your global chords as usual. While the palette or a dialog is open, the grid takes no keys.
 
-The commands without an in-grid key are `grid:pin-column`, `grid:unpin-column`, `grid:move-column-left`, `grid:move-column-right`, `grid:autofit-column`, `grid:reset-layout`, `grid:scroll-to-top`, `grid:scroll-to-end` and `grid:fetch-more`. All `grid:*` commands act on the active results grid, or on the result a query tab shows. See [Results grid](results-grid.md).
+The commands without an in-grid key are `grid:copy-as-markdown`, `grid:copy-as-json`, `grid:copy-as-insert`, `grid:pin-column`, `grid:unpin-column`, `grid:move-column-left`, `grid:move-column-right`, `grid:autofit-column`, `grid:reset-layout`, `grid:scroll-to-top`, `grid:scroll-to-end`, `grid:fetch-more` and `grid:toggle-cell-detail` (opens the [cell detail](results-grid.md#cell-detail) pane; it has no default chord because Mod+Shift+I is the GPUI inspector on Linux and Windows). All `grid:*` commands act on the active results grid, or on the result a query tab shows. See [Results grid](results-grid.md).
 
 ## Rebind a shortcut
 

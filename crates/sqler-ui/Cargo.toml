@@ -29,15 +29,23 @@ gpui-component = { workspace = true, optional = true }
 gpui = { workspace = true, optional = true }
 gpui_platform = { workspace = true, optional = true }
 lsp-types = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
 sqler-driver-sqlite.workspace = true
 sqler-export = { workspace = true, features = ["parquet", "xlsx"] }
 serde_json.workspace = true
+insta.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
 [[bench]]
 name = "grid_viewport"
+harness = false
+
+[[bench]]
+name = "grid_copy"
 harness = false
 
 [[bench]]

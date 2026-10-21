@@ -39,7 +39,10 @@ use crate::export::view::{export_bar, export_overlay};
 use crate::grid::view::{
     GridProbe, GridViews, Table, action_for_command as grid_action_for, apply_action,
 };
-use crate::grid::{GridAction, grid_key_action};
+use crate::grid::{
+    CopyFormat, GATHER_SLICE_CELLS, GridAction, InsertTarget, SYNC_CELLS, copy_key_format,
+    grid_key_action, success_notice,
+};
 use crate::history::view::HistoryViews;
 use crate::history::{self, HistoryCommand, HistoryService};
 use crate::keymap::input::key_input;
@@ -166,6 +169,8 @@ pub(crate) struct WorkspaceView {
     catalog_runs: Vec<oneshot::Receiver<()>>,
     /// Messages to show as notifications at the next render.
     notices: Vec<String>,
+    /// The copy of a large selection in progress; dropping the task cancels it.
+    copy_task: Option<Task<()>>,
     /// The blocking store behind the history and the saved queries.
     history: HistoryService,
     /// The inputs of the history tabs and the history dialogs.
@@ -214,6 +219,9 @@ impl WorkspaceView {
         }
         if let Err(err) = palette::register_commands(&mut commands) {
             eprintln!("sqler: could not register the palette command: {err}");
+        }
+        if let Err(err) = crate::grid::register_copy_commands(&mut commands) {
+            eprintln!("sqler: cannot register the copy commands: {err}");
         }
         if let Err(err) = crate::grid::register_commands(&mut commands) {
             eprintln!("sqler: could not register the grid commands: {err}");
@@ -297,6 +305,7 @@ impl WorkspaceView {
             list_entries: Vec::new(),
             catalog_runs: Vec::new(),
             notices: Vec::new(),
+            copy_task: None,
             history,
             history_views: HistoryViews::default(),
             export_inputs: None,
@@ -489,13 +498,14 @@ impl WorkspaceView {
             || self.query_overlay_tab().is_some()
             || self.history_overlay_open()
             || self.ws.export_dialog().is_some();
-        let Some(action) = grid_key_action(
-            &key_input(&event.keystroke),
-            Platform::current(),
-            focused,
-            overlay,
-            |m| table.read(cx).delegate().motion_moves(m),
-        ) else {
+        let input = key_input(&event.keystroke);
+        if let Some(format) = copy_key_format(&input, Platform::current(), focused, overlay) {
+            self.copy_grid(format, window, cx);
+            return true;
+        }
+        let Some(action) = grid_key_action(&input, Platform::current(), focused, overlay, |m| {
+            table.read(cx).delegate().motion_moves(m)
+        }) else {
             return false;
         };
         table.update(cx, |state, cx| apply_action(state, action, window, cx));
@@ -579,6 +589,10 @@ impl WorkspaceView {
         } else if let Some(command) = crate::export::action_for(id) {
             self.palette.close();
             self.run_export_command(command, window, cx);
+        } else if let Some(format) = CopyFormat::from_command_id(id) {
+            self.palette.close();
+            self.copy_grid(format, window, cx);
+            grid_focus = self.active_table();
         } else if let Some(grid_action) = grid_action_for(id) {
             self.palette.close();
             if grid_action == GridAction::FetchMore {
@@ -633,6 +647,78 @@ impl WorkspaceView {
                 .update(cx, |input, cx| input.set_value(query, window, cx));
         }
         cx.notify();
+    }
+
+    /// Copies the selection of the shown grid to the clipboard in `format`.
+    ///
+    /// A small selection is gathered and rendered at once. A large one is gathered in slices on
+    /// the UI thread (one per turn) and rendered on the background executor; a new copy replaces
+    /// the one in progress. The copied text only goes to the clipboard: it is never logged or
+    /// shown in a notice.
+    fn copy_grid(&mut self, format: CopyFormat, window: &mut Window, cx: &mut Context<Self>) {
+        // A copy still running must not overwrite the clipboard after this one is refused.
+        self.copy_task = None;
+        let Some(table) = self.active_table() else {
+            window.push_notification("Open a results grid first.", cx);
+            return;
+        };
+        let target = self
+            .ws_active_grid()
+            .or_else(|| self.ws_active_query())
+            .and_then(|tab| self.ws.insert_target(tab))
+            .unwrap_or_else(|| InsertTarget::placeholder(None));
+        let mut job = match table.read(cx).delegate().copy_job(format, target) {
+            Ok(job) => job,
+            Err(err) => {
+                window.push_notification(err.to_string(), cx);
+                return;
+            }
+        };
+        let cells = job.cells();
+        if cells <= SYNC_CELLS {
+            table.read(cx).delegate().gather_copy(&mut job, usize::MAX);
+            match job.render() {
+                Ok(out) => {
+                    if let Some(notice) = success_notice(&out, cells) {
+                        window.push_notification(notice, cx);
+                    }
+                    self.apply(Effect::Copy(out.text), cx);
+                }
+                Err(err) => window.push_notification(err.to_string(), cx),
+            }
+            return;
+        }
+        let weak = table.downgrade();
+        self.copy_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let gathered = weak.update(cx, |state, _| {
+                    state.delegate().gather_copy(&mut job, GATHER_SLICE_CELLS)
+                });
+                match gathered {
+                    Ok(true) => break,
+                    Ok(false) => {}
+                    // The grid was closed: nothing to copy any more.
+                    Err(_) => return,
+                }
+                cx.background_executor().timer(Duration::ZERO).await;
+            }
+            let result = cx
+                .background_executor()
+                .spawn(async move { job.render() })
+                .await;
+            this.update(cx, |view, cx| {
+                match result {
+                    Ok(out) => {
+                        let notice = success_notice(&out, cells);
+                        view.apply(Effect::Copy(out.text), cx);
+                        view.notices.extend(notice);
+                    }
+                    Err(err) => view.notices.push(err.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     /// The context menu cannot open from a key press, so the palette opens on the object
@@ -806,7 +892,7 @@ impl WorkspaceView {
         }
     }
 
-    fn apply(&mut self, effect: Effect, cx: &mut Context<Self>) {
+    pub(crate) fn apply(&mut self, effect: Effect, cx: &mut Context<Self>) {
         match effect {
             // `run_command` opens the palette for the object menu; it needs the window.
             Effect::None | Effect::ShowObjectMenu => {}

@@ -146,8 +146,10 @@ impl GridControls {
                 out.relayout = true;
                 out.repaint = true;
             }
-            // Handled by the tab: it owns the model, the fetch and the sort and filter.
+            // Handled by the tab: it owns the model, the fetch and the sort and filter; the
+            // view handles the detail pane.
             GridAction::FetchMore
+            | GridAction::ToggleCellDetail
             | GridAction::SortAscending
             | GridAction::SortDescending
             | GridAction::ClearSort
