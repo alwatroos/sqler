@@ -1,0 +1,5 @@
+{
+  "details":{"family":"llama","parameter_size":"3.2B"},
+  "model_info":{"general.architecture":"llama","general.parameter_count":3212749888,"llama.context_length":131072},
+  "capabilities":["completion","tools","vision"]
+}
