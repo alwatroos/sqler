@@ -33,5 +33,7 @@ pub use edit::{
 pub use state::{Effect, Purpose, RequestId, SecretOp, Workspace};
 #[cfg(feature = "gui")]
 pub(crate) use view::WorkspaceView;
+#[cfg(feature = "screenshots")]
+pub use view::scene;
 #[cfg(feature = "gui")]
 pub use view::{Startup, init, run};

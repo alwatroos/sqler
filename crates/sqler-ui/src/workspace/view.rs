@@ -66,6 +66,8 @@ use crate::theme::resolve;
 use edit_ui::EditUi;
 
 mod export;
+#[cfg(feature = "screenshots")]
+pub mod scene;
 
 /// How long quitting waits for open sessions to close.
 const CLOSE_LIMIT: Duration = Duration::from_secs(2);
