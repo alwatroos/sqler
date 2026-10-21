@@ -38,9 +38,21 @@
 //! that cannot interrupt a step (`SQLite` before its first row) stops later than the tool returns.
 //! Dropping the call's future cancels it; the lent session is then dropped without `release`.
 
+//! # Redaction, untrusted data, audit
+//!
+//! Every call goes through one path (ADR-0037), so no tool can skip these steps. The result is
+//! redacted ([`Redaction`]): values of columns on the redaction list, of statements that mention
+//! a listed word, and of every row when the connection does not send rows, plus driver error
+//! texts that could echo a value. The JSON is then wrapped in an untrusted-data envelope
+//! ([`wrap_untrusted`]; a consumer parses it with [`unwrap_untrusted`]). Finally an
+//! [`AuditEntry`] goes to the optional [`AuditSink`] ([`AuditLog`] persists to
+//! `ai-audit.jsonl`). Entries hold SQL and arguments passed through credential redaction and
+//! size caps, never cell values or statement error texts.
+
 #![forbid(unsafe_code)]
 
 mod approve;
+mod audit;
 mod catalog_tools;
 mod error;
 mod exec;
@@ -48,15 +60,28 @@ mod guard;
 mod json;
 mod limits;
 mod query_tools;
+mod redact;
 mod schema;
 mod source;
 mod toolset;
 mod ui;
+mod untrusted;
 
 pub use approve::{ApprovalReason, ApprovalRequest, ApprovalStage, Approver, Decision};
+pub use audit::{
+    AUDIT_FILE_NAME, AUDIT_FORMAT_VERSION, ApprovalOutcome, AuditConnection, AuditCursor,
+    AuditEntry, AuditError, AuditFailure, AuditLog, AuditOptions, AuditPage, AuditQuery, AuditSink,
+    AuditStatement, CallOutcome, MAX_AUDIT_SQL_BYTES, MAX_AUDIT_STATEMENTS, MAX_AUDIT_TEXT_BYTES,
+    MemoryAudit, Surface,
+};
 pub use error::ToolError;
 pub use limits::{Caps, Limits};
+pub use redact::{REDACTED, RedactScope, Redaction, RedactionSummary};
 pub use schema::{definitions, names};
 pub use source::{ConnectionInfo, SessionSource};
 pub use toolset::{CallReport, ExecutedStatement, ToolSet, Truncation};
 pub use ui::UiHost;
+pub use untrusted::{
+    UNTRUSTED_CLOSE, UNTRUSTED_NOTICE, UNTRUSTED_OPEN, unwrap_untrusted, wrap_untrusted,
+    wrap_untrusted_text,
+};
