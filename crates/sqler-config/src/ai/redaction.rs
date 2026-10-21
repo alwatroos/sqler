@@ -13,7 +13,7 @@ const MAX_ENTRY_CHARS: usize = 64;
 
 /// The built-in entries plus the user's extra ones.
 ///
-/// An entry is a case-insensitive substring of a column name. There is no way to remove a default.
+/// An entry is a substring of a column name, compared ignoring case and separators (`_`, `-`, spaces). There is no way to remove a default.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct RedactionList {
@@ -63,12 +63,23 @@ impl RedactionList {
             .chain(self.extra.iter().map(String::as_str))
     }
 
-    /// Whether a column of this name must be redacted (case-insensitive substring match).
+    /// Whether a column of this name must be redacted. The match is a substring match that ignores
+    /// case and separators, so `apiKey`, `api-key` and `API_KEY` all match `api_key`.
     #[must_use]
     pub fn matches_column(&self, column: &str) -> bool {
-        let column = column.to_lowercase();
-        self.entries().any(|e| column.contains(e))
+        let column = fold(column);
+        self.entries()
+            .map(fold)
+            .any(|e| !e.is_empty() && column.contains(&e))
     }
+}
+
+/// Lowercases and drops every non-alphanumeric character (`_`, `-`, spaces, dots, ...).
+fn fold(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 #[cfg(test)]
@@ -111,6 +122,30 @@ mod tests {
         assert!(l.matches_column("USER_PASSWORD"));
         assert!(l.matches_column("customer_IBAN_code"));
         assert!(l.matches_column("Ssn"));
+        assert!(!l.matches_column("name"));
+    }
+
+    #[test]
+    fn separators_and_case_are_ignored() {
+        let l = RedactionList::default();
+        for c in [
+            "apiKey",
+            "api-key",
+            "API_KEY",
+            "ApiKey",
+            "api key",
+            "x.api_key.y",
+        ] {
+            assert!(l.matches_column(c), "{c}");
+        }
+        let l = list(&["card_no"]).unwrap();
+        assert!(l.matches_column("cardNo"));
+        assert!(!l.matches_column("api"));
+    }
+
+    #[test]
+    fn separator_only_entry_matches_nothing() {
+        let l = list(&["--"]).unwrap();
         assert!(!l.matches_column("name"));
     }
 

@@ -48,7 +48,7 @@ key.
 | --- | -------- | ---- |
 | `id` | yes | 1 to 64 lowercase letters, digits and `-`, starting with a letter or digit; unique among providers |
 | `kind` | yes | `ollama`, `anthropic`, `openai` or `mistral` |
-| `endpoint` | no | `http://` or `https://` with a host; no `@`, `?`, `#` or spaces; at most 2048 bytes |
+| `endpoint` | no | `http://` or `https://` with a host; no `@`, `?`, `#` or spaces; at most 2048 bytes; `http://` is rejected for a provider with an API key unless the host is local |
 | `models` | no | the model names this provider offers (default empty; needed for any `[models]` choice); none may be empty |
 | `api_key_in_keychain` | no | `true` when the API key is in the system keychain; default `false` |
 
@@ -56,7 +56,9 @@ A key such as `api_key` in this table is rejected. Store the key in the keychain
 [Secrets](secrets.md#provider-api-keys).
 
 An `http://` endpoint to a host other than your own machine sends prompts in clear text. SQLer allows
-it, because a local Ollama server needs `http://`. Use `https://` for anything remote.
+it for a provider without an API key, because an Ollama server may need `http://`. For a provider with
+an API key the key itself would travel in clear text, so SQLer rejects `http://` unless the host is
+`localhost`, `127.0.0.1` (any `127.x.x.x`) or `[::1]`. Use `https://` for anything remote.
 
 ### `[models]`
 
@@ -77,7 +79,7 @@ it, because a local Ollama server needs `http://`. Use `https://` for anything r
 | `extra` | no | more column names to redact; each 1 to 64 characters, no control characters |
 
 Columns whose name contains `password`, `passwd`, `secret`, `token`, `api_key` or `ssn` are always
-redacted. The match is a case-insensitive substring of the column name, so `user_password` matches.
+redacted. The match is a substring of the column name that ignores case and separators (`_`, `-`, spaces), so `user_password`, `apiKey` and `api-key` match.
 Your `extra` entries are trimmed, lower-cased and matched the same way; duplicates are dropped. The
 built-in list cannot be shortened: a `defaults` key is rejected.
 

@@ -302,7 +302,7 @@ impl AiConfig {
                 return Err(AiConfigProblem::DuplicateProvider(p.id.clone()));
             }
             if let Some(endpoint) = &p.endpoint
-                && let Some(reason) = endpoint_problem(endpoint)
+                && let Some(reason) = endpoint_problem(endpoint, p.api_key_in_keychain)
             {
                 return Err(AiConfigProblem::InvalidEndpoint {
                     provider: p.id.clone(),
@@ -336,7 +336,7 @@ impl AiConfig {
 }
 
 /// Why `endpoint` is not acceptable, `None` when it is. Never quotes the endpoint.
-fn endpoint_problem(endpoint: &str) -> Option<&'static str> {
+fn endpoint_problem(endpoint: &str, has_api_key: bool) -> Option<&'static str> {
     if endpoint.len() > MAX_ENDPOINT_BYTES {
         return Some("longer than 2048 bytes");
     }
@@ -356,7 +356,24 @@ fn endpoint_problem(endpoint: &str) -> Option<&'static str> {
     if authority.is_empty() || authority.starts_with(':') {
         return Some("must have a host");
     }
+    if has_api_key && endpoint.starts_with("http://") && !is_loopback_authority(authority) {
+        return Some("an API key needs https:// unless the host is local");
+    }
     None
+}
+
+/// Whether the `host[:port]` authority is `localhost`, `127.0.0.0/8` or `[::1]`.
+fn is_loopback_authority(authority: &str) -> bool {
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 #[cfg(test)]
@@ -476,7 +493,7 @@ mod tests {
             "http://[::1]:11434",
         ];
         for e in ok {
-            assert_eq!(endpoint_problem(e), None, "{e}");
+            assert_eq!(endpoint_problem(e, false), None, "{e}");
         }
         let long = format!("http://h/{}", "a".repeat(2048));
         for bad in [
@@ -492,7 +509,7 @@ mod tests {
             "http://h x",
             long.as_str(),
         ] {
-            assert!(endpoint_problem(bad).is_some(), "{bad:?}");
+            assert!(endpoint_problem(bad, false).is_some(), "{bad:?}");
         }
         let mut c = cfg();
         c.providers[0].endpoint = Some("http://user:sk-SECRET@h".into());
@@ -558,5 +575,36 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn plain_http_with_api_key_needs_a_loopback_host() {
+        let check = |endpoint: &str, key: bool| {
+            let mut c = cfg();
+            c.providers[0].endpoint = Some(endpoint.into());
+            c.providers[0].api_key_in_keychain = key;
+            c.validate()
+        };
+        for ok in [
+            ("http://127.0.0.1:11434", true),
+            ("http://localhost:11434", true),
+            ("http://[::1]:11434", true),
+            ("http://remote.example.com:11434", false),
+            ("https://remote.example.com/v1", true),
+        ] {
+            assert_eq!(check(ok.0, ok.1), Ok(()), "{ok:?}");
+        }
+        for bad in [
+            "http://remote.example.com",
+            "http://10.0.0.5:11434",
+            "http://localhost.evil.com",
+        ] {
+            let e = check(bad, true).unwrap_err();
+            assert!(
+                matches!(e, AiConfigProblem::InvalidEndpoint { .. }),
+                "{bad}"
+            );
+            assert!(!e.to_string().contains(bad.trim_start_matches("http://")));
+        }
     }
 }

@@ -92,7 +92,7 @@ A fixed default list of column name fragments (`password`, `passwd`, `secret`, `
 - Good: AI settings are validated before save and independent of the settings tab.
 - Good: users who never use AI keep a `version = 1` connection file.
 - Bad: a file saved with `version = 2` locks out older builds.
-- Bad: `http://` endpoints to remote hosts send prompts in clear text. They are allowed, because Ollama on localhost needs `http://`; the user guide says so.
+- Bad: `http://` endpoints to remote hosts send prompts in clear text. They are allowed without an API key, because Ollama needs `http://`; the user guide says so. With an API key the request headers would carry the key in clear text too, so validation rejects `http://` unless the host is `localhost`, `127.0.0.0/8` or `[::1]`.
 - Bad: editing a connection in the form resets its AI settings to off until the settings tab carries them through. This fails safe.
 - Neutral: `ai.toml` is rewritten whole on save; comments and key order are not kept.
 
