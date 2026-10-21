@@ -13,6 +13,37 @@ A query tab runs SQL on the connection it was opened for. Results appear below t
 
 All four are in the command palette as "Query: Run Selection", "Query: Run Statement at Cursor", "Query: Run All" and "Query: Cancel". Statements are split on `;` the way the server reads them: strings, comments, dollar quotes and `BEGIN ... END` bodies are respected, and a `MySQL` `DELIMITER` line changes the terminator and is never sent to the server. A selection is split on its own text, so a selection holding two statements runs both. Starting a run clears the previous results of the tab. A run is refused while another one is running or waiting for input.
 
+## Toolbar
+
+A query tab has a toolbar above the editor. At the left are the breadcrumbs (connection, database) and the environment chip. At the right are the buttons, each one a command with the same shortcut and the same production confirmation as the key:
+
+| Button | Command | What it does |
+| ------ | ------- | ------------ |
+| Run | `query:run-statement` | Runs the statement at the cursor. |
+| caret next to Run | `query:run-selection`, `query:run-statement`, `query:run-all` | A menu with Run Selection, Run Statement at Cursor and Run All, each with its shortcut. |
+| Run All | `query:run-all` | Runs every statement of the buffer. |
+| Cancel | `query:cancel` | Cancels the running query. |
+| Explain | `query:explain` | Shows the plan of the statement at the cursor (see below). |
+| Format | `editor:format-sql` | Formats the buffer. |
+| Save | `query:save` | Saves the query. |
+
+The tooltip of a button shows its title and shortcut. A button that cannot act is dimmed, and its tooltip says why: Run, Run All and Explain are disabled while another run is active or waiting for input ("A query is already running or waiting for input") and while the connection of the tab is not available; Explain is also disabled when the driver has no explain; Cancel is disabled while nothing runs ("No query is running.") or while the cancel is in progress. Tab inside the editor indents, so reach the toolbar with the pointer or from the focus cycle (`F6`); every button also has a command in the palette.
+
+Object tabs (DDL, properties) and data tabs show breadcrumbs too: the connection, the schema (or database), the table and the object. Object tabs have **Open in Editor** (DDL only) and **Copy** in the toolbar.
+
+## Explain
+
+`query:explain` ("Query: Explain Statement at Cursor", also the Explain button) puts the plan of the statement at the cursor in front of the normal run:
+
+| Database | Text sent |
+| -------- | --------- |
+| `PostgreSQL`, `MySQL`, `MariaDB` | `EXPLAIN <statement>` |
+| `SQLite` | `EXPLAIN QUERY PLAN <statement>` |
+| `DuckDB` | `EXPLAIN <statement>` |
+| `SQL Server` and other drivers | not available: a notice says so and nothing runs |
+
+Explain never adds `ANALYZE`, so the statement is planned, not executed. It always uses the statement at the cursor and ignores a selection. If the statement already starts with `EXPLAIN`, the server rejects the doubled keyword. The plan comes back as an ordinary result. Explain goes through the same run path as Run, so on a `prod` connection `EXPLAIN` of a write (for example `EXPLAIN DELETE ...`) still asks for confirmation. `query:explain` has no default shortcut; bind one in `keybindings.toml` (see [Keybindings](keybindings.md)).
+
 ## Parameters
 
 A statement with placeholders asks for values before it runs. Recognised placeholders depend on the database:
@@ -32,7 +63,7 @@ Values are sent to the server as bound parameters; they are never pasted into th
 
 ## Results
 
-Each statement gets its own entry in a strip above the grid, titled with its number and verb, for example `#2 DELETE`. The status line of an entry shows:
+Each statement gets its own segment in a strip above the grid, titled with its number and verb, for example `#2 DELETE`. The segments form one bordered group; the active one is filled, and a segment shows an icon for its state (pending, running, done, failed in red, cancelled, not run). Hover a segment for its status. The status line beside the strip shows:
 
 - `1,024 rows · 12 ms` for a statement that returned rows;
 - `3 rows affected · 4 ms` for one that did not;
@@ -43,7 +74,7 @@ A statement that returns columns shows them in the same grid as an opened table.
 
 ## Cancel
 
-While a run is active, the results area shows "Running…" (or "Cancelling…") and a Cancel button; `query:cancel` does the same. The server-side statement is cancelled, the entry shows `Cancelled`, the rest of the script is not run, and the tab can run again at once. A cancelled statement may already have changed data if the database does not roll it back. Closing the tab or quitting also cancels a running query.
+While a run is active, the results area shows "Running…" (or "Cancelling…") and a Cancel button; the toolbar Cancel button and `query:cancel` do the same. The server-side statement is cancelled, the entry shows `Cancelled`, the rest of the script is not run, and the tab can run again at once. A cancelled statement may already have changed data if the database does not roll it back. Closing the tab or quitting also cancels a running query.
 
 ## Production connections
 

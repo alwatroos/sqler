@@ -43,7 +43,7 @@ The palette lists commands that need no argument. `connection:select`, `tab:acti
 | `query:run-all` | Cmd+Shift+Enter | Ctrl+Shift+Enter |
 | `query:cancel` | Cmd+. | Ctrl+. |
 
-The `query:*` commands are described in [Running queries](running-queries.md).
+The `query:*` commands are described in [Running queries](running-queries.md). `query:explain` has no default shortcut; add it to `keybindings.toml` to bind one.
 
 The `workbench:*` and `pane:*` commands are described in [Workspace](workspace.md). The other workbench commands have no default shortcut: `workbench:show-saved-queries`, `workbench:show-results`, `workbench:show-messages`, `workbench:reset-layout`, `pane:focus-next`, `pane:focus-previous`, `pane:move-tab-to-next`, `pane:move-tab-to-previous`, `tab:pin`, `tab:close-others`, `tab:close-to-the-right` and `tab:close-all`. `workbench:set-side-width`, `workbench:set-panel-height` and `pane:focus` take a value and are driven by the mouse.
 

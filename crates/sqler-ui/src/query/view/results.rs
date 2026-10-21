@@ -7,21 +7,50 @@
 use std::collections::HashMap;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable as _,
-    InteractiveElement as _, IntoElement as _, ParentElement as _, StatefulInteractiveElement as _,
-    Styled as _, Window, div,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, FontWeight,
+    InteractiveElement as _, IntoElement as _, ParentElement as _, Role,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::InputState;
-use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
+use gpui_component::spinner::Spinner;
+use gpui_component::tooltip::Tooltip;
+use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 
 use crate::grid::edit::GridKey;
 use crate::grid::edit::view::edit_row;
 use crate::grid::view::{Table, grid_table, new_table};
 use crate::grid::{GridTab, IngestState};
-use crate::query::{Phase, QueryTab, StatementStatus};
+use crate::query::{Phase, QueryTab, StatementStatus, StatusTone, status_tone, status_word};
 use crate::tabs::{TabId, TabKind, TabStrip};
+use crate::theme::SPACE;
+use crate::theme::icons::AppIcon;
+use crate::workspace::chrome::{ICON_MD, ICON_SM, TOOLBAR_HEIGHT, ui_scale};
 use crate::workspace::{Workspace, WorkspaceView};
+
+/// Width of the line between two segments.
+const SEPARATOR_W: f32 = 1.;
+
+/// The colour role of a segment icon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tint {
+    Muted,
+    Success,
+    Danger,
+    Warning,
+}
+
+/// The icon and colour role of a segment: the status is never carried by colour alone.
+fn segment_icon(tone: StatusTone) -> (AppIcon, Tint) {
+    match tone {
+        StatusTone::Pending => (AppIcon::Clock, Tint::Muted),
+        StatusTone::Running => (AppIcon::LoaderCircle, Tint::Muted),
+        StatusTone::Done => (AppIcon::Check, Tint::Success),
+        StatusTone::Failed => (AppIcon::CircleAlert, Tint::Danger),
+        StatusTone::Cancelled => (AppIcon::CircleStop, Tint::Warning),
+        StatusTone::NotRun => (AppIcon::Ellipsis, Tint::Muted),
+    }
+}
 
 /// The tables of the last run of one query tab.
 struct Results {
@@ -267,7 +296,9 @@ pub(super) fn results_area(
 ) -> AnyElement {
     let theme = cx.theme();
     let (border, muted, danger) = (theme.border, theme.muted_foreground, theme.danger);
+    let (fg, success, warning) = (theme.foreground, theme.success, theme.warning);
     let (active_bg, hover_bg) = (theme.list_active, theme.list_hover);
+    let (ring, radius) = (theme.ring, theme.radius);
     let area = div()
         .id("query-results")
         .flex_1()
@@ -294,37 +325,94 @@ pub(super) fn results_area(
         .id("query-strip")
         .flex_none()
         .w_full()
+        .h(px(TOOLBAR_HEIGHT))
         .flex()
         .flex_row()
         .items_center()
-        .gap_1()
-        .px_2()
-        .py_1()
+        .gap(px(SPACE[2]))
+        .px(px(SPACE[3]))
         .border_b_1()
+        .border_color(border);
+    let sm = ui_scale(cx).sm;
+    let mut group = div()
+        .id("query-results-tabs")
+        .role(Role::TabList)
+        .aria_label("Statement results")
+        .h(px(ICON_MD + SPACE[3]))
+        .flex()
+        .flex_row()
+        .flex_shrink(1.)
+        .min_w_0()
+        .overflow_x_scroll()
+        .border_1()
         .border_color(border)
-        .overflow_hidden();
+        .rounded(radius);
     for (i, e) in entries.iter().enumerate() {
-        let mut chip = div()
-            .id(("query-result", i))
-            .px_2()
-            .py_0p5()
-            .rounded_md()
-            .text_sm()
-            .cursor_pointer()
-            .hover(move |s| s.bg(hover_bg))
-            .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
-                view.queries.choose(tab, i);
-                cx.notify();
-            }))
-            .child(e.title.clone());
-        if i == index {
-            chip = chip.bg(active_bg);
+        let tone = status_tone(&e.status);
+        let active = i == index;
+        let (icon, tint) = segment_icon(tone);
+        let tint = match tint {
+            Tint::Muted => muted,
+            Tint::Success => success,
+            Tint::Danger => danger,
+            Tint::Warning => warning,
+        };
+        let glyph = if tone == StatusTone::Running {
+            Spinner::new()
+                .icon(icon)
+                .color(muted)
+                .xsmall()
+                .into_any_element()
+        } else {
+            Icon::new(icon)
+                .size(px(ICON_SM))
+                .text_color(tint)
+                .into_any_element()
+        };
+        let title_color = match (tone, active) {
+            (StatusTone::Failed, _) => danger,
+            (_, true) => fg,
+            _ => muted,
+        };
+        let status_text = e.status_text();
+        if i > 0 {
+            group = group.child(div().w(px(SEPARATOR_W)).h_full().flex_none().bg(border));
         }
-        if matches!(e.status, StatementStatus::Failed { .. }) {
-            chip = chip.text_color(danger);
-        }
-        strip = strip.child(chip);
+        group = group.child(
+            div()
+                .id(("query-result", i))
+                .flex_none()
+                .h_full()
+                .flex()
+                .flex_row()
+                .items_center()
+                .px(px(SPACE[3]))
+                .gap(px(SPACE[2]))
+                .border_1()
+                .border_color(gpui::transparent_black())
+                .text_size(px(sm))
+                .text_color(title_color)
+                .cursor_pointer()
+                .when(active, |el| {
+                    el.bg(active_bg).font_weight(FontWeight::MEDIUM)
+                })
+                .when(!active, |el| el.hover(move |s| s.bg(hover_bg)))
+                .focusable()
+                .tab_stop(true)
+                .focus_visible(move |s| s.border_color(ring))
+                .role(Role::Tab)
+                .aria_selected(active)
+                .aria_label(format!("{}, {}", e.title, status_word(tone)))
+                .tooltip(move |window, cx| Tooltip::new(status_text.clone()).build(window, cx))
+                .on_click(cx.listener(move |view, _: &gpui::ClickEvent, _, cx| {
+                    view.queries.choose(tab, i);
+                    cx.notify();
+                }))
+                .child(glyph)
+                .child(e.title.clone()),
+        );
     }
+    strip = strip.child(group);
     let mut controls: Vec<AnyElement> = Vec::new();
     let running_text = match query.phase() {
         Phase::Running {
@@ -336,7 +424,7 @@ pub(super) fn results_area(
     if let Some(text) = running_text {
         controls.push(
             div()
-                .text_sm()
+                .text_size(px(sm))
                 .text_color(muted)
                 .child(text)
                 .into_any_element(),
@@ -399,8 +487,8 @@ pub(super) fn results_area(
     let status = div()
         .id("query-status")
         .flex_none()
-        .px_2()
-        .text_sm()
+        .px(px(SPACE[2]))
+        .text_size(px(sm))
         .text_color(status_color)
         .child(paused_text.unwrap_or_else(|| entry.status_text()));
     let strip = match edit {
@@ -411,4 +499,33 @@ pub(super) fn results_area(
         None => strip.child(status).child(div().flex_1()).children(controls),
     };
     area.child(strip).child(body).into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_tone_has_an_icon() {
+        let tones = [
+            StatusTone::Pending,
+            StatusTone::Running,
+            StatusTone::Done,
+            StatusTone::Failed,
+            StatusTone::Cancelled,
+            StatusTone::NotRun,
+        ];
+        for tone in tones {
+            let _ = segment_icon(tone);
+        }
+        // No two tones share an icon, so the status never rests on colour alone.
+        let mut icons: Vec<_> = tones.iter().map(|t| segment_icon(*t).0).collect();
+        icons.sort_by_key(|i| format!("{i:?}"));
+        icons.dedup();
+        assert_eq!(icons.len(), tones.len());
+        assert_eq!(
+            segment_icon(StatusTone::Failed),
+            (AppIcon::CircleAlert, Tint::Danger)
+        );
+    }
 }
