@@ -43,6 +43,27 @@ Run from the repository root on the commit being recorded:
 
 The figures for these two methods (three sessions open, Linux and Windows sizes) are recorded by T13, not here.
 
+#### Linux binary size (T14)
+
+`size.yml` on `main` reported `sqler` at 83,477,248 bytes on Linux against 44.3 MB on macOS and 43.0 MB on Windows (budget 62,914,560 bytes). Cause: the Linux release binary keeps the ELF symbol table (`.symtab` 8.6 MB plus `.strtab` 14.8 MB on aarch64, 23 MB of 78 MB), which macOS and Windows do not put in the executable, and 16 codegen units. Section table of the unstripped aarch64 build (`size -A`): `.text` 36.5 MB, `.rodata` 6.2 MB, `.eh_frame` 4.8 MB, `.rela.dyn` 2.4 MB, `.gcc_except_table` 2.1 MB; `.debug_*` is absent from the default build. Largest crates in `.text` (`cargo bloat --crates`): `zbus` 4.1 MiB (Secret Service and AccessKit D-Bus code), `std` 2.6, `gpui` 2.4, `gpui_base` 2.2, `gpui_component` 1.6, `gpui_linux` 1.4, `naga` 1.3, `sqler_ui` 1.1, `wgpu_core` 0.8, `accesskit_unix` 0.7 MiB. Both TLS stacks (`aws_lc_sys` 0.4 MiB, `rustls`/`ring`), bundled `SQLite` and the tree-sitter grammars are small next to these, so none of the suspected dependency duplications is the cause.
+
+Measured in Docker (`rust:slim-bookworm` plus the `ci.yml` apt packages, toolchain 1.99.1, `cargo build --release -p sqler-app --locked`, 14 CPUs, 7.7 GiB). aarch64 ran natively, x86_64 (the CI architecture) under emulation, so the x86_64 build times are not comparable to CI:
+
+| Profile | aarch64 bytes | aarch64 build | x86_64 bytes | Verdict |
+| ------- | ------------- | ------------- | ------------ | ------- |
+| default (before) | 78,221,512 | 81 s | 90,666,088 (`strip = "none"`) | over budget |
+| `strip = "symbols"` | 54,884,096 | 75 s | 62,291,760 (`strip` of the binary) | x86_64 only 0.6 MB under the budget |
+| + `lto = "thin"` | 56,587,976 | 70 s | not run | bigger, rejected |
+| + `lto = "fat"` (16 or 1 codegen units) | not built | killed (SIGKILL, out of memory) after 291 s and 459 s | not run | rejected |
+| `strip = "symbols"` + `codegen-units = 1` (applied) | 46,168,064 | 132 s | 53,611,336 | 51.1 MiB, under the budget |
+| `strip` + `panic = "abort"` | 45,840,136 | 131 s | not run | rejected: a panic in a task would end the app |
+| `strip` + `opt-level = "s"` for everything | 42,956,672 | 84 s | not run | rejected: slower grid and editor code for 3 MB more |
+
+The applied profile is `strip = "symbols"` plus `codegen-units = 1` in `[profile.release]`. The CI Linux figure after the change is printed by `size.yml`; the x86_64 Docker figure of 53.6 MB leaves about 9 MB of headroom (the CI figure was 83.5 MB where Docker built 90.7 MB unstripped, so the CI Linux build is expected to be somewhat smaller than Docker's; unconfirmed until `size.yml` runs on this change). macOS and Windows are unchanged in cause but pick up `codegen-units = 1`; their new figures come from `size.yml` after merge. The release build is about 1.7x slower (aarch64 75 s to 132 s). `cargo bench` inherits `release`, so benchmarks run with the same profile.
+
+Next reductions if the budget tightens: `zbus` and `accesskit_unix` (4.8 MiB of `.text`), the `wgpu`/`naga` backends, and `opt-level = "s"` for non-hot dependencies. Not applied: no measured need.
+
+
 M2 note (ba24c9a): the binary grew from 29.5 to 38.3 MiB with the `PostgreSQL` and `MySQL` drivers, the tunnel and the keychain; the cold start rose from 140.6 to 155.1 ms and the idle RSS from 98.1 to 100.0 MiB. The three connections of the M2 row were a `SQLite` `:memory:`, a `PostgreSQL` and a `MySQL` entry, with both containers running. The app has no headless way to open a session (a session opens by double-click or from the connection manager, and `--exit-after-first-frame` exits before any), so the RSS with three sessions actually open was not measured. The figure that was measured is the idle app with three saved connections; the sessions, the tunnel and the catalog cache add to it.
 
 M3 note (e98f4c8): measured fresh on the merged M3 `main` with the same method and `HOME` setup. The binary grew from 38.3 to 42.3 MiB (+4.0 MiB, 44,319,056 bytes) with the SQL text services, the editor, completion and the RSA backends; it stays under the 60 MB target on macOS. The cold start fell from 155.1 to 113.7 ms and the idle RSS from 100.0 to 72.0 MiB (71.9 to 72.1 over three runs). Nothing merged in M3 should make the app faster or lighter at idle, so read these two as the state of the machine and the display during the run, not as an improvement: the figures are measured and unexplained, and the maintainer should repeat them on a normal desktop session. The three connections are the M2 ones (`SQLite` `:memory:`, `PostgreSQL`, `MySQL`), configured and not opened, for the same reason as in M2. The test count rose from 814 to 1595 run (1595 passed, 2 skipped). **Editor keystroke latency** is defined here as the headless work per keystroke: the `editor_intellisense` worst p95, plus `bracket_build_p95_ns` of `editor_buffer` when the text changes next to a bracket. At `e98f4c8` the worst of three runs gives 282,042 ns + 1,349,541 ns = 1.63 ms (the bracket build was 0.49 to 0.51 ms in the other two runs, so 0.74 to 0.79 ms), against the 16 ms frame budget. The input-to-paint latency of the widget (key press to the pixels of the popup, typing and scrolling speed on the 10,000-line script) is not measured: it needs a probe in a real window and is a maintainer check. Coverage is not measured because `cargo llvm-cov` is not installed. Linux and Windows desktop numbers are not measured (no GUI runner in `ci.yml`).
@@ -87,6 +108,10 @@ Run from the repository root on the commit being recorded:
 `bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job. The whole measurement runs `--reps 3` times and the reported p50 and p95 are the minimum over the repetitions (noise on a shared runner only adds time), on the base and on the PR alike. It fails if the PR p95 is more than 25 % plus 100 ns above the base p95, or if the p95 is above 1 ms (`--budget-p95-ns 1000000`). The 100 ns slack is about two timer ticks (one `Instant` pair costs about 41 ns); a 2x slowdown of the 300 ns p95 still fails (checked with `--viewport 200` against a baseline taken with the default 50: p95 584 ns against 292 ns, limit 465 ns). Without a baseline on the base branch only the 1 ms budget applies.
 
 `cells_p95_ns` is gated the same way when the baseline file has that key: the minimum over the repetitions may not exceed the baseline by more than 25 % plus `--cells-slack-ns` (default 500 ns, about one cold cache line of noise per visible row; Linux runners may need a larger value, set it in `bench.yml` if a first run shows it). When the baseline has no `cells_p95_ns` (the base branch is older than this change), the bench prints a skip note and compares only `p95_ns`, so the rule is inert on the PR that introduces it and applies from the next PR on. Checked by hand: a baseline with `cells_p95_ns=100` fails with exit code 1, one with `100000` passes.
+
+The rule is limit = baseline minimum x 1.25 + `--cells-slack-ns`. Worked out for the 6-column table above: a baseline `cells_p95_ns` of 1,209 ns gives 1,209 x 1.25 + 500 = 2,011 ns; one of 917 ns (the figure measured at `d1c6c64`, below) gives 1,646 ns.
+
+`layout_*` (T5, not gated): 100,000 rows x 50 columns, 2 pinned, reversed order, a 10x5 selection; each sample fetches a viewport and visits every visible cell through the layout and the selection. Measured at `d1c6c64` (macOS 27.0.1 arm64, Apple M4 Pro, best of 3 repetitions): `layout_p50_ns` 13,916 and `layout_p95_ns` 14,792 (a second run: 13,959 and 14,542; other runs gave up to about 15.7 us p95). The same run gives the viewport `p95_ns` 84 and `cells_p95_ns` 917 for 6 columns.
 
 ## Results grid view
 
@@ -276,6 +301,40 @@ The popup the editor shows most often (a column behind an alias) takes microseco
 1. `cargo bench -p sqler-ui --bench editor_intellisense` (release profile). Flags: `--tables` (5000), `--columns` (8), `--samples` (2000 per scenario), `--budget-p95-ns` (16000000). Not part of `bench.yml`.
 2. Six scenarios as listed above. The run fails if the qualified scenario does not list the loaded columns or the hover finds nothing.
 3. Output is `key=value` lines: `<scenario>_p50_ns` and `<scenario>_p95_ns`, and `worst_p95_ns`, the largest p95. p50 and p95 are nearest-rank percentiles. Exit code 0 passes, 1 when the worst p95 exceeds the budget or the setup fails, 2 is a usage error.
+
+## Export writers
+
+`cargo bench -p sqler-export --bench export_throughput -- [--rows N --batch N --format ID]` streams synthetic rows (5 columns: integer, text, float, null, timestamp; batches of 1,000) into a sink that discards the bytes, for every format the enabled features compile, and prints `<id>_rows_per_sec=` and `<id>_mib_per_sec=`. Row generation is included. `--format` runs one format, for a per-format peak RSS. Not in `bench.yml`. Decisions: [ADR-0029](adr/0029-parquet-and-xlsx-writers.md).
+
+Measured on 2026-10-21 with `rustc 1.99.1`, release profile, `--locked`. macOS: Apple M4 Pro, arm64. Linux: Docker `rust:1.99.1` on the same arm64 host (`aarch64`).
+
+| Format | OS | Rows | Rows/s | MiB/s | Peak RSS (MB) |
+| ------ | -- | ---- | ------ | ----- | ------------- |
+| `parquet` (Snappy) | macOS | 100,000 | 3.19 M | 55.9 | 27.6 |
+| `parquet` (Snappy) | macOS | 1,000,000 | 4.38 M | 76.3 | 34.1 |
+| `xlsx` | macOS | 100,000 | 0.76 M | 18.8 | 3.3 |
+| `xlsx` | macOS | 1,000,000 | 0.55 M | 13.6 | 3.3 |
+| `parquet` (Snappy) | Linux aarch64 | 100,000 | 4.37 M | 76.6 | 15.3 |
+| `parquet` (Snappy) | Linux aarch64 | 1,000,000 | 5.31 M | 92.3 | 16.5 |
+| `xlsx` | Linux aarch64 | 100,000 | 0.83 M | 20.4 | 2.8 |
+| `xlsx` | Linux aarch64 | 1,000,000 | 0.77 M | 19.1 | 2.8 |
+
+(Parquet and `xlsx` rows come from the single-format builds; the `csv`, `json`, `sql` and Markdown figures and the build with both formats are in ADR-0029.) Peak RSS at 100,000 and at 1,000,000 rows is the same within the size of one row group, which is the point: memory does not depend on the row count. The run-to-run noise is about 10 %.
+
+Size cost of the formats, bench binary, release profile with T14's `strip = "symbols"` and `codegen-units = 1` (so the binaries are already stripped), bytes:
+
+| Features | macOS | Linux aarch64 |
+| -------- | ----- | ------------- |
+| none | 497,488 | 529,240 |
+| `xlsx` | 598,544 | 594,776 |
+| `parquet` | 1,157,536 | 1,184,624 |
+| both | 1,241,856 | 1,315,696 |
+
+(Before T14, with symbols kept and 16 codegen units: macOS 632,464 / 784,912 / 1,527,648 / 1,645,360, Linux 738,064 / 909,088 / 1,655,392 / 1,823,928.)
+
+`sqler-app` on macOS, `cargo build --release --locked -p sqler-app`: 44,362,448 bytes before T3, 44,362,448 with the default (`export-xlsx`), 44,376,272 with `export-parquet`. The delta is about 0 until the UI links the registry (T9). Clean `cargo build --release -p sqler-export --lib` on macOS: none 2.3 s, `xlsx` 2.6 s, `parquet` 7.0 s, both 7.2 s.
+
+Memory proof at 1M rows (`tests/streaming_memory.rs`, `cargo test --release`; RSS after batch 1,000 minus RSS after batch 100): Parquet +5.8 MB on macOS and +2.2 MB on Linux, `XLSX` +0 on both; the test allows +12 MiB.
 
 ## UI framework spike
 

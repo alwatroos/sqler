@@ -473,6 +473,7 @@ impl WorkspaceView {
             Platform::current(),
             focused,
             overlay,
+            |m| table.read(cx).delegate().motion_moves(m),
         ) else {
             return false;
         };

@@ -11,7 +11,7 @@ use std::ops::Range;
 use super::action::GridAction;
 use super::cell::ColumnHeader;
 use super::layout::{ColumnLayout, default_width};
-use super::selection::{CellPos, DisplayMap, IdentityRows, Selection, scroll_row};
+use super::selection::{CellPos, DisplayMap, IdentityRows, Motion, Selection, scroll_row};
 
 /// What the view has to do after an action. Columns are display indices.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -69,6 +69,20 @@ impl GridControls {
         self.selection
             .active()
             .and_then(|c| self.layout.display_column(c.col))
+    }
+
+    /// Whether the motion `to` would change the active cell of a grid of `rows` rows. Nothing
+    /// is changed. Without an active cell a motion starts at the first cell, so it moves.
+    #[must_use]
+    pub fn motion_moves(&self, to: Motion, rows: usize, visible: Range<usize>) -> bool {
+        let order = IdentityRows(rows);
+        let map = DisplayMap {
+            rows: &order,
+            columns: &self.layout,
+        };
+        let mut probe = self.selection.clone();
+        probe.apply_motion(to, false, &map, visible.len().saturating_sub(1));
+        probe.active() != self.selection.active()
     }
 
     /// Applies an action to a grid of `rows` rows of which `visible` are on screen.
@@ -213,6 +227,18 @@ mod tests {
 
     fn mv(to: Motion) -> GridAction {
         GridAction::Move { to, extend: false }
+    }
+
+    #[test]
+    fn motion_moves_tells_edges_without_changing_anything() {
+        let mut c = controls(3);
+        // No active cell: a motion starts at the first cell.
+        assert!(c.motion_moves(Motion::Right, 5, 0..5));
+        assert_eq!(c.selection().active(), None);
+        assert!(c.click_cell(0, 2, 5, false));
+        assert!(!c.motion_moves(Motion::Right, 5, 0..5));
+        assert!(c.motion_moves(Motion::Left, 5, 0..5));
+        assert!(!c.motion_moves(Motion::Right, 0, 0..0));
     }
 
     #[test]

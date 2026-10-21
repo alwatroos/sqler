@@ -1,13 +1,14 @@
 # Export
 
-`sqler-export` (L2) turns columns and rows into `CSV`, `JSON`, `SQL` `INSERT` statements or a
-Markdown table. It is a pure library: no async, no UI, no I/O beyond the `io::Write` it is given.
-The decisions are in [ADR-0028](../adr/0028-export-writer-api.md).
+`sqler-export` (L2) turns columns and rows into `CSV`, `JSON`, `SQL` `INSERT` statements, a
+Markdown table, a `Parquet` file or an `Excel` (`.xlsx`) workbook. It is a pure library: no async, no UI, no I/O beyond the `io::Write` it is given.
+The decisions are in [ADR-0028](../adr/0028-export-writer-api.md) (the API) and
+[ADR-0029](../adr/0029-parquet-and-xlsx-writers.md) (`Parquet` and `XLSX`).
 
 ## Shape
 
 ```text
-caller --> Exporter --> RowWriter (csv | json | sql | markdown) --> BufWriter(64 KiB) --> CountingWrite --> Sink
+caller --> Exporter --> RowWriter (csv | json | sql | markdown | parquet | xlsx) --> BufWriter(64 KiB) --> CountingWrite --> Sink
             |  order, row width, chunks of 1,024 rows, cancel, progress
 Registry: id --> Format --> create(options, sink)
 ```
@@ -37,6 +38,8 @@ let summary = exporter.finish()?; // rows and bytes
 | `JSON` | `json` | `json` | none |
 | `SQL` | `sql` | `sql` | `dialect` (`PostgreSQL`), `schema`, `table` (required), `rows_per_statement` (100) |
 | Markdown | `markdown` | `md` | `null_text` (`NULL`) |
+| `Parquet` (feature `parquet`) | `parquet` | `parquet` | `parquet.row_group_rows` (65,536), `parquet.compression` (`Snappy`, or `Uncompressed`) |
+| `Excel` (feature `xlsx`) | `xlsx` | `xlsx` | none |
 
 `CSV` follows RFC 4180. A field is quoted when it holds the delimiter, `"`, CR or LF. A value that
 is not `NULL` but renders as `null_text` is quoted too, so with the default empty `null_text` an
@@ -76,30 +79,98 @@ breaks become `<br>`. There is no width padding, because output is streamed.
 | Json | raw text | embedded when valid, else a string | string literal |
 
 The full literal table is in the ADR. A cancelled or failed export leaves the partial file (or
-whatever the sink received) behind: the caller (the export UI, the CLI, copy-as) must delete it.
-`XLSX` (T3) needs a streaming zip writer with data descriptors, since writers get no `Seek`; the
-alternative, buffering the whole workbook, breaks the memory goal. Limits: a year outside 0..=9999, `NaN` and NUL on
+whatever the sink received) behind: the caller (the export UI, the CLI, copy-as) must delete it;
+for `Parquet` and `XLSX` the partial file is unreadable (no footer, no central directory). Limits: a year outside 0..=9999, `NaN` and NUL on
 `PostgreSQL` may be rejected by the server (a loud failure, never an injection); on `MySQL`, `NaN`
 and infinity become `NULL`; negative zero is stored as `+0.0` by `MariaDB` and by a `SQLite` `REAL` column; Markdown cells are not HTML-escaped.
 
-## Registry and later formats
+## Parquet
 
-`Registry::with_builtin()` lists the four formats in the order above. `register` adds a format and
-rejects a duplicate id. `Parquet` and `XLSX` (T3) are added behind features with a line in
-`with_builtin` and new fields in `ExportOptions` (`#[non_exhaustive]`).
+Feature `parquet` (on in the crate default; `sqler-app` forwards it as the opt-in
+`export-parquet`). It uses the low-level `SerializedFileWriter` of the `parquet` crate without the
+`arrow` feature, over the `Seek`-less sink. The writer buffers one typed vector per column and
+writes a row group every `row_group_rows` rows (default 65,536) or every 32 MiB of estimated buffer,
+so memory is one row group. `finish` writes the last group and the footer. Compression is Snappy by
+default or none. Every field is `OPTIONAL`; names go through the same de-duplication as `JSON`.
+
+| `DataType` | Parquet type | Accepted `Value` |
+| ---------- | ------------ | ---------------- |
+| Boolean | `BOOLEAN` | Bool |
+| Integer | `INT64` | Int |
+| Float | `DOUBLE` | Float, Int |
+| Date | `INT32` / `DATE` | Date |
+| Time | `INT64` / `TIME(NANOS)` | Time |
+| Timestamp | `INT64` / `TIMESTAMP(MICROS)`, not adjusted to UTC | Timestamp |
+| TimestampTz | `INT64` / `TIMESTAMP(MICROS)`, adjusted to UTC | TimestampTz |
+| Binary | `BYTE_ARRAY` | Bytes, Text |
+| Decimal, Text, Json, Other | `BYTE_ARRAY` / `STRING` | any (a decimal keeps its exact text and scale) |
+
+`Null` is a null in every column. A value that does not fit its column (the text `infinity` in a
+`Timestamp` column, a date whose day count overflows `i32`) fails with `ExportError::Unsupported`
+naming the column; it is never written as a null. Timestamps are microseconds (digits below are
+dropped); a time zone is converted to the UTC instant and the offset is lost. Zero columns are
+`InvalidOptions`; zero rows are a valid file with the schema.
+
+Progress: `Progress.bytes` moves once per row group, not per chunk of 1,024 rows. The file is
+written only when a row group is full, so `bytes` stays flat for up to 65,536 rows at a time (and for
+the rest of the 32 MiB estimate with large cells); `rows` still advances per chunk. A progress bar
+that shows bytes will step, not slide.
+
+## XLSX
+
+Feature `xlsx` (on in the crate default; `sqler-app` forwards it as `export-xlsx`, which is in the
+app default). One sheet, `Sheet1`, written as a streaming zip (deflate entries with data
+descriptors, so no `Seek`) with our own `SpreadsheetML`; the sheet XML is deflated into the sink as
+rows arrive, so memory is one 64 KiB chunk. Row 1 is the header in bold.
+
+| `Value` | Cell |
+| ------- | ---- |
+| Null | no cell |
+| Bool | boolean |
+| Int | number up to 2^53 in magnitude, else text with the digits |
+| Float | number; `NaN`, `Infinity`, `-Infinity` as text |
+| Decimal | number up to 15 significant digits, else exact text |
+| Date | date serial (`yyyy-mm-dd`) for 1900-03-01 to 9999-12-31, else ISO text |
+| Timestamp, TimestampTz | date-time serial (`yyyy-mm-dd hh:mm:ss`, a zone is converted to UTC); same range rule |
+| Time | day fraction (`hh:mm:ss`) |
+| Text, Json, Bytes (`0x..`), other | text |
+
+Formulas are never written: text is always an inline string and the writer has no `<f>` path. Text
+that starts with `=`, `+`, `-`, `@`, tab or CR also carries the `quotePrefix` cell format, so Excel
+keeps it as text. Limits give `ExportError::Limit` with a message that suggests `CSV` or
+`Parquet`: more than 16,384 columns, more than 1,048,575 data rows (Excel's 1,048,576 minus the
+header), a text cell or header over 32,767 UTF-16 units (so also a binary value over 16,383 bytes: its `0x..` hex text passes 32,767), an entry or archive over 4 GiB (no ZIP64). Sizes and offsets stop at `u32::MAX - 1`, because `0xFFFFFFFF` is the ZIP64 marker.
+The time of day is cut down to whole milliseconds, never rounded up, so `23:59:59.9999` stays on its own day and `9999-12-31 23:59:59.999999` stays inside Excel's range. After the first error a writer refuses further `write_batch` and `finish` calls with `ExportError::State`, so a damaged file is never closed as a valid one.
+
+The cell type follows the value, the `XLSX` writer ignores the declared column type. `Parquet` follows the column type: an `Int` in a `Text`, `Decimal` or `Json` column is stringified (those columns take any value), an `Int` in a `Float` column is widened, any other mismatch is `Unsupported`. This is deliberate: a source may report a `Decimal` column whose values arrive as integers, and rejecting those would fail a correct export.
+Characters XML cannot hold become `_xHHHH_`. The tests read the files back with `calamine`; Excel
+itself is a maintainer check.
+
+## Registry and features
+
+`Registry::with_builtin()` lists `csv`, `json`, `sql`, `markdown`, then `parquet` and `xlsx` when
+their features are on. `register` adds a format and rejects a duplicate id. The workspace
+dependency is `default-features = false`, so a crate gets only the formats it asks for. The types
+(`ParquetOptions`, `ParquetCompression`, the ids `PARQUET` and `XLSX`, the error variants `Limit`,
+`Unsupported` and `Encode`) are always compiled; `ParquetFormat` and `XlsxFormat` need their feature.
 
 ## Streaming and speed
 
 `crates/sqler-export/tests/streaming.rs` writes 1,000,000 rows of five columns in batches of 1,000
-through every format into a counting sink, from one reused `Vec<Row>`, and checks that the output
+through every registered format into a counting sink, from one reused `Vec<Row>`, and checks that the output
 grows while rows are written. `cargo bench -p sqler-export --bench export_throughput [-- --rows N
 --batch N]` prints `<id>_rows_per_sec=` and `<id>_mib_per_sec=`. On the development machine (macOS,
 release, 1,000,000 rows, row generation included): `csv` 4.1 M rows/s, `json` 5.7 M, `sql` 4.1 M,
-`markdown` 4.2 M. The bench is not in `bench.yml`.
+`markdown` 4.2 M; `parquet` 4.4 M and `xlsx` 0.6 M (macOS, 1,000,000 rows, ADR-0029 and
+[benchmarks](../benchmarks.md) have Linux, peak RSS and binary sizes). `--format ID` runs one format.
+`tests/streaming_memory.rs` runs `Parquet` and `XLSX` over 1,000,000 rows in its own process and
+fails if the resident set grows by more than 12 MiB between batch 100 and batch 1,000, or if the sink
+does not grow within 66 batches (`Parquet`) or 10 (`XLSX`). The bench is not in `bench.yml`.
 
 ## Tests
 
 Unit tests sit next to each writer. `tests/snapshots.rs` has one `insta` snapshot per format over a
 fixture with every `Value` variant and the awkward cases. `tests/sql_props.rs` renders `INSERT`
 statements for arbitrary text and re-lexes them with the `sqler-sql` lexer. `tests/streaming.rs` is
-the 1M-row test.
+the 1M-row test over every registered format. `tests/parquet_roundtrip.rs` reads files back with
+the `parquet` reader and `tests/xlsx_readback.rs` with `calamine`.

@@ -5,8 +5,8 @@
 //!
 //! Std-only (`harness = false`). Streams `--rows N` (default 1,000,000) rows of five columns
 //! (integer, text, float, null, timestamp) in batches of `--batch N` (1,000) into a sink that
-//! discards the bytes, for every built-in format, and prints `<id>_rows_per_sec=` and
-//! `<id>_mib_per_sec=` lines. A `--bench` argument (added by `cargo bench`) is ignored. Exit
+//! discards the bytes, for every format of `Registry::with_builtin()` (so only the formats the enabled features compile), and prints `<id>_rows_per_sec=` and
+//! `<id>_mib_per_sec=` lines. `--format ID` runs one format only (for a per-format peak RSS). A `--bench` argument (added by `cargo bench`) is ignored. Exit
 //! codes: 0 ok, 1 writer error, 2 bad arguments.
 
 use std::io::{self, Write};
@@ -14,7 +14,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use sqler_core::{Column, DataType, Date, Row, Time, Timestamp, Value};
-use sqler_export::{ExportControl, ExportOptions, Exporter, Registry};
+use sqler_export::{ExportControl, ExportOptions, Exporter, Format, Registry};
 
 /// Discards everything.
 struct Discard;
@@ -95,12 +95,17 @@ fn run(id: &str, rows: i64, batch: usize) -> Result<(f64, f64), String> {
 fn main() -> ExitCode {
     let mut rows = 1_000_000_i64;
     let mut batch = 1_000_usize;
+    let mut only: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--bench" => {}
             "--rows" => match args.next().and_then(|v| v.parse().ok()) {
                 Some(v) => rows = v,
+                None => return usage(),
+            },
+            "--format" => match args.next() {
+                Some(v) => only = Some(v),
                 None => return usage(),
             },
             "--batch" => match args.next().and_then(|v| v.parse().ok()) {
@@ -110,7 +115,17 @@ fn main() -> ExitCode {
             _ => return usage(),
         }
     }
-    for id in ["csv", "json", "sql", "markdown"] {
+    let ids: Vec<&'static str> = Registry::with_builtin().formats().map(Format::id).collect();
+    if let Some(wanted) = &only
+        && !ids.contains(&wanted.as_str())
+    {
+        eprintln!("format {wanted:?} is not registered (enabled features: {ids:?})");
+        return ExitCode::from(2);
+    }
+    for id in ids {
+        if only.as_deref().is_some_and(|wanted| wanted != id) {
+            continue;
+        }
         match run(id, rows, batch) {
             Ok((rps, mibps)) => {
                 println!("{id}_rows_per_sec={rps:.0}");
@@ -126,6 +141,6 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: export_throughput [--rows N] [--batch N]");
+    eprintln!("usage: export_throughput [--rows N] [--batch N] [--format ID]");
     ExitCode::from(2)
 }

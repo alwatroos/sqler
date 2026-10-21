@@ -40,7 +40,7 @@ When the grid has the focus (click a cell, or run a grid command from the palett
 | Home, End | First, last column of the row |
 | Mod+Home, Mod+End | First cell, last cell |
 | Page Up, Page Down | Move by a page of rows |
-| Tab, Shift+Tab | Move right, left |
+| Tab, Shift+Tab | Move right, left; at the last or first cell the key is not used by the grid, so Tab leaves the table |
 | Mod+A | Select all cells |
 | Shift+Space | Select the row of the active cell |
 | Ctrl+Space | Select the column of the active cell (Ctrl on every system) |

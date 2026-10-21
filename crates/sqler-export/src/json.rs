@@ -3,12 +3,12 @@
 
 //! `JSON` writer: an array of objects, one object per line.
 
-use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::io::Write;
 
 use sqler_core::{Column, Row, Value};
 
+use crate::render::unique_names;
 use crate::{ExportError, ExportOptions, Format, JSON, RowWriter, Sink};
 
 /// The `JSON` format.
@@ -51,23 +51,6 @@ struct JsonWriter<'a> {
     /// The row being built; reused.
     line: Vec<u8>,
     scratch: String,
-}
-
-/// Column names made unique: a repeat gets `_2`, `_3`, ... appended.
-fn unique_names(columns: &[Column]) -> Vec<String> {
-    let mut used: HashSet<String> = HashSet::new();
-    let mut names = Vec::with_capacity(columns.len());
-    for column in columns {
-        let mut name = column.name.clone();
-        let mut n = 2_u32;
-        while used.contains(&name) {
-            name = format!("{}_{n}", column.name);
-            n += 1;
-        }
-        used.insert(name.clone());
-        names.push(name);
-    }
-    names
 }
 
 fn push_string(line: &mut Vec<u8>, text: &str) -> Result<(), ExportError> {

@@ -3,7 +3,8 @@
 
 //! Streaming: 1,000,000 synthetic rows go through every built-in format with a batch buffer of
 //! 1,000 rows and a sink that only counts. No `Vec` of all rows exists, and the output grows
-//! while the rows are written, so nothing is accumulated until the end.
+//! while the rows are written, so nothing is accumulated until the end. One test walks
+//! `Registry::formats()`, so a format added to the registry is covered without editing this file.
 
 // Helpers of an integration test are outside the `allow-unwrap-in-tests` scope of clippy.toml.
 #![allow(clippy::unwrap_used)]
@@ -14,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use sqler_core::{Column, DataType, Date, Row, Time, Timestamp, Value};
-use sqler_export::{ExportControl, ExportOptions, Exporter, Registry};
+use sqler_export::{ExportControl, ExportOptions, Exporter, Format, Registry};
 
 const ROWS: usize = 1_000_000;
 const BATCH: usize = 1_000;
@@ -59,9 +60,15 @@ fn fill(row: &mut Row, n: usize) {
     row.0.push(Value::Timestamp(ts));
 }
 
-fn stream(id: &str) {
-    let registry = Registry::with_builtin();
-    let format = registry.get(id).unwrap();
+/// Batches within which the sink must have grown. Parquet writes a row group per 65,536 rows
+/// (66 batches of 1,000); every other format writes within a few batches.
+fn growth_interval(id: &str) -> usize {
+    if id == "parquet" { 66 } else { 10 }
+}
+
+fn stream(format: &dyn Format) {
+    let id = format.id();
+    let interval = growth_interval(id);
     let mut options = ExportOptions::default();
     "t".clone_into(&mut options.sql.table);
     let count = Arc::new(AtomicU64::new(0));
@@ -77,7 +84,7 @@ fn stream(id: &str) {
             fill(row, batch * BATCH + i);
         }
         exporter.write_batch(&buffer).unwrap();
-        if (batch + 1) % 10 == 0 {
+        if (batch + 1) % interval == 0 {
             let now = count.load(Ordering::Relaxed);
             assert!(now > last, "{id}: no output after batch {batch}");
             last = now;
@@ -93,21 +100,12 @@ fn stream(id: &str) {
 }
 
 #[test]
-fn csv_streams() {
-    stream("csv");
-}
-
-#[test]
-fn json_streams() {
-    stream("json");
-}
-
-#[test]
-fn sql_streams() {
-    stream("sql");
-}
-
-#[test]
-fn markdown_streams() {
-    stream("markdown");
+fn every_registered_format_streams() {
+    let registry = Registry::with_builtin();
+    let mut seen = 0;
+    for format in registry.formats() {
+        stream(format);
+        seen += 1;
+    }
+    assert!(seen >= 4, "the four text formats are always registered");
 }

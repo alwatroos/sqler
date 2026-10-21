@@ -17,19 +17,31 @@ use crate::keymap::KeyInput;
 /// `editor:trigger-completion` everywhere else. A key the grid does not claim gives `None` and
 /// goes on to the chord router, where the user's bindings apply. `overlay_open` is whether the
 /// palette, a dialog or a prompt is open: the grid then claims nothing.
+///
+/// Tab and Shift+Tab are claimed only when `moves(motion)` says the move changes the active
+/// cell; at the last (first) cell they go on to the router, so a keyboard user can tab out of
+/// the table.
 #[must_use]
 pub fn grid_key_action(
     input: &KeyInput,
     platform: Platform,
     table_focused: bool,
     overlay_open: bool,
+    moves: impl Fn(Motion) -> bool,
 ) -> Option<GridAction> {
     if !table_focused || overlay_open {
         return None;
     }
-    key_command(input, platform)
+    let action = key_command(input, platform)
         .and_then(|id| CommandId::new(id).ok())
-        .and_then(|id| GridAction::from_command_id(&id))
+        .and_then(|id| GridAction::from_command_id(&id))?;
+    if input.key == "tab"
+        && let GridAction::Move { to, .. } = action
+        && !moves(to)
+    {
+        return None;
+    }
+    Some(action)
 }
 
 /// A user action on a results grid.
@@ -355,14 +367,50 @@ mod tests {
         };
         for p in [Platform::MacOs, Platform::Other] {
             assert_eq!(
-                grid_key_action(&ctrl_space, p, true, false),
+                grid_key_action(&ctrl_space, p, true, false, |_| true),
                 Some(GridAction::SelectColumn)
             );
             // Editor (or anything else) focused: the chord router resolves the completion.
-            assert_eq!(grid_key_action(&ctrl_space, p, false, false), None);
+            assert_eq!(
+                grid_key_action(&ctrl_space, p, false, false, |_| true),
+                None
+            );
             // Palette or dialog open: the grid claims nothing.
-            assert_eq!(grid_key_action(&ctrl_space, p, true, true), None);
+            assert_eq!(grid_key_action(&ctrl_space, p, true, true, |_| true), None);
         }
+    }
+
+    #[test]
+    fn tab_is_claimed_only_when_it_moves_the_active_cell() {
+        let tab = |shift: bool| KeyInput {
+            shift,
+            key: "tab".into(),
+            ..KeyInput::default()
+        };
+        let p = Platform::Other;
+        assert_eq!(
+            grid_key_action(&tab(false), p, true, false, |_| true),
+            Some(mv(Motion::Right))
+        );
+        assert_eq!(
+            grid_key_action(&tab(true), p, true, false, |_| true),
+            Some(mv(Motion::Left))
+        );
+        // At the edge the move changes nothing: the key is left to the router.
+        assert_eq!(
+            grid_key_action(&tab(false), p, true, false, |_| false),
+            None
+        );
+        assert_eq!(grid_key_action(&tab(true), p, true, false, |_| false), None);
+        // Only Tab is conditional: an arrow at the edge is still claimed.
+        let right = KeyInput {
+            key: "right".into(),
+            ..KeyInput::default()
+        };
+        assert_eq!(
+            grid_key_action(&right, p, true, false, |_| false),
+            Some(mv(Motion::Right))
+        );
     }
 
     #[test]
@@ -372,7 +420,9 @@ mod tests {
             key: key.into(),
             ..KeyInput::default()
         };
-        let down = grid_key_action(&input(false, "down"), Platform::Other, true, false);
+        let down = grid_key_action(&input(false, "down"), Platform::Other, true, false, |_| {
+            true
+        });
         assert!(matches!(down, Some(GridAction::Move { .. })));
         // Global chords of the defaults are not grid keys.
         for (ctrl, key) in [
@@ -383,7 +433,7 @@ mod tests {
             (true, "."),
         ] {
             assert_eq!(
-                grid_key_action(&input(ctrl, key), Platform::Other, true, false),
+                grid_key_action(&input(ctrl, key), Platform::Other, true, false, |_| true),
                 None,
                 "{key}"
             );

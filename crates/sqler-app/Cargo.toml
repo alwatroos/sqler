@@ -17,10 +17,12 @@ path = "src/main.rs"
 workspace = true
 
 [features]
-default = ["driver-sqlite", "driver-postgres", "driver-mysql"]
+default = ["driver-sqlite", "driver-postgres", "driver-mysql", "export-xlsx"]
 driver-sqlite = ["dep:sqler-driver-sqlite"]
 driver-postgres = ["dep:sqler-driver-postgres"]
 driver-mysql = ["dep:sqler-driver-mysql"]
+export-xlsx = ["dep:sqler-export", "sqler-export/xlsx"]
+export-parquet = ["dep:sqler-export", "sqler-export/parquet"]
 
 [dependencies]
 sqler-ui = { workspace = true, features = ["gui"] }
@@ -30,6 +32,7 @@ sqler-tunnel.workspace = true
 sqler-driver-sqlite = { workspace = true, optional = true }
 sqler-driver-postgres = { workspace = true, optional = true }
 sqler-driver-mysql = { workspace = true, optional = true }
+sqler-export = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [dev-dependencies]

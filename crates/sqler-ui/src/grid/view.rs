@@ -90,6 +90,12 @@ impl GridDelegate {
         &mut self.tab
     }
 
+    /// Whether the motion would change the active cell.
+    pub(crate) fn motion_moves(&self, to: super::selection::Motion) -> bool {
+        self.controls
+            .motion_moves(to, self.tab.row_count(), self.tab.visible())
+    }
+
     /// Rebuilds the column list, in display order, from the tab's headers and the layout.
     fn rebuild_columns(&mut self) {
         let headers: Vec<ColumnHeader> = (0..self.tab.column_count())

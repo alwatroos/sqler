@@ -78,8 +78,8 @@ While a results grid has the focus, these keys select cells. `Mod` is Cmd on mac
 | Home, End | `grid:move-row-start`, `grid:move-row-end` |
 | Mod+Home, Mod+End | `grid:move-first-cell`, `grid:move-last-cell` |
 | Page Up, Page Down | `grid:move-page-up`, `grid:move-page-down` |
-| Tab, Shift+Tab | `grid:move-right`, `grid:move-left` |
-| Shift with any of the movement keys above | the matching `grid:extend-*` command |
+| Tab, Shift+Tab | `grid:move-right`, `grid:move-left`, only while that moves the active cell (at the last or first cell the key goes on, so Tab leaves the table) |
+| Shift with any of the movement keys above except Tab | the matching `grid:extend-*` command |
 | Mod+A | `grid:select-all` |
 | Shift+Space | `grid:select-row` |
 | Ctrl+Space | `grid:select-column` (Ctrl on every system, also on macOS) |

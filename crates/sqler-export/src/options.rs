@@ -17,6 +17,8 @@ pub struct ExportOptions {
     pub sql: SqlOptions,
     /// Markdown table options.
     pub markdown: MarkdownOptions,
+    /// `Parquet` options.
+    pub parquet: ParquetOptions,
 }
 
 /// The line ending of a `CSV` file.
@@ -103,6 +105,35 @@ impl Default for MarkdownOptions {
     fn default() -> Self {
         Self {
             null_text: "NULL".to_owned(),
+        }
+    }
+}
+
+/// The compression of the `Parquet` column chunks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ParquetCompression {
+    /// No compression.
+    Uncompressed,
+    /// Snappy: fast, a fair ratio.
+    #[default]
+    Snappy,
+}
+
+/// `Parquet` options.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParquetOptions {
+    /// How many rows one row group holds at most.
+    pub row_group_rows: NonZeroUsize,
+    /// The compression of every column chunk.
+    pub compression: ParquetCompression,
+}
+
+impl Default for ParquetOptions {
+    fn default() -> Self {
+        Self {
+            row_group_rows: NonZeroUsize::MIN.saturating_add(65_535),
+            compression: ParquetCompression::default(),
         }
     }
 }

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! Result writers for `CSV`, `JSON`, `SQL` `INSERT` and Markdown tables (`Parquet` and `XLSX`
-//! follow).
+//! Result writers for `CSV`, `JSON`, `SQL` `INSERT`, Markdown tables, `Parquet` (feature
+//! `parquet`) and `XLSX` (feature `xlsx`).
 //!
 //! A [`RowWriter`] is a push-style renderer: `begin` with the columns, `write_batch` with rows
 //! any number of times, `finish`. A [`Format`] makes a writer on any `io::Write` sink, and a
@@ -32,18 +32,31 @@ mod error;
 mod json;
 mod markdown;
 mod options;
+#[cfg(feature = "parquet")]
+mod parquet;
 mod registry;
 mod render;
 mod sql;
+#[cfg(any(feature = "parquet", feature = "xlsx"))]
+mod temporal;
 mod writer;
+#[cfg(feature = "xlsx")]
+mod xlsx;
 
 pub use csv::CsvFormat;
 pub use error::ExportError;
 pub use json::JsonFormat;
 pub use markdown::MarkdownFormat;
-pub use options::{CsvOptions, ExportOptions, LineEnding, MarkdownOptions, SqlOptions};
-pub use registry::{CSV, JSON, MARKDOWN, Registry, SQL};
+pub use options::{
+    CsvOptions, ExportOptions, LineEnding, MarkdownOptions, ParquetCompression, ParquetOptions,
+    SqlOptions,
+};
+#[cfg(feature = "parquet")]
+pub use parquet::ParquetFormat;
+pub use registry::{CSV, JSON, MARKDOWN, PARQUET, Registry, SQL, XLSX};
 pub use sql::SqlFormat;
 pub use writer::{
     CancelToken, ExportControl, Exporter, Format, Progress, RowWriter, Sink, Summary, export_to_vec,
 };
+#[cfg(feature = "xlsx")]
+pub use xlsx::XlsxFormat;

@@ -57,6 +57,7 @@
   - [ADR-0026: Editor intellisense](adr/0026-editor-intellisense.md)
   - [ADR-0027: Bounded result model](adr/0027-bounded-result-model.md)
   - [ADR-0028: Export writer API](adr/0028-export-writer-api.md)
+  - [ADR-0029: Parquet and XLSX writers](adr/0029-parquet-and-xlsx-writers.md)
   - [ADR-0030: Staged edits and DML](adr/0030-staged-edits-and-dml.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
