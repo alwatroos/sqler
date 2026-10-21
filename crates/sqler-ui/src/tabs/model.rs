@@ -9,6 +9,22 @@ use sqler_driver_api::sqler_core::{DriverId, Environment};
 
 use super::header::{Rgb, TabHeader};
 
+/// The most editor groups a strip holds.
+pub const MAX_GROUPS: usize = 4;
+
+/// Stable identifier of an editor group; never reused within one strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct GroupId(u32);
+
+/// Whether a tab is a replaceable preview or kept (pinned).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabMode {
+    /// Replaced by the next preview opened in the same group.
+    Preview,
+    /// Stays until closed.
+    Pinned,
+}
+
 /// Stable identifier of a tab; never reused within one strip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TabId(u64);
@@ -59,6 +75,7 @@ pub struct Tab {
     ordinal: u32,
     /// The database object an object tab shows (for the title).
     object: Option<String>,
+    mode: TabMode,
 }
 
 /// The badge text for an environment, shared by the sidebar and tab headers.
@@ -90,6 +107,12 @@ impl Tab {
         self.kind
     }
 
+    /// Whether the tab is a preview or pinned.
+    #[must_use]
+    pub fn mode(&self) -> TabMode {
+        self.mode
+    }
+
     /// The connection name, plus ` (n)` for the n-th tab opened for that name (n >= 2). Grid tabs
     /// are prefixed with `Results: `. A tab opened for a database object shows the object name
     /// instead: `DDL: <object>`, `Properties: <object>`, `Results: <object>`, `History: <object>`.
@@ -116,7 +139,7 @@ impl Tab {
         }
     }
 
-    /// The header data: title, accent colour and environment badge.
+    /// The header data: title, accent colour, environment badge, kind and preview state.
     #[must_use]
     pub fn header(&self) -> TabHeader {
         let badge = env_badge(self.connection.environment);
@@ -125,33 +148,114 @@ impl Tab {
             accent: self.connection.color.as_deref().and_then(Rgb::parse),
             badge,
             is_prod: self.connection.environment == Some(Environment::Prod),
+            kind: self.kind,
+            preview: self.mode == TabMode::Preview,
         }
     }
 }
 
-/// The ordered tabs and the active one.
-#[derive(Debug, Default)]
+/// One editor group: an ordered list of tabs and its own active tab.
+#[derive(Debug, Clone)]
+pub struct Group {
+    id: GroupId,
+    tabs: Vec<TabId>,
+    active: Option<TabId>,
+}
+
+impl Group {
+    fn new(id: GroupId) -> Self {
+        Self {
+            id,
+            tabs: Vec::new(),
+            active: None,
+        }
+    }
+
+    /// The group id.
+    #[must_use]
+    pub fn id(&self) -> GroupId {
+        self.id
+    }
+
+    /// The tab ids in order.
+    #[must_use]
+    pub fn tabs(&self) -> &[TabId] {
+        &self.tabs
+    }
+
+    /// The group's active tab.
+    #[must_use]
+    pub fn active(&self) -> Option<TabId> {
+        self.active
+    }
+
+    /// Removes a tab; an active one hands over to its right, then left neighbour.
+    fn remove(&mut self, id: TabId) {
+        let Some(pos) = self.tabs.iter().position(|t| *t == id) else {
+            return;
+        };
+        self.tabs.remove(pos);
+        if self.active == Some(id) {
+            self.active = self
+                .tabs
+                .get(pos)
+                .or_else(|| pos.checked_sub(1).and_then(|p| self.tabs.get(p)))
+                .copied();
+        }
+    }
+}
+
+/// The ordered tabs, split into editor groups, and the active one.
+#[derive(Debug)]
 pub struct TabStrip {
     tabs: Vec<Tab>,
-    active: Option<TabId>,
+    groups: Vec<Group>,
+    focused: GroupId,
+    next_group: u32,
     next_id: u64,
     opened_per_name: HashMap<String, u32>,
 }
 
+impl Default for TabStrip {
+    fn default() -> Self {
+        Self {
+            tabs: Vec::new(),
+            groups: vec![Group::new(GroupId(0))],
+            focused: GroupId(0),
+            next_group: 1,
+            next_id: 0,
+            opened_per_name: HashMap::new(),
+        }
+    }
+}
+
 impl TabStrip {
-    /// Opens a tab at the end and activates it.
+    /// Opens a pinned tab at the end of the focused group and activates it.
     pub fn open(&mut self, connection: TabConnection, kind: TabKind) -> TabId {
-        self.open_tab(connection, kind, None)
+        self.open_tab(connection, kind, None, TabMode::Pinned, None)
     }
 
-    /// Opens a tab for a database object at the end and activates it; the title names the object.
+    /// Opens a pinned tab for a database object at the end of the focused group and activates
+    /// it; the title names the object.
     pub fn open_object(
         &mut self,
         connection: TabConnection,
         kind: TabKind,
         object: impl Into<String>,
     ) -> TabId {
-        self.open_tab(connection, kind, Some(object.into()))
+        self.open_tab(connection, kind, Some(object.into()), TabMode::Pinned, None)
+    }
+
+    /// Opens a preview tab for a database object in the focused group at `at` (clamped; `None`
+    /// is the end) and activates it. An older preview is left to the caller to close.
+    pub fn open_preview(
+        &mut self,
+        connection: TabConnection,
+        kind: TabKind,
+        object: impl Into<String>,
+        at: Option<usize>,
+    ) -> TabId {
+        self.open_tab(connection, kind, Some(object.into()), TabMode::Preview, at)
     }
 
     fn open_tab(
@@ -159,6 +263,8 @@ impl TabStrip {
         connection: TabConnection,
         kind: TabKind,
         object: Option<String>,
+        mode: TabMode,
+        at: Option<usize>,
     ) -> TabId {
         let id = TabId(self.next_id);
         self.next_id += 1;
@@ -173,45 +279,69 @@ impl TabStrip {
             kind,
             ordinal: *counter,
             object,
+            mode,
         });
-        self.active = Some(id);
+        let gi = self.focused_index();
+        let group = &mut self.groups[gi];
+        let index = at.map_or(group.tabs.len(), |i| i.min(group.tabs.len()));
+        group.tabs.insert(index, id);
+        group.active = Some(id);
         id
     }
 
-    fn position(&self, id: TabId) -> Option<usize> {
-        self.tabs.iter().position(|t| t.id == id)
+    fn focused_index(&self) -> usize {
+        self.group_index(self.focused).unwrap_or(0)
     }
 
-    /// Activates a tab; `false` if it does not exist.
-    pub fn activate(&mut self, id: TabId) -> bool {
-        if self.position(id).is_some() {
-            self.active = Some(id);
-            true
-        } else {
-            false
+    fn group_index(&self, g: GroupId) -> Option<usize> {
+        self.groups.iter().position(|x| x.id == g)
+    }
+
+    fn group_index_of(&self, id: TabId) -> Option<usize> {
+        self.groups.iter().position(|g| g.tabs.contains(&id))
+    }
+
+    /// Removes group `gi` if it is empty and not the last one; moves focus left if it was focused.
+    fn drop_if_empty(&mut self, gi: usize) {
+        if self.groups[gi].tabs.is_empty() && self.groups.len() > 1 {
+            let removed = self.groups.remove(gi).id;
+            if self.focused == removed {
+                self.focused = self.groups[gi.saturating_sub(1)].id;
+            }
         }
     }
 
-    /// Closes a tab; `false` if it does not exist. Closing the active tab activates its right
-    /// neighbour, otherwise the left one, otherwise none.
-    pub fn close(&mut self, id: TabId) -> bool {
-        let Some(pos) = self.position(id) else {
+    /// Activates a tab and focuses its group; `false` if it does not exist.
+    pub fn activate(&mut self, id: TabId) -> bool {
+        let Some(gi) = self.group_index_of(id) else {
             return false;
         };
-        self.tabs.remove(pos);
-        if self.active == Some(id) {
-            self.active = self
-                .tabs
-                .get(pos)
-                .or_else(|| pos.checked_sub(1).and_then(|p| self.tabs.get(p)))
-                .map(|t| t.id);
-        }
+        self.groups[gi].active = Some(id);
+        self.focused = self.groups[gi].id;
+        true
+    }
+
+    /// Closes a tab; `false` if it does not exist. Closing a group's active tab activates its
+    /// right neighbour in the group, otherwise the left one, otherwise none. An emptied group is
+    /// removed unless it is the last; focus then moves to the group on the left.
+    pub fn close(&mut self, id: TabId) -> bool {
+        let Some(gi) = self.group_index_of(id) else {
+            return false;
+        };
+        self.groups[gi].remove(id);
+        self.tabs.retain(|t| t.id != id);
+        self.drop_if_empty(gi);
         true
     }
 
     fn step(&mut self, forward: bool) {
-        let len = self.tabs.len();
-        let Some(pos) = self.active.and_then(|id| self.position(id)) else {
+        let gi = self.focused_index();
+        let group = &mut self.groups[gi];
+        let len = group.tabs.len();
+        let Some(pos) = group
+            .active
+            .and_then(|id| group.tabs.iter().position(|t| *t == id))
+        else {
             return;
         };
         let next = if forward {
@@ -219,23 +349,23 @@ impl TabStrip {
         } else {
             (pos + len - 1) % len
         };
-        self.active = Some(self.tabs[next].id);
+        group.active = Some(group.tabs[next]);
     }
 
-    /// Activates the next tab, wrapping around.
+    /// Activates the next tab of the focused group, wrapping around.
     pub fn next(&mut self) {
         self.step(true);
     }
 
-    /// Activates the previous tab, wrapping around.
+    /// Activates the previous tab of the focused group, wrapping around.
     pub fn previous(&mut self) {
         self.step(false);
     }
 
-    /// The active tab.
+    /// The active tab of the focused group.
     #[must_use]
     pub fn active(&self) -> Option<&Tab> {
-        self.active.and_then(|id| self.get(id))
+        self.active_in(self.focused)
     }
 
     /// A tab by id.
@@ -244,9 +374,12 @@ impl TabStrip {
         self.tabs.iter().find(|t| t.id == id)
     }
 
-    /// The tabs in order.
+    /// The tabs: group by group, in group order.
     pub fn iter(&self) -> impl Iterator<Item = &Tab> {
-        self.tabs.iter()
+        self.groups
+            .iter()
+            .flat_map(|g| g.tabs.iter())
+            .filter_map(|id| self.get(*id))
     }
 
     /// The number of tabs.
@@ -259,6 +392,154 @@ impl TabStrip {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
+    }
+
+    /// The editor groups, left to right; never empty.
+    #[must_use]
+    pub fn groups(&self) -> &[Group] {
+        &self.groups
+    }
+
+    /// The focused group.
+    #[must_use]
+    pub fn focused_group(&self) -> GroupId {
+        self.focused
+    }
+
+    /// Focuses a group; `false` if it does not exist or is already focused.
+    pub fn focus_group(&mut self, g: GroupId) -> bool {
+        if self.focused == g || self.group_index(g).is_none() {
+            return false;
+        }
+        self.focused = g;
+        true
+    }
+
+    /// Focuses the next or previous group without wrapping; `false` at the edge.
+    pub fn focus_adjacent_group(&mut self, forward: bool) -> bool {
+        match self.adjacent_group(forward) {
+            Some(g) => self.focus_group(g),
+            None => false,
+        }
+    }
+
+    fn adjacent_group(&self, forward: bool) -> Option<GroupId> {
+        let gi = self.focused_index();
+        let target = if forward { gi + 1 } else { gi.checked_sub(1)? };
+        self.groups.get(target).map(Group::id)
+    }
+
+    /// The group a tab is in.
+    #[must_use]
+    pub fn group_of(&self, id: TabId) -> Option<GroupId> {
+        self.group_index_of(id).map(|gi| self.groups[gi].id)
+    }
+
+    /// The index of a tab inside its group.
+    #[must_use]
+    pub fn position_in_group(&self, id: TabId) -> Option<usize> {
+        self.groups
+            .iter()
+            .find_map(|g| g.tabs.iter().position(|t| *t == id))
+    }
+
+    /// The active tab of a group.
+    #[must_use]
+    pub fn active_in(&self, g: GroupId) -> Option<&Tab> {
+        let group = self.groups.get(self.group_index(g)?)?;
+        group.active.and_then(|id| self.get(id))
+    }
+
+    /// The preview tab of a group, if any.
+    #[must_use]
+    pub fn preview_in(&self, g: GroupId) -> Option<TabId> {
+        let group = self.groups.get(self.group_index(g)?)?;
+        group
+            .tabs
+            .iter()
+            .copied()
+            .find(|id| self.mode(*id) == Some(TabMode::Preview))
+    }
+
+    /// Whether a tab is a preview or pinned.
+    #[must_use]
+    pub fn mode(&self, id: TabId) -> Option<TabMode> {
+        self.get(id).map(Tab::mode)
+    }
+
+    /// Pins a preview tab; `true` iff it changed.
+    pub fn pin(&mut self, id: TabId) -> bool {
+        match self.tabs.iter_mut().find(|t| t.id == id) {
+            Some(tab) if tab.mode == TabMode::Preview => {
+                tab.mode = TabMode::Pinned;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Moves a tab to `index` of group `to` (clamped after removal), pins it, activates it there
+    /// and focuses `to`. Within one group this reorders. An emptied source group is removed.
+    pub fn move_tab(&mut self, id: TabId, to: GroupId, index: usize) -> bool {
+        let (Some(from), Some(dest)) = (self.group_index_of(id), self.group_index(to)) else {
+            return false;
+        };
+        self.groups[from].remove(id);
+        let group = &mut self.groups[dest];
+        group.tabs.insert(index.min(group.tabs.len()), id);
+        group.active = Some(id);
+        self.focused = to;
+        if from != dest {
+            self.drop_if_empty(from);
+        }
+        self.pin(id);
+        true
+    }
+
+    /// Moves the active tab one place within its group, without wrapping; `false` at an edge.
+    pub fn move_active_by(&mut self, delta: isize) -> bool {
+        let gi = self.focused_index();
+        let group = &mut self.groups[gi];
+        let Some(pos) = group
+            .active
+            .and_then(|id| group.tabs.iter().position(|t| *t == id))
+        else {
+            return false;
+        };
+        let Some(target) = pos.checked_add_signed(delta) else {
+            return false;
+        };
+        if delta == 0 || target >= group.tabs.len() {
+            return false;
+        }
+        let id = group.tabs.remove(pos);
+        group.tabs.insert(target, id);
+        true
+    }
+
+    /// Moves the active tab to the end of the next or previous group; `false` without one.
+    pub fn move_active_to_adjacent_group(&mut self, forward: bool) -> bool {
+        let Some(id) = self.active().map(Tab::id) else {
+            return false;
+        };
+        let Some(to) = self.adjacent_group(forward) else {
+            return false;
+        };
+        self.move_tab(id, to, usize::MAX)
+    }
+
+    /// Opens a new group right of the focused one and moves the active tab into it. `None` when
+    /// the focused group has fewer than two tabs or there are already [`MAX_GROUPS`] groups.
+    pub fn split_right(&mut self) -> Option<GroupId> {
+        let gi = self.focused_index();
+        if self.groups[gi].tabs.len() < 2 || self.groups.len() >= MAX_GROUPS {
+            return None;
+        }
+        let id = self.groups[gi].active?;
+        let new = GroupId(self.next_group);
+        self.next_group += 1;
+        self.groups.insert(gi + 1, Group::new(new));
+        self.move_tab(id, new, 0).then_some(new)
     }
 }
 
@@ -424,5 +705,155 @@ mod tests {
         let plain = s.open(conn("y"), TabKind::History);
         assert_eq!(s.get(named).unwrap().title(), "History: prod");
         assert_eq!(s.get(plain).unwrap().title(), "History: y");
+    }
+
+    fn titles(s: &TabStrip, g: GroupId) -> Vec<TabId> {
+        s.groups()
+            .iter()
+            .find(|x| x.id() == g)
+            .unwrap()
+            .tabs()
+            .to_vec()
+    }
+
+    #[test]
+    fn default_has_one_empty_group() {
+        let mut s = TabStrip::default();
+        assert_eq!(s.groups().len(), 1);
+        assert_eq!(s.focused_group(), s.groups()[0].id());
+        assert!(!s.focus_group(s.focused_group()));
+    }
+
+    #[test]
+    #[allow(clippy::many_single_char_names)]
+    fn preview_open_pin_and_header_flags() {
+        let mut s = TabStrip::default();
+        let a = s.open(conn("a"), TabKind::Query);
+        let c = s.open(conn("a"), TabKind::Query);
+        let p = s.open_preview(conn("a"), TabKind::Grid, "t", Some(1));
+        let grp = s.focused_group();
+        assert_eq!(titles(&s, grp), [a, p, c]);
+        assert_eq!(s.active().map(Tab::id), Some(p));
+        assert_eq!(s.preview_in(grp), Some(p));
+        assert_eq!(s.mode(p), Some(TabMode::Preview));
+        let h = s.get(p).unwrap().header();
+        assert!(h.preview);
+        assert_eq!(h.kind, TabKind::Grid);
+        assert!(!s.get(a).unwrap().header().preview);
+        assert!(s.pin(p));
+        assert!(!s.pin(p));
+        assert_eq!(s.preview_in(grp), None);
+        let q = s.open_preview(conn("a"), TabKind::Grid, "u", Some(99));
+        assert_eq!(s.position_in_group(q), Some(3));
+    }
+
+    #[test]
+    fn split_refusals_and_effect() {
+        let mut s = TabStrip::default();
+        let a = s.open(conn("a"), TabKind::Query);
+        assert_eq!(s.split_right(), None);
+        let b = s.open(conn("b"), TabKind::Query);
+        let g2 = s.split_right().unwrap();
+        assert_eq!(s.focused_group(), g2);
+        assert_eq!(titles(&s, g2), [b]);
+        assert_eq!(s.active().map(Tab::id), Some(b));
+        assert_eq!(s.group_of(a), Some(s.groups()[0].id()));
+        // one tab in the focused group: refused
+        assert_eq!(s.split_right(), None);
+    }
+
+    #[test]
+    fn split_stops_at_max_groups() {
+        let mut s = TabStrip::default();
+        for _ in 0..8 {
+            s.open(conn("a"), TabKind::Query);
+        }
+        for _ in 0..MAX_GROUPS - 1 {
+            assert!(s.split_right().is_some());
+            s.open(conn("a"), TabKind::Query);
+        }
+        assert_eq!(s.groups().len(), MAX_GROUPS);
+        assert_eq!(s.split_right(), None);
+    }
+
+    #[test]
+    fn closing_last_tab_removes_group_and_focuses_left() {
+        let mut s = TabStrip::default();
+        let a = s.open(conn("a"), TabKind::Query);
+        let b = s.open(conn("b"), TabKind::Query);
+        let g1 = s.focused_group();
+        let g2 = s.split_right().unwrap();
+        assert!(s.close(b));
+        assert_eq!(s.groups().len(), 1);
+        assert_eq!(s.focused_group(), g1);
+        assert_eq!(s.active().map(Tab::id), Some(a));
+        assert!(s.group_of(b).is_none());
+        let _ = g2;
+        // the last group stays when emptied
+        assert!(s.close(a));
+        assert_eq!(s.groups().len(), 1);
+        assert!(s.active().is_none());
+    }
+
+    #[test]
+    fn activate_focuses_group_and_iter_is_group_order() {
+        let mut s = TabStrip::default();
+        let a = s.open(conn("a"), TabKind::Query);
+        let b = s.open(conn("b"), TabKind::Query);
+        let c = s.open(conn("c"), TabKind::Query);
+        let g1 = s.focused_group();
+        let g2 = s.split_right().unwrap(); // c moves right
+        assert_eq!(ids(&s), [a, b, c]);
+        assert_eq!(s.active().map(Tab::id), Some(c));
+        assert!(s.activate(b));
+        assert_eq!(s.focused_group(), g1);
+        assert_eq!(s.active_in(g2).map(Tab::id), Some(c));
+        s.next();
+        assert_eq!(s.active().map(Tab::id), Some(a));
+    }
+
+    #[test]
+    fn move_tab_between_groups_pins_and_removes_empty_source() {
+        let mut s = TabStrip::default();
+        let a = s.open(conn("a"), TabKind::Query);
+        let p = s.open_preview(conn("a"), TabKind::Grid, "t", None);
+        let g1 = s.focused_group();
+        let g2 = s.split_right().unwrap();
+        assert_eq!(s.mode(p), Some(TabMode::Pinned));
+        assert!(s.move_tab(a, g2, 0));
+        assert_eq!(s.groups().len(), 1);
+        assert_eq!(s.focused_group(), g2);
+        assert_eq!(titles(&s, g2), [a, p]);
+        assert!(!s.move_tab(a, g1, 0));
+    }
+
+    #[test]
+    fn move_active_by_reorders_without_wrapping() {
+        let mut s = TabStrip::default();
+        let a = s.open(conn("a"), TabKind::Query);
+        let b = s.open(conn("b"), TabKind::Query);
+        assert!(!s.move_active_by(1));
+        assert!(s.move_active_by(-1));
+        assert_eq!(ids(&s), [b, a]);
+        assert!(!s.move_active_by(-1));
+        assert!(!TabStrip::default().move_active_by(1));
+    }
+
+    #[test]
+    fn adjacent_group_focus_and_move() {
+        let mut s = TabStrip::default();
+        let a = s.open(conn("a"), TabKind::Query);
+        let b = s.open(conn("b"), TabKind::Query);
+        assert!(!s.move_active_to_adjacent_group(true));
+        assert!(!s.focus_adjacent_group(true));
+        let g1 = s.focused_group();
+        let g2 = s.split_right().unwrap();
+        assert!(!s.focus_adjacent_group(true));
+        assert!(s.focus_adjacent_group(false));
+        assert_eq!(s.focused_group(), g1);
+        assert!(s.focus_group(g2));
+        assert!(s.move_active_to_adjacent_group(false));
+        assert_eq!(titles(&s, g1), [a, b]);
+        assert_eq!(s.groups().len(), 1);
     }
 }

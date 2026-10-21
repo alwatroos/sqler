@@ -21,6 +21,7 @@ mod paths;
 mod saved_queries;
 mod secrets;
 mod settings;
+mod workbench;
 
 pub use ai::{
     AI_CONFIG_FORMAT_VERSION, AI_MAX_ROWS_RANGE, AI_TIMEOUT_SECS_RANGE, AiConfig, AiConfigError,
@@ -51,4 +52,9 @@ pub use secrets::{
 };
 pub use settings::{
     DEFAULT_RESULT_PAGE_ROWS, FONT_SIZE_RANGE, RESULT_PAGE_ROWS_RANGE, Settings, ThemePreference,
+};
+pub use workbench::{
+    BOTTOM_PANEL_SIZE_RANGE, BOTTOM_VIEWS, MAX_RECENT_COMMANDS, MAX_RECENT_CONNECTIONS, PanelState,
+    SIDE_PANEL_SIZE_RANGE, SIDE_VIEWS, WINDOW_SIZE_RANGE, WORKBENCH_VERSION, WindowState,
+    WorkbenchLoad, WorkbenchState,
 };

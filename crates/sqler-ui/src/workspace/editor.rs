@@ -29,6 +29,14 @@ impl Workspace {
         self.editors.get(tab)
     }
 
+    /// The text of an editor tab changed: a preview tab is pinned and the tab is dirty.
+    pub fn editor_edited(&mut self, tab: TabId) {
+        self.tabs.pin(tab);
+        if let Some(doc) = self.editors.get_mut(tab) {
+            doc.mark_dirty();
+        }
+    }
+
     /// Takes the start text of an editor tab (once); the view puts it into the new editor.
     pub fn take_editor_seed(&mut self, tab: TabId) -> Option<String> {
         self.editors.take_seed(tab)
