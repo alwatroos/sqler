@@ -29,12 +29,14 @@ use crate::grid::view::{GridDelegate, Table, apply_action};
 use crate::grid::{CellPos, DisplayMap, GridAction, Motion, RowOrder as _};
 use crate::query::view::scrim;
 use crate::theme::icons::AppIcon;
+use crate::theme::widgets::env_chip;
 use crate::theme::{SPACE, TypeScale};
 use crate::workspace::chrome::{
     DIALOG_W_LG, DIALOG_W_MD, DIALOG_W_SM, LIST_MAX_H, TOOLBAR_HEIGHT, dialog_footer, dialog_panel,
     dialog_title, ui_scale,
 };
 use crate::workspace::{CloseTarget, WorkspaceView};
+use sqler_driver_api::sqler_core::Environment;
 
 /// The largest selection a bulk edit (Set NULL, Revert, Delete) works on in one go.
 const MAX_BULK: usize = 100_000;
@@ -562,12 +564,7 @@ pub(crate) fn edit_row(
         );
     }
     if bar.production {
-        row = row.child(
-            div()
-                .text_size(px(scale.xs))
-                .text_color(danger)
-                .child("production"),
-        );
+        row = row.child(env_chip(Environment::Prod, cx));
     }
     if let Some(blocked) = bar.blocked.as_ref().filter(|_| editable) {
         row = row.child(

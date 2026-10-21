@@ -13,6 +13,7 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::ContextMenuExt as _;
+use gpui_component::spinner::Spinner;
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
 use sqler_config::{ConnectionId, GroupId};
@@ -317,6 +318,14 @@ fn row_icon(icon: AppIcon, color: Hsla) -> Icon {
     Icon::new(icon).size(px(ICON_SM)).text_color(color)
 }
 
+/// The animated "running" indicator, sized like a row icon.
+fn running_spinner(color: Hsla) -> Spinner {
+    Spinner::new()
+        .icon(AppIcon::LoaderCircle)
+        .color(color)
+        .xsmall()
+}
+
 /// The space where a chevron would be, for rows that cannot expand.
 fn chevron_spacer() -> Div {
     div().w(px(ICON_SM)).flex_none()
@@ -342,16 +351,18 @@ fn row_pad(depth: usize) -> Pixels {
 fn action_button(
     id: impl Into<ElementId>,
     label: &'static str,
-    danger: bool,
     action: ConnectionAction,
     cx: &mut Context<WorkspaceView>,
 ) -> Button {
-    let button = Button::new(id).ghost().xsmall().label(label);
-    let button = if danger { button.danger() } else { button };
-    button.on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-        view.dispatch_connection(action.clone(), cx);
-        cx.stop_propagation();
-    }))
+    // Destructive actions stay neutral at rest; the confirm dialog carries the danger colour.
+    Button::new(id)
+        .ghost()
+        .xsmall()
+        .label(label)
+        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            view.dispatch_connection(action.clone(), cx);
+            cx.stop_propagation();
+        }))
 }
 
 /// Builds the element of one line of the list.
@@ -544,7 +555,7 @@ fn object_row(
             line = line.child(
                 div()
                     .id(ElementId::Name(format!("{key}-loading").into()))
-                    .child(row_icon(AppIcon::LoaderCircle, muted))
+                    .child(running_spinner(muted))
                     .tooltip(tip("Loading…")),
             );
         }
@@ -652,7 +663,6 @@ fn group_row(
                 .child(action_button(
                     group_id("group-new", &key),
                     "New subgroup",
-                    false,
                     ConnectionAction::NewGroup {
                         parent: Some(id.clone()),
                     },
@@ -661,14 +671,12 @@ fn group_row(
                 .child(action_button(
                     group_id("group-rename", &key),
                     "Rename",
-                    false,
                     ConnectionAction::RenameGroup(id.clone()),
                     cx,
                 ))
                 .child(action_button(
                     group_id("group-delete", &key),
                     "Delete",
-                    true,
                     ConnectionAction::DeleteGroup(id.clone()),
                     cx,
                 )),
@@ -763,9 +771,12 @@ fn connection_row(
         }
         None => line.child(chevron_spacer()),
     };
+    // The slot is always reserved so the names of all connections line up.
+    let mut dot_slot = div().size(px(DOT)).flex_none().rounded_full();
     if let Some(color) = dot {
-        line = line.child(div().size(px(DOT)).flex_none().rounded_full().bg(color));
+        dot_slot = dot_slot.bg(color);
     }
+    line = line.child(dot_slot);
     line = line.child(row_icon(AppIcon::Server, muted)).child(
         div()
             .flex_1()
@@ -780,7 +791,7 @@ fn connection_row(
     match entry.status() {
         ConnectionStatus::Idle => {}
         ConnectionStatus::Connecting => {
-            line = line.child(row_icon(AppIcon::LoaderCircle, muted));
+            line = line.child(running_spinner(muted));
         }
         ConnectionStatus::Failed(_) => {
             line = line.child(row_icon(AppIcon::CircleAlert, danger));
@@ -836,21 +847,18 @@ fn connection_row(
                 .child(action_button(
                     ("edit-connection", index),
                     "Edit",
-                    false,
                     ConnectionAction::Edit(id.clone()),
                     cx,
                 ))
                 .child(action_button(
                     ("move-connection", index),
                     "Move",
-                    false,
                     ConnectionAction::OpenMoveTo(id.clone()),
                     cx,
                 ))
                 .child(action_button(
                     ("delete-connection", index),
                     "Delete",
-                    true,
                     ConnectionAction::Delete(id),
                     cx,
                 )),
@@ -879,8 +887,9 @@ pub(crate) fn connections_empty(view: &WorkspaceView, cx: &mut Context<Workspace
     .text_center()
     .child(
         div().pt(px(SPACE[3])).child(
+            // Outline: a welcome screen next to this list owns the one primary action.
             Button::new("empty-new-connection")
-                .primary()
+                .outline()
                 .small()
                 .icon(AppIcon::Plus)
                 .label("New Connection")

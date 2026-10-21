@@ -11,7 +11,8 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
+use gpui_component::spinner::Spinner;
+use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
 use super::{Delimiter, ExportDialog, ExportScope, FreshRun, LoadedRows};
 use crate::grid::group_thousands;
@@ -20,8 +21,8 @@ use crate::theme::SPACE;
 use crate::theme::icons::AppIcon;
 use crate::workspace::WorkspaceView;
 use crate::workspace::chrome::{
-    DIALOG_W_MD, ICON_SM, TOOLBAR_HEIGHT, dialog_footer, dialog_panel, dialog_title, field_row,
-    scrim, ui_scale,
+    DIALOG_W_MD, TOOLBAR_HEIGHT, dialog_footer, dialog_panel, dialog_title, field_row, scrim,
+    ui_scale,
 };
 
 /// The label of a scope choice.
@@ -271,9 +272,10 @@ pub(crate) fn export_bar(
             .border_b_1()
             .border_color(border)
             .child(
-                Icon::new(AppIcon::LoaderCircle)
-                    .size(px(ICON_SM))
-                    .text_color(muted),
+                Spinner::new()
+                    .icon(AppIcon::LoaderCircle)
+                    .color(muted)
+                    .xsmall(),
             )
             .child(
                 div()

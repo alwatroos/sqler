@@ -207,12 +207,14 @@ pub(crate) fn field_row(
     div()
         .flex()
         .flex_row()
-        .items_center()
+        .items_start()
         .gap(px(SPACE[3]))
         .child(
             div()
                 .w(px(LABEL_WIDTH))
                 .flex_none()
+                // Aligns the label with the first line of a control.
+                .pt(px(SPACE[2]))
                 .text_size(px(ui_scale(cx).sm))
                 .text_color(cx.theme().muted_foreground)
                 .child(label.into()),

@@ -10,13 +10,13 @@ use std::fs;
 use std::path::Path;
 
 /// The scanned view files, relative to `src/`, each with the marker the scan starts at (`""`
-/// scans from the top). The sidebar is scanned from `fn item(` on: the container above it
+/// scans from the top). The sidebar is scanned from `fn node_icon(` on: the container above it
 /// belongs to the workbench shell.
 const SCANNED: &[(&str, &str)] = &[
     ("palette/view.rs", ""),
     ("query/view/dialogs.rs", ""),
     ("grid/edit/view.rs", ""),
-    ("sidebar/view.rs", "fn item("),
+    ("sidebar/view.rs", "fn node_icon("),
     ("connections/view.rs", ""),
     ("workspace/drop_dialog.rs", ""),
     ("grid/view.rs", ""),

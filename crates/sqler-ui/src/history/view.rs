@@ -342,7 +342,8 @@ fn history_row(
     };
     let state = RowState {
         selected,
-        focused: true,
+        // The list has no focus handle of its own: the selection draws unfocused.
+        focused: false,
         disabled: false,
     };
     let mut line = list_row(("history-row", ix), state, cx)
@@ -487,7 +488,7 @@ pub(crate) fn saved_section(
                 };
                 let state = RowState {
                     selected: saved.selected() == Some(query.id()),
-                    focused: true,
+                    focused: false,
                     disabled: false,
                 };
                 let row = list_row(("saved-row", ix), state, cx)

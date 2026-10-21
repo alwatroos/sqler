@@ -25,8 +25,9 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::PopupMenu;
 use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::select::{Select, SelectState};
+use gpui_component::spinner::Spinner;
 use gpui_component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
-use gpui_component::{ActiveTheme as _, Icon, IndexPath, Sizable as _};
+use gpui_component::{ActiveTheme as _, IndexPath, Sizable as _};
 
 use super::detail_view::{self, CellDetailView, CopyCellValue};
 use super::edit::GridKey;
@@ -596,7 +597,12 @@ impl GridViews {
                 .gap(px(SPACE[2]))
                 .text_size(px(scale.sm))
                 .text_color(muted)
-                .child(Icon::new(AppIcon::LoaderCircle).size(px(ICON_SM)))
+                .child(
+                    Spinner::new()
+                        .icon(AppIcon::LoaderCircle)
+                        .color(muted)
+                        .xsmall(),
+                )
                 .child("Preparing the results…");
         };
         let hint = |action: GridAction, title: &str| {

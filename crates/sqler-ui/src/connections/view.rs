@@ -17,6 +17,7 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::spinner::Spinner;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
 use sqler_config::{GroupId, TlsMode};
 use sqler_driver_api::sqler_core::{DriverId, Environment};
@@ -674,7 +675,7 @@ fn form_panel(
                 .child(error.message.clone()),
         );
     }
-    body = body.child(test_row(form, colors, cx));
+    body = body.child(field_row("", test_row(form, colors, cx), cx));
 
     panel()
         .child(dialog_title(Some(AppIcon::Server), heading, cx))
@@ -789,7 +790,12 @@ fn test_row(
     match &form.test {
         TestStatus::Running(_) => {
             row = row
-                .child(status_icon(AppIcon::LoaderCircle, colors.muted))
+                .child(
+                    Spinner::new()
+                        .icon(AppIcon::LoaderCircle)
+                        .color(colors.muted)
+                        .xsmall(),
+                )
                 .child(div().child("Testing the connection…"))
                 .child(button(
                     "test-cancel",
