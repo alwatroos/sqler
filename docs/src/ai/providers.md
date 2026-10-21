@@ -121,3 +121,66 @@ The text comes from Ollama's `error` field, cut to 200 characters; it never hold
 
 Tests run against a loopback mock server with hand-written fixtures. A real run against Ollama with one tool-capable model is pending (maintainer).
 
+## Anthropic
+
+The `sqler-ai-anthropic` crate implements `AiProvider` as `AnthropicProvider` over the Messages API (`POST /v1/messages` with `stream: true`, `GET /v1/models`). It reuses the `reqwest` 0.12 workspace dependency of the Ollama provider (one TLS stack, see `docs/src/dependencies.md`), so the futures and streams must be polled inside a Tokio runtime with I/O and time enabled.
+
+### Endpoint, key and remote
+
+`AnthropicProvider::new(api_key, None)` uses `DEFAULT_ENDPOINT`, `https://api.anthropic.com`; `new(api_key, Some(url))` takes an `https` URL with a host, or an `http` URL whose host is `localhost` or a loopback address (a test server or a local proxy), so the key never travels in clear text. A URL with a user name, a password, a query or a fragment is `AiError::Invalid`, as is an empty key or one with characters that cannot be in a header (the key is never echoed). Redirects are not followed, the connect timeout is 10 s, a loopback endpoint is reached without an environment proxy, and a chat has no overall timeout. `GET /v1/models` pages time out after 30 s.
+
+The caller passes the key (T11 reads it from the keychain). It is kept only as a sensitive header value and sent as `x-api-key`; it is never in a URL. `Debug` of the provider prints `api_key: "<redacted>"`. Every error text has the key replaced by `***` before it is cut to 200 characters, and `crates/sqler-ai-anthropic/tests/secrets.rs` checks that the key is in no error text, `Debug` print, `log` record or `tracing` event or span.
+
+Anthropic is a remote provider: `is_local()` is always false, even with a loopback endpoint. `is_local` and `model_capabilities` are inherent methods, so a caller that needs them builds the concrete `AnthropicProvider`.
+
+### Wire format
+
+Checked on 2026-10-21 against the Anthropic documentation (Messages, streaming, Models list, errors, versions, models overview).
+
+| Call | Use |
+| ---- | --- |
+| `GET /v1/models?limit=1000` | `id`, `display_name`, `max_input_tokens`; `&after_id=<last_id>` while `has_more`, at most 10 pages |
+| `POST /v1/messages` | `{model, max_tokens, system?, messages, tools?, temperature?, stream: true}` |
+
+Every request sends `x-api-key`, `anthropic-version: 2023-06-01` (the only version the versioning page lists) and `content-type: application/json`; `/v1/messages` also sends `accept: text/event-stream`. No `anthropic-beta` header is sent.
+
+- `max_tokens` is required by the API: it is the request's `max_output_tokens`, else `DEFAULT_MAX_TOKENS` (4096), which is below the output limit of every listed model (64K for the smallest). `system` is the top-level string. Tools are `{name, description, input_schema}`. The API combines consecutive turns of one role; the provider also merges them, so several tool results are one user turn.
+- User text and images keep their order (`image` blocks are base64 with the media type). An assistant message is its text followed by `tool_use` blocks with `input` as a JSON object (bad JSON is `AiError::Invalid` as the first stream item); an assistant message without blocks is dropped. A tool result is a `tool_result` block (`tool_use_id`, `content`, `is_error` when true) in a user turn. Results are not checked against earlier calls; the API does that.
+- The reply is server-sent events (lines end at `\n`, `\r\n` or `\r`; events up to 8 MiB). Events are dispatched on the `type` of the JSON data; the `event:` name is ignored, and so is every unknown event, content block or delta type (`thinking`, `signature_delta`, `server_tool_use`, ...).
+- Text from `text_delta` (and from a non-empty text block start) becomes `TextDelta`. The `input_json_delta` fragments of a `tool_use` block are buffered per block index and one complete `ToolCall` is emitted at `content_block_stop` (the start `input`, or `{}`, if no fragment came; malformed JSON is passed through raw). Interleaved blocks are kept apart.
+- Usage: the counts of `message_start` and `message_delta` are cumulative. Input is `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`; a count that is missing keeps its last value (the documented `message_delta` carries only `output_tokens`). The provider emits the increment as `Usage` events, so the sum is the total. `message_stop` gives `Done`.
+
+| `stop_reason` | `StopReason` |
+| ------------- | ------------ |
+| `end_turn`, `stop_sequence` | `EndTurn` |
+| `tool_use` | `ToolUse` |
+| `max_tokens`, `model_context_window_exceeded` | `MaxTokens` |
+| `pause_turn`, `refusal`, anything else | `Other(reason)` |
+| none | `ToolUse` if the response had a tool call, else `EndTurn` |
+
+Differences from what the plan expected, found by the live check: the Models API now returns `max_input_tokens` (and `max_tokens` and a `capabilities` object), so `list_models` uses it for `context_window`; and no listed model lacks image input, so the vision table has no exception (see Capabilities).
+
+### Capabilities
+
+`capabilities()` is the provider in general: tools and vision on, JSON mode off, context 200,000 tokens. `model_capabilities(model)` is a static table with no I/O: ids starting with `claude-` have tools and vision and `max_context_tokens` of 200,000; other ids have tools only and no window. 200,000 is the smallest context of any listed model (Haiku 4.5 and Sonnet 4.5 have 200K; the 4.8, 5 and 5.5 generations have 1M), so a prompt budgeted on it always fits; `list_models` reports the exact `max_input_tokens`, and falls back to the table when it is null. `claude-3-5-haiku`, the one model the plan expected without image input, is retired.
+
+JSON mode is off, and a request with `ResponseFormat::Json` fails with `AiError::Unsupported` as the first stream item: the Messages API has no schema-less JSON flag, and structured outputs need a schema and a beta header.
+
+### Errors
+
+| Case | `AiError` |
+| ---- | --------- |
+| HTTP 401 or 403 | `Auth("HTTP <code>")` |
+| HTTP 429 | `RateLimited` with integer `Retry-After` seconds |
+| HTTP 529 | `Provider("overloaded (HTTP 529): <message>")` |
+| other non-2xx | `Provider("HTTP <code>: <message>")`, or `"HTTP <code>"` without a message |
+| SSE `error` event `authentication_error`, `permission_error` | `Auth(<type>)` |
+| SSE `error` event `rate_limit_error` | `RateLimited` without a delay |
+| SSE `error` event `overloaded_error` | `Provider("overloaded: <message>")` |
+| other SSE `error` event | `Provider("<type>: <message>")` |
+| timeout, connection refused, body cut off, other transport failure | `Network("timed out" \| "cannot connect to the Anthropic API" \| "response interrupted" \| "request failed")` |
+| malformed event, event over 8 MiB, end of stream before `message_stop` | `Protocol` |
+
+An overload is a `Provider` error, not `RateLimited`: it is the service, not the caller's quota, and the UI should not say "rate limited". A dedicated `AiError::Overloaded` is a follow-up change to `sqler-ai-api`. The message is the API's `error.message`; it never holds the URL, a header or the prompt. After `Done` or any `Err` the stream returns `None`. Dropping the stream drops the HTTP response and closes the connection.
+
+Tests run against a loopback mock server with fixtures hand-written from the documentation's example transcripts. One real streamed call with tools on a real key is pending (maintainer).
