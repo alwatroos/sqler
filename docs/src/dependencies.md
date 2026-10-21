@@ -129,6 +129,7 @@ Per-dependency rationale is added by the PR that introduces it.
   measures the delta against the 7.1 MB Linux headroom. `hyper`, `hyper-util`, `hyper-rustls`,
   `rustls`, `ring` and `tokio` are already in the app tree through `gpui-pre-reqwest` and `sqlx`;
   the new code is `reqwest`, `tower-http` and this crate.
+- `sqler-ai-openai` (T5) adds no crate: it reuses the T3 `reqwest` 0.12.28 and `base64` 0.22.1 rows above (same workspace line, same rustls/ring stack). Checked 2026-10-21: `cargo tree -p sqler-ai-openai -i rsa`, `-i webpki-roots`, `-i openssl-sys`, `-i native-tls` and `-i aws-lc-rs` find no package, one `rustls`, `cargo deny check` clean with no new ignore.
 - `log` 0.4.34 and `tracing` 0.1.44 (T4, dev-dependencies of `sqler-ai-anthropic` only): `tests/secrets.rs`
   installs a capturing `log::Log` and `tracing::Subscriber` to prove the API key reaches no log or trace
   output. Both are already in `Cargo.lock` (`reqwest` uses `log`, `hyper` uses `tracing`), so no new
