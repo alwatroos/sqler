@@ -111,6 +111,8 @@ Run from the repository root on the commit being recorded:
 
 The rule is limit = baseline minimum x 1.25 + `--cells-slack-ns`. Worked out for the 6-column table above: a baseline `cells_p95_ns` of 1,209 ns gives 1,209 x 1.25 + 500 = 2,011 ns; one of 917 ns (the figure measured at `d1c6c64`, below) gives 1,646 ns.
 
+Interleaving (T15): the grid step of `bench.yml` follows the browser tree scheme. The base commit is checked out first; both sides are built (`--no-run`), then 6 rounds run in the order base, PR, PR, base, base, PR, each round one repetition (`--reps 1`, so the base gets the flag only if its source knows `--reps`) saved to its own file. A last judge-only call (`--pr` per PR file, `--compare` per base file, `--slack-ns 100`) takes the minimum per key over the rounds on each side (`p95_ns`, `cells_p95_ns` and the p50s; a baseline `cells_p95_ns` counts only if every base file has it) and applies the rule above to those minima. The keys, the 25 % and the slacks (100 ns, 500 ns) are unchanged; only the measurement is. Judge-mode report: `mode=judge`, `rounds=N`, the merged keys and `base_p95_ns` / `base_cells_p95_ns`. Checked by hand (macOS arm64): 3 default base rounds against 3 PR rounds with `--viewport 200` fail with exit 1 (`p95` 292 ns against 84 ns, limit 205 ns; `cells_p95` 2,584 ns against 958 ns, limit 1,697 ns); 3 default PR rounds pass (exit 0); a PR file without `p50_ns` exits 2. Over 5 default local runs the keys were stable: p50 83 ns, p95 84 ns, cells p50 709 to 791 ns, cells p95 958 to 1,000 ns. Over the 23 Bench runs that have both sides (2026-10-20 to 2026-10-21) no grid gate failed: PR/base p95 ranged 0.40 to 1.12 and PR/base cells p95 0.75 to 1.04, and the smallest margin to the limit was 37 % for p95 and 30 % for cells p95 (base p95 131 to 491 ns, base cells p95 1,499 to 3,005 ns). So the data does not show a grid flake; the interleaving is applied because the grid gate has the same structure as the tree gate (sequential runs on a shared runner) and the change costs about 30 s, not because a failure was observed. The keys, the 25 % and the slacks stay as they were.
+
 `layout_*` (T5, not gated): 100,000 rows x 50 columns, 2 pinned, reversed order, a 10x5 selection; each sample fetches a viewport and visits every visible cell through the layout and the selection. Measured at `d1c6c64` (macOS 27.0.1 arm64, Apple M4 Pro, best of 3 repetitions): `layout_p50_ns` 13,916 and `layout_p95_ns` 14,792 (a second run: 13,959 and 14,542; other runs gave up to about 15.7 us p95). The same run gives the viewport `p95_ns` 84 and `cells_p95_ns` 917 for 6 columns.
 
 ## Results grid view
@@ -218,13 +220,82 @@ Expand p95 is about 0.7 ms against the 16 ms budget (one frame at 60 Hz), and se
 
 ### Method
 
-1. `cargo bench -p sqler-ui --bench browser_tree` (release profile). Flags: `--tables` (5000), `--samples` (200), `--select-samples` (20000), `--reps` (3), `--save PATH`, `--compare PATH`, `--threshold-pct` (25), `--slack-ns` (250000), `--budget-expand-p95-ns` (16000000), `--budget-select-p95-ns` (1000000).
+1. `cargo bench -p sqler-ui --bench browser_tree` (release profile). Flags: `--tables` (5000), `--samples` (200), `--select-samples` (20000), `--reps` (3), `--warmup` (30), `--save PATH`, `--compare PATH` (repeatable), `--pr PATH` (repeatable, judge mode), `--threshold-pct` (25), `--slack-ns` (250000), `--floor-ns` (1000000), `--simulate-slowdown`, `--budget-expand-p95-ns` (16000000), `--budget-select-p95-ns` (1000000). The first `--warmup` iterations are not recorded. `--simulate-slowdown` makes the timed expand do its work twice (a test-only 2x regression; the second tree is built outside the timed span). With `--pr`, nothing is measured: the report is the minimum per key over the `--pr` files, judged against the minimum over the `--compare` files, and it prints `mode=judge`, `rounds=<files>` and `base_expand_p50_ns` / `base_expand_p95_ns`.
 2. `expand_*`: expand the schema, load the 5,000-table listing, rebuild the rows. `folder_p95_ns`: expand the `Tables` folder under it. `select_*`: change the selection. p50 and p95 are nearest-rank percentiles.
 3. Exit code 0 passes, 1 is a regression or budget failure, 2 is a usage error.
 
 ### Regression rule
 
-`bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `expand_p95_ns` is more than 25 % plus 250 us above the base, or if a budget is exceeded. Every metric is the minimum over `--reps 3` repetitions of the whole measurement, on the base and on the PR alike. The 250 us slack is an absolute allowance for runner noise on a millisecond-scale metric (about 0.7 ms on the reference machine, so the limit is about 1.1 ms); a 2x slowdown (about 1.35 ms) is above it and fails (checked by halving the saved baseline: expand p95 790 us against a baseline of 336 us, limit 670 us). Only `expand_p95_ns` is compared; the select p95 is guarded by its 1 ms budget.
+`bench.yml` runs the bench on Linux for each pull request. Base and PR rounds alternate inside one step (T15; see the noise analysis below): 8 rounds, each a single in-process repetition (`--reps 1`), in the order base, PR, PR, base, base, PR, ... so that neither side owns the cold start or the slow minute. Each round saves its report. A final judge-only call (`--pr` per PR file, `--compare` per base file) takes the minimum per key over the rounds of each side and decides. The rule on those minima:
+
+- `expand_p50_ns` fails when it is above `max(base_p50 x 1.25 + 250 us, 1 ms)` (`--threshold-pct 25`, `--slack-ns 250000`, `--floor-ns 1000000`). The floor keeps a base that happens to be very fast from producing a limit near the timer and allocator noise.
+- `expand_p95_ns` is informational: a `WARN:` line above `2 x base_p95 + 2 x slack`, never a failure. Its absolute budget (16 ms) still fails, and so does the select p95 budget (1 ms).
+- Without a baseline on the base branch only the budgets apply. A base whose bench source has no `--reps` gets no `--reps` flag (grep guard in the workflow); `--pr`, `--warmup` and `--floor-ns` are never passed to the base.
+
+Why p50 and not p95: with 200 samples the p95 is the tenth-largest value, so a single descheduling burst of ten expands moves it; the p50 moves only if half the samples slow down, which is a real shift. The minimum over rounds drops the rounds that landed on a slow minute of the shared runner (noise only adds time), and alternating the order spreads a drift of the runner over both sides instead of loading it on one.
+
+Limits, worked out: a base minimum p50 of 1.20 ms gives 1.20 x 1.25 + 0.25 = 1.75 ms; one of 0.62 ms (this machine) gives 1.02 ms (above the floor by 20 us). A 2x regression fails when the baseline is at least about 0.5 ms (below that, the 1 ms floor or the 250 us slack is above 2x): on Linux CI (median base p50 1.4 ms) 2x is 2.8 ms against a limit of 2.0 ms.
+
+Checks by hand (macOS arm64, Apple M4 Pro, 5000 tables, bench binary from the T15 tree):
+
+- Saved-baseline method: `--save base.txt` gave expand p50 625,916 ns. `--simulate-slowdown --compare base.txt` gave p50 1,231,083 ns against a limit of 1,032,395 ns, exit 1 (`FAIL: expand p50 ... regressed`). A normal run against the same file exited 0.
+- Judge method: 3 base files and 3 `--simulate-slowdown` PR files (`--reps 1` each) judged with `--pr` / `--compare`: expand p50 1,229,875 ns against 611,292 ns (limit 1,014,115 ns), exit 1. Normal against normal, 3 base and 3 PR files, repeated 10 times: 0 failures.
+- Halved baseline (the old doc check): with the p50 and p95 of the baseline halved to 312,958 / 324,167 ns, a normal run (about 0.62 ms) exits 0, with or without `--floor-ns 0`. That is the rule working as designed, not a miss: against a 0.31 ms baseline the limit is 0.64 ms because of the 250 us slack, and 0.62 ms is not a 2x regression of anything the gate can see. The 2x demos above start from the real baseline.
+- For contrast, the old rule (p95, 25 % + 50 ns in CI): `expand p95 1,868,787 ns regressed against baseline 883,585 ns (limit 1,104,531 ns)` failed run 39471570387 on 2026-10-20, with p50 718,436 against 726,307 ns.
+
+### Noise analysis (T15)
+
+Observed: the old gate (p95 of 200 samples, 25 % + 50 ns, base and PR benches run minutes apart, one repetition each on the Linux runner) failed 5 of the last 100 Bench runs (2026-10-20 18:04 to 2026-10-21 06:22 UTC), all five on the browser-tree expand p95 and none on any other gate. In four of the five the p50 was within 7 % of the base and only the p95 had doubled or worse (the fifth, `rsa-alternatives`, had a p50 of 1.74 ms against 0.68 ms as well). Sources of noise, in the order they matter:
+
+1. **Runner contention between the base and the PR run.** The two benches ran in separate steps with a build between them. The base p50 swung 0.71 to 3.13 ms over the runs and the PR p50 0.84 to 3.95 ms; inside one run the two sides differ by a factor of up to 2.6 in p50 (runs 39522092691: 0.71 against 1.84 ms, 39527230085: 1.36 against 2.88 ms) and in both directions (39518119097: 3.05 against 1.46 ms). A shift of the whole distribution on one side cannot be told from a regression with sequential runs, whatever percentile is used. The retro-applied p50 rule on single runs (below) would have failed 4 runs for this reason alone. Fix: interleave (ABBA) and take the minimum over rounds.
+2. **Few samples at a high percentile.** On the 22 tabulated runs p95 / p50 was above 2.5 on 7 base figures (above 3 on 2) and on 3 PR figures (base of 39517969629: p50 1.17 ms, p95 3.26 ms; the PR side of the same run: 1.11 / 1.13 ms). The p95 of 200 samples is the 190th value: ten slow iterations (a scheduler tick, a neighbour VM) set it. Median of the p95 over the 22 base runs: 2.60 ms against a median p50 of 1.42 ms. Fix: gate on the p50, keep the p95 as a warning.
+3. **Cold first iterations.** The bench took no warm-up, so the first allocations of the 5,000-table listing (allocator growth, page faults, cold instruction cache) were samples. Locally the effect is small once the best of 3 repetitions is taken (below), but it is cheap to remove: 30 unrecorded iterations first (`--warmup 30`).
+4. **Timer resolution** is not a factor at this scale: one `Instant` pair costs about 41 ns on macOS against a 0.6 ms expand, 0.007 %.
+5. **Allocator state** matters through the cold start and through the other benches' leftovers; in the interleaved scheme every round is a fresh process, so nothing carries over.
+
+Local measurements (macOS 27.0.1 arm64, Apple M4 Pro, idle machine, release bench binary; this machine is the quiet case, CI is not):
+
+| Setup | expand p50 (ns), 5 runs | expand p95 (ns), 5 runs |
+| ----- | ------------------------ | ------------------------ |
+| default (`--reps 3 --warmup 30`) | 622,375 / 612,500 / 614,292 / 610,500 / 612,833 | 648,042 / 631,708 / 632,292 / 624,708 / 631,416 |
+| `--warmup 0` (best of 3 reps) | 612,500 / 612,791 / 619,208 / 611,583 / 610,584 | 626,875 / 626,417 / 638,708 / 625,708 / 624,791 |
+| `--reps 1 --warmup 0` | 613,416 / 613,250 / 616,583 / 611,667 / 616,042 | 661,291 / 623,708 / 632,834 / 628,333 / 638,209 |
+| `--reps 1 --warmup 30` | 612,125 / 613,084 / 613,459 / 614,542 / 625,000 | 639,333 / 657,416 / 631,834 / 628,250 / 658,542 |
+
+The p50 spread is 1.0 to 2 % on an idle machine in every setup, the p95 spread 4 to 6 % (single repetitions), so the macOS runs cannot show the CI effects; the warm-up is not measurable here (the first iteration costs less than the p95 resolution of 200 samples). It is kept because the Linux CI base showed cold-start outliers (p95 / p50 above 3 in 2 of 22 runs, above 2.5 in 7) and the cost is 30 iterations of 0.6 ms. This is a judgement, not a measured gain; say so if it needs to be revisited. The `grid_viewport` and the CI table below carry the evidence for the rest.
+
+CI data, last 22 Bench runs with a browser-tree figure on both sides (old bench: one run per side, p95-gated; the p50 columns are printed by the old bench too). "p50 rule, single run" retro-applies the new threshold to those single runs (it is what the new rule would say without interleaving); "p95 rule in force" is the old gate:
+
+| Run | Branch | Date | Base p50 (ms) | PR p50 (ms) | p50 PR/base | p50 rule, single run | Base p95 (ms) | PR p95 (ms) | p95 PR/base | p95 rule in force | Job |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 39511007499 | export-text-writers | 10-20 | 1.47 | 1.41 | 0.95 | pass | 3.93 | 3.87 | 0.99 | pass | success |
+| 39513530762 | grid-bounded-model | 10-20 | 1.45 | 1.48 | 1.02 | pass | 3.92 | 3.98 | 1.02 | pass | success |
+| 39514446344 | grid-bounded-model | 10-20 | 1.15 | 1.13 | 0.98 | pass | 3.29 | 1.21 | 0.37 | pass | success |
+| 39516199348 | staged-edits-model | 10-20 | 3.13 | 3.15 | 1.00 | pass | 3.20 | 3.20 | 1.00 | pass | success |
+| 39516457224 | linux-binary-size | 10-20 | 1.55 | 1.62 | 1.05 | pass | 1.91 | 1.95 | 1.02 | pass | success |
+| 39516706188 | cli-export | 10-20 | 1.44 | 1.43 | 0.99 | pass | 1.54 | 1.51 | 0.98 | pass | success |
+| 39517058811 | staged-edits-model | 10-20 | 1.52 | 2.50 | 1.65 | fail | 2.59 | 2.56 | 0.99 | pass | success |
+| 39517969629 | cli-export | 10-20 | 1.17 | 1.11 | 0.95 | pass | 3.26 | 1.13 | 0.35 | pass | success |
+| 39518119097 | grid-columns-selection | 10-20 | 3.05 | 1.46 | 0.48 | pass | 3.48 | 1.62 | 0.47 | pass | success |
+| 39519279591 | export-parquet-xlsx | 10-21 | 1.41 | 1.45 | 1.03 | pass | 1.46 | 2.98 | 2.05 | fail | failure |
+| 39520414293 | export-parquet-xlsx | 10-21 | 2.56 | 1.18 | 0.46 | pass | 2.61 | 2.53 | 0.97 | pass | success |
+| 39522092691 | grid-columns-selection | 10-21 | 0.71 | 1.84 | 2.60 | fail | 1.83 | 1.90 | 1.04 | pass | success |
+| 39527167827 | grid-cell-detail | 10-21 | 1.43 | 1.45 | 1.01 | pass | 1.56 | 1.54 | 0.99 | pass | success |
+| 39527230085 | grid-copy-as | 10-21 | 1.36 | 2.88 | 2.12 | fail | 2.89 | 2.94 | 1.02 | pass | success |
+| 39528689537 | grid-sort-filter | 10-21 | 1.86 | 3.95 | 2.13 | fail | 4.08 | 4.21 | 1.03 | pass | success |
+| 39529727634 | grid-sort-filter | 10-21 | 1.44 | 1.34 | 0.93 | pass | 1.57 | 1.49 | 0.95 | pass | success |
+| 39530672804 | grid-export | 10-21 | 0.87 | 0.84 | 0.97 | pass | 2.79 | 2.89 | 1.04 | pass | success |
+| 39552491949 | grid-export | 10-21 | 1.35 | 1.42 | 1.05 | pass | 1.39 | 1.49 | 1.07 | pass | success |
+| 39552612160 | grid-cell-detail | 10-21 | 0.89 | 0.85 | 0.96 | pass | 3.10 | 0.92 | 0.30 | pass | success |
+| 39552987230 | grid-copy-as | 10-21 | 0.92 | 0.92 | 1.00 | pass | 0.99 | 0.99 | 1.00 | pass | success |
+| 39554975641 | grid-export | 10-21 | 1.02 | 1.04 | 1.02 | pass | 1.08 | 2.35 | 2.17 | fail | failure |
+| 39555341031 | grid-cell-detail | 10-21 | 1.14 | 1.16 | 1.01 | pass | 1.17 | 1.18 | 1.02 | pass | success |
+
+Retro-application: the old p95 rule failed 2 of these 22 runs (39519279591: p95 1.46 against 2.98 ms; 39554975641: 1.08 against 2.35 ms; three older failures are not in the table: p95 4.17 against 3.17 ms, 1.87 against 0.88 ms and 7.75 against 0.73 ms, with p50 within 7 % in the first two and 1.74 against 0.68 ms in the third). The new threshold applied to single runs would have passed both of them (p50 within 3 %) but failed 4 others (39517058811, 39522092691, 39527230085, 39528689537: PR p50 1.65 to 2.60 times the base) which the old rule passed because their p95 was equal on both sides. Those four are whole-distribution shifts between two sequential runs, with nothing in the PR touching the tree: a p50 gate without interleaving is as flaky as the p95 gate, only in different runs. That is the reason for the ABBA rounds with a minimum per side, not a different percentile alone. Whether the interleaved rule passes every one of such runs can only be shown by the reruns below.
+
+Note on this PR's own run: the base (main) still has the old browser bench without warm-up, which is biased slow, so the PR side looks faster than the base. The bias is transitional; from the next PR on, both sides run the same code.
+
+CI reruns of this change (Bench job, interleaved scheme): pending. They need the pull request, which the PR stage opens; this section is to be filled with the PR value, limit and margin of the browser expand p50 and the grid p95 and cells p95 for at least 5 runs.
 
 ## Completion
 
@@ -259,6 +330,10 @@ The worst completion p95 is about 0.5 to 1.0 ms against the 16 ms budget (one fr
 ### Regression rule
 
 `bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `complete_p95_ns`, taken as the minimum over 3 in-process repetitions, is more than 25 % plus 250 us (`--slack-ns 250000`, 1/64 of the budget) above the same figure on the base, or if `complete_p95_ns`, `hover_p95_ns`, `diagnose_p95_ns` or `worst_p95_ns` exceeds the 16 ms budget. `hover_p95_ns` and `diagnose_p95_ns` are compared the same way when the base's file has them (a base from before T7 does not; `bench.yml` therefore gates them only once the base branch has a baseline with those keys, and until then only the 16 ms budget applies to them; the gate code is checked by comparing against a saved file that has the keys). Without a baseline on the base branch only the budget applies. The p95 of this bench is in the hundreds of microseconds and sits in the tail of the relation-scan scenarios, so the fixed 50 ns slack of the ns-scale benches would flake on a shared runner; the minimum over repetitions drops a noisy repetition and the 250 us floor keeps a real 2x regression (about +450 us on the M4, more on a runner) failing. If the gate still flakes, report it here rather than widening the default silently.
+
+## Gate review (T15)
+
+The same data (the last 100 Bench runs, of which the 22 to 23 with both sides in the logs were read) was checked for the other gated benches. Only the browser expand p95 ever failed in that window. `catalog_tree` `hit_p95_ns` (100,000 samples, 25 % + 150 ns): PR/base ratio 0.90 to 1.07 over 22 runs, base 99 to 148 ns, 0 failures under the current rule. `catalog_index` `prefix_p95_ns` (25 % + 50 ns): ratio 0.84 to 1.05, base 153 to 328 us, 0 failures. `completion` `complete_p95_ns` (minimum of `--reps 3`, 25 % + 250 us): ratio 0.81 to 1.03, base 368 to 760 us, 0 failures. Nothing here points at noise, so their rules are unchanged (no gate was loosened). `grid_sort` is not on this base, and `editor_*` and `export_throughput` are not in `bench.yml`, so there is nothing to review for them; a bench added later should follow the interleaved A/B plus judge pattern of the browser step. If one of the ns-scale gates (`hit_p95_ns` with a 150 ns slack, `prefix_p95_ns` with a 50 ns slack) ever flakes, the first step is the same interleaving, not a wider slack.
 
 ## SQL editor buffer
 

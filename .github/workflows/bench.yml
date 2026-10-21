@@ -31,32 +31,51 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - name: Baseline bench on the base commit
+      - name: Check out the base commit
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git worktree add ../base "$BASE_SHA"
+      - name: Grid viewport bench (base and PR interleaved)
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/target"
-          git worktree add ../base "$BASE_SHA"
-          if [ -f ../base/crates/sqler-ui/benches/grid_viewport.rs ]; then
+          # Same scheme as the browser tree step below: base and PR rounds alternate and each side
+          # is judged by its minimum over all rounds (docs/src/benchmarks.md).
+          T="$GITHUB_WORKSPACE/target"
+          mkdir -p "$T"
+          BASE_SRC="$GITHUB_WORKSPACE/../base/crates/sqler-ui/benches/grid_viewport.rs"
+          ROUNDS=6
+          BASE_ARGS=""
+          HAVE_BASE=0
+          if [ -f "$BASE_SRC" ]; then
+            HAVE_BASE=1
             # Older base benches reject --reps (exit 2); pass it only if the base source knows it.
-            REPS=""
-            if grep -q -- '--reps' ../base/crates/sqler-ui/benches/grid_viewport.rs; then REPS="--reps 3"; fi
-            cd ../base
-            rustup toolchain install
-            # Exit 1 means the base itself broke the 1 ms budget; the file is saved first.
-            cargo bench -p sqler-ui --bench grid_viewport -- $REPS --save "$GITHUB_WORKSPACE/target/bench-base.txt" || [ $? -eq 1 ]
+            if grep -q -- '--reps' "$BASE_SRC"; then BASE_ARGS="--reps 1"; fi
+            (cd "$GITHUB_WORKSPACE/../base" && rustup toolchain install && cargo bench -p sqler-ui --bench grid_viewport --no-run)
           else
             echo "::notice::no baseline bench on base"
           fi
-      - name: Bench the PR (or branch) commit
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/target"
-          if [ -f "$GITHUB_WORKSPACE/target/bench-base.txt" ]; then
-            cargo bench -p sqler-ui --bench grid_viewport -- --reps 3 --save "$GITHUB_WORKSPACE/target/bench-pr.txt" --compare "$GITHUB_WORKSPACE/target/bench-base.txt" --slack-ns 100
-          else
-            cargo bench -p sqler-ui --bench grid_viewport -- --reps 3 --save "$GITHUB_WORKSPACE/target/bench-pr.txt"
-          fi
+          cargo bench -p sqler-ui --bench grid_viewport --no-run
+          base_round() {
+            # Exit 1 means the base itself broke the 1 ms budget; the file is saved first.
+            (cd "$GITHUB_WORKSPACE/../base" && cargo bench -p sqler-ui --bench grid_viewport -- $BASE_ARGS --save "$T/bench-base-$1.txt") || [ $? -eq 1 ]
+          }
+          pr_round() {
+            cargo bench -p sqler-ui --bench grid_viewport -- --reps 1 --save "$T/bench-pr-$1.txt" || [ $? -eq 1 ]
+          }
+          JUDGE=""
+          for i in $(seq 1 "$ROUNDS"); do
+            if [ $((i % 2)) -eq 1 ]; then
+              if [ "$HAVE_BASE" -eq 1 ]; then base_round "$i"; fi
+              pr_round "$i"
+            else
+              pr_round "$i"
+              if [ "$HAVE_BASE" -eq 1 ]; then base_round "$i"; fi
+            fi
+            JUDGE="$JUDGE --pr $T/bench-pr-$i.txt"
+            if [ "$HAVE_BASE" -eq 1 ]; then JUDGE="$JUDGE --compare $T/bench-base-$i.txt"; fi
+          done
+          # Judge only: no measuring, min over the PR files against min over the base files.
+          cargo bench -p sqler-ui --bench grid_viewport -- --save "$T/bench-pr.txt" $JUDGE --slack-ns 100
       - name: Baseline catalog bench on the base commit
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
@@ -97,29 +116,47 @@ jobs:
           else
             cargo bench -p sqler-catalog --bench catalog_index -- --save "$GITHUB_WORKSPACE/target/catalog-index-pr.txt"
           fi
-      - name: Baseline browser tree bench on the base commit
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+      - name: Browser tree bench (base and PR interleaved)
+        if: ${{ !cancelled() }}
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/target"
-          if [ -f ../base/crates/sqler-ui/benches/browser_tree.rs ]; then
+          # Shared runners swing by 2-3x between minutes, so the base and PR rounds alternate in this
+          # one step and each side is judged by its minimum over all rounds (docs/src/benchmarks.md).
+          T="$GITHUB_WORKSPACE/target"
+          mkdir -p "$T"
+          BASE_SRC="$GITHUB_WORKSPACE/../base/crates/sqler-ui/benches/browser_tree.rs"
+          ROUNDS=8
+          BASE_ARGS=""
+          HAVE_BASE=0
+          if [ -f "$BASE_SRC" ]; then
+            HAVE_BASE=1
             # Older base benches reject --reps (exit 2); pass it only if the base source knows it.
-            REPS=""
-            if grep -q -- '--reps' ../base/crates/sqler-ui/benches/browser_tree.rs; then REPS="--reps 3"; fi
-            cd ../base
-            # Exit 1 means the base itself broke a budget; the file is saved first.
-            cargo bench -p sqler-ui --bench browser_tree -- $REPS --save "$GITHUB_WORKSPACE/target/browser-base.txt" || [ $? -eq 1 ]
+            if grep -q -- '--reps' "$BASE_SRC"; then BASE_ARGS="--reps 1"; fi
+            (cd "$GITHUB_WORKSPACE/../base" && rustup toolchain install && cargo bench -p sqler-ui --bench browser_tree --no-run)
           else
             echo "::notice::no browser tree baseline bench on base"
           fi
-      - name: Bench the browser tree on the PR (or branch) commit
-        if: ${{ !cancelled() }}
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/target"
-          if [ -f "$GITHUB_WORKSPACE/target/browser-base.txt" ]; then
-            cargo bench -p sqler-ui --bench browser_tree -- --reps 3 --save "$GITHUB_WORKSPACE/target/browser-pr.txt" --compare "$GITHUB_WORKSPACE/target/browser-base.txt" --slack-ns 250000
-          else
-            cargo bench -p sqler-ui --bench browser_tree -- --reps 3 --save "$GITHUB_WORKSPACE/target/browser-pr.txt"
-          fi
+          cargo bench -p sqler-ui --bench browser_tree --no-run
+          base_round() {
+            # Exit 1 means the base itself broke a budget; the file is saved first.
+            (cd "$GITHUB_WORKSPACE/../base" && cargo bench -p sqler-ui --bench browser_tree -- $BASE_ARGS --save "$T/browser-base-$1.txt") || [ $? -eq 1 ]
+          }
+          pr_round() {
+            cargo bench -p sqler-ui --bench browser_tree -- --reps 1 --save "$T/browser-pr-$1.txt" || [ $? -eq 1 ]
+          }
+          JUDGE=""
+          for i in $(seq 1 "$ROUNDS"); do
+            if [ $((i % 2)) -eq 1 ]; then
+              if [ "$HAVE_BASE" -eq 1 ]; then base_round "$i"; fi
+              pr_round "$i"
+            else
+              pr_round "$i"
+              if [ "$HAVE_BASE" -eq 1 ]; then base_round "$i"; fi
+            fi
+            JUDGE="$JUDGE --pr $T/browser-pr-$i.txt"
+            if [ "$HAVE_BASE" -eq 1 ]; then JUDGE="$JUDGE --compare $T/browser-base-$i.txt"; fi
+          done
+          # Judge only: no measuring, min over the PR files against min over the base files.
+          cargo bench -p sqler-ui --bench browser_tree -- --save "$T/browser-pr.txt" $JUDGE
       - name: Baseline completion bench on the base commit
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
@@ -143,7 +180,7 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          for f in "$GITHUB_WORKSPACE/target/bench-base.txt" "$GITHUB_WORKSPACE/target/bench-pr.txt" "$GITHUB_WORKSPACE/target/catalog-base.txt" "$GITHUB_WORKSPACE/target/catalog-pr.txt" "$GITHUB_WORKSPACE/target/catalog-index-base.txt" "$GITHUB_WORKSPACE/target/catalog-index-pr.txt" "$GITHUB_WORKSPACE/target/browser-base.txt" "$GITHUB_WORKSPACE/target/browser-pr.txt" "$GITHUB_WORKSPACE/target/completion-base.txt" "$GITHUB_WORKSPACE/target/completion-pr.txt"; do
+          for f in "$GITHUB_WORKSPACE"/target/bench-base-?.txt "$GITHUB_WORKSPACE/target/bench-pr.txt" "$GITHUB_WORKSPACE/target/catalog-base.txt" "$GITHUB_WORKSPACE/target/catalog-pr.txt" "$GITHUB_WORKSPACE/target/catalog-index-base.txt" "$GITHUB_WORKSPACE/target/catalog-index-pr.txt" "$GITHUB_WORKSPACE"/target/browser-base-?.txt "$GITHUB_WORKSPACE/target/browser-pr.txt" "$GITHUB_WORKSPACE/target/completion-base.txt" "$GITHUB_WORKSPACE/target/completion-pr.txt"; do
             if [ -f "$f" ]; then
               echo "### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
