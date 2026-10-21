@@ -24,6 +24,7 @@ use super::export::ExportCenter;
 use super::history::HistoryWorkspace;
 use super::query::ActiveRun;
 use crate::ai::{AiState, AiStatus, ai_status};
+use crate::ai::{AuditPanel, AuditRead};
 use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
 use crate::connections::{
     ConnectFailure, ConnectRequest, ConnectionAction, ConnectionForm, Dialog, FieldError, FormMode,
@@ -42,8 +43,8 @@ use crate::sidebar::SidebarModel;
 use crate::tabs::{Breadcrumbs, TabConnection, TabDecor, TabId, TabKind, TabStrip};
 use crate::theme::{self, Appearance};
 use crate::workbench::{
-    RecentCommands, RecentConnections, RowInfo, RunIndicator, StatusBarModel, WorkbenchAction,
-    WorkbenchLayout, database_label, format_duration, format_rows,
+    PanelView, RecentCommands, RecentConnections, RowInfo, RunIndicator, StatusBarModel,
+    WorkbenchAction, WorkbenchLayout, database_label, format_duration, format_rows,
 };
 
 /// Identifies one connect attempt.
@@ -203,6 +204,9 @@ pub enum Effect {
     /// Run an apply job on tokio (`SessionBridge::spawn` with `ApplyJob::run`), mark the grid
     /// with `GridEditor::begin_apply` first, then report with [`Workspace::apply_finished`].
     ApplyEdits(ApplyJob),
+    /// Read a page of the AI audit log on the blocking pool, then report with
+    /// [`Workspace::audit_loaded`].
+    ReadAudit(AuditRead),
     /// Record this statement in the query history on a blocking thread, then report with
     /// [`Workspace::history_recorded`].
     RecordHistory(NewHistoryEntry),
@@ -359,6 +363,10 @@ impl std::fmt::Debug for Effect {
                 .field("tab", &search.tab)
                 .field("request", &search.request)
                 .finish_non_exhaustive(),
+            Self::ReadAudit(read) => f
+                .debug_struct("ReadAudit")
+                .field("request", &read.request)
+                .finish(),
             Self::ClearHistory => f.write_str("ClearHistory"),
             Self::SaveSavedQueries {
                 generation,
@@ -463,6 +471,8 @@ pub struct Workspace {
     pub(super) next_run: u64,
     /// The history tabs, saved queries and their dialogs.
     pub(super) history: HistoryWorkspace,
+    /// The AI audit log viewer.
+    pub(super) audit: AuditPanel,
     /// Inline editing: pending changes, the transaction flags, the apply flow.
     pub(super) edit: EditFlow,
     /// The export dialog and the exports in progress.
@@ -528,6 +538,7 @@ impl Workspace {
             query_runs: HashMap::new(),
             next_run: 0,
             history: HistoryWorkspace::new(),
+            audit: AuditPanel::default(),
             edit: EditFlow::default(),
             exports: ExportCenter::default(),
             layout: WorkbenchLayout::default(),
@@ -568,6 +579,9 @@ impl Workspace {
 
     /// Applies a layout action. The layout needs no I/O, so the effect is always none.
     pub fn dispatch_workbench(&mut self, action: WorkbenchAction) -> Effect {
+        if action == WorkbenchAction::ShowPanelView(PanelView::Audit) {
+            return self.open_audit();
+        }
         self.layout.apply(action);
         Effect::None
     }

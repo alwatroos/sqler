@@ -170,7 +170,7 @@ The product questions are taken with the recommended defaults and implemented un
 
 ## 5. Persistence, compatibility and budgets
 - **`workbench.toml`** (config dir, `sqler-config`):
-  - Contents: `version = 1`; `[side_panel]` visible/size/view (`connections|saved-queries`); `[bottom_panel]` visible/size/view (`results|messages|history`); optional `[window]` width/height; `recent_commands` (≤10 IDs); `recent_connections` (≤5 connection IDs).
+  - Contents: `version = 1`; `[side_panel]` visible/size/view (`connections|saved-queries`); `[bottom_panel]` visible/size/view (`results|messages|history|ai-audit`); optional `[window]` width/height; `recent_commands` (≤10 IDs); `recent_connections` (≤5 connection IDs).
   - Reading is lenient: unknown keys are ignored, and out-of-range or unknown values fall back per field to the default/clamp.
   - A missing file gives defaults.
   - `version > 1` gives defaults, and the file is **never written** (read-only, same rule as settings).
@@ -217,7 +217,7 @@ impl ConfigDir { pub fn workbench_path(&self) -> PathBuf; pub fn load_workbench_
 ```
 ```rust
 // sqler-ui/src/workbench/ (U2, headless)
-pub enum SideView { Connections, SavedQueries }   pub enum PanelView { Results, Messages, History }
+pub enum SideView { Connections, SavedQueries }   pub enum PanelView { Results, Messages, History, Audit }
 pub enum Region { ActivityBar, SidePanel, Editor, Panel, StatusBar }
 pub enum WorkbenchAction { ToggleSidePanel, ShowSideView(SideView), ToggleBottomPanel, ShowPanelView(PanelView),
     SetSideWidth(u16), SetPanelHeight(u16), FocusNextRegion, FocusPreviousRegion, ResetLayout }

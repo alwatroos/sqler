@@ -4,7 +4,7 @@
 //! The tool set: the one entry every AI surface calls.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Instant, SystemTime};
 
 use serde_json::{Value, json};
@@ -16,7 +16,7 @@ use sqler_sql::{Dialect, StatementClass};
 
 use crate::approve::Approver;
 use crate::audit::{
-    AuditDraft, AuditEntry, AuditSink, DraftError, DraftRun, DraftStatement, Surface,
+    AuditDraft, AuditEntry, AuditSink, CancelPoint, DraftError, DraftRun, DraftStatement, Surface,
 };
 use crate::error::ToolError;
 use crate::limits::Limits;
@@ -85,14 +85,157 @@ pub struct CallReport {
     pub redaction: RedactionSummary,
 }
 
+/// How far a call got, as far as the guard cares.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Phase {
+    /// Nothing is approved yet.
+    #[default]
+    Started,
+    /// Every needed approval was granted; nothing was sent yet.
+    Approved,
+    /// Statements are being sent (or were); their results are not all recorded yet.
+    Executing,
+}
+
 /// What a dispatched call leaves behind besides its content.
 #[derive(Debug, Default)]
-pub(crate) struct Ran {
+pub(crate) struct RanState {
     pub connection: Option<String>,
     pub executed: Vec<ExecutedStatement>,
     pub info: Option<ConnectionInfo>,
     /// Every planned statement: its SQL, class and whether it needs approval.
     pub planned: Vec<(String, StatementClass, bool)>,
+    pub phase: Phase,
+}
+
+/// The state of one call, shared with the drop guard so a dropped future can still be audited.
+///
+/// The lock is never held across an await.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Ran {
+    state: Arc<Mutex<RanState>>,
+}
+
+impl Ran {
+    fn with<R>(&self, f: impl FnOnce(&mut RanState) -> R) -> R {
+        f(&mut self.state.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    pub(crate) fn set_planned(&self, planned: Vec<(String, StatementClass, bool)>) {
+        self.with(|s| s.planned = planned);
+    }
+
+    pub(crate) fn push_executed(&self, executed: ExecutedStatement) {
+        self.with(|s| s.executed.push(executed));
+    }
+
+    pub(crate) fn set_phase(&self, phase: Phase) {
+        self.with(|s| s.phase = phase);
+    }
+
+    fn set_connection(&self, info: &ConnectionInfo) {
+        self.with(|s| {
+            s.connection = Some(info.id.clone());
+            s.info = Some(info.clone());
+        });
+    }
+
+    /// Takes the state out (the call is over).
+    fn take(&self) -> RanState {
+        self.with(std::mem::take)
+    }
+}
+
+/// Writes a best-effort `cancelled` audit entry if a call's future is dropped before `finish`.
+///
+/// Dropping is synchronous: the entry is built from the shared state and handed to the sink's
+/// synchronous `record`. It never panics (a panic while building is caught) and never awaits.
+struct CancelGuard<'a> {
+    toolset: &'a ToolSet,
+    call: &'a ToolCall,
+    ran: Ran,
+    started_at: SystemTime,
+    started: Instant,
+    armed: bool,
+}
+
+impl CancelGuard<'_> {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    fn record(&self) {
+        let Some(sink) = &self.toolset.inner.audit else {
+            return;
+        };
+        let state = self.ran.take();
+        let inner = &self.toolset.inner;
+        let dialect = state
+            .info
+            .as_ref()
+            .and_then(|i| Dialect::from_driver_id(i.driver.as_str()));
+        let point = if state.phase >= Phase::Approved {
+            CancelPoint::AfterApproval
+        } else {
+            CancelPoint::BeforeApproval
+        };
+        let entry = AuditEntry::from_draft(AuditDraft {
+            started: self.started_at,
+            duration: self.started.elapsed(),
+            surface: inner.surface,
+            tool: &self.call.name,
+            connection: state
+                .info
+                .as_ref()
+                .map(|i| (i.id.as_str(), i.name.as_str())),
+            raw_arguments: &self.call.arguments,
+            statements: draft_statements(&state),
+            error: None,
+            result_bytes: 0,
+            redaction: RedactionSummary::default(),
+            rules: &inner.redaction,
+            dialect,
+            cancel: Some(point),
+        });
+        sink.record(&entry);
+    }
+}
+
+impl Drop for CancelGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            // Never panic out of a drop (it may run while unwinding).
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.record()));
+        }
+    }
+}
+
+/// The planned statements with what is known of their run. Once statements are being sent
+/// (`Phase::Executing`), one without a recorded result counts as run: it was sent or may have
+/// been, and an audit errs on the side of saying so.
+fn draft_statements(ran: &RanState) -> Vec<DraftStatement<'_>> {
+    let in_flight = ran.phase == Phase::Executing;
+    ran.planned
+        .iter()
+        .enumerate()
+        .map(|(i, (sql, class, needs_approval))| DraftStatement {
+            sql,
+            class: *class,
+            needs_approval: *needs_approval,
+            ran: match ran.executed.get(i) {
+                Some(e) => Some(DraftRun {
+                    rows: e.rows,
+                    truncated: e.truncated.map(Truncation::as_str),
+                    failed: e.failed,
+                }),
+                None => in_flight.then_some(DraftRun {
+                    rows: 0,
+                    truncated: None,
+                    failed: false,
+                }),
+            },
+        })
+        .collect()
 }
 
 type DefinitionKey = (String, DbObject);
@@ -264,8 +407,17 @@ impl ToolSet {
         let started_at = SystemTime::now();
         let started = Instant::now();
         let mut ran = Ran::default();
+        let mut guard = CancelGuard {
+            toolset: self,
+            call,
+            ran: ran.clone(),
+            started_at,
+            started,
+            armed: true,
+        };
         let outcome = self.run(call, &mut ran).await;
-        self.finish(call, started_at, started, outcome, ran)
+        guard.disarm();
+        self.finish(call, started_at, started, outcome, ran.take())
     }
 
     /// The one exit of every call: redact, wrap, build the result, audit.
@@ -275,7 +427,7 @@ impl ToolSet {
         started_at: SystemTime,
         started: Instant,
         outcome: Result<Value, ToolError>,
-        ran: Ran,
+        ran: RanState,
     ) -> CallReport {
         let denied_index = match &outcome {
             Err(ToolError::Denied { index }) => Some(*index),
@@ -305,21 +457,7 @@ impl ToolSet {
         } else {
             ToolResult::ok(&call.id, content)
         };
-        let statements = ran
-            .planned
-            .iter()
-            .enumerate()
-            .map(|(i, (sql, class, needs_approval))| DraftStatement {
-                sql,
-                class: *class,
-                needs_approval: *needs_approval,
-                ran: ran.executed.get(i).map(|e| DraftRun {
-                    rows: e.rows,
-                    truncated: e.truncated.map(Truncation::as_str),
-                    failed: e.failed,
-                }),
-            })
-            .collect();
+        let statements = draft_statements(&ran);
         let audit = AuditEntry::from_draft(AuditDraft {
             started: started_at,
             duration: started.elapsed(),
@@ -337,6 +475,7 @@ impl ToolSet {
             redaction: summary.clone(),
             rules: &self.inner.redaction,
             dialect,
+            cancel: None,
         });
         if let Some(sink) = &self.inner.audit {
             sink.record(&audit);
@@ -428,10 +567,9 @@ impl ToolSet {
         }
     }
 
-    fn connection(&self, name: &str, ran: &mut Ran) -> Result<ConnectionInfo, ToolError> {
+    fn connection(&self, name: &str, ran: &Ran) -> Result<ConnectionInfo, ToolError> {
         let info = self.inner.resolve(name)?;
-        ran.connection = Some(info.id.clone());
-        ran.info = Some(info.clone());
+        ran.set_connection(&info);
         Ok(info)
     }
 }

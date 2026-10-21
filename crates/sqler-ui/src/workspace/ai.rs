@@ -141,6 +141,11 @@ impl Workspace {
                 | AiAction::CancelProvider
                 | AiAction::TestProvider
                 | AiAction::ToggleConnection
+                | AiAction::OpenAuditLog
+                | AiAction::LoadMoreAudit
+                | AiAction::CopyAuditSql
+                | AiAction::SetAuditFilter(_)
+                | AiAction::SelectAuditEntry(_)
         );
         if changes_config && self.ai.load_error().is_some() {
             return self.ai_notice(READ_ONLY);
@@ -204,6 +209,11 @@ impl Workspace {
                 None => Effect::None,
             },
             AiAction::ToggleConnection => self.toggle_connection_ai(),
+            audit @ (AiAction::OpenAuditLog
+            | AiAction::LoadMoreAudit
+            | AiAction::CopyAuditSql
+            | AiAction::SetAuditFilter(_)
+            | AiAction::SelectAuditEntry(_)) => self.dispatch_audit(audit),
         }
     }
 

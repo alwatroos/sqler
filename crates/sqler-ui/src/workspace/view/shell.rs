@@ -17,6 +17,7 @@ use gpui_component::resizable::{
 use sqler_config::Modifiers;
 
 use super::WorkspaceView;
+use super::audit::audit_panel_body;
 use crate::command::CommandId;
 use crate::export::view::export_bar;
 use crate::grid::IngestState;
@@ -318,6 +319,7 @@ impl WorkspaceView {
             }
             PanelView::Messages => messages_body(self, active, cx),
             PanelView::History => history_panel_body(self, cx),
+            PanelView::Audit => audit_panel_body(self, cx),
         }
     }
 
