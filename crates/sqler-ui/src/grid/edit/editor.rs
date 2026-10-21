@@ -842,6 +842,10 @@ impl GridEditor {
             }
         }
         self.failed = None;
+        if staged.change_count() == 0 {
+            // Nothing is left to apply, so an unknown commit no longer guards anything.
+            self.apply_block = None;
+        }
     }
 
     /// Drops every pending change, the open editor, the failure mark and the apply block.
@@ -1676,6 +1680,24 @@ mod tests {
         e.discard();
         assert_eq!(e.apply_blocked(), None);
         assert_eq!(e.pending(), 0);
+    }
+
+    #[test]
+    fn reverting_every_change_lifts_the_apply_block() {
+        let m = model();
+        let mut e = editor();
+        edit_text_cell(&mut e, &m, 0, 1, "A");
+        edit_text_cell(&mut e, &m, 1, 1, "B");
+        applying(&mut e);
+        e.finish_apply(&ApplyOutcome::CommitUnknown {
+            failure: ApplyFailure::Driver("connection lost".to_owned()),
+            rollback_error: None,
+        });
+        e.revert(&m, &[at(0, 1)]);
+        assert_eq!(e.apply_blocked(), Some(COMMIT_UNKNOWN));
+        e.revert(&m, &[at(1, 1)]);
+        assert_eq!(e.pending(), 0);
+        assert_eq!(e.apply_blocked(), None);
     }
 
     #[test]

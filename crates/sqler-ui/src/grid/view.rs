@@ -409,7 +409,11 @@ impl TableDelegate for GridDelegate {
         } else if let Some(bg) = mark.background {
             cell = cell.bg(bg);
         }
-        if let Some(color) = mark.border.filter(|_| !active) {
+        // A selected cell shows the selection fill, so its mark keeps a border cue instead.
+        let cue = mark
+            .border
+            .or_else(|| mark.background.filter(|_| selected).map(|c| c.opacity(1.)));
+        if let Some(color) = cue.filter(|_| !active) {
             cell = cell.border_1().border_color(color);
         }
         if let Some(color) = mark.text {

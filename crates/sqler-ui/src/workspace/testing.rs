@@ -783,6 +783,36 @@ mod flow {
     }
 
     #[test]
+    fn a_saved_connection_relabelled_prod_is_honoured_on_the_next_apply() {
+        // The tab opened as dev; the saved connection is relabelled prod afterwards. The gate
+        // takes the stricter of the two on every request.
+        let mut f = Flow::new(Some(Environment::Dev));
+        let (tab, key, mut grid) = editable(&mut f);
+        set_cell(&mut grid, 0, 1, "A");
+        let id = f.conn();
+        let spec =
+            f.w.sidebar
+                .profile(&id)
+                .unwrap()
+                .spec()
+                .clone()
+                .with_environment(Environment::Prod);
+        f.w.sidebar.update_connection(&id, spec).unwrap();
+        assert_eq!(
+            f.w.tabs().get(tab).unwrap().connection().environment,
+            Some(Environment::Dev)
+        );
+        let plan = grid.edit().plan();
+        assert!(matches!(f.w.request_apply(key, plan), Effect::None));
+        assert!(f.w.edit_confirm().is_some());
+        assert!(!f.w.is_applying(tab));
+        assert_eq!(
+            texts(&f.select("SELECT * FROM t ORDER BY id")),
+            ["1,a", "2,b", "3,c"]
+        );
+    }
+
+    #[test]
     fn dev_staging_and_unlabelled_connections_go_straight_to_the_job() {
         for environment in [Some(Environment::Dev), Some(Environment::Staging), None] {
             let mut f = Flow::new(environment);

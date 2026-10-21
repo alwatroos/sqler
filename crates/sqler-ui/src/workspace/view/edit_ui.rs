@@ -36,8 +36,8 @@ pub(super) struct EditUi {
     confirm_shown: Option<(usize, usize)>,
     /// Whether a dialog was open at the last render.
     was_open: bool,
-    /// A cell-editor key was handled as an action; its key-down is to be ignored.
-    key_done: bool,
+    /// The cell-editor command an action just ran; the key-down of that same key is ignored.
+    key_done: Option<EditorKey>,
 }
 
 impl EditUi {
@@ -51,7 +51,7 @@ impl EditUi {
             preview_shown: None,
             confirm_shown: None,
             was_open: false,
-            key_done: false,
+            key_done: None,
         }
     }
 }
@@ -291,13 +291,14 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if std::mem::take(&mut self.edit_ui.key_done) {
-            // The input's own action already ran for this key press (see `cell_editor_action`).
-            return true;
-        }
+        let done = self.edit_ui.key_done.take();
         let Some(command) = cell_editor_key(&key_input(&event.keystroke)) else {
             return false;
         };
+        if done == Some(command) {
+            // The input's own action already ran for this key press (see `cell_editor_action`).
+            return true;
+        }
         self.run_cell_editor_key(command, window, cx)
     }
 
@@ -310,7 +311,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         if self.run_cell_editor_key(command, window, cx) {
-            self.edit_ui.key_done = true;
+            self.edit_ui.key_done = Some(command);
             cx.stop_propagation();
         } else {
             cx.propagate();
