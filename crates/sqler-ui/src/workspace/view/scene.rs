@@ -14,16 +14,19 @@ use std::time::{Duration, Instant};
 
 use gpui::{App, AppContext as _, Entity, Window};
 use gpui_component::Root;
+use sqler_ai_api::mock::ScriptedProvider;
+use sqler_ai_api::{AiError, AiProvider, ModelInfo};
 use sqler_config::{
-    ConnectionId, ConnectionSpec, ConnectionStore, KeybindingOverrides, MemoryStore,
-    ThemePreference,
+    AiConfig, ConnectionAi, ConnectionId, ConnectionSpec, ConnectionStore, KeybindingOverrides,
+    MemoryStore, ModelChoice, ProviderConfig, ProviderId, ProviderKind, Secret, ThemePreference,
 };
 use sqler_driver_api::sqler_core::{DriverId, Environment, ObjectKind};
 
 use super::{Startup, WorkspaceView};
+use crate::ai::{AiAction, AiProviderFactory, AiStartup};
 use crate::browser::{BrowserAction, LoadState, TreeNodeId};
 use crate::command::CommandId;
-use crate::connections::Connector;
+use crate::connections::{ConnectionAction, Connector};
 use crate::palette::OPEN_PALETTE;
 use crate::settings::SettingsModel;
 use crate::tabs::{TabId, TabKind};
@@ -119,6 +122,26 @@ pub const SCENES: &[Scene] = &[
         name: "connection-dialog",
         pending: None,
     },
+    Scene {
+        name: "ai-side-view",
+        pending: None,
+    },
+    Scene {
+        name: "ai-side-view-empty",
+        pending: None,
+    },
+    Scene {
+        name: "ai-settings",
+        pending: None,
+    },
+    Scene {
+        name: "ai-provider-editor",
+        pending: None,
+    },
+    Scene {
+        name: "connection-dialog-ai",
+        pending: None,
+    },
 ];
 
 /// The window size of every scene, in logical pixels.
@@ -185,6 +208,12 @@ enum Step {
     Open { conn: &'static str, seed: String },
     /// Runs a command by ID.
     Command(&'static str),
+    /// Opens the editor of the AI provider with this id.
+    EditProvider(&'static str),
+    /// Runs a connection action.
+    Connection(ConnectionAction),
+    /// Scrolls the settings page to its end.
+    ScrollSettingsToEnd,
     /// Selects the sidebar entry called `conn`.
     Select(&'static str),
     /// Records a command as just used in the palette.
@@ -289,6 +318,22 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Command("workbench:toggle-side-panel"),
         ],
         "connection-dialog" => vec![Step::Command("connection:new")],
+        "ai-side-view" => vec![
+            open_step("dev", "select * from customers;"),
+            Step::Wait(Wait::Editors(1)),
+            Step::Command("workbench:show-ai"),
+        ],
+        "ai-side-view-empty" => vec![Step::Command("workbench:show-ai")],
+        "ai-settings" => vec![Step::Command("ai:open-settings")],
+        "ai-provider-editor" => vec![
+            Step::Command("ai:open-settings"),
+            Step::EditProvider("claude"),
+            Step::ScrollSettingsToEnd,
+        ],
+        "connection-dialog-ai" => vec![
+            Step::Command("connection:new"),
+            Step::Connection(ConnectionAction::SetAiEnabled(true)),
+        ],
         "welcome-recent" => {
             let mut steps = editors("dev", 1, 0);
             steps.extend(editors("staging", 1, 1));
@@ -308,8 +353,15 @@ fn store(scene: &Scene) -> Result<ConnectionStore, String> {
         return Ok(store);
     }
     let driver = DriverId::new("sqlite").map_err(|err| err.to_string())?;
+    let dev_ai = if scene.name == "ai-side-view" {
+        ConnectionAi::new(true)
+    } else {
+        ConnectionAi::default()
+    };
     let specs = [
-        ConnectionSpec::new("dev", driver.clone(), ":memory:").with_environment(Environment::Dev),
+        ConnectionSpec::new("dev", driver.clone(), ":memory:")
+            .with_environment(Environment::Dev)
+            .with_ai(dev_ai),
         ConnectionSpec::new("staging", driver.clone(), ":memory:")
             .with_environment(Environment::Staging),
         ConnectionSpec::new("prod", driver, ":memory:")
@@ -343,6 +395,61 @@ fn startup(
         keybindings: Ok(KeybindingOverrides::default()),
         history_dir: None,
         workbench: crate::workbench::WorkbenchStartup::default(),
+        ai: ai_startup(scene),
+    }
+}
+
+/// The model the scenes' mock provider lists.
+const SCENE_MODEL: &str = "qwen2.5-coder:7b";
+
+/// A factory whose providers answer from a script: no network, no keychain, no key text.
+struct SceneProviders;
+
+impl AiProviderFactory for SceneProviders {
+    fn kinds(&self) -> Vec<ProviderKind> {
+        crate::ai::ALL_KINDS.to_vec()
+    }
+
+    fn build(
+        &self,
+        _provider: &ProviderConfig,
+        _key: Option<&Secret>,
+    ) -> Result<Arc<dyn AiProvider>, AiError> {
+        Ok(Arc::new(
+            ScriptedProvider::new("mock").with_models(vec![ModelInfo::new(SCENE_MODEL)]),
+        ))
+    }
+}
+
+/// The AI settings of a scene: none, an Ollama default, or Ollama plus a keyed Anthropic.
+fn ai_startup(scene: &Scene) -> AiStartup {
+    let mut config = AiConfig::default();
+    if let Ok(ollama) = ProviderId::new("ollama") {
+        if matches!(
+            scene.name,
+            "ai-side-view" | "ai-settings" | "ai-provider-editor" | "connection-dialog-ai"
+        ) {
+            config.providers.push(
+                ProviderConfig::new(ollama.clone(), ProviderKind::Ollama)
+                    .with_models([SCENE_MODEL]),
+            );
+            config.models.default = Some(ModelChoice::new(ollama, SCENE_MODEL));
+        }
+        if let (true, Ok(claude)) = (
+            matches!(scene.name, "ai-settings" | "ai-provider-editor"),
+            ProviderId::new("claude"),
+        ) {
+            config.providers.push(
+                ProviderConfig::new(claude, ProviderKind::Anthropic)
+                    .with_models(["claude-sonnet"])
+                    .with_api_key_in_keychain(true),
+            );
+        }
+    }
+    AiStartup {
+        config: Ok(config),
+        dir: None,
+        factory: Arc::new(SceneProviders),
     }
 }
 
@@ -456,6 +563,12 @@ impl WorkspaceView {
                 let id = CommandId::new(command).map_err(|err| err.to_string())?;
                 self.run_command(&id, window, cx);
             }
+            Step::ScrollSettingsToEnd => self.settings_scroll.scroll_to_bottom(),
+            Step::EditProvider(id) => {
+                let id = ProviderId::new(id).map_err(|err| err.to_string())?;
+                self.dispatch_ai(AiAction::EditProvider(id), cx);
+            }
+            Step::Connection(action) => self.dispatch_connection(action.clone(), cx),
             Step::Record(command) => {
                 let id = CommandId::new(command).map_err(|err| err.to_string())?;
                 self.palette.record(&id);

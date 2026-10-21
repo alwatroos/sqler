@@ -54,5 +54,6 @@ consequences. SQLer uses the MADR format.
 | [0045](0045-workbench-state-persistence.md) | Workbench state persistence: `workbench.toml` v1, lenient read, debounced atomic writes | accepted |
 | [0046](0046-keyboard-first-model-and-accessibility.md) | Keyboard-first model and accessibility: command IDs, F6 regions, labels, `query:explain` through the prod gate | accepted |
 | [0047](0047-screenshot-harness.md) | Screenshot harness: headless GPUI renderer, scenes in both themes, Linux CI artifact | accepted |
+| [0050](0050-ai-surfaces-in-the-workbench.md) | AI surfaces in the workbench: activity item, side view, status item, command ids, additive `side_view` value, provider factory | accepted |
 
 ADR numbers 0039 and 0040 are reserved for M5.

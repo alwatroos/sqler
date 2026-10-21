@@ -16,11 +16,11 @@ The window has five regions. `F6` moves the focus to the next one and `Shift+F6`
 
 | Region | What it holds |
 | ------ | ------------- |
-| Activity bar | Icons for Connections, Saved Queries and History at the top, Settings at the bottom (opens the Settings tab, where the theme is chosen). |
-| Side panel | The Connections tree or the Saved Queries list, depending on the activity item. |
+| Activity bar | Icons for Connections, Saved Queries and History at the top, AI and Settings at the bottom (AI shows the [AI view](ai.md#the-ai-view); Settings opens the Settings tab, where the theme is chosen). |
+| Side panel | The Connections tree, the Saved Queries list or the AI view, depending on the activity item. |
 | Editor groups | One to four groups side by side, each with a tab bar and the body of its active tab. |
 | Bottom panel | Results, Messages and History, as tabs. |
-| Status bar | The environment, connection and database of the active tab, the run state, row count and timing, and the toggles for the two panels (filled while the panel is open). |
+| Status bar | The environment, connection and database of the active tab, the [AI state](ai.md#the-status-bar), the run state, row count and timing, and the toggles for the two panels (filled while the panel is open). |
 
 - **Activity bar.** Clicking the active item hides the side panel, as in VS Code. The History item shows or hides the bottom panel on History. Each item has a tooltip with its shortcut.
 - **Side panel and bottom panel.** Drag the divider to resize; the size is kept when you restart. Show or hide them with `Cmd/Ctrl+B` and `Cmd/Ctrl+J` or the buttons at the right end of the status bar. "View: Reset Layout" restores the defaults. Running a query shows the Results view.

@@ -9,8 +9,9 @@ use std::path::PathBuf;
 
 use sqler_catalog::{CacheKey, CatalogWorker, RefreshHandle};
 use sqler_config::{
-    ConnectionId, ConnectionProfile, NewHistoryEntry, PanelState, SavedQueries, Secret, SecretRef,
-    WINDOW_SIZE_RANGE, WORKBENCH_VERSION, WindowState, WorkbenchLoad, WorkbenchState,
+    AiConfig, ConfigDir, ConnectionId, ConnectionProfile, NewHistoryEntry, PanelState,
+    ProviderConfig, SavedQueries, Secret, SecretRef, WINDOW_SIZE_RANGE, WORKBENCH_VERSION,
+    WindowState, WorkbenchLoad, WorkbenchState,
 };
 use sqler_driver_api::sqler_core::{ConnectionConfig, DbObject, DriverId};
 use sqler_driver_api::{CancelHandle, Session};
@@ -22,6 +23,7 @@ use super::edit::EditFlow;
 use super::export::ExportCenter;
 use super::history::HistoryWorkspace;
 use super::query::ActiveRun;
+use crate::ai::{AiState, AiStatus, ai_status};
 use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
 use crate::connections::{
     ConnectFailure, ConnectRequest, ConnectionAction, ConnectionForm, Dialog, FieldError, FormMode,
@@ -231,6 +233,27 @@ pub enum Effect {
     /// Start this export; report with [`Workspace::export_progress`] and
     /// [`Workspace::export_finished`].
     RunExport(ExportJob),
+    /// Write `ai.toml` (when there is a `dir`) on a blocking thread, then apply the keychain
+    /// changes, then report the file's result with [`Workspace::ai_saved`]. The keychain is not
+    /// touched when the file could not be written.
+    SaveAiConfig {
+        /// Where `ai.toml` lives; `None` keeps the change for this session only.
+        dir: Option<ConfigDir>,
+        /// The configuration to write.
+        config: AiConfig,
+        /// Keychain changes to make after the file is written.
+        secrets: Vec<SecretOp>,
+    },
+    /// Test a provider: build it on the blocking pool, then list its models within 15 seconds on
+    /// tokio, and report with [`Workspace::ai_test_finished`].
+    TestAiProvider {
+        /// Tells this test from an older one.
+        request: u64,
+        /// The provider to test.
+        provider: ProviderConfig,
+        /// A typed key that is not stored yet.
+        key: Option<Secret>,
+    },
 }
 
 impl std::fmt::Debug for Effect {
@@ -348,6 +371,27 @@ impl std::fmt::Debug for Effect {
             // Never the folder or the file name.
             Self::PickExportPath { .. } => f.write_str("PickExportPath"),
             Self::RunExport(job) => f.debug_tuple("RunExport").field(&job.tab).finish(),
+            // Ids and counts only: never the endpoint, the models or a key.
+            Self::SaveAiConfig {
+                dir,
+                config,
+                secrets,
+            } => f
+                .debug_struct("SaveAiConfig")
+                .field("persistent", &dir.is_some())
+                .field("providers", &config.providers.len())
+                .field("secrets", &secrets.len())
+                .finish(),
+            Self::TestAiProvider {
+                request,
+                provider,
+                key,
+            } => f
+                .debug_struct("TestAiProvider")
+                .field("request", request)
+                .field("provider", &provider.id.as_str())
+                .field("key", &key.is_some())
+                .finish(),
         }
     }
 }
@@ -429,6 +473,8 @@ pub struct Workspace {
     workbench_newer: bool,
     /// The connections opened last, most recent first.
     recent_connections: RecentConnections,
+    /// The AI settings: providers, models, drafts and test status.
+    pub(super) ai: AiState,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -487,6 +533,7 @@ impl Workspace {
             layout: WorkbenchLayout::default(),
             workbench_newer: false,
             recent_connections: RecentConnections::default(),
+            ai: AiState::default(),
         }
     }
 
@@ -581,6 +628,12 @@ impl Workspace {
         })
     }
 
+    /// What AI does for the connection behind a tab; `None` when the tab has no saved connection.
+    fn tab_ai_status(&self, id: TabId) -> Option<AiStatus> {
+        let profile = self.sidebar.profile(self.tab_conns.get(&id)?)?;
+        ai_status(self.ai.config(), Some(profile.spec()))
+    }
+
     /// The database a tab's connection points at, as the status bar and breadcrumbs show it.
     fn tab_database(&self, id: TabId) -> Option<String> {
         let conn = self.tabs.get(id)?.connection();
@@ -646,6 +699,7 @@ impl Workspace {
             run,
             rows: rows.map(format_rows),
             timing,
+            ai: self.tab_ai_status(id),
         }
     }
 
@@ -1377,6 +1431,8 @@ impl Workspace {
             A::SetTlsMode(mode) => self.edit_form(|f| f.set_tls_mode(mode)),
             A::SetSshEnabled(on) => self.edit_form(|f| f.set_ssh_enabled(on)),
             A::SetSshAuth(auth) => self.edit_form(|f| f.set_ssh_auth(auth)),
+            A::SetAiEnabled(on) => self.edit_form(|f| f.set_ai_enabled(on)),
+            A::SetAiSendRows(rows) => self.edit_form(|f| f.set_ai_send_rows(rows)),
             A::ClearSecret(slot) => self.edit_form(|f| f.clear_secret(slot)),
             A::OpenMoveTo(id) => {
                 if self.sidebar.profile(&id).is_none() {
@@ -2421,6 +2477,48 @@ mod tests {
     }
 
     #[test]
+    fn status_bar_shows_ai_state() {
+        use sqler_config::{
+            AiConfig, ConnectionAi, ModelChoice, ProviderConfig, ProviderId, ProviderKind,
+        };
+        let pid = |s: &str| ProviderId::new(s).unwrap();
+        let mut w = ws();
+        assert_eq!(w.status_bar(None).ai, None, "no tab, no AI item");
+        // Off by default.
+        let r = connect(&mut w, 0);
+        finish_ok(&mut w, r);
+        assert_eq!(w.status_bar(None).ai, Some(AiStatus::Off));
+        let dev = w.sidebar().entries()[0].id().clone();
+        let turn_on = |w: &mut Workspace| {
+            let spec = w.sidebar().profile(&dev).unwrap().spec().clone();
+            w.sidebar
+                .update_connection(&dev, spec.with_ai(ConnectionAi::new(true)))
+                .unwrap();
+        };
+        // On, but no provider.
+        turn_on(&mut w);
+        assert_eq!(w.status_bar(None).ai, Some(AiStatus::NotSetUp));
+        // A local provider.
+        let mut config = AiConfig::default();
+        config
+            .providers
+            .push(ProviderConfig::new(pid("ollama"), ProviderKind::Ollama).with_models(["q"]));
+        config.providers.push(
+            ProviderConfig::new(pid("claude"), ProviderKind::Anthropic)
+                .with_models(["c"])
+                .with_api_key_in_keychain(true),
+        );
+        config.models.default = Some(ModelChoice::new(pid("ollama"), "q"));
+        let w = w.with_ai(AiState::for_config(config.clone()));
+        let label = |w: &Workspace| w.status_bar(None).ai.map(|a| a.label());
+        assert_eq!(label(&w).as_deref(), Some("ollama \u{b7} local"));
+        // A remote one.
+        config.models.default = Some(ModelChoice::new(pid("claude"), "c"));
+        let w2 = w.with_ai(AiState::for_config(config));
+        assert_eq!(label(&w2).as_deref(), Some("claude \u{b7} remote"));
+    }
+
+    #[test]
     fn breadcrumbs_for_query_and_object_tabs() {
         let mut w = ws();
         let tab = open_tabs(&mut w, 1)[0];
@@ -2695,6 +2793,28 @@ mod tests {
         let profile = w.sidebar().profile(&id).unwrap();
         assert_eq!(profile.spec().name, "Renamed");
         assert_eq!(profile.secret_refs().len(), 2);
+    }
+
+    #[test]
+    fn editing_a_connection_keeps_its_ai_opt_in() {
+        let mut w = manager();
+        let id = saved_with_secrets(&mut w);
+        let mut spec = w.sidebar().profile(&id).unwrap().spec().clone();
+        spec = spec.with_ai(sqler_config::ConnectionAi::new(true).with_send_rows(false));
+        w.sidebar.update_connection(&id, spec).unwrap();
+        let before = w.sidebar().profile(&id).unwrap().spec().ai;
+        w.dispatch_connection(A::Edit(id.clone()));
+        w.dispatch_connection(text(FormField::Name, "Renamed"));
+        w.dispatch_connection(A::Save);
+        let profile = w.sidebar().profile(&id).unwrap();
+        assert_eq!(profile.spec().name, "Renamed");
+        assert_eq!(profile.spec().ai, before);
+        // The dialog changes it.
+        w.dispatch_connection(A::Edit(id.clone()));
+        w.dispatch_connection(A::SetAiEnabled(false));
+        w.dispatch_connection(A::SetAiSendRows(None));
+        w.dispatch_connection(A::Save);
+        assert!(w.sidebar().profile(&id).unwrap().spec().ai.is_default());
     }
 
     #[test]
