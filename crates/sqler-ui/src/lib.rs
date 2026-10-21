@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ai;
 pub mod browser;
 pub mod command;
 pub mod connections;
