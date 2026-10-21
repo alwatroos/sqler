@@ -50,6 +50,10 @@ const FORBIDDEN: &[&str] = &[
     "\"▸\"",
     "\"▾\"",
     "\"×\"",
+    "\"[x]\"",
+    "\"[ ]\"",
+    "\"(•)\"",
+    "\"( )\"",
 ];
 
 /// The first problem on `line`, if any.

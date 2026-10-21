@@ -10,7 +10,9 @@ use gpui::{
     Styled as _, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
+use gpui_component::radio::Radio;
 use gpui_component::spinner::Spinner;
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
@@ -111,23 +113,11 @@ pub(crate) fn export_overlay(
 
     let mut scopes = div().flex().flex_col().gap(px(SPACE[1]));
     for (i, scope) in offered_scopes(dialog).into_iter().enumerate() {
-        let mark = if form.scope == scope {
-            "(\u{2022})"
-        } else {
-            "( )"
-        };
         scopes = scopes.child(
-            div()
-                .id(("export-scope", i))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(SPACE[2]))
-                .text_size(px(scale.sm))
-                .cursor_pointer()
-                .child(mark)
-                .child(scope_label(dialog, scope))
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            Radio::new(("export-scope", i))
+                .label(scope_label(dialog, scope))
+                .checked(form.scope == scope)
+                .on_click(cx.listener(move |view, _: &bool, _, cx| {
                     view.export_set_scope(scope, cx);
                 })),
         );
@@ -160,17 +150,11 @@ pub(crate) fn export_overlay(
             }
             let header = form.header;
             options = options.child(field_row("Delimiter", delimiters, cx)).child(
-                div()
-                    .id("export-header")
-                    .flex()
-                    .flex_row()
-                    .gap(px(SPACE[2]))
-                    .text_size(px(scale.sm))
-                    .cursor_pointer()
-                    .child(if header { "[x]" } else { "[ ]" })
-                    .child("Header row")
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.export_set_header(!header, cx);
+                Checkbox::new("export-header")
+                    .label("Header row")
+                    .checked(header)
+                    .on_click(cx.listener(move |view, checked: &bool, _, cx| {
+                        view.export_set_header(*checked, cx);
                     })),
             );
             if let Some(inputs) = inputs {

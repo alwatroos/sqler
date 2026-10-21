@@ -124,7 +124,9 @@ pub(crate) fn list_row(id: impl Into<ElementId>, s: RowState, cx: &App) -> State
             .hover(move |style| style.bg(hover))
             .active(move |style| style.bg(active)),
         RowLook::SelectedFocused => row.cursor_pointer().bg(active).border_color(edge),
-        RowLook::SelectedUnfocused => row.cursor_pointer().bg(hover),
+        // The strong fill without the edge: distinct from hover, so the selection stays
+        // visible under the pointer; the edge is what marks the focus.
+        RowLook::SelectedUnfocused => row.cursor_pointer().bg(active),
         RowLook::Disabled => row
             .opacity(DISABLED_OPACITY)
             .text_color(theme.muted_foreground),
@@ -297,10 +299,15 @@ mod tests {
             ];
             let mut col = div().flex().flex_col();
             for (i, s) in rows.into_iter().enumerate() {
-                col = col.child(list_row(("row", i), s, cx).child("row"));
+                col = col.child(
+                    list_row(("row", i), s, cx)
+                        .debug_selector(|| format!("row-{i}"))
+                        .child("row"),
+                );
             }
             scrim("scrim", cx).child(
                 dialog_panel("panel", DIALOG_W_SM, cx)
+                    .debug_selector(|| "panel".to_owned())
                     .child(dialog_title(Some(AppIcon::TriangleAlert), "Title", cx))
                     .child(field_row("Label", "content", cx))
                     .child(col)
@@ -320,6 +327,14 @@ mod tests {
             cx.run_until_parked();
             cx.update(|window, _| window.refresh());
             cx.run_until_parked();
+            for selector in ["panel", "row-0", "row-1", "row-2", "row-3"] {
+                let bounds = cx.debug_bounds(selector);
+                let size = bounds.map(|b| b.size);
+                assert!(
+                    size.is_some_and(|s| s.width > px(0.) && s.height > px(0.)),
+                    "{selector} in {look:?}: {size:?}"
+                );
+            }
         }
     }
 }
