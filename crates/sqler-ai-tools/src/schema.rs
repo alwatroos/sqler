@@ -145,10 +145,9 @@ pub(crate) struct OpenResultsTabArgs {
     pub title: Option<String>,
 }
 
-/// Arguments of `search_data`; the tool itself arrives in a later release.
+/// Arguments of `search_data`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[allow(dead_code)] // schema/struct agreement is tested; the tool is not dispatched yet
 pub(crate) struct SearchDataArgs {
     pub connection: String,
     pub question: String,
@@ -344,8 +343,7 @@ pub(crate) fn open_results_tab_schema() -> Value {
     )
 }
 
-/// Schema of `search_data`; the tool is added by a later release, so only tests use it for now.
-#[allow(dead_code)]
+/// Schema of `search_data`.
 pub(crate) fn search_data_schema() -> Value {
     object(
         &json!({
@@ -449,6 +447,15 @@ fn ui_tools() -> Vec<(&'static str, &'static str, Value)> {
             open_results_tab_schema(),
         ),
     ]
+}
+
+/// The `search_data` definition; a [`crate::ToolSet`] lists it only with a data-search host.
+pub(crate) fn search_data_definition() -> ToolDefinition {
+    ToolDefinition::new(
+        names::SEARCH_DATA,
+        "Find data by describing it in plain language. Writes one read-only query, shows it, runs it under the run_query row and time limits and returns the SQL and the rows.",
+        search_data_schema(),
+    )
 }
 
 /// The tool definitions a host exports. The UI-only tools are listed only when `ui` is true;
