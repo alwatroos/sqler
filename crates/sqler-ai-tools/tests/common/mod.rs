@@ -14,7 +14,7 @@ use serde_json::Value;
 use sqler_ai_api::{BoxFuture, ToolCall};
 use sqler_ai_tools::{
     ApprovalRequest, Approver, CallReport, ConnectionInfo, Decision, Limits, SessionSource,
-    ToolError, ToolSet,
+    ToolError, ToolSet, unwrap_untrusted,
 };
 use sqler_catalog::Catalog;
 use sqler_driver_api::sqler_core::{
@@ -173,9 +173,19 @@ pub const SEED: &[&str] = &[
 
 impl SqliteSource {
     pub async fn new(tag: &str, env: Option<Environment>) -> Arc<Self> {
+        Self::seeded(tag, env, None, SEED).await
+    }
+
+    /// Like `new`, with an explicit `send_rows` (`None` keeps the default) and seed statements.
+    pub async fn seeded(
+        tag: &str,
+        env: Option<Environment>,
+        send_rows: Option<bool>,
+        seed: &[&str],
+    ) -> Arc<Self> {
         let db = TempDb::new(tag);
         let mut seeder = db.open().await;
-        for sql in SEED {
+        for sql in seed {
             exec(&mut *seeder, sql).await;
         }
         let introspections = Arc::new(AtomicUsize::new(0));
@@ -186,7 +196,10 @@ impl SqliteSource {
         let boxed: Box<dyn Introspect> = Box::new(counting);
         let (catalog, worker) = Catalog::new(boxed);
         tokio::spawn(worker.run());
-        let info = ConnectionInfo::new("db", "Test DB", DriverId::new("sqlite").unwrap(), env);
+        let mut info = ConnectionInfo::new("db", "Test DB", DriverId::new("sqlite").unwrap(), env);
+        if let Some(yes) = send_rows {
+            info = info.with_send_rows(yes);
+        }
         Arc::new(Self {
             db,
             info,
@@ -276,12 +289,12 @@ impl Approver for ScriptedApprover {
     }
 }
 
-/// Calls a tool and parses its content.
+/// Calls a tool and parses its content (unwrapping the untrusted-data envelope).
 pub async fn call(ts: &ToolSet, name: &str, args: Value) -> (CallReport, Value) {
     let report = ts
         .call_detailed(&ToolCall::new("id1", name, args.to_string()))
         .await;
-    let content = serde_json::from_str(&report.result.content).unwrap();
+    let content = serde_json::from_str(unwrap_untrusted(&report.result.content).unwrap()).unwrap();
     (report, content)
 }
 

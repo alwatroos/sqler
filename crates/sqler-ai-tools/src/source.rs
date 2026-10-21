@@ -24,6 +24,8 @@ pub struct ConnectionInfo {
     pub environment: Option<Environment>,
     /// Whether the connection refuses everything but plain reads.
     pub read_only: bool,
+    /// Whether row values may reach the model. `false` withholds every `rows` array (ADR-0037).
+    pub send_rows: bool,
 }
 
 impl ConnectionInfo {
@@ -41,6 +43,7 @@ impl ConnectionInfo {
             driver,
             environment,
             read_only: false,
+            send_rows: environment != Some(Environment::Prod),
         }
     }
 
@@ -48,6 +51,15 @@ impl ConnectionInfo {
     #[must_use]
     pub fn with_read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
+        self
+    }
+
+    /// Sets whether row values may be sent to the model. Hosts pass
+    /// `ConnectionProfile::ai_sends_rows()`; the default is `true` unless the environment is
+    /// `prod`.
+    #[must_use]
+    pub fn with_send_rows(mut self, yes: bool) -> Self {
+        self.send_rows = yes;
         self
     }
 }
@@ -80,5 +92,23 @@ pub trait SessionSource: Send + Sync {
         Box::pin(async move {
             let _ = session.close().await;
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(env: Option<Environment>) -> ConnectionInfo {
+        ConnectionInfo::new("a", "A", DriverId::new("sqlite").unwrap(), env)
+    }
+
+    #[test]
+    fn send_rows_defaults_off_only_for_prod() {
+        assert!(info(None).send_rows);
+        assert!(info(Some(Environment::Dev)).send_rows);
+        assert!(!info(Some(Environment::Prod)).send_rows);
+        assert!(info(Some(Environment::Prod)).with_send_rows(true).send_rows);
+        assert!(!info(None).with_send_rows(false).send_rows);
     }
 }
