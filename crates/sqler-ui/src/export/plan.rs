@@ -56,8 +56,8 @@ impl std::fmt::Debug for ExportOrigin {
 /// Rows and columns of the grid model, by model index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadedRows {
-    /// Every column and the first `rows` rows, in model order. `rows` is the count the dialog
-    /// showed: rows that arrive later are not exported.
+    /// Every column and the first `rows` rows, in model order (no sort or filter). `rows` is the
+    /// count the dialog showed: rows that arrive later are not exported.
     All {
         /// The number of rows the dialog described.
         rows: usize,
@@ -76,8 +76,11 @@ pub enum LoadedRows {
 pub struct GridFacts {
     /// Number of columns.
     pub columns: usize,
-    /// Number of rows the model holds.
+    /// Number of rows as displayed (after the grid's filter).
     pub rows: usize,
+    /// The model rows as displayed, in display order, when a sort or filter is set. `None`: the
+    /// model order, `rows` rows.
+    pub displayed: Option<Vec<usize>>,
     /// Whether the result ended (every row is loaded).
     pub complete: bool,
     /// The selected cells, if any.
@@ -205,8 +208,12 @@ pub struct ExportDialog {
     pub formats: Vec<FormatEntry>,
     /// The values being edited.
     pub form: ExportForm,
-    /// Rows the grid holds.
+    /// Rows the grid shows (sort and filter applied).
     pub loaded_rows: usize,
+    /// The model rows as displayed when a sort or filter is set; `None`: model order.
+    pub displayed: Option<Vec<usize>>,
+    /// Number of columns of the result.
+    pub columns: usize,
     /// Whether the result ended.
     pub complete: bool,
     /// The selected cells, if any.
@@ -250,6 +257,8 @@ impl ExportDialog {
             formats: available_formats(),
             form: ExportForm::new(scope),
             loaded_rows: facts.rows,
+            displayed: facts.displayed.clone(),
+            columns: facts.columns,
             complete: facts.complete,
             selection: facts.selection.clone(),
             fresh,
@@ -584,6 +593,7 @@ mod tests {
         GridFacts {
             columns: 2,
             rows: 10,
+            displayed: None,
             complete,
             selection: None,
         }

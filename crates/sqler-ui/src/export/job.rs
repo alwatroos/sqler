@@ -595,6 +595,26 @@ impl<W: std::io::Write> std::io::Write for FailAfter<W> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_driver_id_picks_the_read_only_statement() {
+        assert_eq!(
+            read_only_statement("sqlite"),
+            Some("PRAGMA query_only = ON")
+        );
+        assert_eq!(
+            read_only_statement("postgres"),
+            Some("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+        );
+        assert_eq!(
+            read_only_statement("mysql"),
+            Some("SET SESSION TRANSACTION READ ONLY")
+        );
+        // No session setting: only the lexical gate applies.
+        assert_eq!(read_only_statement("duckdb"), None);
+        assert_eq!(read_only_statement("mssql"), None);
+        assert_eq!(read_only_statement(""), None);
+    }
+
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
 

@@ -517,6 +517,7 @@ fn facts() -> GridFacts {
     GridFacts {
         columns: 2,
         rows: 3,
+        displayed: None,
         complete: false,
         selection: None,
     }

@@ -56,11 +56,18 @@ fn grid_facts(table: &Table, cx: &App) -> Result<GridFacts, &'static str> {
     let state = table.read(cx);
     let delegate = state.delegate();
     let grid = delegate.grid();
-    let rows = grid.row_count();
     let controls = delegate.controls();
     let layout = controls.layout();
     // The grid's own row order, so a sort and a filter apply to a selection export.
     let order = grid.rows();
+    let rows = order.len();
+    // With a sort or filter set the loaded-rows scope follows the display order too.
+    let displayed = if grid.order().is_active() {
+        let shown: Option<Vec<usize>> = (0..rows).map(|r| order.model_row(r)).collect();
+        Some(shown.ok_or(SELECTION_UNMAPPED)?)
+    } else {
+        None
+    };
     let map = DisplayMap {
         rows: &order,
         columns: layout,
@@ -81,6 +88,7 @@ fn grid_facts(table: &Table, cx: &App) -> Result<GridFacts, &'static str> {
     Ok(GridFacts {
         columns: grid.column_count(),
         rows,
+        displayed,
         complete: matches!(grid.state(), IngestState::Done { .. }),
         selection,
     })

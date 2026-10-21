@@ -232,8 +232,15 @@ impl Workspace {
         };
         let loaded_only = matches!(dialog.fresh, FreshRun::Refused(_));
         let source = match dialog.form.scope {
-            ExportScope::Loaded => ExportSource::Loaded(LoadedRows::All {
-                rows: dialog.loaded_rows,
+            // The rows as displayed: a sort or filter of the grid applies.
+            ExportScope::Loaded => ExportSource::Loaded(match &dialog.displayed {
+                Some(rows) => LoadedRows::Picked {
+                    rows: rows.clone(),
+                    columns: (0..dialog.columns).collect(),
+                },
+                None => LoadedRows::All {
+                    rows: dialog.loaded_rows,
+                },
             }),
             ExportScope::Selection => {
                 let Some(rows) = dialog.selection.clone() else {
@@ -480,6 +487,7 @@ mod tests {
         GridFacts {
             columns: 3,
             rows: 50,
+            displayed: None,
             complete,
             selection: None,
         }
@@ -860,6 +868,37 @@ mod tests {
             job.source,
             ExportSource::Loaded(LoadedRows::Picked { .. })
         ));
+    }
+
+    #[test]
+    fn the_loaded_scope_follows_the_displayed_rows() {
+        let mut w = ws();
+        let tab = open(&mut w, 0);
+        run(&mut w, tab, "select 7");
+        let mut f = facts(false);
+        f.rows = 2;
+        f.displayed = Some(vec![4, 1]);
+        w.open_export(target(tab, 0), &f);
+        assert_eq!(w.export_dialog().unwrap().loaded_rows, 2);
+        w.export_dialog_mut()
+            .unwrap()
+            .set_scope(ExportScope::Loaded);
+        let form = form(&w);
+        assert!(matches!(
+            w.submit_export(form),
+            Effect::PickExportPath { .. }
+        ));
+        let Effect::RunExport(job) = w.export_path_chosen(
+            w.export_dialog().unwrap().generation,
+            Some(PathBuf::from("/tmp/l.csv")),
+        ) else {
+            panic!("expected RunExport");
+        };
+        let ExportSource::Loaded(LoadedRows::Picked { rows, columns }) = job.source else {
+            panic!("expected displayed rows");
+        };
+        assert_eq!(rows, vec![4, 1]);
+        assert_eq!(columns, vec![0, 1, 2]);
     }
 
     #[test]

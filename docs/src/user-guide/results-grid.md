@@ -134,14 +134,15 @@ Editing cells arrives in M4.
 **Export Results...** (`grid:export`, in the command palette) writes the result of the active grid or query result to a file. It works on a table-data tab and on every result of a query tab. The dialog offers:
 
 - **Format**: CSV, JSON, SQL `INSERT` and Markdown in every build. Excel (`.xlsx`) and Parquet are listed only when the build has them (the `export-xlsx` and `export-parquet` features), see below.
-- **Scope**: *Loaded rows (N)*, the rows the grid holds now, *Selection (rows x columns)* when cells are selected, copied in the order you see them, and *All rows (runs the query again)*.
+- **Scope**: *Loaded rows (N)*, the rows the grid holds now, as displayed (with the current sort and filter, in the order you see them; N is the number of rows shown), *Selection (rows x columns)* when cells are selected, copied in the order you see them, and *All rows (runs the query again)*.
 - **Options**: for CSV the delimiter (`,` `;` Tab `|`), a header row and the NULL text; for Markdown the NULL text; for SQL the table name, an optional schema and the rows per `INSERT` (1 to 10,000). JSON, Parquet and Excel use their defaults.
 
 After **Export...** the system save dialog asks for the file. A progress line with a **Cancel** button (also `export:cancel`) is shown while the file is written. The file is written under a hidden name next to the target and renamed when the export is complete, so a cancelled or failed export leaves no half-written file and an existing file is replaced only by a complete one. Replacing a file keeps its permissions on Unix; a symbolic link at the target is replaced by a regular file and the file it pointed to is left alone. If the result changes while the dialog is open (the query runs again, the table is opened again), the export is cancelled with a notice. Closing the tab or quitting the app cancels its export.
 
 Things to know:
 
-- *Loaded rows* exports what the grid holds. A result that is paused at its page limit (see "Pages and paused results") exports only the loaded pages; the dialog shows the count.
+- *Loaded rows* exports what the grid shows: when a sort or filter is set, only the matching rows, in the sorted order, exactly as copy and the selection export do. *All rows (runs the query again)* ignores the grid's sort and filter.
+- *Loaded rows* covers what the grid holds. A result that is paused at its page limit (see "Pages and paused results") exports only the loaded pages; the dialog shows the count.
 - *All rows (runs the query again)* runs the statement once more on a new, separate session and streams every row into the file, without loading them into the grid. The data can differ from what the grid shows, because it is read again now. Anything that exists only in the tab's own session (temporary tables, `SET` values) is missing on the new session, and the statement then fails with the database's error.
 - Only a single statement that SQLer classifies as a read is run again. Anything else (`INSERT`, `UPDATE`, DDL, a script with several statements, a statement SQLer cannot classify) is never run a second time: the *All rows* choice is not offered, a note gives the reason, and only the loaded rows can be exported.
 - Memory does not depend on the number of rows; the writer stays a few batches behind the reader.
