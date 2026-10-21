@@ -21,23 +21,38 @@ sqler-catalog.workspace = true
 sqler-completion.workspace = true
 sqler-config.workspace = true
 sqler-driver-api.workspace = true
+sqler-export.workspace = true
 sqler-sql.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 gpui-component = { workspace = true, optional = true }
 gpui = { workspace = true, optional = true }
 gpui_platform = { workspace = true, optional = true }
 lsp-types = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
 sqler-driver-mysql.workspace = true
 sqler-driver-postgres.workspace = true
 sqler-driver-sqlite.workspace = true
+sqler-export = { workspace = true, features = ["parquet", "xlsx"] }
+serde_json.workspace = true
+insta.workspace = true
 proptest.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
 [[bench]]
 name = "grid_viewport"
+harness = false
+
+[[bench]]
+name = "grid_copy"
+harness = false
+
+[[bench]]
+name = "grid_sort"
 harness = false
 
 [[bench]]
@@ -50,4 +65,8 @@ harness = false
 
 [[bench]]
 name = "editor_intellisense"
+harness = false
+
+[[bench]]
+name = "grid_export"
 harness = false

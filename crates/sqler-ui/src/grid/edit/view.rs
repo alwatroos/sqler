@@ -26,7 +26,7 @@ use super::{
     PreviewStatement,
 };
 use crate::grid::view::{GridDelegate, Table, apply_action};
-use crate::grid::{CellPos, DisplayMap, GridAction, IdentityRows, Motion};
+use crate::grid::{CellPos, DisplayMap, GridAction, Motion, RowOrder as _};
 use crate::query::view::scrim;
 use crate::workspace::{CloseTarget, WorkspaceView};
 
@@ -298,9 +298,10 @@ pub(crate) fn editor_element(
     cx: &mut Context<TableState<GridDelegate>>,
 ) -> Option<AnyElement> {
     let editor = delegate.tab.edit().editing()?;
+    // `row` is a display row; the editor's cell is in grid rows (the model row's identity).
     if editor.pos
         != (CellPos {
-            row,
+            row: delegate.tab.grid_row(row)?,
             col: model_col,
         })
     {
@@ -343,7 +344,7 @@ pub(crate) fn editor_element(
 
 /// The cells of the selection, in grid rows and model columns.
 fn selected_cells(delegate: &GridDelegate) -> Result<Vec<CellPos>, String> {
-    let order = IdentityRows(delegate.tab.display_row_count());
+    let order = delegate.tab.grid_rows();
     let map = DisplayMap {
         rows: &order,
         columns: delegate.controls.layout(),
@@ -369,7 +370,7 @@ fn selected_cells(delegate: &GridDelegate) -> Result<Vec<CellPos>, String> {
 
 /// The grid rows of the selection.
 fn selected_rows(delegate: &GridDelegate) -> Result<Vec<usize>, String> {
-    let order = IdentityRows(delegate.tab.display_row_count());
+    let order = delegate.tab.grid_rows();
     let map = DisplayMap {
         rows: &order,
         columns: delegate.controls.layout(),
@@ -382,7 +383,8 @@ fn selected_rows(delegate: &GridDelegate) -> Result<Vec<usize>, String> {
             "The selection is too large for one change (at most {MAX_BULK} rows)."
         ));
     }
-    Ok(rect.rows.collect())
+    // The rectangle is in display rows; the editor works on grid rows (model identity).
+    Ok(rect.rows.filter_map(|d| order.model_row(d)).collect())
 }
 
 /// Runs an edit action that only touches this table. `None` for every other action.
@@ -421,12 +423,15 @@ pub(crate) fn apply_edit_action(
                 let (model, editor) = delegate.tab.edit_parts();
                 editor.add_row(model)
             };
-            if let Ok(row) = added {
-                let rows = delegate.tab.display_row_count();
-                delegate.controls.click_cell(row, 0, rows, false);
-                state
-                    .vertical_scroll_handle
-                    .scroll_to_item_strict(row, gpui::ScrollStrategy::Top);
+            if let Ok(grid_row) = added {
+                // The new row is last in the display, below the sorted and filtered rows.
+                let rows = delegate.tab.grid_rows();
+                if let Some(row) = rows.display_row(grid_row) {
+                    delegate.controls.click_cell(row, 0, &rows, false);
+                    state
+                        .vertical_scroll_handle
+                        .scroll_to_item_strict(row, gpui::ScrollStrategy::Top);
+                }
             }
             added.map(|_| ())
         }

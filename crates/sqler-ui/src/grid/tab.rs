@@ -4,14 +4,18 @@
 //! `GridTab`: the headless state of one results-grid tab.
 
 use std::ops::Range;
+use std::time::Duration;
 
 use super::action::GridAction;
 use super::cell::{self, ColumnHeader, group_thousands};
-use super::edit::{DisplayCell, EditContext, EditState, GridEditor};
+use super::edit::{CellMark, DisplayCell, EditContext, EditState, GridEditor};
+use super::order::{DisplayRows, GridOrder, OrderProgress};
+use super::selection::RowOrder;
+use super::sort::{Collation, SortDirection, SortSpec};
 use super::stats::RenderStats;
 use super::{
-    GridCancel, GridLimits, GridModel, IngestState, SyntheticSource, grid_channel_with,
-    spawn_ingest,
+    CellRef, FilterSpec, GridCancel, GridLimits, GridModel, IngestState, SyntheticSource,
+    grid_channel_with, spawn_ingest,
 };
 
 /// Rows of the synthetic result opened by `dev:open-synthetic-grid`.
@@ -36,13 +40,46 @@ pub struct PollOutcome {
     pub terminal: bool,
 }
 
-/// A results-grid tab: the model, header labels, the visible row range, render statistics and the
-/// editing state.
+/// The rows of a grid as drawn: a [`DisplayRows`] followed by the rows editing added.
+#[derive(Debug, Clone, Copy)]
+pub struct GridRows<'a> {
+    shown: DisplayRows<'a>,
+    base: usize,
+    extra: usize,
+}
+
+impl RowOrder for GridRows<'_> {
+    fn len(&self) -> usize {
+        self.shown.len() + self.extra
+    }
+
+    fn model_row(&self, display: usize) -> Option<usize> {
+        let shown = self.shown.len();
+        if display < shown {
+            self.shown.model_row(display)
+        } else {
+            (display - shown < self.extra).then(|| self.base + (display - shown))
+        }
+    }
+
+    fn display_row(&self, row: usize) -> Option<usize> {
+        if row < self.base {
+            self.shown.display_row(row)
+        } else {
+            (row - self.base < self.extra).then(|| self.shown.len() + (row - self.base))
+        }
+    }
+}
+
+/// A results-grid tab: the model, header labels, the sort and filter order, the visible row
+/// range, render statistics and the editing state.
 ///
 /// `Debug` prints sizes and states only, never cell values.
 pub struct GridTab {
     model: GridModel,
     headers: Vec<ColumnHeader>,
+    /// Boxed: a `GridTab` travels inside `workspace::Effect`, whose variants must stay close in size.
+    order: Box<GridOrder>,
     visible: Range<usize>,
     stats: RenderStats,
     /// Boxed: the editor is large and most grids (read-only results) never use it.
@@ -67,6 +104,7 @@ impl GridTab {
         Self {
             model,
             headers: Vec::new(),
+            order: Box::default(),
             visible: 0..0,
             stats: RenderStats::default(),
             edit: Box::default(),
@@ -94,6 +132,7 @@ impl GridTab {
         let applied = self.model.poll(budget);
         let columns_changed = self.model.columns().len() != self.headers.len();
         if columns_changed {
+            self.order.reset();
             self.headers = self
                 .model
                 .columns()
@@ -111,6 +150,12 @@ impl GridTab {
                 IngestState::Waiting | IngestState::Streaming | IngestState::Paused
             ),
         }
+    }
+
+    /// The model behind the tab.
+    #[must_use]
+    pub fn model(&self) -> &GridModel {
+        &self.model
     }
 
     /// The ingestion state.
@@ -137,6 +182,12 @@ impl GridTab {
         self.headers.get(col)
     }
 
+    /// The cell at a model row and column, if both exist.
+    #[must_use]
+    pub fn cell(&self, row: usize, col: usize) -> Option<CellRef<'_>> {
+        self.model.row(row)?.get(col)
+    }
+
     /// The display text of a cell; empty when the row or column does not exist.
     #[must_use]
     pub fn cell_text(&self, row: usize, col: usize) -> String {
@@ -145,6 +196,129 @@ impl GridTab {
             .and_then(|r| r.get(col))
             .map(|c| cell::cell_text(&c))
             .unwrap_or_default()
+    }
+
+    /// The sort and filter order.
+    #[must_use]
+    pub fn order(&self) -> &GridOrder {
+        &self.order
+    }
+
+    /// The sort and filter order, to change its specs. The view then runs [`GridTab::step_order`].
+    pub fn order_mut(&mut self) -> &mut GridOrder {
+        &mut self.order
+    }
+
+    /// The rows as displayed (sorted and filtered), as a [`RowOrder`] for the grid controls.
+    #[must_use]
+    pub fn rows(&self) -> DisplayRows<'_> {
+        self.order.rows(self.model.row_count())
+    }
+
+    /// The number of rows the sort and filter show (not counting rows added by editing).
+    #[must_use]
+    pub fn display_count(&self) -> usize {
+        self.rows().len()
+    }
+
+    /// The rows as drawn: the displayed model rows (sorted and filtered), then the rows an apply
+    /// inserted and the staged new rows, which the sort and filter do not touch. A position is
+    /// a *grid row* (a model row, or above `model.row_count()` an added row), the identity edits,
+    /// marks and the apply plan use.
+    #[must_use]
+    pub fn grid_rows(&self) -> GridRows<'_> {
+        GridRows {
+            shown: self.rows(),
+            base: self.model.row_count(),
+            extra: self.edit.extra_rows(),
+        }
+    }
+
+    /// The grid row (model row identity) drawn at a display position.
+    #[must_use]
+    pub fn grid_row(&self, display: usize) -> Option<usize> {
+        self.grid_rows().model_row(display)
+    }
+
+    /// The model row shown at a display position.
+    #[must_use]
+    pub fn model_row(&self, display: usize) -> Option<usize> {
+        self.rows().model_row(display)
+    }
+
+    /// Does a slice of the sort and filter job; see [`GridOrder::step`].
+    pub fn step_order(&mut self, budget: Option<Duration>) -> OrderProgress {
+        self.order.step(&self.model, budget)
+    }
+
+    /// When rows wait for a merge into the sorted view, the time to look again (`ZERO`: pump the
+    /// job now); see [`GridOrder::next_extend_check`].
+    #[must_use]
+    pub fn next_extend_check(&self, now: std::time::Instant) -> Option<Duration> {
+        self.order.next_extend_check(&self.model, now)
+    }
+
+    /// Applies a sort or filter action. `active_col` is the model column of the active cell.
+    /// Returns whether the order changed (the view then pumps the job).
+    pub fn apply_order_action(&mut self, a: GridAction, active_col: Option<usize>) -> bool {
+        match a {
+            GridAction::SortAscending | GridAction::SortDescending => {
+                let Some(column) = active_col else {
+                    return false;
+                };
+                let d = if a == GridAction::SortAscending {
+                    SortDirection::Ascending
+                } else {
+                    SortDirection::Descending
+                };
+                let mut spec = SortSpec::default();
+                spec.set_only(column, d);
+                self.order.set_sort(spec);
+            }
+            GridAction::ClearSort => self.order.set_sort(SortSpec::default()),
+            GridAction::ClearFilter => self.order.set_filter(FilterSpec::default()),
+            GridAction::ToggleMatchCase => self.order.set_collation(match self.order.collation() {
+                Collation::CaseInsensitive => Collation::CodePoint,
+                Collation::CodePoint => Collation::CaseInsensitive,
+            }),
+            _ => return false,
+        }
+        true
+    }
+
+    /// The sort and filter status: progress while the job runs, otherwise `N of M rows` when
+    /// filtered or `Sorted M rows`, where M counts the rows covered; `" · loaded rows only"`
+    /// is appended while the result is not complete. `None` without a sort or filter.
+    #[must_use]
+    pub fn order_text(&self) -> Option<String> {
+        if !self.order.is_active() {
+            return None;
+        }
+        if let OrderProgress::Working { done, total } = self.order.progress() {
+            let percent = (done * 100).checked_div(total).unwrap_or(0);
+            let verb = if self.order.sort().is_empty() {
+                "Filtering"
+            } else {
+                "Sorting"
+            };
+            return Some(format!("{verb}… {percent}%"));
+        }
+        if self.order.covered() == 0 && self.row_count() > 0 {
+            return None;
+        }
+        let covered = group_thousands(self.order.covered());
+        let mut text = if self.order.filter().is_empty() {
+            format!("Sorted {covered} rows")
+        } else {
+            format!(
+                "{} of {covered} rows",
+                group_thousands(self.display_count())
+            )
+        };
+        if !matches!(self.model.state(), IngestState::Done { .. }) {
+            text.push_str(" · loaded rows only");
+        }
+        Some(text)
     }
 
     /// Records the range of rows the view currently draws.
@@ -175,7 +349,8 @@ impl GridTab {
     /// `Rows 1–27 of 1,000,000` for the visible range; `None` when nothing is visible.
     #[must_use]
     pub fn range_text(&self) -> Option<String> {
-        let end = self.visible.end.min(self.row_count());
+        let count = self.display_count();
+        let end = self.visible.end.min(count);
         if self.visible.start >= end {
             return None;
         }
@@ -183,14 +358,14 @@ impl GridTab {
             "Rows {}–{} of {}",
             group_thousands(self.visible.start + 1),
             group_thousands(end),
-            group_thousands(self.row_count())
+            group_thousands(count)
         ))
     }
 
     /// The row an action scrolls to; `None` when there are no rows or the action does not scroll.
     #[must_use]
     pub fn jump_target(&self, a: GridAction) -> Option<usize> {
-        let rows = self.row_count();
+        let rows = self.display_count();
         if rows == 0 {
             return None;
         }
@@ -241,17 +416,25 @@ impl GridTab {
         self.edit.state_for(&self.model)
     }
 
-    /// Rows to draw: the model's, then the rows an apply inserted, then the staged new rows.
+    /// Rows to draw: the displayed model rows, then the rows an apply inserted, then the staged
+    /// new rows.
     #[must_use]
     pub fn display_row_count(&self) -> usize {
-        self.model.row_count() + self.edit.extra_rows()
+        self.grid_rows().len()
     }
 
-    /// What to draw for a cell (grid row, model column): the value, staged or applied, and its
-    /// mark.
+    /// What to draw for a cell (display row, model column): the value, staged or applied, and its
+    /// mark. The display row is mapped to its grid row first.
     #[must_use]
     pub fn display_cell(&self, row: usize, col: usize) -> DisplayCell {
-        self.edit.display_cell(&self.model, row, col)
+        match self.grid_row(row) {
+            Some(grid_row) => self.edit.display_cell(&self.model, grid_row, col),
+            None => DisplayCell {
+                text: String::new(),
+                mark: CellMark::None,
+                null: false,
+            },
+        }
     }
 
     /// Cancels ingestion.
@@ -278,6 +461,7 @@ mod tests {
     use super::super::grid_channel;
     use super::super::viewport::{ROW_HEIGHT_PX, ScrollViewport};
     use super::*;
+    use crate::grid::QuickFilter;
 
     fn wait_done(tab: &mut GridTab) {
         let start = Instant::now();
@@ -470,6 +654,183 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(matches!(tab.state(), IngestState::Cancelled));
+    }
+
+    fn quick(text: &str, column: usize) -> FilterSpec {
+        FilterSpec {
+            quick: Some(QuickFilter {
+                text: text.to_owned(),
+                column: Some(column),
+            }),
+            conditions: vec![],
+        }
+    }
+
+    #[test]
+    fn sort_action_needs_an_active_column_and_reports_progress() {
+        let mut tab = loaded(2_500);
+        assert_eq!(tab.order_text(), None);
+        assert!(!tab.apply_order_action(GridAction::SortAscending, None));
+        assert!(!tab.order().is_active());
+        assert!(tab.apply_order_action(GridAction::SortDescending, Some(0)));
+        assert_eq!(tab.order_text().as_deref(), Some("Sorting… 0%"));
+        // Until it is published the rows show in model order.
+        assert_eq!(tab.model_row(0), Some(0));
+        assert_eq!(
+            tab.step_order(Some(Duration::ZERO)),
+            OrderProgress::Working {
+                done: 1_024,
+                total: 10_000
+            }
+        );
+        assert_eq!(tab.order_text().as_deref(), Some("Sorting… 10%"));
+        assert_eq!(tab.step_order(None), OrderProgress::Published);
+        assert_eq!(tab.order_text().as_deref(), Some("Sorted 2,500 rows"));
+        assert_eq!(tab.model_row(0), Some(2_499));
+        assert_eq!(tab.display_count(), 2_500);
+        // A sort action replaces the sort rather than adding a key.
+        assert!(tab.apply_order_action(GridAction::SortAscending, Some(1)));
+        assert_eq!(tab.order().sort().keys.len(), 1);
+        assert_eq!(tab.step_order(None), OrderProgress::Published);
+        assert_eq!(tab.model_row(0), Some(0));
+        // Only sort and filter actions are handled here.
+        assert!(!tab.apply_order_action(GridAction::PinColumn, Some(1)));
+        assert!(!tab.apply_order_action(GridAction::FetchMore, None));
+        assert!(tab.apply_order_action(GridAction::ClearSort, None));
+        assert_eq!(tab.order_text(), None);
+        assert_eq!(tab.model_row(0), Some(0));
+        assert_eq!(tab.model_row(2_499), Some(2_499));
+    }
+
+    #[test]
+    fn grid_rows_map_display_rows_to_model_rows_and_back() {
+        let mut tab = loaded(2_500);
+        tab.order_mut().set_filter(quick("r12", 1));
+        assert_eq!(tab.step_order(None), OrderProgress::Published);
+        let rows = tab.grid_rows();
+        // Without added rows the grid rows are the displayed model rows.
+        assert_eq!(rows.len(), 111);
+        assert_eq!(tab.display_row_count(), 111);
+        assert_eq!(tab.grid_row(0), Some(12));
+        assert_eq!(tab.grid_row(1), Some(120));
+        assert_eq!(rows.display_row(120), Some(1));
+        assert_eq!(
+            rows.display_row(13),
+            None,
+            "a filtered-out row has no position"
+        );
+        assert_eq!(tab.grid_row(111), None);
+        // The drawn cell is the model row's, not the row at the same position in the model.
+        assert_eq!(tab.display_cell(1, 1).text, tab.cell_text(120, 1));
+        assert_eq!(tab.display_cell(500, 1).text, "");
+        // Added rows follow the displayed rows and map to rows past the model.
+        let with_extra = GridRows {
+            shown: tab.rows(),
+            base: 2_500,
+            extra: 2,
+        };
+        assert_eq!(with_extra.len(), 113);
+        assert_eq!(with_extra.model_row(110), Some(tab.model_row(110).unwrap()));
+        assert_eq!(with_extra.model_row(111), Some(2_500));
+        assert_eq!(with_extra.model_row(112), Some(2_501));
+        assert_eq!(with_extra.model_row(113), None);
+        assert_eq!(with_extra.display_row(2_500), Some(111));
+        assert_eq!(with_extra.display_row(2_501), Some(112));
+        assert_eq!(with_extra.display_row(2_502), None);
+    }
+
+    #[test]
+    fn filtered_status_range_and_jump_targets_use_displayed_rows() {
+        let mut tab = loaded(2_500);
+        tab.order_mut().set_filter(quick("r12", 1));
+        assert_eq!(tab.order_text().as_deref(), Some("Filtering… 0%"));
+        assert_eq!(tab.step_order(None), OrderProgress::Published);
+        assert_eq!(tab.order_text().as_deref(), Some("111 of 2,500 rows"));
+        assert_eq!(tab.display_count(), 111);
+        assert_eq!(tab.row_count(), 2_500, "the model keeps every row");
+        assert_eq!(tab.model_row(0), Some(12));
+        assert_eq!(tab.model_row(1), Some(120));
+        assert_eq!(tab.model_row(111), None);
+        tab.set_visible(0..27);
+        assert_eq!(tab.range_text().as_deref(), Some("Rows 1–27 of 111"));
+        tab.set_visible(100..200);
+        assert_eq!(tab.range_text().as_deref(), Some("Rows 101–111 of 111"));
+        assert_eq!(tab.jump_target(GridAction::ScrollToEnd), Some(110));
+        // Cell text stays model-indexed.
+        assert_eq!(tab.cell_text(12, 1), "r12c1");
+        assert!(tab.apply_order_action(GridAction::ClearFilter, None));
+        assert_eq!(tab.order_text(), None);
+        assert_eq!(tab.display_count(), 2_500);
+        // Nothing matches: the range is empty.
+        tab.order_mut().set_filter(quick("nope", 1));
+        assert_eq!(tab.step_order(None), OrderProgress::Published);
+        assert_eq!(tab.order_text().as_deref(), Some("0 of 2,500 rows"));
+        assert_eq!(tab.range_text(), None);
+        assert_eq!(tab.jump_target(GridAction::ScrollToTop), None);
+    }
+
+    #[test]
+    fn match_case_toggles_sort_and_filter_collation() {
+        let mut tab = loaded(100);
+        tab.order_mut().set_filter(quick("R5", 1));
+        tab.step_order(None);
+        assert_eq!(tab.display_count(), 11, "r5, r50-r59");
+        assert!(tab.apply_order_action(GridAction::ToggleMatchCase, None));
+        assert_eq!(tab.order().collation(), Collation::CodePoint);
+        tab.step_order(None);
+        assert_eq!(tab.display_count(), 0);
+        assert!(tab.apply_order_action(GridAction::ToggleMatchCase, None));
+        assert_eq!(tab.order().collation(), Collation::CaseInsensitive);
+    }
+
+    #[test]
+    fn partial_results_say_that_only_loaded_rows_are_covered() {
+        let (model, sink) = grid_channel_with(GridLimits::rows(1_000));
+        let mut tab = GridTab::new(model);
+        let handle = spawn_ingest(SyntheticSource::new(2_500, 3, 256), sink).unwrap();
+        let start = Instant::now();
+        while !matches!(tab.state(), IngestState::Paused) {
+            assert!(start.elapsed() < Duration::from_secs(20), "never paused");
+            tab.poll(POLL_BUDGET);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(tab.apply_order_action(GridAction::SortDescending, Some(0)));
+        assert_eq!(tab.step_order(None), OrderProgress::Published);
+        assert_eq!(
+            tab.order_text().as_deref(),
+            Some("Sorted 1,000 rows · loaded rows only")
+        );
+        tab.order_mut().set_filter(quick("c1", 1));
+        tab.step_order(None);
+        assert_eq!(
+            tab.order_text().as_deref(),
+            Some("1,000 of 1,000 rows · loaded rows only")
+        );
+        // The rest arrives: the order extends, and the suffix goes.
+        while !matches!(tab.state(), IngestState::Done { .. }) {
+            assert!(start.elapsed() < Duration::from_secs(20), "never done");
+            tab.fetch_more();
+            tab.poll(POLL_BUDGET);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(tab.row_count(), 2_500);
+        while tab.step_order(None) != OrderProgress::Idle {}
+        assert_eq!(tab.order_text().as_deref(), Some("2,500 of 2,500 rows"));
+        assert_eq!(tab.model_row(0), Some(2_499), "still sorted descending");
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn a_new_column_set_clears_the_order() {
+        let (model, sink) = grid_channel();
+        let mut tab = GridTab::new(model);
+        tab.order_mut().set_filter(quick("x", 0));
+        assert!(tab.order().is_active());
+        let handle = spawn_ingest(SyntheticSource::new(10, 3, 4), sink).unwrap();
+        handle.join().unwrap().unwrap();
+        assert!(tab.poll(1).columns_changed);
+        assert!(!tab.order().is_active() && !tab.order().is_working());
+        assert_eq!(tab.order_text(), None);
     }
 
     #[test]

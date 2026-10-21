@@ -18,10 +18,17 @@
 mod action;
 mod cell;
 mod control;
+mod copy;
+mod detail;
+#[cfg(feature = "gui")]
+pub(crate) mod detail_view;
+mod filter;
 mod ingest;
 mod layout;
 mod model;
+mod order;
 mod selection;
+mod sort;
 mod stats;
 mod store;
 mod synthetic;
@@ -33,21 +40,33 @@ mod viewport;
 pub use action::{GridAction, grid_key_action, register_commands};
 pub use cell::{ColumnHeader, MAX_CELL_CHARS, cell_text, group_thousands, type_label};
 pub use control::{Applied, GridControls};
+pub use copy::{
+    CopyError, CopyFormat, CopyJob, CopyLimits, CopyOutput, GATHER_SLICE_CELLS, InsertTarget,
+    NOTIFY_CELLS, PLACEHOLDER_TABLE, SYNC_CELLS, copy_key_format, copy_now, register_copy_commands,
+    success_notice,
+};
+pub use detail::{
+    CellDetail, DETAIL_BINARY_CAP, DETAIL_LINE_CHARS, DETAIL_TEXT_CAP, DetailCap, DetailKind,
+    DetailLine, HEX_BYTES_PER_LINE, JSON_PRETTY_CAP, copy_text, human_bytes,
+};
+pub use filter::{CompiledFilter, Condition, FilterOp, FilterSpec, QuickFilter};
 pub use ingest::{IngestSummary, ingest, spawn_ingest};
 pub use layout::{ColumnLayout, MAX_COLUMN_PX, MIN_COLUMN_PX, default_width, widest_text};
 pub use model::{
     GridCancel, GridLimits, GridModel, GridSink, IngestState, Viewport, grid_channel,
     grid_channel_with,
 };
+pub use order::{DisplayRows, GridOrder, OrderProgress};
 pub use selection::{
     CellPos, DisplayMap, DisplayRect, IdentityRows, Motion, RowOrder, Selection, SelectionKind,
     key_command, scroll_row,
 };
+pub use sort::{Collation, SortDirection, SortKey, SortSpec, compare_cells};
 pub use stats::{ProbeReport, RenderStats, nearest_rank};
 pub use store::{CellRef, RowRef};
 pub use synthetic::SyntheticSource;
 pub use tab::{
-    GridTab, POLL_BUDGET, PollOutcome, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS,
+    GridRows, GridTab, POLL_BUDGET, PollOutcome, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS,
 };
 pub use viewport::{ROW_HEIGHT_PX, ScrollViewport};
 pub mod edit;

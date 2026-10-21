@@ -1,0 +1,6 @@
+---
+source: crates/sqler-ui/src/grid/detail.rs
+expression: render(&d)
+---
+text · 33 bytes [text]
+nul␀bel␇esc␛del␡rlo�evil�x�

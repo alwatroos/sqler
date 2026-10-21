@@ -1,0 +1,7 @@
+---
+source: crates/sqler-ui/src/grid/detail.rs
+expression: render(&d)
+---
+json · 13 bytes [json]
+note: Not formatted: not valid JSON, or nested at depth 128 or deeper. Shown as stored.
+{"a": [1, 2,}

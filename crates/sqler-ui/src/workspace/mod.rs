@@ -13,6 +13,7 @@ mod browser;
 mod drop_dialog;
 mod edit;
 mod editor;
+mod export;
 mod history;
 mod query;
 mod state;

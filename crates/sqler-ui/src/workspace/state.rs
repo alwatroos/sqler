@@ -5,18 +5,20 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::path::PathBuf;
 
 use sqler_catalog::{CacheKey, CatalogWorker, RefreshHandle};
 use sqler_config::{
     ConnectionId, ConnectionProfile, NewHistoryEntry, SavedQueries, Secret, SecretRef,
 };
-use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId};
+use sqler_driver_api::sqler_core::{ConnectionConfig, DbObject, DriverId};
 use sqler_driver_api::{CancelHandle, Session};
 use sqler_sql::Dialect;
 
 use super::action::WorkspaceAction;
 use super::browser::{BrowserJob, BrowserState, OpenDataJob};
 use super::edit::EditFlow;
+use super::export::ExportCenter;
 use super::history::HistoryWorkspace;
 use super::query::ActiveRun;
 use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
@@ -25,8 +27,11 @@ use crate::connections::{
     GroupPurpose, HostKeyPrompt, SecretField, TestStatus, from_profile_secret,
 };
 use crate::editor::{EditorDocs, EditorKey, TextEdit};
+use crate::export::ExportJob;
 use crate::grid::edit::ApplyJob;
-use crate::grid::{GridCancel, GridTab, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS};
+use crate::grid::{
+    GridCancel, GridTab, InsertTarget, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS,
+};
 use crate::history::HistorySearch;
 use crate::query::{QueryJob, QueryTab, RunEvent};
 use crate::settings::SettingsModel;
@@ -208,6 +213,19 @@ pub enum Effect {
         /// The queries to write.
         queries: SavedQueries,
     },
+    /// Ask for the target file of an export (the native save dialog), then report with
+    /// [`Workspace::export_path_chosen`].
+    PickExportPath {
+        /// The folder to start in.
+        directory: PathBuf,
+        /// The suggested file name.
+        suggested_name: String,
+        /// The dialog this prompt belongs to; hand it back to `export_path_chosen`.
+        dialog: u64,
+    },
+    /// Start this export; report with [`Workspace::export_progress`] and
+    /// [`Workspace::export_finished`].
+    RunExport(ExportJob),
 }
 
 impl std::fmt::Debug for Effect {
@@ -322,6 +340,9 @@ impl std::fmt::Debug for Effect {
                 .field("generation", generation)
                 .field("queries", &queries.queries().len())
                 .finish(),
+            // Never the folder or the file name.
+            Self::PickExportPath { .. } => f.write_str("PickExportPath"),
+            Self::RunExport(job) => f.debug_tuple("RunExport").field(&job.tab).finish(),
         }
     }
 }
@@ -359,6 +380,8 @@ pub struct Workspace {
     system_appearance: Appearance,
     /// Cancel flags of the grid tabs' ingestion threads.
     pub(super) grid_cancels: HashMap<TabId, GridCancel>,
+    /// The table or view behind each open-data tab.
+    pub(super) grid_objects: HashMap<TabId, DbObject>,
     /// Rows of the synthetic grid; a field so tests can use a small result.
     synthetic_rows: usize,
     /// The object browser of every connection that was opened.
@@ -391,6 +414,8 @@ pub struct Workspace {
     pub(super) history: HistoryWorkspace,
     /// Inline editing: pending changes, the transaction flags, the apply flow.
     pub(super) edit: EditFlow,
+    /// The export dialog and the exports in progress.
+    pub(super) exports: ExportCenter,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -427,6 +452,7 @@ impl Workspace {
             settings_tab: SettingsTab::Closed,
             system_appearance: Appearance::Light,
             grid_cancels: HashMap::new(),
+            grid_objects: HashMap::new(),
             synthetic_rows: SYNTHETIC_ROWS,
             browsers: HashMap::new(),
             next_generation: 0,
@@ -443,6 +469,7 @@ impl Workspace {
             next_run: 0,
             history: HistoryWorkspace::new(),
             edit: EditFlow::default(),
+            exports: ExportCenter::default(),
         }
     }
 
@@ -470,6 +497,19 @@ impl Workspace {
     #[must_use]
     pub fn dialog_generation(&self) -> u64 {
         self.dialog_generation
+    }
+
+    /// Where a copy as SQL `INSERT` of this tab's grid points: the real table for an open-data
+    /// tab, else the placeholder table. The dialect is the tab connection's. `None` if the tab
+    /// is gone.
+    #[must_use]
+    pub fn insert_target(&self, tab: TabId) -> Option<InsertTarget> {
+        let connection = self.tabs.get(tab)?.connection();
+        let dialect = Dialect::from_driver_id(connection.driver.as_str());
+        Some(match self.grid_objects.get(&tab) {
+            Some(object) => InsertTarget::for_object(dialect, object),
+            None => InsertTarget::placeholder(dialect),
+        })
     }
 
     /// Takes the pending message for the user, if any.
@@ -638,6 +678,7 @@ impl Workspace {
     /// Quits for real: stops every run and apply, ends the grid ingestions and returns what the
     /// view has to close.
     pub(super) fn quit_now(&mut self) -> Effect {
+        self.cancel_all_exports();
         let mut cancels = self.cancel_all_queries();
         cancels.extend(self.edit.stop_all_applies());
         // Ends every grid ingestion, waking one that is paused on a full page.
@@ -763,11 +804,13 @@ impl Workspace {
         if let Some(cancel) = self.grid_cancels.remove(&id) {
             cancel.cancel();
         }
+        self.grid_objects.remove(&id);
         self.close_object_tab(id);
         self.editors.remove(id);
         self.tab_conns.remove(&id);
         self.queries.remove(&id);
         self.history.forget_tab(id);
+        self.cancel_tab_export(id);
         let cancel = self.cancel_query_run(id);
         if self.tabs.is_empty() && self.settings_tab == SettingsTab::Background {
             self.settings_tab = SettingsTab::Active;

@@ -136,6 +136,16 @@ pub enum GridAction {
     AutofitColumn,
     /// Restore column order, widths and pinning.
     ResetLayout,
+    /// Sort ascending by the column of the active cell.
+    SortAscending,
+    /// Sort descending by the column of the active cell.
+    SortDescending,
+    /// Remove the sort.
+    ClearSort,
+    /// Remove the quick filter and every condition.
+    ClearFilter,
+    /// Switch between case-insensitive and code point text order and filter matching.
+    ToggleMatchCase,
     /// Load the next page of a result that stopped at its page limit.
     FetchMore,
     /// Edit the active cell.
@@ -156,6 +166,8 @@ pub enum GridAction {
     DiscardChanges,
     /// Allow editing a result without a key, matching rows on all their values.
     EditWithoutKey,
+    /// Show or hide the detail pane of the active cell.
+    ToggleCellDetail,
 }
 
 const fn mv(to: Motion) -> GridAction {
@@ -168,7 +180,7 @@ const fn ext(to: Motion) -> GridAction {
 
 impl GridAction {
     /// Every action, in palette order.
-    pub const ALL: [GridAction; 41] = [
+    pub const ALL: [GridAction; 47] = [
         Self::ScrollToTop,
         Self::ScrollToEnd,
         mv(Motion::Up),
@@ -200,6 +212,11 @@ impl GridAction {
         Self::MoveColumnRight,
         Self::AutofitColumn,
         Self::ResetLayout,
+        Self::SortAscending,
+        Self::SortDescending,
+        Self::ClearSort,
+        Self::ClearFilter,
+        Self::ToggleMatchCase,
         Self::FetchMore,
         Self::EditCell,
         Self::SetNull,
@@ -210,6 +227,7 @@ impl GridAction {
         Self::ApplyChanges,
         Self::DiscardChanges,
         Self::EditWithoutKey,
+        Self::ToggleCellDetail,
     ];
 
     /// The ID string of the command this action runs.
@@ -250,6 +268,11 @@ impl GridAction {
             Self::MoveColumnRight => "grid:move-column-right",
             Self::AutofitColumn => "grid:autofit-column",
             Self::ResetLayout => "grid:reset-layout",
+            Self::SortAscending => "grid:sort-ascending",
+            Self::SortDescending => "grid:sort-descending",
+            Self::ClearSort => "grid:clear-sort",
+            Self::ClearFilter => "grid:clear-filter",
+            Self::ToggleMatchCase => "grid:toggle-match-case",
             Self::FetchMore => "grid:fetch-more",
             Self::EditCell => "grid:edit-cell",
             Self::SetNull => "grid:set-null",
@@ -260,6 +283,7 @@ impl GridAction {
             Self::ApplyChanges => "grid:apply-changes",
             Self::DiscardChanges => "grid:discard-changes",
             Self::EditWithoutKey => "grid:edit-without-key",
+            Self::ToggleCellDetail => "grid:toggle-cell-detail",
         }
     }
 
@@ -302,6 +326,11 @@ impl GridAction {
             Self::MoveColumnRight => "Results: Move Column Right",
             Self::AutofitColumn => "Results: Autofit Column",
             Self::ResetLayout => "Results: Reset Column Layout",
+            Self::SortAscending => "Results: Sort Ascending",
+            Self::SortDescending => "Results: Sort Descending",
+            Self::ClearSort => "Results: Clear Sort",
+            Self::ClearFilter => "Results: Clear Filter",
+            Self::ToggleMatchCase => "Results: Match Case in Sort and Filter",
             Self::FetchMore => "Fetch More Rows",
             Self::EditCell => "Results: Edit Cell",
             Self::SetNull => "Results: Set Cell to NULL",
@@ -312,6 +341,7 @@ impl GridAction {
             Self::ApplyChanges => "Results: Apply Changes",
             Self::DiscardChanges => "Results: Discard Changes",
             Self::EditWithoutKey => "Results: Edit Without a Key",
+            Self::ToggleCellDetail => "Results: Toggle Cell Detail",
         }
     }
 
@@ -359,7 +389,7 @@ mod tests {
             assert!(id.to_string().starts_with("grid:"), "{a:?}");
             assert!(seen.insert(id), "duplicate ID for {a:?}");
         }
-        assert_eq!(seen.len(), 41);
+        assert_eq!(seen.len(), 47);
     }
 
     #[test]
@@ -395,6 +425,14 @@ mod tests {
             "grid:fetch-more"
         );
         assert_eq!(
+            GridAction::ToggleCellDetail.command_id().to_string(),
+            "grid:toggle-cell-detail"
+        );
+        assert_eq!(
+            GridAction::ToggleCellDetail.title(),
+            "Results: Toggle Cell Detail"
+        );
+        assert_eq!(
             GridAction::PinColumn.command_id().to_string(),
             "grid:pin-column"
         );
@@ -402,6 +440,36 @@ mod tests {
             GridAction::AutofitColumn.command_id().to_string(),
             "grid:autofit-column"
         );
+        for (a, id, title) in [
+            (
+                GridAction::SortAscending,
+                "grid:sort-ascending",
+                "Results: Sort Ascending",
+            ),
+            (
+                GridAction::SortDescending,
+                "grid:sort-descending",
+                "Results: Sort Descending",
+            ),
+            (
+                GridAction::ClearSort,
+                "grid:clear-sort",
+                "Results: Clear Sort",
+            ),
+            (
+                GridAction::ClearFilter,
+                "grid:clear-filter",
+                "Results: Clear Filter",
+            ),
+            (
+                GridAction::ToggleMatchCase,
+                "grid:toggle-match-case",
+                "Results: Match Case in Sort and Filter",
+            ),
+        ] {
+            assert_eq!(a.command_id().to_string(), id);
+            assert_eq!(a.title(), title);
+        }
         assert_eq!(mv(Motion::Down).command_id().to_string(), "grid:move-down");
         assert_eq!(
             ext(Motion::Last).command_id().to_string(),
@@ -626,7 +694,7 @@ mod tests {
                 Some(action)
             );
         }
-        assert_eq!(GridAction::ALL.len(), 41);
+        assert_eq!(GridAction::ALL.len(), 47);
     }
 
     #[test]

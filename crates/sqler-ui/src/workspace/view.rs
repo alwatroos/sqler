@@ -40,11 +40,15 @@ use crate::connections::FormField;
 use crate::connections::view::{DialogInputs, dialog_overlay};
 use crate::connections::{self, ConnectionAction, Connector, Dialog};
 use crate::editor::{self, EditorAction, view::EditorViews};
+use crate::export::view::{export_bar, export_overlay};
 use crate::grid::edit::EditorKey;
 use crate::grid::view::{
     GridProbe, GridViews, Table, action_for_command as grid_action_for, apply_action,
 };
-use crate::grid::{GridAction, Motion, grid_key_action};
+use crate::grid::{
+    CopyFormat, GATHER_SLICE_CELLS, GridAction, InsertTarget, Motion, SYNC_CELLS, copy_key_format,
+    grid_key_action, success_notice,
+};
 use crate::history::view::HistoryViews;
 use crate::history::{self, HistoryCommand, HistoryService};
 use crate::keymap::input::key_input;
@@ -60,6 +64,8 @@ use crate::tabs::TabId;
 use crate::theme::apply::{appearance_of, apply};
 use crate::theme::resolve;
 use edit_ui::EditUi;
+
+mod export;
 
 /// How long quitting waits for open sessions to close.
 const CLOSE_LIMIT: Duration = Duration::from_secs(2);
@@ -170,12 +176,16 @@ pub(crate) struct WorkspaceView {
     catalog_runs: Vec<oneshot::Receiver<()>>,
     /// Messages to show as notifications at the next render.
     notices: Vec<String>,
+    /// The copy of a large selection in progress; dropping the task cancels it.
+    copy_task: Option<Task<()>>,
     /// The blocking store behind the history and the saved queries.
     history: HistoryService,
     /// The inputs of the history tabs and the history dialogs.
     pub(crate) history_views: HistoryViews,
     /// The editing dialogs and the contexts pushed to the grids.
     edit_ui: EditUi,
+    /// The text inputs of the export dialog on screen.
+    export_inputs: Option<export::ExportInputs>,
     /// Keeps the OS appearance observer alive.
     _appearance: Subscription,
     /// Keeps the quit hook (closes sessions when the app quits any way) alive.
@@ -219,8 +229,14 @@ impl WorkspaceView {
         if let Err(err) = palette::register_commands(&mut commands) {
             eprintln!("sqler: could not register the palette command: {err}");
         }
+        if let Err(err) = crate::grid::register_copy_commands(&mut commands) {
+            eprintln!("sqler: cannot register the copy commands: {err}");
+        }
         if let Err(err) = crate::grid::register_commands(&mut commands) {
             eprintln!("sqler: could not register the grid commands: {err}");
+        }
+        if let Err(err) = crate::export::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the export commands: {err}");
         }
         if let Err(err) = connections::register_commands(&mut commands) {
             eprintln!("sqler: could not register the connection commands: {err}");
@@ -264,6 +280,7 @@ impl WorkspaceView {
         // Any way of quitting (window close, the OS menu) closes the open sessions, within the
         // short time the platform allows. The `app:quit` command waits longer (`CLOSE_LIMIT`).
         let quit = cx.on_app_quit(|view, _| {
+            view.ws.cancel_all_exports();
             for handle in view.ws.cancel_all_queries() {
                 drop(view.bridge.spawn(async move {
                     let _ = handle.cancel().await;
@@ -297,9 +314,11 @@ impl WorkspaceView {
             list_entries: Vec::new(),
             catalog_runs: Vec::new(),
             notices: Vec::new(),
+            copy_task: None,
             history,
             history_views: HistoryViews::default(),
             edit_ui: EditUi::new(cx),
+            export_inputs: None,
             _appearance: appearance,
             _quit: quit,
         };
@@ -429,6 +448,16 @@ impl WorkspaceView {
         if !was_open
             && chord.key() == "escape"
             && chord.modifiers() == Modifiers::default()
+            && self.ws.export_dialog().is_some()
+        {
+            // Escape closes the export dialog; nothing is exported.
+            cx.stop_propagation();
+            self.export_dismiss(cx);
+            return;
+        }
+        if !was_open
+            && chord.key() == "escape"
+            && chord.modifiers() == Modifiers::default()
             && self.history_overlay_open()
         {
             // Escape closes the history dialog or the saved-query picker; nothing changes.
@@ -495,10 +524,16 @@ impl WorkspaceView {
             || self.ws.drop_dialog().is_some()
             || self.query_overlay_tab().is_some()
             || self.history_overlay_open()
-            || self.edit_overlay_open();
+            || self.edit_overlay_open()
+            || self.ws.export_dialog().is_some();
         let editing = self.cell_editing(cx);
+        let input = key_input(&event.keystroke);
+        if let Some(format) = copy_key_format(&input, Platform::current(), focused, overlay) {
+            self.copy_grid(format, window, cx);
+            return true;
+        }
         let Some(action) = grid_key_action(
-            &key_input(&event.keystroke),
+            &input,
             Platform::current(),
             focused,
             overlay,
@@ -587,6 +622,13 @@ impl WorkspaceView {
         } else if let Some(command) = history::action_for(id) {
             self.palette.close();
             self.history_command(command, cx);
+        } else if let Some(command) = crate::export::action_for(id) {
+            self.palette.close();
+            self.run_export_command(command, window, cx);
+        } else if let Some(format) = CopyFormat::from_command_id(id) {
+            self.palette.close();
+            self.copy_grid(format, window, cx);
+            grid_focus = self.active_table();
         } else if let Some(grid_action) = grid_action_for(id) {
             self.palette.close();
             if grid_action == GridAction::FetchMore {
@@ -643,6 +685,78 @@ impl WorkspaceView {
                 .update(cx, |input, cx| input.set_value(query, window, cx));
         }
         cx.notify();
+    }
+
+    /// Copies the selection of the shown grid to the clipboard in `format`.
+    ///
+    /// A small selection is gathered and rendered at once. A large one is gathered in slices on
+    /// the UI thread (one per turn) and rendered on the background executor; a new copy replaces
+    /// the one in progress. The copied text only goes to the clipboard: it is never logged or
+    /// shown in a notice.
+    fn copy_grid(&mut self, format: CopyFormat, window: &mut Window, cx: &mut Context<Self>) {
+        // A copy still running must not overwrite the clipboard after this one is refused.
+        self.copy_task = None;
+        let Some(table) = self.active_table() else {
+            window.push_notification("Open a results grid first.", cx);
+            return;
+        };
+        let target = self
+            .ws_active_grid()
+            .or_else(|| self.ws_active_query())
+            .and_then(|tab| self.ws.insert_target(tab))
+            .unwrap_or_else(|| InsertTarget::placeholder(None));
+        let mut job = match table.read(cx).delegate().copy_job(format, target) {
+            Ok(job) => job,
+            Err(err) => {
+                window.push_notification(err.to_string(), cx);
+                return;
+            }
+        };
+        let cells = job.cells();
+        if cells <= SYNC_CELLS {
+            table.read(cx).delegate().gather_copy(&mut job, usize::MAX);
+            match job.render() {
+                Ok(out) => {
+                    if let Some(notice) = success_notice(&out, cells) {
+                        window.push_notification(notice, cx);
+                    }
+                    self.apply(Effect::Copy(out.text), cx);
+                }
+                Err(err) => window.push_notification(err.to_string(), cx),
+            }
+            return;
+        }
+        let weak = table.downgrade();
+        self.copy_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let gathered = weak.update(cx, |state, _| {
+                    state.delegate().gather_copy(&mut job, GATHER_SLICE_CELLS)
+                });
+                match gathered {
+                    Ok(true) => break,
+                    Ok(false) => {}
+                    // The grid was closed: nothing to copy any more.
+                    Err(_) => return,
+                }
+                cx.background_executor().timer(Duration::ZERO).await;
+            }
+            let result = cx
+                .background_executor()
+                .spawn(async move { job.render() })
+                .await;
+            this.update(cx, |view, cx| {
+                match result {
+                    Ok(out) => {
+                        let notice = success_notice(&out, cells);
+                        view.apply(Effect::Copy(out.text), cx);
+                        view.notices.extend(notice);
+                    }
+                    Err(err) => view.notices.push(err.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     /// The context menu cannot open from a key press, so the palette opens on the object
@@ -816,7 +930,7 @@ impl WorkspaceView {
         }
     }
 
-    fn apply(&mut self, effect: Effect, cx: &mut Context<Self>) {
+    pub(crate) fn apply(&mut self, effect: Effect, cx: &mut Context<Self>) {
         match effect {
             // `run_command` opens the palette for the object menu; it needs the window.
             Effect::None | Effect::ShowObjectMenu => {}
@@ -852,7 +966,10 @@ impl WorkspaceView {
                 })
                 .detach();
             }
-            Effect::OpenGrid { tab, grid } => self.grids.insert(tab, grid),
+            Effect::OpenGrid { tab, grid } => {
+                self.grids.insert(tab, grid);
+                self.ws.result_replaced(tab);
+            }
             Effect::CloseSession(session) => self.bridge.close(session),
             Effect::CloseSessions(sessions) => {
                 let closed = self.bridge.close_all(sessions, CLOSE_LIMIT);
@@ -879,6 +996,7 @@ impl WorkspaceView {
             | Effect::SearchHistory(_)
             | Effect::ClearHistory
             | Effect::SaveSavedQueries { .. } => self.apply_history(effect, cx),
+            Effect::PickExportPath { .. } | Effect::RunExport(_) => self.apply_export(effect, cx),
             Effect::CancelQuery(handle) => {
                 // The answer does not matter: the job reports how the statement ended.
                 drop(self.bridge.spawn(async move {
@@ -948,6 +1066,7 @@ impl WorkspaceView {
     ) {
         let (tab, run) = (job.tab, job.run);
         self.queries.insert_grids(tab, grids);
+        self.ws.remember_run(tab, &job.statements);
         let done = self.bridge.spawn(job.run());
         cx.spawn(async move |this, cx| {
             // The channel closes when the job ends, so every event arrives before the end.
@@ -1218,6 +1337,7 @@ impl WorkspaceView {
             }
             Effect::OpenData { tab, grid, job } => {
                 self.grids.insert(tab, grid);
+                self.ws.remember_open_data(tab, &job.sql);
                 // The job reports failures to the grid itself; nobody waits for it.
                 drop(self.bridge.spawn(job.run(self.bridge.connector())));
             }
@@ -1296,6 +1416,7 @@ impl Render for WorkspaceView {
         }
         self.sync_edit(window, cx);
         self.sync_dialog_inputs(window, cx);
+        self.sync_export_inputs(window, cx);
         if self.history_views.materialize(&self.ws, window, cx) {
             // A history dialog or the picker closed: the root takes the focus back.
             window.focus(&self.focus, cx);
@@ -1348,6 +1469,12 @@ impl Render for WorkspaceView {
             .and_then(|tab| query_overlay(self, tab, cx));
         let history_dialog = history::view::history_overlay(self, cx);
         let edit_dialog = crate::grid::edit::view::edit_overlay(self, cx);
+        let export_dialog = export_overlay(self, cx);
+        let export_progress = self
+            .ws
+            .tabs()
+            .active()
+            .and_then(|tab| export_bar(self, tab.id(), cx));
         let palette = self.palette.is_open().then(|| {
             let items = self.palette.items(&self.commands, &self.keys);
             palette::view::palette_overlay(
@@ -1408,6 +1535,7 @@ impl Render for WorkspaceView {
                             .child(div().flex_1().min_w_0().child(strip))
                             .child(strip_end),
                     )
+                    .children(export_progress)
                     .child(body),
             )
             .children(dialog)
@@ -1415,6 +1543,7 @@ impl Render for WorkspaceView {
             .children(query_dialog)
             .children(history_dialog)
             .children(edit_dialog)
+            .children(export_dialog)
             .children(palette)
     }
 }

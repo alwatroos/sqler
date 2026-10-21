@@ -712,6 +712,7 @@ impl Workspace {
         let limits = GridLimits::from_settings(self.settings().settings());
         let (model, sink) = grid_channel_with(limits);
         self.grid_cancels.insert(tab, sink.canceller());
+        self.grid_objects.insert(tab, obj.clone());
         Effect::OpenData {
             tab,
             grid: GridTab::new(model),
@@ -1497,6 +1498,31 @@ mod tests {
         let tab = h.w.tabs().get(tab).unwrap();
         assert_eq!(tab.kind(), TabKind::Grid);
         assert_eq!(tab.title(), "Results: \"main\".\"users\"");
+    }
+
+    #[test]
+    fn insert_target_is_the_real_table_for_open_data_and_the_placeholder_otherwise() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        h.open();
+        h.click("Schemas (1)", BrowserAction::Expand);
+        h.click("main", BrowserAction::Expand);
+        h.click("Tables (2)", BrowserAction::Expand);
+        let query_tab = h.w.tabs().active().unwrap().id();
+        h.click("users", BrowserAction::Entry(MenuEntry::OpenData));
+        let (data_tab, _job) = h.seen.grids.remove(0);
+        let real = h.w.insert_target(data_tab).unwrap();
+        assert_eq!(real.table, "users");
+        assert_eq!(real.schema.as_deref(), Some("main"));
+        assert_eq!(real.dialect, sqler_sql::Dialect::Sqlite);
+        assert!(!real.assumed_dialect);
+        let placeholder = h.w.insert_target(query_tab).unwrap();
+        assert_eq!(placeholder.table, crate::grid::PLACEHOLDER_TABLE);
+        assert_eq!(placeholder.schema, None);
+        assert_eq!(placeholder.dialect, sqler_sql::Dialect::Sqlite);
+        let effect = h.w.dispatch(WorkspaceAction::CloseTab(data_tab));
+        h.apply(effect);
+        assert_eq!(h.w.insert_target(data_tab), None);
+        assert!(h.w.grid_objects.is_empty());
     }
 
     /// Opens a grid on `users`, starts a synthetic ingestion on its sink that outgrows the default
