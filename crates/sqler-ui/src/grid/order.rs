@@ -217,6 +217,38 @@ impl GridOrder {
         (!self.filter.is_empty()).then(|| self.filter.compile(self.collation))
     }
 
+    /// How long until the rows that wait are due for a merge: `None` when none wait (or no order
+    /// is published), `Some(ZERO)` when they are due now: enough of them, or some that have waited
+    /// long enough (a slow result is not frozen), or the result is no longer streaming. `now` is a
+    /// parameter so the decision can be tested with a fake clock.
+    fn extend_wait(&self, rows: usize, streaming: bool, now: Instant) -> Option<Duration> {
+        if !self.published || !self.is_active() || rows <= self.covered {
+            return None;
+        }
+        let fresh = rows - self.covered;
+        let floor = self.extend_floor.unwrap_or(EXTEND_FLOOR);
+        let after = self.extend_after.unwrap_or(EXTEND_AFTER);
+        if !streaming || fresh >= floor.max(self.covered / 8) {
+            return Some(Duration::ZERO);
+        }
+        Some(self.published_at.map_or(Duration::ZERO, |t| {
+            after.saturating_sub(now.saturating_duration_since(t))
+        }))
+    }
+
+    /// The headless decision behind the view's timer: `None` when no rows wait for a merge, else
+    /// the time after which to look again (`ZERO`: start the job now). With it, rows that wait
+    /// while the stream is quiet are shown half a second after the last merge without another
+    /// batch.
+    #[must_use]
+    pub fn next_extend_check(&self, model: &GridModel, now: Instant) -> Option<Duration> {
+        if self.job.is_some() {
+            return None;
+        }
+        let rows = model.row_count().min(u32::MAX as usize);
+        self.extend_wait(rows, matches!(model.state(), IngestState::Streaming), now)
+    }
+
     /// Starts an extend job when rows have arrived that the order does not cover. Returns whether
     /// a job runs now.
     fn start_extend(&mut self, model: &GridModel) -> bool {
@@ -227,13 +259,8 @@ impl GridOrder {
         if rows <= self.covered {
             return false;
         }
-        let fresh = rows - self.covered;
-        let floor = self.extend_floor.unwrap_or(EXTEND_FLOOR);
-        let after = self.extend_after.unwrap_or(EXTEND_AFTER);
-        // Enough rows, or some rows that have waited long enough: a slow result is not frozen.
-        let enough = fresh >= floor.max(self.covered / 8)
-            || self.published_at.is_none_or(|t| t.elapsed() >= after);
-        if !enough && matches!(model.state(), IngestState::Streaming) {
+        let streaming = matches!(model.state(), IngestState::Streaming);
+        if self.extend_wait(rows, streaming, Instant::now()) != Some(Duration::ZERO) {
             return false;
         }
         let caches_ok = self.keys.len() == self.sort.keys.len()
@@ -428,6 +455,8 @@ struct Job {
     run_next: usize,
     /// The size of the next run when the sizes adapt.
     run_size: usize,
+    /// Whether a run overran its budget in this job: growth is slow from then on.
+    run_overran: bool,
     /// The end of each sorted run so far.
     run_ends: Vec<usize>,
     merger: Option<Merger>,
@@ -464,6 +493,7 @@ impl Job {
             phase: Phase::Scan,
             run_next: 0,
             run_size: RUN_FIRST,
+            run_overran: false,
             run_ends: Vec::new(),
             merger: None,
             result: Vec::new(),
@@ -504,6 +534,28 @@ impl Job {
             Phase::Inverse => 3 * n + share(self.inv_pos, self.result.len()),
         };
         (done, (4 * n).max(1))
+    }
+
+    /// Sorts the next run of the kept rows and sizes the one after it.
+    fn sort_run(&mut self, ctx: &Ctx<'_>, keys: &mut [KeyCache]) {
+        let cmp = Cmp { ctx, keys };
+        let len = ctx.run_len.unwrap_or(self.run_size).max(1);
+        let end = (self.run_next + len).min(self.kept.len());
+        let started = Instant::now();
+        self.kept[self.run_next..end].sort_unstable_by(|&a, &b| cmp.compare(a, b));
+        if ctx.run_len.is_none() {
+            let (size, overran) =
+                next_run(end - self.run_next, started.elapsed(), self.run_overran);
+            self.run_size = size;
+            self.run_overran = overran;
+        }
+        self.run_next = end;
+        self.run_ends.push(end);
+        if end >= self.kept.len() {
+            let kept = std::mem::take(&mut self.kept);
+            self.merger = Some(Merger::new(kept, std::mem::take(&mut self.run_ends)));
+            self.phase = Phase::MergeNew;
+        }
     }
 
     /// Does one unit of work. Returns whether the job is finished (the result is ready).
@@ -551,23 +603,7 @@ impl Job {
                     }
                 }
             }
-            Phase::Runs => {
-                let cmp = Cmp { ctx, keys };
-                let len = ctx.run_len.unwrap_or(self.run_size).max(1);
-                let end = (self.run_next + len).min(self.kept.len());
-                let started = Instant::now();
-                self.kept[self.run_next..end].sort_unstable_by(|&a, &b| cmp.compare(a, b));
-                if ctx.run_len.is_none() {
-                    self.run_size = next_run_size(end - self.run_next, started.elapsed());
-                }
-                self.run_next = end;
-                self.run_ends.push(end);
-                if end >= self.kept.len() {
-                    let kept = std::mem::take(&mut self.kept);
-                    self.merger = Some(Merger::new(kept, std::mem::take(&mut self.run_ends)));
-                    self.phase = Phase::MergeNew;
-                }
-            }
+            Phase::Runs => self.sort_run(ctx, keys),
             Phase::MergeNew | Phase::MergeOld => {
                 let cmp = Cmp { ctx, keys };
                 let Some(m) = self.merger.as_mut() else {
@@ -629,6 +665,20 @@ fn next_run_size(rows: usize, took: Duration) -> usize {
     // `fit` is about n' log2 n'; dividing by the log of the last size is close enough.
     let size = (fit / n.log2()) as usize;
     size.clamp(RUN_MIN, (rows * 2).min(RUN_MAX))
+}
+
+/// The size of the next run, and whether the job has overrun: a run that took more than twice
+/// `RUN_TARGET` (a column that is cheap in its first rows and expensive later) halves the next
+/// size at least, and from then on the size grows by a quarter at a time, not by doubling.
+fn next_run(rows: usize, took: Duration, overran_before: bool) -> (usize, bool) {
+    let mut size = next_run_size(rows, took);
+    let overran = overran_before || took > RUN_TARGET * 2;
+    if took > RUN_TARGET * 2 {
+        size = size.min(rows / 2);
+    } else if overran {
+        size = size.min(rows + rows / 4);
+    }
+    (size.max(RUN_MIN), overran)
 }
 
 /// A resumable bottom-up merge sort over sorted runs that end at `ends`.
@@ -1235,6 +1285,69 @@ mod tests {
         // Very slow: the floor. A short last run does not distort the next size.
         assert_eq!(next_run_size(4_096, Duration::from_secs(1)), RUN_MIN);
         assert_eq!(next_run_size(10, Duration::from_secs(1)), RUN_MIN);
+    }
+
+    /// A fake cost model: a column that is cheap in its first 40,000 rows (already ordered) and
+    /// 200 times dearer after that. No run may take more than twice the target once one overran.
+    #[test]
+    fn a_run_that_overran_is_followed_by_smaller_ones() {
+        #[allow(clippy::cast_precision_loss)]
+        fn cost(start: usize, rows: usize) -> Duration {
+            let per_unit = |pos: usize| if pos < 40_000 { 2e-9 } else { 4e-7 };
+            let n = rows as f64;
+            Duration::from_secs_f64(per_unit(start) * n * n.log2())
+        }
+        let (mut size, mut overran) = (RUN_FIRST, false);
+        let (mut pos, mut first_overrun, mut worst_after) = (0, None, Duration::ZERO);
+        while pos < 400_000 {
+            let took = cost(pos, size);
+            if first_overrun.is_some() {
+                worst_after = worst_after.max(took);
+            } else if took > RUN_TARGET * 2 {
+                first_overrun = Some(pos);
+            }
+            (size, overran) = next_run(size, took, overran);
+            pos += size;
+        }
+        assert!(first_overrun.is_some(), "the model never overran");
+        assert!(overran);
+        assert!(
+            worst_after <= RUN_TARGET * 2,
+            "a run took {worst_after:?} after the first overrun"
+        );
+        // Growth after an overrun is slow.
+        assert_eq!(next_run(1_000, Duration::from_micros(1), true).0, 1_250);
+        assert_eq!(next_run(1_000, Duration::from_micros(1), false).0, 2_000);
+        // An overrun halves at least.
+        assert!(next_run(8_192, Duration::from_millis(5), false).0 <= 4_096);
+        assert_eq!(next_run(300, Duration::from_secs(1), false).0, RUN_MIN);
+    }
+
+    #[test]
+    fn the_extend_decision_follows_a_fake_clock() {
+        let (mut model, sink) = testing::channel(4);
+        let mut order = GridOrder::default();
+        order.set_sort(sort_of(&[(0, Asc)]));
+        testing::push(&mut model, &sink, random_rows(10_000, 1));
+        run(&mut order, &model);
+        let base = Instant::now();
+        order.published_at = Some(base);
+        let ms = Duration::from_millis;
+        // Nothing waits: no timer.
+        assert_eq!(order.next_extend_check(&model, base), None);
+        testing::push(&mut model, &sink, random_rows(3, 2));
+        // A few rows wait on a quiet stream: look again after the rest of the delay.
+        assert_eq!(order.next_extend_check(&model, base), Some(EXTEND_AFTER));
+        assert_eq!(
+            order.next_extend_check(&model, base + ms(200)),
+            Some(ms(300))
+        );
+        assert_eq!(order.next_extend_check(&model, base + ms(500)), Some(ms(0)));
+        assert_eq!(order.next_extend_check(&model, base + ms(900)), Some(ms(0)));
+        // Once due, the pump merges them.
+        order.extend_after = Some(Duration::ZERO);
+        assert_eq!(order.step(&model, None), OrderProgress::Published);
+        assert_eq!(order.next_extend_check(&model, Instant::now()), None);
     }
 
     #[test]

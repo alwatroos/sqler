@@ -172,6 +172,13 @@ impl GridTab {
         self.order.step(&self.model, budget)
     }
 
+    /// When rows wait for a merge into the sorted view, the time to look again (`ZERO`: pump the
+    /// job now); see [`GridOrder::next_extend_check`].
+    #[must_use]
+    pub fn next_extend_check(&self, now: std::time::Instant) -> Option<Duration> {
+        self.order.next_extend_check(&self.model, now)
+    }
+
     /// Applies a sort or filter action. `active_col` is the model column of the active cell.
     /// Returns whether the order changed (the view then pumps the job).
     pub fn apply_order_action(&mut self, a: GridAction, active_col: Option<usize>) -> bool {

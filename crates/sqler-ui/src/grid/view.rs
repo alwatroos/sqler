@@ -616,8 +616,16 @@ pub(crate) fn start_polling(table: &Table, window: &mut Window, cx: &mut Context
                     sync_bar(state, window, cx);
                     state.refresh(cx);
                 }
-                if (outcome.rows_changed || outcome.terminal)
-                    && state.delegate().tab.order().is_active()
+                // The poll tick is also the timer of the 500 ms merge trigger: rows that wait while
+                // the stream is quiet are merged once due. It ends with this task (result done,
+                // tab closed), so nothing outlives the grid.
+                if state.delegate().tab.order().is_active()
+                    && (outcome.terminal
+                        || state
+                            .delegate()
+                            .tab
+                            .next_extend_check(Instant::now())
+                            .is_some_and(|wait| wait.is_zero()))
                 {
                     ensure_pump(state, cx);
                 }

@@ -6,8 +6,8 @@
 //! Std-only (`harness = false`). Prints `key=value` lines, optionally saves them, and can compare
 //! against a saved baseline. Each key is the minimum over `--reps` repetitions. Gated keys:
 //! `sort_p95_ns` (text sort), `filter_p95_ns` (quick filter over all columns) and
-//! `viewport_sorted_p95_ns` (50-row windows of the sorted order), each with 25 % plus an absolute
-//! slack. A key missing from the baseline file is noted and not compared. Information only:
+//! `viewport_sorted_p95_ns` (50-row windows of the sorted order) and `sort_url_p95_ns` (see
+//! below), each with 25 % plus an absolute slack. A key missing from the baseline file is noted and not compared. Information only:
 //! `sort_int_p95_ns`, `sort_multi_p95_ns`, `filter_cond_p95_ns`, `order_heap_bytes` (published) and
 //! `order_peak_heap_bytes` (the most while one text sort replaces another).
 //! `slice_max_ns` (the longest 6 ms step of a text sort) has a budget.
@@ -15,8 +15,9 @@
 //! Three more columns of 1M rows cover the sorts that the 8-byte key cache cannot always decide:
 //! `sort_dec_p95_ns` (decimals), `sort_url_p95_ns` (text that shares a 40-byte prefix) and
 //! `sort_mixed_p95_ns` (a column of ints and floats). Each has a sort budget
-//! (`--budget-sort-slow-ns` for decimals and mixed, `--budget-sort-url-ns` for the text, which
-//! compares cells on most steps) and its own `slice_dec_max_ns`, `slice_url_max_ns`,
+//! (`--budget-sort-slow-ns` for decimals and mixed, `--budget-sort-url-ns`, 15 s, for the text, which
+//! compares cells on most steps; only a catastrophe guard, regressions are caught by the
+//! relative comparison against the baseline) and its own `slice_dec_max_ns`, `slice_url_max_ns`,
 //! `slice_mixed_max_ns`, each under the same step budget as `slice_max_ns`. Exit codes: 0 ok,
 //! 1 budget or regression failure, 2 bad arguments or unreadable baseline. See
 //! `docs/src/benchmarks.md` for the method and the rule.
@@ -78,7 +79,7 @@ fn parse_args() -> Result<Args, String> {
         budget_viewport_ns: 1_000_000,
         budget_slice_ns: 16_000_000,
         budget_sort_slow_ns: 500_000_000,
-        budget_sort_url_ns: 5_000_000_000,
+        budget_sort_url_ns: 15_000_000_000,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -372,6 +373,7 @@ struct Baseline {
     sort: Option<u64>,
     filter: Option<u64>,
     viewport: Option<u64>,
+    url: Option<u64>,
 }
 
 fn read_baseline(path: &str) -> Result<Baseline, String> {
@@ -385,6 +387,7 @@ fn read_baseline(path: &str) -> Result<Baseline, String> {
         sort: key("sort_p95_ns="),
         filter: key("filter_p95_ns="),
         viewport: key("viewport_sorted_p95_ns="),
+        url: key("sort_url_p95_ns="),
     })
 }
 
@@ -557,6 +560,7 @@ fn run() -> Result<ExitCode, (u8, String)> {
             pct,
             a.viewport_slack_ns,
         );
+        ok &= gate("sort_url_p95_ns", base.url, sort_url, pct, a.sort_slack_ns);
     }
     Ok(if ok {
         ExitCode::SUCCESS
