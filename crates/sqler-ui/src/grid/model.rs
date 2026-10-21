@@ -268,7 +268,6 @@ impl GridCancel {
 /// Rows are stored compactly as chunks with their start offsets, so growth never copies earlier
 /// rows and a viewport read is a binary search plus a walk. Dropping the model frees the rows and
 /// wakes a paused ingestion, which then ends.
-#[derive(Debug)]
 pub struct GridModel {
     rx: Receiver<Msg>,
     cancel: CancelFlag,
@@ -280,6 +279,19 @@ pub struct GridModel {
     /// `starts[i]` is the index of the first row of `chunks[i]`.
     starts: Vec<usize>,
     rows: usize,
+}
+
+/// The state, the columns and the sizes: never the cells, so a log line holds no row data.
+impl std::fmt::Debug for GridModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GridModel")
+            .field("state", &self.state)
+            .field("limits", &self.limits)
+            .field("columns", &self.columns)
+            .field("rows", &self.rows)
+            .field("chunks", &self.chunks.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Drop for GridModel {
@@ -663,6 +675,23 @@ mod tests {
         m.poll(usize::MAX);
         assert_eq!(m.state(), &IngestState::Failed("boom".to_owned()));
         assert_eq!(m.row_count(), 2);
+    }
+
+    #[test]
+    fn debug_output_holds_no_cell_data() {
+        let (mut m, s) = grid_channel();
+        assert!(s.send(Msg::Columns(cols())));
+        let secret = "SECRET-CELL-VALUE";
+        let row = vec![Row(vec![Value::Text(secret.to_owned())])];
+        assert!(s.send(Msg::Rows(Chunk::from_rows(row, 1))));
+        m.poll(usize::MAX);
+        assert_eq!(m.row_count(), 1);
+        let text = format!("{m:?}");
+        assert!(
+            text.contains("GridModel") && text.contains("rows: 1"),
+            "{text}"
+        );
+        assert!(!text.contains(secret), "{text}");
     }
 
     #[test]

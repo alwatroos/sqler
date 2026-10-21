@@ -21,10 +21,13 @@ mod control;
 mod detail;
 #[cfg(feature = "gui")]
 pub(crate) mod detail_view;
+mod filter;
 mod ingest;
 mod layout;
 mod model;
+mod order;
 mod selection;
+mod sort;
 mod stats;
 mod store;
 mod synthetic;
@@ -40,16 +43,19 @@ pub use detail::{
     CellDetail, DETAIL_BINARY_CAP, DETAIL_LINE_CHARS, DETAIL_TEXT_CAP, DetailCap, DetailKind,
     DetailLine, HEX_BYTES_PER_LINE, JSON_PRETTY_CAP, copy_text, human_bytes,
 };
+pub use filter::{CompiledFilter, Condition, FilterOp, FilterSpec, QuickFilter};
 pub use ingest::{IngestSummary, ingest, spawn_ingest};
 pub use layout::{ColumnLayout, MAX_COLUMN_PX, MIN_COLUMN_PX, default_width, widest_text};
 pub use model::{
     GridCancel, GridLimits, GridModel, GridSink, IngestState, Viewport, grid_channel,
     grid_channel_with,
 };
+pub use order::{DisplayRows, GridOrder, OrderProgress};
 pub use selection::{
     CellPos, DisplayMap, DisplayRect, IdentityRows, Motion, RowOrder, Selection, SelectionKind,
     key_command, scroll_row,
 };
+pub use sort::{Collation, SortDirection, SortKey, SortSpec, compare_cells};
 pub use stats::{ProbeReport, RenderStats, nearest_rank};
 pub use store::{CellRef, RowRef};
 pub use synthetic::SyntheticSource;

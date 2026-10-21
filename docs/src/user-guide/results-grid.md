@@ -65,6 +65,27 @@ Nothing in a value is interpreted: there are no links and no markup.
 **Large values.** The pane shows at most 1 MiB of a text, a JSON document (before or after indenting) or a binary value, and says so in a note (`Showing the first 1.0 MiB of 10.0 MiB.`). A JSON document over 1 MiB is shown as stored, not indented, until you use Show all; over 8 MiB it stays as stored (it is still split into lines of at most 1,000 columns and scrolled the same way). **Show all** loads the rest in the background, so the window keeps responding; it keeps working on the value you selected, and selecting another cell cancels the wait. While a value is shown in full, SQLer holds the value, a copy of it for the background job and the lines of the pane. Measured with 50 MB values: a 50 MB text takes about 60 MB more, a 50 MB binary about 55 MB more, and a worst case of 52 million one-character lines about 260 MB more (a 4-byte offset per line). Formatted JSON in full is cut at 64 MiB.
 
 **Copy value** puts the full value on the clipboard as plain text, whatever the pane shows: the stored text (also JSON, as stored, not indented), `0x` followed by the hex digits for binary, and a scalar as the grid shows it. The button is disabled for NULL. Copying a binary value builds a text twice its size in hex (about 30 ms for 50 MB).
+## Sort
+
+Sorting works on the rows the grid holds. Every header has a small sort indicator at its right edge (`↕` while the column is unsorted). Click the indicator to sort the column ascending (`↑`), click again for descending (`↓`), and again to remove the sort. Shift+click the indicator of another column to add it as a secondary key; with two or more keys the indicators are numbered (`↑1`, `↓2`). A click on the rest of the header still selects the column.
+
+The commands `grid:sort-ascending` ("Results: Sort Ascending") and `grid:sort-descending` sort by the column of the active cell and replace the current sort; `grid:clear-sort` removes it. They have no default shortcut, and without an active cell they do nothing.
+
+- **Order.** Values compare by their type: numbers by value, dates and times by instant, text by characters, and so on. NULL comes last in both directions. Rows that compare equal keep their original order.
+- **Match case.** Text sorts and filters ignoring case by default. The **Match case** box in the filter bar (`grid:toggle-match-case`, "Results: Match Case in Sort and Filter") switches to comparing by Unicode code point. It is kept for the open table only.
+- **Large results.** The sort runs in short slices on the interface thread, so the window stays usable; the previous order stays on screen until the new one is ready, and the status shows `Sorting… 40%`. Changing the sort or the filter while it runs starts over.
+
+## Filter
+
+The filter bar above the table has a **quick filter** (rows where any column, or the column picked in the list next to it, contains the text; applied shortly after you stop typing) and a **condition editor**: pick a column, an operator (`=`, `≠`, contains, `>`, `<`, is NULL, is not NULL), type a value and click **Add**. Each condition shows as a chip; click `×` on it to remove it. All parts combine with AND. NULL only matches "is NULL"; comparing with `≠` does not match NULL either. **Clear filter** (`grid:clear-filter`, "Results: Clear Filter") removes everything.
+
+The status next to the bar shows `1,204 of 1,000,000 rows` while a filter is on, or `Sorted 1,000,000 rows` when only a sort is on.
+
+## Loaded rows only
+
+Sort and filter cover the rows the grid holds. While a result is still loading, or paused after a page (see [Pages and paused results](#pages-and-paused-results)), the status ends with `· loaded rows only`. Rows that arrive while a sort or filter is on are merged in once enough of them are there (or half a second after the last merge, or when loading ends), so rows can move under the view while a result loads. Fetching more rows extends the sorted and filtered view in the same way. Sorting by the database (`ORDER BY`) is not part of the grid.
+
+**Known limit.** A MySQL text column with a binary collation (for example `VARCHAR ... COLLATE utf8mb4_bin`) reaches the grid as binary data, not as text. It sorts correctly (byte order), but the quick filter and the "contains" condition find nothing in it. This is a driver limit, not a grid one.
 
 ## Close a grid
 
@@ -82,7 +103,7 @@ Memory is gated on a result with 6 columns (the `grid_viewport` default); other 
 
 ## Not yet available
 
-Sorting, filtering, copying cells, editing cells and exporting arrive in M4.
+Copying cells, editing cells and exporting arrive in M4.
 
 ## Editing limits
 

@@ -41,6 +41,10 @@ name = "grid_viewport"
 harness = false
 
 [[bench]]
+name = "grid_sort"
+harness = false
+
+[[bench]]
 name = "browser_tree"
 harness = false
 

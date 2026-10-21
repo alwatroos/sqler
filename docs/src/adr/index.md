@@ -40,3 +40,4 @@ consequences. SQLer uses the MADR format.
 | [0028](0028-export-writer-api.md) | Export writer API: push-style row writers, a format registry and SQL literals | accepted |
 | [0029](0029-parquet-and-xlsx-writers.md) | Parquet and XLSX writers: own streaming zip, low-level Parquet API, two cargo features | accepted |
 | [0030](0030-staged-edits-and-dml.md) | Staged edits and DML: bound statements, single-table editability, one-transaction apply | accepted |
+| [0031](0031-client-side-sort-and-filter.md) | Client-side sort and filter: published display order, resumable job on the UI thread | accepted |
