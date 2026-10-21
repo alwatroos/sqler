@@ -37,7 +37,7 @@ use crate::history::HistorySearch;
 use crate::query::{Phase, QueryJob, QueryTab, RunEvent, StatementStatus};
 use crate::settings::SettingsModel;
 use crate::sidebar::SidebarModel;
-use crate::tabs::{TabConnection, TabDecor, TabId, TabKind, TabStrip};
+use crate::tabs::{Breadcrumbs, TabConnection, TabDecor, TabId, TabKind, TabStrip};
 use crate::theme::{self, Appearance};
 use crate::workbench::{
     RecentCommands, RecentConnections, RowInfo, RunIndicator, StatusBarModel, WorkbenchAction,
@@ -405,6 +405,8 @@ pub struct Workspace {
     pub(super) editors: EditorDocs,
     /// The saved connection behind every editor and object tab.
     pub(super) tab_conns: HashMap<TabId, ConnectionId>,
+    /// The breadcrumb segments of the object tabs (DDL, Properties, data), after the connection.
+    pub(super) object_crumbs: HashMap<TabId, Vec<String>>,
     /// Start text for the editor that the connect attempt of this request opens.
     pub(super) editor_seeds: HashMap<RequestId, String>,
     /// Start text of an open that stopped at the host-key prompt, until the retry runs.
@@ -473,6 +475,7 @@ impl Workspace {
             next_refresh: 0,
             editors: EditorDocs::new(),
             tab_conns: HashMap::new(),
+            object_crumbs: HashMap::new(),
             editor_seeds: HashMap::new(),
             retry_seeds: HashMap::new(),
             queries: HashMap::new(),
@@ -578,6 +581,36 @@ impl Workspace {
         })
     }
 
+    /// The database a tab's connection points at, as the status bar and breadcrumbs show it.
+    fn tab_database(&self, id: TabId) -> Option<String> {
+        let conn = self.tabs.get(id)?.connection();
+        self.tab_conns
+            .get(&id)
+            .and_then(|c| self.sidebar.index_of(c))
+            .and_then(|i| self.sidebar.entries().get(i))
+            .and_then(|e| database_label(&conn.driver, &e.config().target))
+    }
+
+    /// The breadcrumbs of a tab: the connection, then the database (query tabs) or the object
+    /// (other tabs, falling back to the tab title).
+    #[must_use]
+    pub fn breadcrumbs(&self, id: TabId) -> Option<Breadcrumbs> {
+        let tab = self.tabs.get(id)?;
+        let conn = tab.connection();
+        let mut items = vec![conn.name.clone()];
+        if tab.kind() == TabKind::Query {
+            items.extend(self.tab_database(id));
+        } else if let Some(crumbs) = self.object_crumbs.get(&id) {
+            items.extend(crumbs.iter().cloned());
+        } else {
+            items.push(tab.title());
+        }
+        Some(Breadcrumbs {
+            items,
+            env: conn.environment,
+        })
+    }
+
     /// What the status bar shows for the active tab. `rows` describes the result in view.
     #[must_use]
     pub fn status_bar(&self, rows: Option<RowInfo>) -> StatusBarModel {
@@ -586,12 +619,7 @@ impl Workspace {
         };
         let id = tab.id();
         let conn = tab.connection();
-        let database = self
-            .tab_conns
-            .get(&id)
-            .and_then(|c| self.sidebar.index_of(c))
-            .and_then(|i| self.sidebar.entries().get(i))
-            .and_then(|e| database_label(&conn.driver, &e.config().target));
+        let database = self.tab_database(id);
         let query = self.queries.get(&id);
         let run = match query.map(QueryTab::phase) {
             Some(Phase::Running { cancelling, .. }) => {
@@ -1098,6 +1126,7 @@ impl Workspace {
         self.close_object_tab(id);
         self.editors.remove(id);
         self.tab_conns.remove(&id);
+        self.object_crumbs.remove(&id);
         self.queries.remove(&id);
         self.history.forget_tab(id);
         self.cancel_tab_export(id);
@@ -2389,6 +2418,26 @@ mod tests {
         let s = w.status_bar(None);
         assert_eq!(s.accent, Some(crate::tabs::Rgb(0x0000_ff00)));
         assert_eq!(s.rows, None);
+    }
+
+    #[test]
+    fn breadcrumbs_for_query_and_object_tabs() {
+        let mut w = ws();
+        let tab = open_tabs(&mut w, 1)[0];
+        let c = w.breadcrumbs(tab).unwrap();
+        assert_eq!(c.items, ["dev", "memory"]);
+        assert_eq!(c.env, Some(Environment::Dev));
+        assert_eq!(c.label(), "dev › memory");
+        // An object tab: its recorded crumbs, else its title.
+        let conn = w.sidebar().entries()[0].id().clone();
+        let (obj, _) = w.open_object_preview(&conn, TabKind::Ddl, "t").unwrap();
+        assert_eq!(w.breadcrumbs(obj).unwrap().items, ["dev", "DDL: t"]);
+        w.object_crumbs
+            .insert(obj, vec!["main".to_owned(), "t".to_owned()]);
+        assert_eq!(w.breadcrumbs(obj).unwrap().items, ["dev", "main", "t"]);
+        w.dispatch(WorkspaceAction::CloseTab(obj));
+        assert!(!w.object_crumbs.contains_key(&obj));
+        assert!(w.breadcrumbs(obj).is_none());
     }
 
     #[test]

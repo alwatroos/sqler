@@ -1358,6 +1358,10 @@ impl WorkspaceView {
                     .run_editor(&mut editor::QueryRunPort, editor::run_mode(mode), buffer)
             }
             QueryCommand::Cancel => self.ws.cancel_editor_run(&mut editor::QueryRunPort),
+            QueryCommand::Explain => match self.editors.buffer(tab, cx) {
+                Some(buffer) => self.ws.explain_query(tab, editor::run_snapshot(buffer)),
+                None => Effect::None,
+            },
         };
         self.apply(effect, cx);
         self.settle(cx);

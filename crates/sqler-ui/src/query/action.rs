@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! The query commands: run selection, run statement, run all and cancel.
+//! The query commands: run selection, run statement, run all, cancel and explain.
 
 use crate::command::{Command, CommandError, CommandId, CommandRegistry};
 
@@ -15,6 +15,8 @@ pub enum QueryCommand {
     Run(RunMode),
     /// Cancel the running query.
     Cancel,
+    /// Explain the statement at the cursor.
+    Explain,
 }
 
 /// The commands: ID and title.
@@ -23,6 +25,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("query:run-statement", "Query: Run Statement at Cursor"),
     ("query:run-all", "Query: Run All"),
     ("query:cancel", "Query: Cancel"),
+    ("query:explain", "Query: Explain Statement at Cursor"),
 ];
 
 impl QueryCommand {
@@ -43,6 +46,7 @@ impl QueryCommand {
             Self::Run(RunMode::Statement) => "query:run-statement",
             Self::Run(_) => "query:run-all",
             Self::Cancel => "query:cancel",
+            Self::Explain => "query:explain",
         }
     }
 }
@@ -55,6 +59,7 @@ pub fn action_for(id: &CommandId) -> Option<QueryCommand> {
         "query:run-statement" => QueryCommand::Run(RunMode::Statement),
         "query:run-all" => QueryCommand::Run(RunMode::All),
         "query:cancel" => QueryCommand::Cancel,
+        "query:explain" => QueryCommand::Explain,
         _ => return None,
     })
 }
@@ -75,11 +80,12 @@ pub fn register_commands(registry: &mut CommandRegistry) -> Result<(), CommandEr
 mod tests {
     use super::*;
 
-    const ALL: [QueryCommand; 4] = [
+    const ALL: [QueryCommand; 5] = [
         QueryCommand::Run(RunMode::Selection),
         QueryCommand::Run(RunMode::Statement),
         QueryCommand::Run(RunMode::All),
         QueryCommand::Cancel,
+        QueryCommand::Explain,
     ];
 
     #[test]
@@ -107,7 +113,7 @@ mod tests {
     fn registered_with_titles() {
         let mut r = CommandRegistry::new();
         register_commands(&mut r).unwrap();
-        assert_eq!(r.len(), 4);
+        assert_eq!(r.len(), 5);
         for a in ALL {
             assert!(r.get(&a.command_id()).is_some());
         }
@@ -115,5 +121,17 @@ mod tests {
             register_commands(&mut r),
             Err(CommandError::Duplicate(_))
         ));
+    }
+
+    #[test]
+    fn explain_has_title_and_no_default_chord() {
+        use sqler_config::{CommandId as ConfigId, Keymap, Platform};
+        assert!(COMMANDS.contains(&("query:explain", "Query: Explain Statement at Cursor")));
+        let id = CommandId::new("query:explain").unwrap();
+        assert_eq!(action_for(&id), Some(QueryCommand::Explain));
+        let cfg = ConfigId::new("query:explain").unwrap();
+        for p in [Platform::MacOs, Platform::Other] {
+            assert_eq!(Keymap::defaults(p).chords_for(&cfg), []);
+        }
     }
 }

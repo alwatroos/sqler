@@ -44,15 +44,19 @@
 
 mod action;
 mod buffer;
+mod explain;
 mod job;
 mod params;
 mod plan;
 mod run;
+mod strip;
+mod toolbar;
 #[cfg(feature = "gui")]
 pub(crate) mod view;
 
 pub use action::{COMMANDS, QueryCommand, action_for, register_commands};
 pub use buffer::{BufferSnapshot, RunMode};
+pub use explain::{EXPLAIN_UNSUPPORTED, explain_for, explain_supported, explain_text};
 pub use job::{QueryJob, QueryJobDone, RunStop};
 pub use params::{
     BoundStatement, ParamError, ParamForm, ParamInput, ParamKey, ParamKind, ParamRow, bind,
@@ -60,3 +64,5 @@ pub use params::{
 };
 pub use plan::{Plan, PlanError, PlannedStatement, plan};
 pub use run::{Phase, QueryTab, ResultEntry, RunError, RunEvent, RunId, StatementStatus, Step};
+pub use strip::{StatusTone, status_tone, status_word};
+pub use toolbar::{RunState, ToolbarContext, ToolbarItem, toolbar_tooltip};

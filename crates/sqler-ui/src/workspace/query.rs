@@ -18,8 +18,9 @@ use super::state::{Effect, Workspace};
 use crate::grid::edit::SchemaProbe;
 use crate::grid::{GridLimits, GridTab, grid_channel_with};
 use crate::query::{
-    BoundStatement, BufferSnapshot, ParamInput, ParamKind, Phase, QueryJob, QueryJobDone, QueryTab,
-    RunError, RunEvent, RunId, RunMode, RunStop, Step, plan,
+    BoundStatement, BufferSnapshot, EXPLAIN_UNSUPPORTED, ParamInput, ParamKind, Phase, QueryJob,
+    QueryJobDone, QueryTab, RunError, RunEvent, RunId, RunMode, RunState, RunStop, Step,
+    ToolbarContext, explain_for, explain_supported, plan,
 };
 use crate::tabs::{TabId, TabKind};
 
@@ -102,6 +103,61 @@ impl Workspace {
             Ok(_) => Effect::None,
             Err(err) => self.query_notice(err.to_string()),
         }
+    }
+
+    /// Explains the statement at the cursor: wraps it with the driver's explain prefix and hands
+    /// the text to [`Workspace::run_query`], so the parameter prompt and the production gate
+    /// apply as for any run. `ANALYZE` is never added.
+    #[allow(clippy::needless_pass_by_value)] // the editor hands its snapshot over
+    pub fn explain_query(&mut self, tab: TabId, buf: BufferSnapshot) -> Effect {
+        let Some((dialect, _)) = self.query_context(tab) else {
+            return Effect::None;
+        };
+        if self.tabs.get(tab).map(crate::tabs::Tab::kind) != Some(TabKind::Query) {
+            return self.query_notice("Open a query tab first.");
+        }
+        let plan = match plan(dialect, &buf, RunMode::Statement) {
+            Ok(plan) => plan,
+            Err(err) => return self.query_notice(err.to_string()),
+        };
+        let Some(statement) = plan.statements.first() else {
+            return self.query_notice("No statement to run");
+        };
+        let driver = self
+            .tabs
+            .get(tab)
+            .map(|t| t.connection().driver.as_str().to_owned())
+            .unwrap_or_default();
+        match explain_for(&driver, dialect, &statement.sql) {
+            Some(text) => self.run_query(tab, RunMode::All, BufferSnapshot::at_cursor(text, 0)),
+            None => self.query_notice(EXPLAIN_UNSUPPORTED),
+        }
+    }
+
+    /// What decides which toolbar items of a query tab are enabled; `None` for other tabs.
+    #[must_use]
+    pub fn query_toolbar(&self, tab: TabId) -> Option<ToolbarContext> {
+        let query = self.queries.get(&tab)?;
+        if self.tabs.get(tab)?.kind() != TabKind::Query {
+            return None;
+        }
+        let run = match query.phase() {
+            Phase::Idle => RunState::Idle,
+            Phase::Prompting(_) | Phase::Confirming(_) => RunState::Busy,
+            Phase::Running {
+                cancelling: true, ..
+            } => RunState::Cancelling,
+            _ => RunState::Running,
+        };
+        let connection = self.tabs.get(tab)?.connection();
+        Some(ToolbarContext {
+            run,
+            connected: self.has_session(tab),
+            explain: explain_supported(
+                connection.driver.as_str(),
+                Dialect::from_driver_id(connection.driver.as_str()),
+            ),
+        })
     }
 
     /// Answers the parameter prompt of a query tab with the values the user typed.
@@ -326,6 +382,7 @@ mod tests {
             ConnectionConfig::new("dev", driver.clone(), ":memory:")
                 .with_environment(Environment::Dev),
             ConnectionConfig::new("prod", driver, ":memory:").with_environment(Environment::Prod),
+            ConnectionConfig::new("ms", DriverId::new("mssql").unwrap(), "x"),
         ]))
     }
 
@@ -568,5 +625,98 @@ mod tests {
             handle.join().unwrap(),
             Err(sqler_driver_api::DriverError::Cancelled)
         ));
+    }
+
+    fn sql_of(effect: Effect) -> String {
+        match effect {
+            Effect::RunQuery { job, .. } => job.statements[0].query.sql.clone(),
+            other => panic!("expected RunQuery, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn explain_wraps_the_statement_at_the_cursor() {
+        let mut w = ws();
+        let (tab, _) = open(&mut w, 0);
+        let snapshot = BufferSnapshot::at_cursor("select 1;\nselect 2;", 12);
+        let effect = w.explain_query(tab, snapshot);
+        assert_eq!(sql_of(effect), "EXPLAIN QUERY PLAN select 2");
+    }
+
+    #[test]
+    fn explain_of_a_prod_write_confirms_the_wrapped_text() {
+        let mut w = ws();
+        let (tab, _) = open(&mut w, 1);
+        let effect = w.explain_query(tab, buf("delete from t"));
+        assert!(matches!(effect, Effect::None));
+        let Phase::Confirming(statements) = w.query_tab(tab).unwrap().phase() else {
+            panic!("expected a confirmation");
+        };
+        assert_eq!(statements[0].sql, "EXPLAIN QUERY PLAN delete from t");
+        w.dismiss_query_prompt(tab);
+        assert_eq!(*w.query_tab(tab).unwrap().phase(), Phase::Idle);
+        assert!(w.has_session(tab));
+        w.explain_query(tab, buf("delete from t"));
+        assert!(matches!(w.confirm_query(tab), Effect::RunQuery { .. }));
+    }
+
+    #[test]
+    fn explain_of_a_prod_read_runs_at_once() {
+        let mut w = ws();
+        let (tab, _) = open(&mut w, 1);
+        assert_eq!(
+            sql_of(w.explain_query(tab, buf("select 1"))),
+            "EXPLAIN QUERY PLAN select 1"
+        );
+    }
+
+    #[test]
+    fn explain_is_unsupported_on_mssql() {
+        let mut w = ws();
+        let (tab, _) = open(&mut w, 2);
+        assert!(matches!(
+            w.explain_query(tab, buf("select 1")),
+            Effect::None
+        ));
+        assert_eq!(w.take_notice().as_deref(), Some(EXPLAIN_UNSUPPORTED));
+        assert!(!w.query_toolbar(tab).unwrap().explain);
+    }
+
+    #[test]
+    fn explain_is_refused_while_busy_and_on_empty_text() {
+        let mut w = ws();
+        let (tab, _) = open(&mut w, 0);
+        assert!(matches!(w.explain_query(tab, buf("  ")), Effect::None));
+        assert_eq!(w.take_notice().as_deref(), Some("No statement to run"));
+        let _first = start(&mut w, tab, "select 1");
+        assert!(matches!(
+            w.explain_query(tab, buf("select 2")),
+            Effect::None
+        ));
+        let notice = w.take_notice().unwrap();
+        assert!(notice.contains("already running"), "{notice}");
+    }
+
+    #[test]
+    fn toolbar_follows_the_run() {
+        let mut w = ws();
+        let (tab, _) = open(&mut w, 0);
+        let c = w.query_toolbar(tab).unwrap();
+        assert_eq!(c.run, RunState::Idle);
+        assert!(c.connected && c.explain);
+        let _first = start(&mut w, tab, "select 1");
+        let c = w.query_toolbar(tab).unwrap();
+        assert_eq!(c.run, RunState::Running);
+        assert!(!c.connected);
+        w.cancel_query(tab);
+        assert_eq!(w.query_toolbar(tab).unwrap().run, RunState::Cancelling);
+    }
+
+    #[test]
+    fn toolbar_is_busy_while_confirming() {
+        let mut w = ws();
+        let (tab, _) = open(&mut w, 1);
+        w.run_query(tab, RunMode::All, buf("delete from t"));
+        assert_eq!(w.query_toolbar(tab).unwrap().run, RunState::Busy);
     }
 }
