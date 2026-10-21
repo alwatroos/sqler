@@ -98,3 +98,84 @@ On a connection marked `prod`, `unlimited` is ignored and the caps always apply.
 AI is off until you turn it on for a connection with a `[connection.ai]` table in
 `connections.toml`, see [Connections](connections.md). With `send_rows` unset, row data may be sent to
 the model on every connection not marked `prod` (including unlabelled ones) and is not sent on `prod`. An explicit `send_rows` wins.
+
+## In the app
+
+AI is off until you turn it on for a connection. Nothing is sent to a provider by setting one up.
+Setting up, checking and turning AI on all happen in four places.
+
+### Settings > AI
+
+Open Settings (`settings:open` or `mod+,`) and scroll to **AI**; the command `ai:open-settings` ("AI:
+Open Settings") or the **AI settings** button of the AI view jumps there.
+
+- **Providers.** One row per provider with Edit and Remove. Under it, "Add provider" has one button per
+  kind compiled into your build (Ollama runs on this computer and is the first). The editor has Id
+  (read-only when editing), Kind, Endpoint (empty uses the default, `http://127.0.0.1:11434` for
+  Ollama), Models (comma-separated) and, for Anthropic, OpenAI and Mistral, the API key in a masked
+  field. Save writes `ai.toml` and puts the key into the keychain; afterwards the field is empty and
+  reads "Stored in the keychain" with **Remove key**. **Test connection** asks the provider for its
+  models (15 s limit) and shows "Testing...", "Connected: N models" with **Use listed models**, or
+  "Failed: ..." (never with your key or endpoint text). Removing a provider clears the model choices
+  that name it and deletes its key.
+- **Models.** Default, NL to SQL, Explain, Fix and Exploration, a `provider/model` of the
+  configured providers. The Default entry can be "None"; every other entry can be "Default", which
+  means the Default entry serves it.
+- **Redaction.** The built-in column names are listed read-only; extra names go in one field,
+  separated by commas or new lines.
+- **Limits.** Max rows and Timeout (s) within the ranges above, and "Lift limits (never on prod)".
+
+If `ai.toml` cannot be read, the section says so and refuses edits until you fix or remove the file;
+SQLer never overwrites it. Without a configuration directory, changes last for the session and the
+section says so (keys still go to the keychain).
+
+![The AI section of the Settings page](../screenshots/after/ai-settings-dark.png)
+
+The provider editor, with the masked API key and **Test connection**:
+
+![The provider editor](../screenshots/after/ai-provider-editor-dark.png)
+
+### The AI view
+
+The **AI** item of the activity bar (above Settings) or `workbench:show-ai` (`Cmd/Ctrl+Shift+A`) shows
+the side view: the AI state of the active tab's connection (or the selected one) with the provider,
+model, "local"/"remote" and whether result rows may go along, and the button **Turn on for this
+connection** / **Turn off** (`ai:toggle-connection`); the list of providers with the text "key stored" when a key
+is stored; and the buttons **AI settings** and **Test provider** (`ai:test-provider`). Without a
+provider it explains how to set one up.
+
+![The AI view](../screenshots/after/ai-side-view-dark.png)
+
+![The AI view before a provider is set up](../screenshots/after/ai-side-view-empty-dark.png)
+
+### The status bar
+
+The status bar shows the state for the active connection: "AI off", "AI not set up" (on, but no
+provider), "{provider} · local", "{provider} · remote" or "{provider} · local +remote" (a model that
+uses a local provider and another that uses a remote one). The tooltip names the provider, its kind and
+model, and says whether the schema and result rows go to this computer or to a remote service. A click
+shows the AI view. A provider counts as local when its endpoint host is `localhost` or a loopback
+address, or when it is Ollama without an endpoint.
+
+### The connection dialog
+
+The connection form has an **AI** block: Off/On and, when on, **Send result rows** (Environment
+default, Yes, No), the same as `[connection.ai]` in [Connections](connections.md). Editing a connection
+keeps these settings.
+
+![The AI block of the connection dialog](../screenshots/after/connection-dialog-ai-dark.png)
+
+### Commands
+
+| Command | Palette name |
+| ------- | ------------ |
+| `workbench:show-ai` | View: Show AI |
+| `ai:open-settings` | AI: Open Settings |
+| `ai:add-provider` | AI: Add Provider |
+| `ai:test-provider` | AI: Test Provider |
+| `ai:save-provider` | AI: Save Provider |
+| `ai:cancel-provider` | AI: Close Provider Editor |
+| `ai:edit-settings` | AI: Edit Settings |
+| `ai:toggle-connection` | AI: Turn On or Off for This Connection |
+
+Only `workbench:show-ai` has a default shortcut. See the [placement decisions](../adr/0050-ai-surfaces-in-the-workbench.md).

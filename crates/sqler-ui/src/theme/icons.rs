@@ -4,7 +4,7 @@
 //! The Lucide icons the shell draws and the asset source that serves them.
 //!
 //! `gpui_kit_assets::Assets` ships the icons `gpui-component` needs itself, which fixes the blank
-//! component icons. The 22 icons it lacks are embedded here with `icon_assets!` (selected set
+//! component icons. The 23 icons it lacks are embedded here with `icon_assets!` (selected set
 //! only, about +20 KiB). [`AppAssets`] tries those first and falls back to `Assets`. Register it
 //! with `Application::with_assets`. The icons are ISC licensed, see `licenses/LUCIDE-ISC.txt`.
 
@@ -35,6 +35,7 @@ gpui_kit_assets::icon_assets!(
         Pin,
         MessageSquare,
         WandSparkles,
+        Sparkles,
         Save,
         Plug,
         Unplug,
@@ -105,6 +106,8 @@ pub enum AppIcon {
     MessageSquare,
     /// The Lucide `wand sparkles` icon.
     WandSparkles,
+    /// The Lucide `sparkles` icon.
+    Sparkles,
     /// The Lucide `save` icon.
     Save,
     /// The Lucide `refresh cw` icon.
@@ -133,7 +136,7 @@ pub enum AppIcon {
 
 impl AppIcon {
     /// Every icon of the set.
-    pub const ALL: [AppIcon; 42] = [
+    pub const ALL: [AppIcon; 43] = [
         Self::Database,
         Self::Server,
         Self::Table,
@@ -164,6 +167,7 @@ impl AppIcon {
         Self::Pin,
         Self::MessageSquare,
         Self::WandSparkles,
+        Self::Sparkles,
         Self::Save,
         Self::RefreshCw,
         Self::Copy,
@@ -212,6 +216,7 @@ impl AppIcon {
             Self::Pin => IconName::Pin,
             Self::MessageSquare => IconName::MessageSquare,
             Self::WandSparkles => IconName::WandSparkles,
+            Self::Sparkles => IconName::Sparkles,
             Self::Save => IconName::Save,
             Self::RefreshCw => IconName::RefreshCw,
             Self::Copy => IconName::Copy,
@@ -272,9 +277,9 @@ mod tests {
     fn all_is_unique() {
         let mut v = AppIcon::ALL.to_vec();
         v.dedup();
-        assert_eq!(v.len(), 42);
+        assert_eq!(v.len(), 43);
         let set: std::collections::HashSet<_> = AppIcon::ALL.into_iter().collect();
-        assert_eq!(set.len(), 42);
+        assert_eq!(set.len(), 43);
     }
 
     #[test]

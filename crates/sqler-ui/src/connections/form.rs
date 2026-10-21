@@ -10,8 +10,8 @@
 use std::path::PathBuf;
 
 use sqler_config::{
-    ConnectionId, ConnectionProfile, ConnectionSpec, GroupId, Secret, SecretKind, SecretRef,
-    SshAuth, SshProfile, StoreError, TlsMode, TlsProfile,
+    ConnectionAi, ConnectionId, ConnectionProfile, ConnectionSpec, GroupId, Secret, SecretKind,
+    SecretRef, SshAuth, SshProfile, StoreError, TlsMode, TlsProfile,
 };
 use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId, Environment};
 
@@ -201,6 +201,8 @@ pub struct ConnectionForm {
     group: Option<GroupId>,
     tls_mode: Option<TlsMode>,
     ssh_enabled: bool,
+    ai_enabled: bool,
+    ai_send_rows: Option<bool>,
     ssh_auth: SshAuthKind,
     db_password: SecretField,
     ssh_secret: SecretField,
@@ -239,6 +241,8 @@ impl ConnectionForm {
             group: None,
             tls_mode: None,
             ssh_enabled: false,
+            ai_enabled: false,
+            ai_send_rows: None,
             ssh_auth: SshAuthKind::Password,
             db_password: SecretField::Clear,
             ssh_secret: SecretField::Clear,
@@ -269,6 +273,8 @@ impl ConnectionForm {
         form.driver = Some(spec.driver.clone());
         form.environment = spec.environment;
         form.group = profile.group().cloned();
+        form.ai_enabled = spec.ai.enabled;
+        form.ai_send_rows = spec.ai.send_rows;
         if let Some(tls) = &spec.tls {
             form.tls_mode = Some(tls.mode);
             form.ca_cert = path_text(tls.ca_cert.as_ref());
@@ -477,6 +483,28 @@ impl ConnectionForm {
         self.ssh_enabled = enabled;
     }
 
+    /// Whether AI features may be used with this connection (off by default).
+    #[must_use]
+    pub fn ai_enabled(&self) -> bool {
+        self.ai_enabled
+    }
+
+    /// Turns AI on or off for this connection.
+    pub fn set_ai_enabled(&mut self, enabled: bool) {
+        self.ai_enabled = enabled;
+    }
+
+    /// Whether result rows may be sent to the AI provider; `None` is the environment default.
+    #[must_use]
+    pub fn ai_send_rows(&self) -> Option<bool> {
+        self.ai_send_rows
+    }
+
+    /// Sets the explicit "send result rows" choice (`None` = the environment default).
+    pub fn set_ai_send_rows(&mut self, choice: Option<bool>) {
+        self.ai_send_rows = choice;
+    }
+
     /// How the tunnel authenticates.
     #[must_use]
     pub fn ssh_auth(&self) -> SshAuthKind {
@@ -575,6 +603,9 @@ impl ConnectionForm {
         if let Some(ssh) = ssh {
             spec = spec.with_ssh(ssh);
         }
+        let mut ai = ConnectionAi::new(self.ai_enabled);
+        ai.send_rows = self.ai_send_rows;
+        spec = spec.with_ai(ai);
         Ok(ValidForm {
             spec,
             group: self.group.clone(),
@@ -722,6 +753,30 @@ mod tests {
         let mut store = ConnectionStore::new();
         let id = store.add_connection(spec, None).unwrap();
         store.connection(&id).unwrap().clone()
+    }
+
+    #[test]
+    fn new_form_has_ai_off() {
+        let f = filled();
+        assert!(!f.ai_enabled());
+        assert_eq!(f.ai_send_rows(), None);
+        assert!(f.validate().unwrap().spec.ai.is_default());
+    }
+
+    #[test]
+    fn edit_keeps_ai_settings() {
+        let p = saved(
+            ConnectionSpec::new("Main", pg(), "postgres://db/app?user=me")
+                .with_ai(ConnectionAi::new(true).with_send_rows(false)),
+        );
+        let mut f = ConnectionForm::edit(&p);
+        assert!(f.ai_enabled());
+        assert_eq!(f.ai_send_rows(), Some(false));
+        let ai = f.validate().unwrap().spec.ai;
+        assert_eq!(ai, ConnectionAi::new(true).with_send_rows(false));
+        f.set_ai_enabled(false);
+        f.set_ai_send_rows(None);
+        assert!(f.validate().unwrap().spec.ai.is_default());
     }
 
     #[test]

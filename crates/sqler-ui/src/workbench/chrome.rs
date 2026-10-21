@@ -17,6 +17,8 @@ pub enum ActivityItem {
     SavedQueries,
     /// The query history (in the bottom panel).
     History,
+    /// The AI view (at the bottom of the bar, above Settings).
+    Ai,
     /// The settings tab (at the bottom of the bar).
     Settings,
 }
@@ -25,6 +27,12 @@ impl ActivityItem {
     /// The items above the divider, in order.
     pub const TOP: [ActivityItem; 3] = [Self::Connections, Self::SavedQueries, Self::History];
 
+    /// The items below the divider, in order.
+    pub const BOTTOM: [ActivityItem; 2] = [Self::Ai, Self::Settings];
+
+    /// How many items there are (one focus handle each; `Settings` is the last index).
+    pub const COUNT: usize = 5;
+
     /// The tooltip title and accessible label.
     #[must_use]
     pub fn title(self) -> &'static str {
@@ -32,6 +40,7 @@ impl ActivityItem {
             Self::Connections => "Connections",
             Self::SavedQueries => "Saved Queries",
             Self::History => "History",
+            Self::Ai => "AI",
             Self::Settings => "Settings",
         }
     }
@@ -43,6 +52,7 @@ impl ActivityItem {
             Self::Connections => "database",
             Self::SavedQueries => "bookmark",
             Self::History => "clock",
+            Self::Ai => "sparkles",
             Self::Settings => "settings",
         }
     }
@@ -54,6 +64,7 @@ impl ActivityItem {
             Self::Connections => "workbench:show-connections",
             Self::SavedQueries => "workbench:show-saved-queries",
             Self::History => "history:open",
+            Self::Ai => "workbench:show-ai",
             Self::Settings => "settings:open",
         }
     }
@@ -70,6 +81,7 @@ impl ActivityItem {
                 layout.side_visible() && layout.side_view() == SideView::SavedQueries
             }
             Self::History => layout.panel_visible() && layout.panel_view() == PanelView::History,
+            Self::Ai => layout.side_visible() && layout.side_view() == SideView::Ai,
             Self::Settings => false,
         }
     }
@@ -81,7 +93,7 @@ impl ActivityItem {
             return self.command();
         }
         match self {
-            Self::Connections | Self::SavedQueries => "workbench:toggle-side-panel",
+            Self::Connections | Self::SavedQueries | Self::Ai => "workbench:toggle-side-panel",
             Self::History => "workbench:toggle-bottom-panel",
             Self::Settings => self.command(),
         }
@@ -113,7 +125,34 @@ mod tests {
         assert!(ActivityItem::Connections.is_active(&l));
         assert!(!ActivityItem::SavedQueries.is_active(&l));
         assert!(!ActivityItem::History.is_active(&l));
+        assert!(!ActivityItem::Ai.is_active(&l));
         assert!(!ActivityItem::Settings.is_active(&l));
+    }
+
+    #[test]
+    fn ai_item_sits_above_settings() {
+        assert_eq!(
+            ActivityItem::BOTTOM,
+            [ActivityItem::Ai, ActivityItem::Settings]
+        );
+        assert_eq!(
+            ActivityItem::COUNT,
+            ActivityItem::TOP.len() + ActivityItem::BOTTOM.len()
+        );
+        assert_eq!(ActivityItem::Ai.title(), "AI");
+        assert_eq!(ActivityItem::Ai.icon_name(), "sparkles");
+        assert_eq!(ActivityItem::Ai.command(), "workbench:show-ai");
+        let l = WorkbenchLayout::default();
+        assert_eq!(ActivityItem::Ai.click_command(&l), "workbench:show-ai");
+        let ai = layout(&[A::ShowSideView(SideView::Ai)]);
+        assert!(ActivityItem::Ai.is_active(&ai));
+        assert!(!ActivityItem::Connections.is_active(&ai));
+        assert_eq!(
+            ActivityItem::Ai.click_command(&ai),
+            "workbench:toggle-side-panel"
+        );
+        let hidden = layout(&[A::ShowSideView(SideView::Ai), A::ToggleSidePanel]);
+        assert!(!ActivityItem::Ai.is_active(&hidden));
     }
 
     #[test]
@@ -166,7 +205,7 @@ mod tests {
     fn every_command_is_registered() {
         let mut r = crate::command::CommandRegistry::new();
         crate::workbench::register_commands(&mut r).unwrap();
-        for item in ActivityItem::TOP {
+        for item in ActivityItem::TOP.into_iter().chain(ActivityItem::BOTTOM) {
             let id = item.command();
             if id.starts_with("workbench:") {
                 assert!(

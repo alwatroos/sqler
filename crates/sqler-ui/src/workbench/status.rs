@@ -50,6 +50,8 @@ pub struct StatusBarModel {
     pub rows: Option<String>,
     /// The duration of the statement in view.
     pub timing: Option<String>,
+    /// The AI provider that receives the schema, or why none does; `None` without a connection.
+    pub ai: Option<crate::ai::AiStatus>,
 }
 
 /// `1 row`, `1,234 rows`, `500 of 1,234 rows`, `100,000+ rows`.

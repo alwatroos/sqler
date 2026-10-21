@@ -7271,6 +7271,11 @@ version = "0.1.0"
 name = "sqler-app"
 version = "0.1.0"
 dependencies = [
+ "sqler-ai-anthropic",
+ "sqler-ai-api",
+ "sqler-ai-mistral",
+ "sqler-ai-ollama",
+ "sqler-ai-openai",
  "sqler-config",
  "sqler-driver-api",
  "sqler-driver-mysql",
@@ -7454,6 +7459,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "sqler-ai-api",
  "sqler-catalog",
  "sqler-completion",
  "sqler-config",

@@ -17,15 +17,30 @@ path = "src/main.rs"
 workspace = true
 
 [features]
-default = ["driver-sqlite", "driver-postgres", "driver-mysql", "export-xlsx", "export-parquet"]
+default = [
+    "driver-sqlite",
+    "driver-postgres",
+    "driver-mysql",
+    "export-xlsx",
+    "export-parquet",
+    "ai-ollama",
+    "ai-anthropic",
+    "ai-openai",
+    "ai-mistral",
+]
 driver-sqlite = ["dep:sqler-driver-sqlite"]
 driver-postgres = ["dep:sqler-driver-postgres"]
 driver-mysql = ["dep:sqler-driver-mysql"]
 export-xlsx = ["dep:sqler-export", "sqler-export/xlsx"]
 export-parquet = ["dep:sqler-export", "sqler-export/parquet"]
+ai-ollama = ["dep:sqler-ai-ollama"]
+ai-anthropic = ["dep:sqler-ai-anthropic"]
+ai-openai = ["dep:sqler-ai-openai"]
+ai-mistral = ["dep:sqler-ai-mistral"]
 
 [dependencies]
 sqler-ui = { workspace = true, features = ["gui"] }
+sqler-ai-api.workspace = true
 sqler-config.workspace = true
 sqler-driver-api.workspace = true
 sqler-tunnel.workspace = true
@@ -33,6 +48,10 @@ sqler-driver-sqlite = { workspace = true, optional = true }
 sqler-driver-postgres = { workspace = true, optional = true }
 sqler-driver-mysql = { workspace = true, optional = true }
 sqler-export = { workspace = true, optional = true }
+sqler-ai-ollama = { workspace = true, optional = true }
+sqler-ai-anthropic = { workspace = true, optional = true }
+sqler-ai-openai = { workspace = true, optional = true }
+sqler-ai-mistral = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [dev-dependencies]
