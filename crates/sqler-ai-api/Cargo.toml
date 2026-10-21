@@ -11,3 +11,11 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[features]
+# Compiles `mock::ScriptedProvider` for downstream tests.
+test-support = []
+
+[dependencies]
+thiserror.workspace = true
+serde_json.workspace = true
