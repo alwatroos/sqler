@@ -84,3 +84,14 @@ todo = "deny"
 # (the upstream `rsa` backend is banned, RUSTSEC-2023-0071). 56-line diff in 4 files, see vendor/sqlx-mysql/README.md.
 [patch.crates-io]
 sqlx-mysql = { path = "vendor/sqlx-mysql" }
+
+# T14: the Linux release binary kept its ELF symbol table (.symtab + .strtab, about 23 MB of 78 MB on aarch64) and
+# was split over 16 codegen units. `strip = "symbols"` drops the table with no runtime effect (a panic backtrace
+# prints addresses instead of function names); `codegen-units = 1` lets the inliner see whole crates (about 9 MB
+# smaller, release build about 1.7x slower). Unstripped build for debugging:
+# `CARGO_PROFILE_RELEASE_STRIP=none cargo build --release -p sqler-app`. `bench` inherits `release`.
+# Rejected: LTO (thin grew the binary, fat was killed by the OOM killer in 7.7 GB) and `panic = "abort"` (changes
+# failure behaviour); see docs/src/benchmarks.md.
+[profile.release]
+strip = "symbols"
+codegen-units = 1

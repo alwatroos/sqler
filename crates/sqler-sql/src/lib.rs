@@ -20,12 +20,15 @@
 //!
 //! [`sql_literal`] renders a `sqler-core` value as a SQL literal that cannot end its string, and
 //! the lexer is public ([`tokenize`], [`Token`], [`TokenKind`]) so callers can re-lex generated SQL.
+//! [`update()`], [`insert()`] and [`delete()`] generate bound DML for staged grid edits: every
+//! value is a parameter, never text in the SQL; [`single_table_source`] proves a `SELECT` reads one table.
 
 #![forbid(unsafe_code)]
 
 mod classify;
 mod ddl;
 mod dialect;
+mod dml;
 mod error;
 mod format;
 mod lexer;
@@ -39,6 +42,11 @@ pub use ddl::{
 };
 pub use dialect::{
     Dialect, push_literal, qualified_name, quote_identifier, sql_literal, string_literal,
+};
+pub use dml::{
+    BoundDml, ColumnValue, DmlError, SelectList, SourceTable, SqlIdent, TxStep, delete,
+    delete_bound, insert, insert_bound, param_marker, same_column, single_table_source,
+    transaction_sql, unwritable_reason, update, update_bound,
 };
 pub use error::{DdlError, FormatError};
 pub use format::{FormatOptions, format};

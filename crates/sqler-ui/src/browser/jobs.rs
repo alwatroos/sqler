@@ -196,6 +196,11 @@ pub async fn load_properties(
 ///
 /// A failure before the first row is also reported to the sink, so the grid shows it.
 ///
+/// The grid model is bounded (see `GridLimits`): when its page fills up before the result ends,
+/// this future stays pending, with the short-lived session still open, until the user fetches
+/// more rows, cancels (`GridCancel`, `GridModel::cancel`) or drops the model; it then finishes
+/// and closes the session.
+///
 /// # Errors
 /// [`BrowserError::Connect`] or [`BrowserError::Driver`]; [`BrowserError::Cancelled`] when the
 /// sink was cancelled.
@@ -269,7 +274,7 @@ mod tests {
 
     use super::*;
     use crate::browser::testing::{FakeIntrospect, SessionConnector, request};
-    use crate::grid::{IngestState, grid_channel};
+    use crate::grid::{GridLimits, IngestState, grid_channel, grid_channel_with};
 
     fn runtime() -> Runtime {
         Builder::new_multi_thread()
@@ -644,5 +649,63 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, BrowserError::Cancelled));
         assert_eq!(s.connector.connects(), 0);
+    }
+
+    fn wait_for_state(model: &mut crate::grid::GridModel, want: &IngestState) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while model.state() != want {
+            assert!(Instant::now() < deadline, "stuck in {:?}", model.state());
+            model.poll(usize::MAX);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn open_data_pauses_at_the_page_and_fetch_more_finishes() {
+        let s = setup();
+        let connector = s.connector.clone().with_rows(10);
+        let (mut grid, sink) = grid_channel_with(GridLimits::rows(4));
+        let job = s.rt.spawn(open_data(
+            Arc::new(connector.clone()),
+            request(),
+            "SELECT 1".into(),
+            sink,
+        ));
+        wait_for_state(&mut grid, &IngestState::Paused);
+        assert_eq!(grid.row_count(), 4);
+        assert_eq!(connector.closed(), 0);
+        assert!(!job.is_finished());
+
+        assert!(grid.fetch_more());
+        wait_for_state(&mut grid, &IngestState::Paused);
+        assert_eq!(grid.row_count(), 8);
+        assert!(grid.fetch_more());
+        wait_for_state(
+            &mut grid,
+            &IngestState::Done {
+                rows_affected: None,
+            },
+        );
+        assert_eq!(grid.row_count(), 10);
+        s.rt.block_on(job).unwrap().unwrap();
+        assert_eq!(connector.closed(), 1);
+    }
+
+    #[test]
+    fn open_data_drop_while_paused_closes_the_session() {
+        let s = setup();
+        let connector = s.connector.clone().with_rows(10);
+        let (mut grid, sink) = grid_channel_with(GridLimits::rows(4));
+        let job = s.rt.spawn(open_data(
+            Arc::new(connector.clone()),
+            request(),
+            "SELECT 1".into(),
+            sink,
+        ));
+        wait_for_state(&mut grid, &IngestState::Paused);
+        drop(grid);
+        let err = s.rt.block_on(job).unwrap().unwrap_err();
+        assert!(matches!(err, BrowserError::Cancelled), "{err:?}");
+        assert_eq!(connector.closed(), 1);
     }
 }
