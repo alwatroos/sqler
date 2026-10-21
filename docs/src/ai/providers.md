@@ -247,6 +247,10 @@ The `sqler-ai-mistral` crate implements `AiProvider` as `MistralProvider` over t
 
 The chat shape is close to OpenAI's, but the crate is its own copy: layering forbids one provider crate depending on another, and Mistral differs in the places listed under Wire format.
 
+### In the app
+
+`sqler-app` builds a `MistralProvider` for a provider of kind `mistral` when the `ai-mistral` cargo feature is on (it is in `default`). The key is read from the keychain (or taken from the settings form for Test connection) and passed to the constructor; a missing key is an `Auth` error and a bad endpoint is `Invalid`. Without the feature the kind is not offered and building it gives `Unsupported`. The app tests build it without any network call.
+
 ### Endpoint and key
 
 `MistralProvider::new(api_key, endpoint)`. `None` selects `DEFAULT_ENDPOINT`, `https://api.mistral.ai`; the provider appends `/v1/...`, so a gateway with a path prefix works (`https://gw.example.com/mistral`). The key is required: it is trimmed, and an empty key or a byte that is not visible ASCII is `AiError::Invalid`. The endpoint is `Invalid` when it is over 2048 bytes, has whitespace or a control character, contains `@`, `?` or `#`, does not parse, is not `http` or `https`, has no host, or has user info, a query or a fragment. `http` is allowed only for a loopback host (`localhost`, `127.0.0.0/8`, `::1`), so the key never travels in clear text; a loopback host is also reached without an environment proxy. The messages never quote the key or the URL.
