@@ -48,7 +48,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-catalog` | L2 | Schema cache, incremental refresh, search index, dependency graph |
 | `sqler-completion` | L2 | Intellisense engine: scope analysis, alias resolution, ranking; pure functions, heavily tested |
 | `sqler-export` | L2 | CSV, JSON, SQL `INSERT`, Markdown, Parquet and XLSX writers behind a push-style `RowWriter` API and a format registry (ADR-0028); Parquet and XLSX sit behind the cargo features `parquet` and `xlsx` (ADR-0029) |
-| `sqler-ai-tools` | L3 | Tool set exposed to models: list_schemas, describe_table, run_query (guarded), search_data, explain |
+| `sqler-ai-tools` | L3 | Tool set exposed to models: catalog tools, `run_query`, `sample_rows`, `explain_query` (guarded by classification, approval and limits), `search_data`; host traits `SessionSource`, `Approver`, `UiHost` (ADR-0036) |
 | `sqler-plugin-host` | L3 | Plugin loading, sandboxing, capability grants, lifecycle |
 | `sqler-mcp` | L4 | MCP server (rmcp) exposing `sqler-ai-tools` to external agents |
 | `sqler-acp` | L5 | ACP client: spawn and host Claude Code, Codex CLI, Gemini CLI and others inside SQLer |
@@ -254,6 +254,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0033](docs/src/adr/0033-inline-editing-ui.md) | Inline editing: apply session, transaction flag, schema probe, in-place overlay and a single gate | accepted |
 | [0034](docs/src/adr/0034-ai-provider-api.md) | AI provider API: boxed futures, crate-owned event stream, cancel by drop, increment usage | accepted |
 | [0035](docs/src/adr/0035-ai-configuration.md) | AI configuration: `ai.toml`, provider key references, per-connection opt-in, connections format v2 | accepted |
+| [0036](docs/src/adr/0036-ai-tool-schemas-guards-and-host-traits.md) | AI tool schemas, guards and host traits: one `ToolSet`, approval per statement, prod twice, no approver refuses, row and time caps | accepted |
 | [0042](docs/src/adr/0042-workbench-layout.md) | Workbench layout and editor groups: headless layout, groups, preview tabs, bottom panel, status bar | accepted |
 | [0043](docs/src/adr/0043-visual-system-and-themes.md) | Visual system and themes: scales, embedded SQLer Dark/Light themes, env accents, contrast test | accepted |
 | [0044](docs/src/adr/0044-icons.md) | Icons: `gpui-kit-assets` Lucide subset plus component assets | accepted |
