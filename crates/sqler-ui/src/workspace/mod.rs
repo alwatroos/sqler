@@ -10,6 +10,8 @@ mod action;
 mod bridge;
 mod browser;
 #[cfg(feature = "gui")]
+pub(crate) mod chrome;
+#[cfg(feature = "gui")]
 mod drop_dialog;
 mod edit;
 mod editor;
@@ -33,5 +35,7 @@ pub use edit::{
 pub use state::{Effect, Purpose, RequestId, SecretOp, Workspace};
 #[cfg(feature = "gui")]
 pub(crate) use view::WorkspaceView;
+#[cfg(feature = "screenshots")]
+pub use view::scene;
 #[cfg(feature = "gui")]
 pub use view::{Startup, init, run};

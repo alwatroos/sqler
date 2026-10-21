@@ -4,12 +4,14 @@
 //! Settings, keybindings and the saved-connection list, stored as TOML files in
 //! the platform configuration directory.
 //!
-//! The query history (`history.jsonl`) and saved queries (`queries.toml`) live next to them.
+//! The query history (`history.jsonl`), saved queries (`queries.toml`) and the AI settings
+//! (`ai.toml`) live next to them.
 //!
-//! Secrets (passwords, passphrases) live in the OS keychain through [`SecretStore`]; never in these files.
+//! Secrets (passwords, passphrases, AI provider API keys) live in the OS keychain through [`SecretStore`]; never in these files.
 
 #![forbid(unsafe_code)]
 
+mod ai;
 mod connections;
 mod error;
 mod fs;
@@ -19,11 +21,18 @@ mod paths;
 mod saved_queries;
 mod secrets;
 mod settings;
+mod workbench;
 
+pub use ai::{
+    AI_CONFIG_FORMAT_VERSION, AI_MAX_ROWS_RANGE, AI_TIMEOUT_SECS_RANGE, AiConfig, AiConfigError,
+    AiConfigProblem, AiLimits, DEFAULT_AI_MAX_ROWS, DEFAULT_AI_TIMEOUT_SECS,
+    DEFAULT_REDACTED_COLUMNS, ModelAssignments, ModelChoice, ProviderConfig, ProviderId,
+    ProviderKind, QueryCaps, RedactionList, UseCase,
+};
 pub use connections::{
-    CONNECTIONS_FORMAT_VERSION, ConnectionId, ConnectionProfile, ConnectionSpec, ConnectionStore,
-    Group, GroupId, ProfileSecret, ProfileSecretKind, SshAuth, SshProfile, StoreError, TlsMode,
-    TlsProfile,
+    CONNECTIONS_FORMAT_VERSION, ConnectionAi, ConnectionId, ConnectionProfile, ConnectionSpec,
+    ConnectionStore, Group, GroupId, ProfileSecret, ProfileSecretKind, SshAuth, SshProfile,
+    StoreError, TlsMode, TlsProfile,
 };
 pub use error::ConfigError;
 pub use history::{
@@ -38,9 +47,14 @@ pub use saved_queries::{
     SavedQueryId,
 };
 pub use secrets::{
-    KEYCHAIN_SERVICE, KeychainStore, MemoryStore, Secret, SecretError, SecretKind, SecretRef,
-    SecretStore,
+    KEYCHAIN_SERVICE, KeychainStore, MemoryStore, ProviderKeyRef, Secret, SecretError, SecretKind,
+    SecretRef, SecretStore,
 };
 pub use settings::{
     DEFAULT_RESULT_PAGE_ROWS, FONT_SIZE_RANGE, RESULT_PAGE_ROWS_RANGE, Settings, ThemePreference,
+};
+pub use workbench::{
+    BOTTOM_PANEL_SIZE_RANGE, BOTTOM_VIEWS, MAX_RECENT_COMMANDS, MAX_RECENT_CONNECTIONS, PanelState,
+    SIDE_PANEL_SIZE_RANGE, SIDE_VIEWS, WINDOW_SIZE_RANGE, WORKBENCH_VERSION, WindowState,
+    WorkbenchLoad, WorkbenchState,
 };

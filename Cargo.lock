@@ -3139,6 +3139,7 @@ dependencies = [
  "gpui-pre-linux",
  "gpui-pre-macos",
  "gpui-pre-web",
+ "gpui-pre-wgpu",
  "gpui-pre-windows",
 ]
 
@@ -3295,6 +3296,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-collections",
  "gpui-pre-util",
+ "image",
  "itertools 0.14.0",
  "log",
  "parking_lot",
@@ -7501,6 +7503,10 @@ version = "0.1.0"
 [[package]]
 name = "sqler-ai-api"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "sqler-ai-mistral"
@@ -7696,8 +7702,10 @@ name = "sqler-ui"
 version = "0.1.0"
 dependencies = [
  "gpui-component",
+ "gpui-kit-assets",
  "gpui-pre",
  "gpui-pre-platform",
+ "image",
  "insta",
  "lsp-types",
  "proptest",

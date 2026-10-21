@@ -43,4 +43,14 @@ consequences. SQLer uses the MADR format.
 | [0031](0031-client-side-sort-and-filter.md) | Client-side sort and filter: published display order, resumable job on the UI thread | accepted |
 | [0032](0032-grid-export.md) | Grid export: loaded rows or a fresh run of a read statement, writer on the blocking pool, hidden partial file, Parquet in the app default | accepted |
 | [0033](0033-inline-editing-ui.md) | Inline editing: apply session, transaction flag, schema probe, in-place overlay and a single gate | accepted |
+| [0034](0034-ai-provider-api.md) | AI provider API: boxed futures, crate-owned event stream, cancel by drop, increment usage | accepted |
+| [0035](0035-ai-configuration.md) | AI configuration: `ai.toml`, provider key references, per-connection opt-in, connections format v2 | accepted |
 | [0041](0041-acp-client.md) | ACP client: agent profiles, one supervisor task per agent, scrubbed environment, MCP descriptor and no client capabilities | accepted |
+| [0042](0042-workbench-layout.md) | Workbench layout and editor groups: headless layout, groups, preview tabs, bottom panel, status bar | accepted |
+| [0043](0043-visual-system-and-themes.md) | Visual system and themes: scales, embedded SQLer Dark/Light themes, env accents, contrast test | accepted |
+| [0044](0044-icons.md) | Icons: `gpui-kit-assets` Lucide subset plus component assets | accepted |
+| [0045](0045-workbench-state-persistence.md) | Workbench state persistence: `workbench.toml` v1, lenient read, debounced atomic writes | accepted |
+| [0046](0046-keyboard-first-model-and-accessibility.md) | Keyboard-first model and accessibility: command IDs, F6 regions, labels, `query:explain` through the prod gate | accepted |
+| [0047](0047-screenshot-harness.md) | Screenshot harness: headless GPUI renderer, scenes in both themes, Linux CI artifact | accepted |
+
+ADR numbers 0036 to 0040 are reserved for M5.

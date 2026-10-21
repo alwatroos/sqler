@@ -12,17 +12,20 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, Context, Div, Entity, Focusable as _, InteractiveElement as _,
-    IntoElement, KeyBinding, MouseButton, MouseDownEvent, NoAction, ParentElement as _, Pixels,
-    SharedString, Stateful, Styled as _, Subscription, WeakEntity, Window, div, px,
+    App, AppContext as _, Context, Div, Entity, Focusable as _, FontWeight,
+    InteractiveElement as _, IntoElement, KeyBinding, MouseButton, MouseDownEvent, NoAction,
+    ParentElement as _, Pixels, SharedString, Stateful, Styled as _, Subscription, WeakEntity,
+    Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::menu::{PopupMenu, PopupMenuItem};
+use gpui_component::menu::PopupMenu;
 use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::select::{Select, SelectState};
+use gpui_component::spinner::Spinner;
 use gpui_component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
 use gpui_component::{ActiveTheme as _, IndexPath, Sizable as _};
 
@@ -37,6 +40,10 @@ use super::{
 };
 use crate::command::CommandId;
 use crate::tabs::{TabId, TabStrip};
+use crate::theme::icons::AppIcon;
+use crate::theme::widgets::icon_button;
+use crate::theme::{SPACE, tooltip_text};
+use crate::workspace::chrome::{ICON_SM, TOOLBAR_HEIGHT, hinted_item, ui_scale};
 use crate::workspace::{Effect, WorkspaceAction, WorkspaceView};
 
 /// How often the pending messages of a grid are applied.
@@ -83,6 +90,15 @@ pub(crate) fn action_for_command(id: &CommandId) -> Option<GridAction> {
 const DETAIL_WIDTH_PX: f32 = 360.;
 const DETAIL_MIN_PX: f32 = 240.;
 const DETAIL_MAX_PX: f32 = 1200.;
+
+/// Width of the quick filter input, in pixels.
+const QUICK_W: f32 = 200.;
+/// Width of the scope, column and operand inputs of the filter bar.
+const SELECT_W: f32 = 140.;
+/// Width of the operator select of the filter bar.
+const OP_W: f32 = 130.;
+/// Font weight of a column name.
+const NAME_WEIGHT: f32 = 500.;
 
 /// The key context of the data table.
 const TABLE_CONTEXT: &str = "DataTable";
@@ -249,15 +265,20 @@ impl TableDelegate for GridDelegate {
         _row_ix: usize,
         mut menu: PopupMenu,
         _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
         let Some(hook) = self.on_copy.clone() else {
             return menu;
         };
+        // The hints are read here, when the menu opens, not per frame.
+        let workspace = self.workspace.upgrade();
         for format in CopyFormat::ALL {
             let hook = hook.clone();
+            let hint = workspace
+                .as_ref()
+                .and_then(|ws| ws.read(cx).shortcut_hint(&format.command_id()));
             menu = menu.item(
-                PopupMenuItem::new(format.menu_label())
+                hinted_item(format.menu_label(), Some(AppIcon::Copy), hint)
                     .on_click(move |_, window, cx| hook(format, window, cx)),
             );
         }
@@ -291,12 +312,15 @@ impl TableDelegate for GridDelegate {
         let indicator = self.tab.order().sort().indicator(model_col);
         let sorted = indicator.is_some();
         let fg = cx.theme().foreground;
+        let scale = ui_scale(cx);
+        let group = SharedString::from(format!("grid-th-{col_ix}"));
         div()
+            .group(group.clone())
             .size_full()
             .flex()
             .flex_row()
             .items_center()
-            .gap_1()
+            .gap(px(SPACE[1]))
             .overflow_hidden()
             .whitespace_nowrap()
             .on_mouse_down(
@@ -311,17 +335,31 @@ impl TableDelegate for GridDelegate {
                     }
                 }),
             )
-            .child(name.to_owned())
-            .child(div().text_xs().text_color(muted).child(label.to_owned()))
+            .child(
+                div()
+                    .text_size(px(scale.sm))
+                    .font_weight(FontWeight(NAME_WEIGHT))
+                    .child(name.to_owned()),
+            )
+            .child(
+                div()
+                    .text_size(px(scale.xs))
+                    .text_color(muted)
+                    .child(label.to_owned()),
+            )
             .child(div().flex_1())
             .child(
                 // The sort indicator: a click on it sorts; the rest of the header selects the
                 // column.
                 div()
-                    .px_1()
-                    .text_xs()
+                    .px(px(SPACE[1]))
+                    .text_size(px(scale.xs))
                     .cursor_pointer()
                     .text_color(if sorted { fg } else { muted })
+                    .when(!sorted, |d| {
+                        d.opacity(0.)
+                            .group_hover(group.clone(), |style| style.opacity(1.))
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |state, e: &MouseDownEvent, _, cx| {
@@ -378,6 +416,8 @@ impl TableDelegate for GridDelegate {
         let mut cell = div()
             .size_full()
             .overflow_hidden()
+            .font_family(cx.theme().mono_font_family.clone())
+            .text_size(px(ui_scale(cx).mono))
             .whitespace_nowrap()
             .text_ellipsis()
             .on_mouse_down(
@@ -473,8 +513,10 @@ impl TableDelegate for GridDelegate {
         let widest = widest_text(
             std::iter::once(header_text.as_str()).chain(cells.iter().map(String::as_str)),
         )?;
-        let font_size = cx.theme().font_size;
-        let run = window.text_style().to_run(widest.len());
+        // The cells draw in the mono face at the mono size; measure the same.
+        let font_size = px(ui_scale(cx).mono);
+        let mut run = window.text_style().to_run(widest.len());
+        run.font.family = cx.theme().mono_font_family.clone();
         let line = window.text_system().shape_line(
             SharedString::from(widest.to_owned()),
             font_size,
@@ -542,13 +584,30 @@ impl GridViews {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let (border, muted) = (theme.border, theme.muted_foreground);
+        let scale = ui_scale(cx);
         let Some(table) = self.tables.get(&tab) else {
             return div()
                 .id("grid-body")
                 .flex_1()
                 .w_full()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_center()
+                .gap(px(SPACE[2]))
+                .text_size(px(scale.sm))
                 .text_color(muted)
+                .child(
+                    Spinner::new()
+                        .icon(AppIcon::LoaderCircle)
+                        .color(muted)
+                        .xsmall(),
+                )
                 .child("Preparing the results…");
+        };
+        let hint = |action: GridAction, title: &str| {
+            let shortcut = view.shortcut_hint(&action.command_id());
+            tooltip_text(title, shortcut.as_deref())
         };
         let (status, range, paused) = {
             let grid = &table.read(cx).delegate().tab;
@@ -561,22 +620,24 @@ impl GridViews {
         let toolbar = div()
             .id("grid-toolbar")
             .w_full()
-            .h(px(36.))
+            .h(px(TOOLBAR_HEIGHT))
             .flex_none()
             .flex()
             .flex_row()
             .items_center()
-            .gap_3()
-            .px_2()
+            .gap(px(SPACE[3]))
+            .px(px(SPACE[3]))
             .border_b_1()
             .border_color(border)
-            .child(div().text_sm().child(status))
-            .children(range.map(|r| div().text_sm().text_color(muted).child(r)))
+            .child(div().text_size(px(scale.sm)).child(status))
+            .children(range.map(|r| div().text_size(px(scale.sm)).text_color(muted).child(r)))
             .child(div().flex_1())
             .children(paused.then(|| {
                 Button::new("grid-fetch-more")
                     .label("Fetch more")
+                    .icon(AppIcon::RefreshCw)
                     .small()
+                    .tooltip(hint(GridAction::FetchMore, "Fetch more rows"))
                     .on_click(cx.listener(move |view, _, window, cx| {
                         view.grids
                             .run_action(tab, GridAction::FetchMore, window, cx);
@@ -587,6 +648,7 @@ impl GridViews {
                     .label("Top")
                     .ghost()
                     .small()
+                    .tooltip(hint(GridAction::ScrollToTop, "Scroll to top"))
                     .on_click(cx.listener(move |view, _, window, cx| {
                         view.grids
                             .run_action(tab, GridAction::ScrollToTop, window, cx);
@@ -597,6 +659,7 @@ impl GridViews {
                     .label("End")
                     .ghost()
                     .small()
+                    .tooltip(hint(GridAction::ScrollToEnd, "Scroll to end"))
                     .on_click(cx.listener(move |view, _, window, cx| {
                         view.grids
                             .run_action(tab, GridAction::ScrollToEnd, window, cx);
@@ -1055,7 +1118,8 @@ fn condition_chips(
     names: &[String],
     cx: &mut Context<WorkspaceView>,
 ) -> Vec<Div> {
-    let border = cx.theme().border;
+    let (border, radius) = (cx.theme().border, cx.theme().radius);
+    let scale = ui_scale(cx);
     filter
         .conditions
         .iter()
@@ -1075,27 +1139,28 @@ fn condition_chips(
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap_1()
-                .px_1()
+                .gap(px(SPACE[1]))
+                .pl(px(SPACE[2]))
                 .border_1()
                 .border_color(border)
-                .rounded_sm()
-                .text_sm()
+                .rounded(radius)
+                .text_size(px(scale.sm))
                 .child(text)
                 .child(
-                    Button::new(("grid-chip-x", ix as u64))
-                        .label("×")
-                        .ghost()
-                        .small()
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            remove.update(cx, |state, cx| {
-                                edit_filter(state, cx, |conditions| {
-                                    if ix < conditions.len() {
-                                        conditions.remove(ix);
-                                    }
-                                });
+                    icon_button(
+                        ("grid-chip-x", ix as u64),
+                        AppIcon::X,
+                        format!("Clear Filter {}", ix + 1),
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        remove.update(cx, |state, cx| {
+                            edit_filter(state, cx, |conditions| {
+                                if ix < conditions.len() {
+                                    conditions.remove(ix);
+                                }
                             });
-                        })),
+                        });
+                    })),
                 )
         })
         .collect()
@@ -1103,8 +1168,10 @@ fn condition_chips(
 
 /// The filter bar above a grid: quick filter, scope, match case, condition editor and chips,
 /// and the status of the sort and filter. `None` before the bar exists.
+#[allow(clippy::too_many_lines)] // one declarative element tree
 fn filter_bar(table: &Table, cx: &mut Context<WorkspaceView>) -> Option<Div> {
     let (muted, border) = (cx.theme().muted_foreground, cx.theme().border);
+    let scale = ui_scale(cx);
     let id = table.entity_id().as_u64();
     let (quick, scope, column, op, operand, filter, status, case, chip_names) = {
         let d = table.read(cx).delegate();
@@ -1144,6 +1211,7 @@ fn filter_bar(table: &Table, cx: &mut Context<WorkspaceView>) -> Option<Div> {
         act(table, GridAction::ToggleMatchCase),
         act(table, GridAction::ClearFilter),
     );
+    let filtered = !filter.is_empty();
     let add_table = table.clone();
     let chips = condition_chips(table, &filter, &chip_names, cx);
     Some(
@@ -1152,25 +1220,56 @@ fn filter_bar(table: &Table, cx: &mut Context<WorkspaceView>) -> Option<Div> {
             .flex_none()
             .flex()
             .flex_row()
-            .flex_wrap()
             .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
+            .gap(px(SPACE[2]))
+            .px(px(SPACE[3]))
+            .py(px(SPACE[1]))
+            .overflow_hidden()
             .border_b_1()
             .border_color(border)
-            .child(div().w(px(200.)).child(Input::new(&quick).small()))
-            .child(div().w(px(140.)).child(Select::new(&scope).small()))
+            .child(
+                div()
+                    .w(px(QUICK_W))
+                    .flex_none()
+                    .child(Input::new(&quick).small()),
+            )
+            .child(
+                div()
+                    .w(px(SELECT_W))
+                    .flex_none()
+                    .child(Select::new(&scope).small()),
+            )
             .child(
                 Checkbox::new(("grid-match-case", id))
                     .label("Match case")
                     .checked(case)
                     .on_click(cx.listener(move |_, _: &bool, window, cx| on_case(window, cx))),
             )
-            .child(div().w(px(1.)).h(px(18.)).bg(border))
-            .child(div().w(px(140.)).child(Select::new(&column).small()))
-            .child(div().w(px(130.)).child(Select::new(&op).small()))
-            .children(needs_operand.then(|| div().w(px(140.)).child(Input::new(&operand).small())))
+            .child(
+                div()
+                    .h(px(ICON_SM))
+                    .flex_none()
+                    .border_l_1()
+                    .border_color(border),
+            )
+            .child(
+                div()
+                    .w(px(SELECT_W))
+                    .flex_none()
+                    .child(Select::new(&column).small()),
+            )
+            .child(
+                div()
+                    .w(px(OP_W))
+                    .flex_none()
+                    .child(Select::new(&op).small()),
+            )
+            .children(needs_operand.then(|| {
+                div()
+                    .w(px(SELECT_W))
+                    .flex_none()
+                    .child(Input::new(&operand).small())
+            }))
             .child(
                 Button::new(("grid-add-condition", id))
                     .label("Add")
@@ -1186,17 +1285,24 @@ fn filter_bar(table: &Table, cx: &mut Context<WorkspaceView>) -> Option<Div> {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap_1()
+                    .gap(px(SPACE[1]))
                     .children(chips),
             )
-            .child(
+            .children(filtered.then(|| {
                 Button::new(("grid-clear-filter", id))
                     .label("Clear filter")
                     .ghost()
                     .small()
-                    .on_click(cx.listener(move |_, _, window, cx| on_clear(window, cx))),
-            )
-            .children(status.map(|text| div().text_sm().text_color(muted).child(text))),
+                    .on_click(cx.listener(move |_, _, window, cx| on_clear(window, cx)))
+            }))
+            .children(status.map(|text| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(scale.sm))
+                    .text_color(muted)
+                    .child(text)
+            })),
     )
 }
 

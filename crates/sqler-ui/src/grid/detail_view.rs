@@ -22,6 +22,11 @@ use gpui_component::button::Button;
 use gpui_component::table::TableState;
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 
+use crate::theme::SPACE;
+use crate::theme::icons::AppIcon;
+use crate::theme::widgets::{section_header, toolbar_button};
+use crate::workspace::chrome::{HEADER_HEIGHT, ui_scale};
+
 use super::view::{GridDelegate, Table};
 use super::{CellDetail, CellPos, DetailCap, DetailKind, copy_text};
 
@@ -195,6 +200,7 @@ impl Render for CellDetailView {
         let theme = cx.theme();
         let (muted, border, bg) = (theme.muted_foreground, theme.border, theme.background);
         let mono = theme.mono_font_family.clone();
+        let scale = ui_scale(cx);
         let pane = v_flex()
             .id("cell-detail")
             .size_full()
@@ -205,41 +211,60 @@ impl Render for CellDetailView {
             .border_color(border);
         let Some(doc) = self.doc.as_ref() else {
             return pane
-                .p_3()
-                .text_sm()
+                .p(px(SPACE[3]))
+                .text_size(px(scale.sm))
                 .text_color(muted)
                 .child("Select a cell to see its full value.");
         };
         let is_null = doc.kind() == DetailKind::Null;
         let loading = self.task.is_some();
-        let header = v_flex()
-            .px_3()
-            .py_2()
-            .gap_1()
+        let header = section_header("Cell value", cx)
+            .h(px(HEADER_HEIGHT))
+            .flex_none()
+            .border_b_1()
+            .border_color(border);
+        let identity = v_flex()
+            .px(px(SPACE[3]))
+            .py(px(SPACE[2]))
+            .gap(px(SPACE[1]))
             .flex_none()
             .child(
                 h_flex()
-                    .gap_2()
+                    .gap(px(SPACE[2]))
                     .items_baseline()
                     .child(
                         div()
+                            .text_size(px(scale.sm))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(doc.column().to_owned()),
                     )
-                    .child(div().text_xs().text_color(muted).child(doc.type_label())),
+                    .child(
+                        div()
+                            .text_size(px(scale.xs))
+                            .text_color(muted)
+                            .child(doc.type_label()),
+                    ),
             )
-            .child(div().text_sm().text_color(muted).child(doc.summary()));
+            .child(
+                div()
+                    .text_size(px(scale.sm))
+                    .text_color(muted)
+                    .child(doc.summary()),
+            );
         let toolbar = h_flex()
-            .px_3()
-            .pb_2()
-            .gap_2()
+            .px(px(SPACE[3]))
+            .pb(px(SPACE[2]))
+            .gap(px(SPACE[2]))
             .flex_none()
             .child(
-                Button::new("cell-detail-copy")
-                    .label("Copy value")
-                    .small()
-                    .disabled(is_null)
-                    .on_click(cx.listener(|view, _, _, cx| view.copy(cx))),
+                toolbar_button(
+                    "cell-detail-copy",
+                    AppIcon::Copy,
+                    "Copy value",
+                    "Copy value",
+                )
+                .disabled(is_null)
+                .on_click(cx.listener(|view, _, _, cx| view.copy(cx))),
             )
             .children(doc.is_truncated().then(|| {
                 Button::new("cell-detail-show-all")
@@ -248,11 +273,16 @@ impl Render for CellDetailView {
                     .disabled(loading)
                     .on_click(cx.listener(|view, _, _, cx| view.show_all(cx)))
             }));
-        let notes = v_flex().px_3().pb_2().flex_none().children(
-            doc.notes()
-                .iter()
-                .map(|n| div().text_sm().text_color(muted).child(n.clone())),
-        );
+        let notes = v_flex()
+            .px(px(SPACE[3]))
+            .pb(px(SPACE[2]))
+            .flex_none()
+            .children(doc.notes().iter().map(|n| {
+                div()
+                    .text_size(px(scale.sm))
+                    .text_color(muted)
+                    .child(n.clone())
+            }));
         let lines = doc.line_count();
         // The scroll range takes its width from one measured line: the widest, not the first.
         let widest = doc.widest_line();
@@ -262,6 +292,7 @@ impl Render for CellDetailView {
             cx.processor(move |view, range: Range<usize>, _, cx| {
                 let muted = cx.theme().muted_foreground;
                 let mono = cx.theme().mono_font_family.clone();
+                let mono_size = px(ui_scale(cx).mono);
                 let Some(doc) = view.doc.as_ref() else {
                     return Vec::new();
                 };
@@ -273,7 +304,7 @@ impl Render for CellDetailView {
                             .h(px(ROW_HEIGHT))
                             .flex_none()
                             .font_family(mono.clone())
-                            .text_sm()
+                            .text_size(mono_size)
                             .whitespace_nowrap()
                             .child(
                                 div()
@@ -293,8 +324,12 @@ impl Render for CellDetailView {
         .flex_1()
         .min_h_0()
         .w_full()
-        .px_3()
+        .px(px(SPACE[3]))
         .font_family(mono);
-        pane.child(header).child(toolbar).child(notes).child(body)
+        pane.child(header)
+            .child(identity)
+            .child(toolbar)
+            .child(notes)
+            .child(body)
     }
 }

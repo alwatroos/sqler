@@ -56,6 +56,54 @@ jobs:
           cargo check -p sqler-export --no-default-features --features parquet
           cargo check -p sqler-export --no-default-features --features xlsx
 
+  screenshots:
+    name: screenshots (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # The build set of `check`, plus a software Vulkan driver (lavapipe, shows up as llvmpipe)
+      # and a font. No display, Xvfb or compositor: the harness opens no OS window.
+      - name: Linux system packages (GPUI build, software Vulkan, fonts)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev \
+            mesa-vulkan-drivers libvulkan1 fonts-dejavu-core
+      - name: Render the scenes
+        run: cargo test -p sqler-ui --features screenshots --test screenshots
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: screenshots-linux
+          path: target/screenshots
+          if-no-files-found: warn
+
+  screenshots-macos:
+    name: screenshots (macos)
+    runs-on: macos-latest
+    # A runner without a Metal device ends the process inside GPUI, so this job may not be green.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # macOS images may ship Xcode without the separately downloaded Metal toolchain.
+      - name: Metal toolchain
+        run: xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+      - name: Render the scenes
+        run: cargo test -p sqler-ui --features screenshots --test screenshots
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: screenshots-macos
+          path: target/screenshots
+          if-no-files-found: warn
+
   db:
     name: db
     runs-on: ubuntu-latest

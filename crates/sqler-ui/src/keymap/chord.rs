@@ -42,6 +42,80 @@ pub fn chord_from_input(input: &KeyInput) -> Option<KeyChord> {
     KeyChord::parse(&text, Platform::Other).ok()
 }
 
+/// The chord as a user-facing label: glyphs on macOS (`⌘⇧P`), words elsewhere (`Ctrl+Shift+P`).
+///
+/// macOS orders modifiers ⌘ ⌃ ⌥ ⇧ before the key; other platforms use `Ctrl`, `Alt`, `Shift`,
+/// `Super`, joined with `+`.
+#[must_use]
+pub fn display_chord(chord: &KeyChord, p: Platform) -> String {
+    let m = chord.modifiers();
+    let mac = p == Platform::MacOs;
+    let key = display_key(chord.key(), mac);
+    if mac {
+        let mut out = String::new();
+        for (on, glyph) in [(m.cmd, '⌘'), (m.ctrl, '⌃'), (m.alt, '⌥'), (m.shift, '⇧')] {
+            if on {
+                out.push(glyph);
+            }
+        }
+        out.push_str(&key);
+        out
+    } else {
+        let mut parts: Vec<&str> = Vec::new();
+        for (on, name) in [
+            (m.ctrl, "Ctrl"),
+            (m.alt, "Alt"),
+            (m.shift, "Shift"),
+            (m.cmd, "Super"),
+        ] {
+            if on {
+                parts.push(name);
+            }
+        }
+        parts.push(&key);
+        parts.join("+")
+    }
+}
+
+fn display_key(key: &str, mac: bool) -> String {
+    let named = match (key, mac) {
+        ("enter", true) => "↩",
+        ("enter", false) => "Enter",
+        ("escape", true) => "⎋",
+        ("escape", false) => "Esc",
+        ("tab", true) => "⇥",
+        ("tab", false) => "Tab",
+        ("space", _) => "Space",
+        ("backspace", true) => "⌫",
+        ("backspace", false) => "Backspace",
+        ("delete", true) => "⌦",
+        ("delete", false) => "Delete",
+        ("insert", _) => "Insert",
+        ("home", true) => "↖",
+        ("home", false) => "Home",
+        ("end", true) => "↘",
+        ("end", false) => "End",
+        ("pageup", true) => "⇞",
+        ("pageup", false) => "PageUp",
+        ("pagedown", true) => "⇟",
+        ("pagedown", false) => "PageDown",
+        ("up", true) => "↑",
+        ("up", false) => "Up",
+        ("down", true) => "↓",
+        ("down", false) => "Down",
+        ("left", true) => "←",
+        ("left", false) => "Left",
+        ("right", true) => "→",
+        ("right", false) => "Right",
+        _ => "",
+    };
+    if !named.is_empty() {
+        return named.to_owned();
+    }
+    // Letters upper case; digits, punctuation and `F1..F24` as is.
+    key.to_ascii_uppercase()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +162,62 @@ mod tests {
             assert_eq!(chord_from_input(&input("", key)), None, "{key}");
         }
         assert_eq!(chord_from_input(&input("c", "shift")), None);
+    }
+
+    fn shown(chord: &str, p: Platform) -> String {
+        display_chord(&KeyChord::parse(chord, p).unwrap(), p)
+    }
+
+    #[test]
+    fn display_examples() {
+        let cases = [
+            ("mod+shift+p", "⌘⇧P", "Ctrl+Shift+P"),
+            ("mod+enter", "⌘↩", "Ctrl+Enter"),
+            ("ctrl+tab", "⌃⇥", "Ctrl+Tab"),
+            ("shift+f6", "⇧F6", "Shift+F6"),
+            ("mod+\\", "⌘\\", "Ctrl+\\"),
+            ("mod+shift+pagedown", "⌘⇧⇟", "Ctrl+Shift+PageDown"),
+            ("escape", "⎋", "Esc"),
+            ("ctrl+alt+shift+cmd+a", "⌘⌃⌥⇧A", "Ctrl+Alt+Shift+Super+A"),
+        ];
+        for (c, mac, other) in cases {
+            assert_eq!(shown(c, Platform::MacOs), mac, "{c}");
+            assert_eq!(shown(c, Platform::Other), other, "{c}");
+        }
+        assert_eq!(shown("cmd+k", Platform::Other), "Super+K");
+        assert_eq!(shown("mod+1", Platform::MacOs), "⌘1");
+    }
+
+    #[test]
+    fn every_key_has_a_label() {
+        let mut keys: Vec<String> = [
+            "enter",
+            "escape",
+            "tab",
+            "space",
+            "backspace",
+            "delete",
+            "insert",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+            "up",
+            "down",
+            "left",
+            "right",
+        ]
+        .map(String::from)
+        .to_vec();
+        keys.extend((1..=24).map(|n| format!("f{n}")));
+        for k in keys {
+            for p in [Platform::MacOs, Platform::Other] {
+                let label = shown(&k, p);
+                assert!(!label.is_empty(), "{k}");
+                if k.starts_with('f') && k.len() > 1 {
+                    assert_eq!(label, k.to_ascii_uppercase());
+                }
+            }
+        }
     }
 }

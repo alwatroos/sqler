@@ -33,6 +33,8 @@ pub enum SecretKind {
     SshPassword,
     /// The passphrase of an SSH private key.
     SshKeyPassphrase,
+    /// The API key of an AI provider (the scope id is the provider id, see [`ProviderKeyRef`]).
+    ProviderApiKey,
 }
 
 impl SecretKind {
@@ -43,7 +45,14 @@ impl SecretKind {
             Self::DatabasePassword => "db-password",
             Self::SshPassword => "ssh-password",
             Self::SshKeyPassphrase => "ssh-key-passphrase",
+            Self::ProviderApiKey => "ai-provider-key",
         }
+    }
+
+    /// Whether references of this kind are scoped to an AI provider rather than a connection.
+    #[must_use]
+    pub fn is_provider_scoped(self) -> bool {
+        matches!(self, Self::ProviderApiKey)
     }
 
     /// The kind with this id, or `None` for an unknown id.
@@ -53,6 +62,7 @@ impl SecretKind {
             "db-password" => Some(Self::DatabasePassword),
             "ssh-password" => Some(Self::SshPassword),
             "ssh-key-passphrase" => Some(Self::SshKeyPassphrase),
+            "ai-provider-key" => Some(Self::ProviderApiKey),
             _ => None,
         }
     }
@@ -142,6 +152,73 @@ impl FromStr for SecretRef {
     }
 }
 
+/// The reference of an AI provider's API key: `<provider-id>:ai-provider-key`, stored under the
+/// same [`KEYCHAIN_SERVICE`] as connection secrets (ADR-0035).
+///
+/// Wraps a [`SecretRef`] whose kind is always [`SecretKind::ProviderApiKey`]; pass
+/// [`ProviderKeyRef::secret_ref`] to a [`SecretStore`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ProviderKeyRef(SecretRef);
+
+impl ProviderKeyRef {
+    /// The key reference of provider `provider_id`.
+    ///
+    /// # Errors
+    /// [`SecretError::InvalidRef`] if the id breaks the reference id grammar.
+    pub fn new(provider_id: &str) -> Result<Self, SecretError> {
+        SecretRef::new(provider_id, SecretKind::ProviderApiKey).map(Self)
+    }
+
+    /// A reference for an id that was already validated.
+    pub(crate) fn from_valid(provider_id: &str) -> Self {
+        Self(SecretRef {
+            connection_id: provider_id.to_owned(),
+            kind: SecretKind::ProviderApiKey,
+        })
+    }
+
+    /// The provider id.
+    #[must_use]
+    pub fn provider_id(&self) -> &str {
+        self.0.connection_id()
+    }
+
+    /// The generic reference to pass to [`SecretStore::set`], `get` and `delete`.
+    #[must_use]
+    pub fn secret_ref(&self) -> &SecretRef {
+        &self.0
+    }
+}
+
+impl fmt::Display for ProviderKeyRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl TryFrom<SecretRef> for ProviderKeyRef {
+    type Error = SecretError;
+
+    fn try_from(r: SecretRef) -> Result<Self, Self::Error> {
+        if r.kind().is_provider_scoped() {
+            Ok(Self(r))
+        } else {
+            Err(SecretError::InvalidRef {
+                input: r.to_string(),
+                reason: "not a provider key reference",
+            })
+        }
+    }
+}
+
+impl FromStr for ProviderKeyRef {
+    type Err = SecretError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s.parse::<SecretRef>()?)
+    }
+}
+
 /// A secret value. Its `Debug` output never shows the value; there is no `Display` and no serde.
 #[derive(Clone)]
 pub struct Secret(String);
@@ -204,10 +281,11 @@ pub trait SecretStore: Send + Sync {
 mod tests {
     use super::*;
 
-    const KINDS: [SecretKind; 3] = [
+    const KINDS: [SecretKind; 4] = [
         SecretKind::DatabasePassword,
         SecretKind::SshPassword,
         SecretKind::SshKeyPassphrase,
+        SecretKind::ProviderApiKey,
     ];
 
     #[test]
@@ -287,5 +365,64 @@ mod tests {
             e.to_string(),
             "stored secret for c1:db-password is not valid UTF-8"
         );
+    }
+
+    #[test]
+    fn existing_refs_parse_unchanged() {
+        for (text, kind) in [
+            ("c1:db-password", SecretKind::DatabasePassword),
+            ("c1:ssh-password", SecretKind::SshPassword),
+            ("c1:ssh-key-passphrase", SecretKind::SshKeyPassphrase),
+        ] {
+            let r: SecretRef = text.parse().unwrap();
+            assert_eq!(r, SecretRef::new("c1", kind).unwrap());
+            assert_eq!(r.to_string(), text);
+            assert!(!kind.is_provider_scoped());
+        }
+    }
+
+    #[test]
+    fn provider_ref_round_trips() {
+        let r = ProviderKeyRef::new("local-1").unwrap();
+        assert_eq!(r.to_string(), "local-1:ai-provider-key");
+        assert_eq!(r.provider_id(), "local-1");
+        assert_eq!(r.secret_ref().kind(), SecretKind::ProviderApiKey);
+        assert_eq!(
+            "local-1:ai-provider-key".parse::<ProviderKeyRef>().unwrap(),
+            r
+        );
+        assert_eq!(ProviderKeyRef::from_valid("local-1"), r);
+        assert_eq!(ProviderKeyRef::try_from(r.secret_ref().clone()).unwrap(), r);
+        assert!(SecretKind::ProviderApiKey.is_provider_scoped());
+        assert!(matches!(
+            ProviderKeyRef::new("a b"),
+            Err(SecretError::InvalidRef { .. })
+        ));
+    }
+
+    #[test]
+    fn connection_ref_is_not_a_provider_ref() {
+        let e = "c1:db-password".parse::<ProviderKeyRef>().unwrap_err();
+        assert!(
+            e.to_string().contains("not a provider key reference"),
+            "{e}"
+        );
+        assert!("nope".parse::<ProviderKeyRef>().is_err());
+    }
+
+    #[test]
+    fn memory_store_keeps_kinds_apart() {
+        let store = MemoryStore::new();
+        let db = SecretRef::new("x", SecretKind::DatabasePassword).unwrap();
+        let key = ProviderKeyRef::new("x").unwrap();
+        store.set(&db, &Secret::from("one")).unwrap();
+        store.set(key.secret_ref(), &Secret::from("two")).unwrap();
+        assert_eq!(store.get(&db).unwrap().unwrap().expose(), "one");
+        assert_eq!(
+            store.get(key.secret_ref()).unwrap().unwrap().expose(),
+            "two"
+        );
+        assert!(store.delete(key.secret_ref()).unwrap());
+        assert!(store.get(&db).unwrap().is_some());
     }
 }

@@ -42,7 +42,7 @@ A saved query is a name, the SQL text and an optional connection. Saved queries 
 
 - **Save** (`query:save`, "Query: Save Query"): saves the text of the active SQL editor. A dialog asks for the name. A new query is bound to the editor's connection. For a tab that was opened from a saved query, the dialog is prefilled with that name; keeping the name overwrites the SQL of that query. If the name is already used, the dialog shows an error and stays open. With no editor SQLer shows "Open a SQL editor first.", and with an empty buffer "Nothing to save."
 - **Open** (`query:open-saved`, "Query: Open Saved Query"): opens a picker. Type to filter (every word must be part of `folder/name`, ignoring case), move with Up and Down, press Enter to open the query in a new editor and Escape to close the picker. A query with a connection opens on that connection, otherwise on the active tab's connection, otherwise on the connection selected in the sidebar.
-- **Sidebar**: the "SAVED QUERIES" section under the connection list shows every saved query as `folder/name`. Click selects, double-click opens. The selected query has Rename and Delete buttons.
+- **Sidebar**: the "SAVED QUERIES" section under the connection list shows every saved query as `folder/name`. Click selects, double-click opens. The selected query has Rename and Delete buttons. With no saved query the section shows "No saved queries" and how to save one.
 - **Rename** (`query:rename-saved`) and **Delete** (`query:delete-saved`) act on the query selected in the sidebar; without one SQLer shows "Select a saved query first." Delete asks for confirmation.
 
 If `queries.toml` could not be read, or is still loading, saving, renaming and deleting are refused with a message and the file is never overwritten.

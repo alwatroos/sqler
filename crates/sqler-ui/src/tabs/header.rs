@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! What a tab header shows: title, accent colour and environment badge.
+//! What a tab header shows: title, accent colour, environment badge, kind and preview state.
+
+use super::model::TabKind;
 
 /// A colour as `0xRRGGBB`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +32,21 @@ pub struct TabHeader {
     pub badge: Option<&'static str>,
     /// Whether the connection is a production one (rendered distinctly).
     pub is_prod: bool,
+    /// What the tab shows.
+    pub kind: TabKind,
+    /// Whether the tab is a preview (rendered in italics).
+    pub preview: bool,
+}
+
+/// A header plus the live state a tab strip decorates it with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabDecor {
+    /// The header data.
+    pub header: TabHeader,
+    /// Unsaved text or staged edits.
+    pub dirty: bool,
+    /// A statement is running.
+    pub running: bool,
 }
 
 #[cfg(test)]

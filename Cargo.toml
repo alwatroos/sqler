@@ -66,9 +66,13 @@ calamine = { version = "0.37.0", default-features = false }
 memory-stats = "1.2.0"
 bytes = "1.12.1"
 gpui-component = { version = "0.8.0", features = ["tree-sitter-sql"] }
+# Lucide icon assets (ADR-0044); pinned to the version gpui-component 0.8.0 resolves.
+gpui-kit-assets = "=0.8.0"
 # Same 0.97 line as gpui-component 0.8.0 (its CompletionProvider/HoverProvider speak these types); AGENTS.md section 10.
 lsp-types = "0.97.0"
 gpui = { version = "=0.3.9", package = "gpui-pre" }
+# Dev only: PNG encode and downscale in the screenshot harness (already in the lockfile through gpui-pre).
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 gpui_platform = { version = "=0.3.9", package = "gpui-pre-platform", features = ["font-kit", "x11", "wayland"] }
 
 [workspace.lints.rust]

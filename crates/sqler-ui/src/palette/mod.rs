@@ -6,21 +6,28 @@
 //! The palette lists the commands of the [`CommandRegistry`], filtered and ranked by its matcher,
 //! with each command's current shortcut. Key handling is in [`crate::keymap`].
 
+#[cfg_attr(not(feature = "gui"), allow(dead_code))] // only the overlay reads it
+pub(crate) mod sections;
 #[cfg(feature = "gui")]
 pub(crate) mod view;
 
 use crate::command::{Command, CommandError, CommandId, CommandRegistry, MatchField};
 use crate::keymap::KeyDispatcher;
+use crate::workbench::RecentCommands;
 
 /// The ID of the command that opens the palette (pinned by ADR-0005).
 pub const OPEN_PALETTE: &str = "workspace:open-command-palette";
 
 /// Commands that need an argument and so cannot run from the palette.
-const NEEDS_ARGUMENT: &[&str] = &[
+pub(crate) const NEEDS_ARGUMENT: &[&str] = &[
     "connection:select",
     "tab:activate",
     "settings:set-theme",
     "settings:set-ui-font-size",
+    "pane:focus",
+    "tab:move",
+    "workbench:set-side-width",
+    "workbench:set-panel-height",
 ];
 
 /// Registers the palette's own commands.
@@ -45,6 +52,8 @@ pub struct PaletteItem {
     pub field: MatchField,
     /// Matched char indices into the title or ID named by `field`.
     pub positions: Vec<usize>,
+    /// Whether the row is in the "recently used" block at the top of an empty-query list.
+    pub recent: bool,
 }
 
 /// The palette state: open or closed, the query and the selected row.
@@ -53,6 +62,7 @@ pub struct PaletteState {
     open: bool,
     query: String,
     selected: usize,
+    recent: RecentCommands,
 }
 
 impl PaletteState {
@@ -101,21 +111,54 @@ impl PaletteState {
         self.selected
     }
 
-    /// The rows for the current query, best match first.
+    /// The commands run from the palette or a shortcut, most recent first.
+    #[must_use]
+    pub fn recent(&self) -> &RecentCommands {
+        &self.recent
+    }
+
+    /// Replaces the recent commands (the binary restores them at startup).
+    pub fn set_recent(&mut self, recent: RecentCommands) {
+        self.recent = recent;
+    }
+
+    /// Records a command as just used.
+    pub fn record(&mut self, id: &CommandId) {
+        self.recent.record(id);
+    }
+
+    /// The rows for the current query, best match first. With an empty query the recently used
+    /// commands come first, then the rest without those.
     #[must_use]
     pub fn items(&self, registry: &CommandRegistry, keys: &KeyDispatcher) -> Vec<PaletteItem> {
-        registry
+        let rows = registry
             .query(&self.query)
             .into_iter()
             .filter(|m| !NEEDS_ARGUMENT.contains(&m.command.id().as_str()))
             .map(|m| PaletteItem {
                 id: m.command.id().clone(),
                 title: m.command.title().to_owned(),
-                shortcut: keys.shortcut_label(m.command.id()),
+                shortcut: keys.shortcut_display(m.command.id()),
                 field: m.field,
                 positions: m.positions,
-            })
-            .collect()
+                recent: false,
+            });
+        if !self.query.is_empty() {
+            return rows.collect();
+        }
+        let mut rows: Vec<PaletteItem> = rows.collect();
+        let mut out: Vec<PaletteItem> = Vec::new();
+        for id in self.recent.iter() {
+            if let Some(at) = rows.iter().position(|r| &r.id == id) {
+                let mut item = rows.remove(at);
+                item.recent = true;
+                item.field = MatchField::Title;
+                item.positions = Vec::new();
+                out.push(item);
+            }
+        }
+        out.extend(rows);
+        out
     }
 
     /// Moves the selection by `delta` rows, wrapping around a list of `len` rows.
@@ -196,12 +239,70 @@ mod tests {
                 "dev:open-synthetic-grid",
                 "settings:open",
                 "tab:close",
+                "tab:close-all",
+                "tab:close-others",
+                "tab:close-to-the-right",
+                "tab:move-left",
+                "tab:move-right",
                 "tab:next",
+                "tab:pin",
                 "tab:previous",
                 "theme:toggle-mode",
                 "workspace:open-command-palette"
             ]
         );
+    }
+
+    #[test]
+    fn argument_commands_never_show() {
+        let (r, k) = setup();
+        let s = PaletteState::default();
+        for id in ["pane:focus", "tab:move", "workbench:set-side-width"] {
+            assert!(!ids(&s, &r, &k).contains(&id.to_owned()));
+        }
+    }
+
+    #[test]
+    fn recent_commands_come_first_without_duplicates() {
+        let (r, k) = setup();
+        let mut s = PaletteState::default();
+        s.record(&CommandId::new("tab:next").unwrap());
+        s.record(&CommandId::new("app:quit").unwrap());
+        s.record(&CommandId::new("tab:activate").unwrap()); // needs an argument
+        let items = s.items(&r, &k);
+        let list: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(&list[..2], ["app:quit", "tab:next"]);
+        assert!(items[0].recent && items[1].recent);
+        assert!(items[2..].iter().all(|i| !i.recent));
+        let mut sorted = list.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), list.len());
+        assert!(!list.contains(&"tab:activate"));
+    }
+
+    #[test]
+    fn typed_query_ignores_recents() {
+        let (r, k) = setup();
+        let mut s = PaletteState::default();
+        s.record(&CommandId::new("app:quit").unwrap());
+        s.set_query("tab");
+        let items = s.items(&r, &k);
+        assert!(items.iter().all(|i| !i.recent));
+        let plain = PaletteState {
+            query: "tab".into(),
+            ..PaletteState::default()
+        };
+        assert_eq!(items, plain.items(&r, &k));
+    }
+
+    #[test]
+    fn confirm_does_not_record() {
+        let (r, k) = setup();
+        let mut s = PaletteState::default();
+        s.open();
+        let _ = s.confirm(&r, &k);
+        assert_eq!(s.recent().iter().count(), 0);
     }
 
     #[test]
@@ -214,7 +315,7 @@ mod tests {
             .find(|i| i.id.as_str() == OPEN_PALETTE)
             .unwrap();
         assert_eq!(open.title, "Show Command Palette");
-        assert_eq!(open.shortcut.as_deref(), Some("ctrl+shift+p"));
+        assert_eq!(open.shortcut.as_deref(), Some("Ctrl+Shift+P"));
         let conn = items
             .iter()
             .find(|i| i.id.as_str() == "connection:open")
@@ -234,7 +335,7 @@ mod tests {
             .query("tab")
             .iter()
             .map(|m| m.command.id().to_string())
-            .filter(|i| i != "tab:activate")
+            .filter(|i| i != "tab:activate" && i != "tab:move")
             .collect();
         assert_eq!(list, expected);
         s.set_query("zzzz");

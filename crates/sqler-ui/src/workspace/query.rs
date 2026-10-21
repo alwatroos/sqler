@@ -195,6 +195,8 @@ impl Workspace {
             query.started(run, statements);
         }
         self.query_runs.insert(tab, active);
+        self.layout
+            .reveal_panel(crate::workbench::PanelView::Results);
         Effect::RunQuery {
             job,
             grids,

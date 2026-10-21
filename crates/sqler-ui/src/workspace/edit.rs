@@ -137,6 +137,8 @@ pub struct ClosePrompt {
     pub target: CloseTarget,
     /// The number of pending changes that would be lost.
     pub pending: usize,
+    /// The tab's editor also holds unsaved text that would be lost (batch close only).
+    pub unsaved_text: bool,
 }
 
 /// The result of [`Workspace::apply_finished`].
@@ -286,6 +288,18 @@ impl EditFlow {
         self.applies.contains_key(&tab)
     }
 
+    /// Marks `tab` as applying, for tests of the guards around a running apply.
+    #[cfg(test)]
+    pub(super) fn mark_applying(&mut self, tab: TabId) {
+        self.applies.insert(
+            tab,
+            ActiveApply {
+                run: ApplyId::new(1),
+                stop: ApplyStop::new(),
+            },
+        );
+    }
+
     pub(super) fn pending_notice(&self, tab: TabId) -> Option<String> {
         let n = self.pending_for_tab(tab);
         (n > 0).then(|| format!("Apply or discard the {n} pending change(s) first."))
@@ -299,6 +313,7 @@ impl EditFlow {
         let prompt = ClosePrompt {
             target: CloseTarget::Quit,
             pending,
+            unsaved_text: false,
         };
         self.close_prompt = Some(prompt);
         Some(prompt)
@@ -312,9 +327,21 @@ impl EditFlow {
         let prompt = ClosePrompt {
             target: CloseTarget::Tab(tab),
             pending,
+            unsaved_text: false,
         };
         self.close_prompt = Some(prompt);
         Some(prompt)
+    }
+
+    /// Asks before a batch close discards the unsaved editor text of `tab`.
+    pub(super) fn text_prompt(&mut self, tab: TabId) -> ClosePrompt {
+        let prompt = ClosePrompt {
+            target: CloseTarget::Tab(tab),
+            pending: self.pending_for_tab(tab),
+            unsaved_text: true,
+        };
+        self.close_prompt = Some(prompt);
+        prompt
     }
 }
 
