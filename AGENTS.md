@@ -246,6 +246,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0028](docs/src/adr/0028-export-writer-api.md) | Export writer API: push-style row writers, a format registry and SQL literals | accepted |
 | [0029](docs/src/adr/0029-parquet-and-xlsx-writers.md) | Parquet and XLSX writers: own streaming zip, low-level Parquet API, two cargo features | accepted |
 | [0030](docs/src/adr/0030-staged-edits-and-dml.md) | Staged edits and DML: bound statements, single-table editability, one-transaction apply | accepted |
+| [0033](docs/src/adr/0033-inline-editing-ui.md) | Inline editing: apply session, transaction flag, schema probe, in-place overlay and a single gate | accepted |
 
 ## 9. Roadmap status
 

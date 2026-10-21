@@ -438,13 +438,25 @@ fn pg_type(column: &ColumnInfo) -> Option<String> {
 /// A generated statement and, for each entry of `query.params`, the catalog column it is bound
 /// for. The columns come from the generator itself, so a preview can label every value without
 /// re-deriving the generator's parameter order.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Debug` prints counts only: the bound values are user data.
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub struct BoundDml {
     /// The SQL and its parameters.
     pub query: Query,
     /// The column of `query.params[i]`, same length and order.
     pub columns: Vec<String>,
+}
+
+impl std::fmt::Debug for BoundDml {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BoundDml")
+            .field("sql_len", &self.query.sql.len())
+            .field("params", &self.query.params.len())
+            .field("columns", &self.columns.len())
+            .finish()
+    }
 }
 
 struct Builder<'a> {
@@ -997,6 +1009,23 @@ mod tests {
 
     fn sql(q: &Result<Query, DmlError>) -> &str {
         &q.as_ref().unwrap().sql
+    }
+
+    #[test]
+    fn bound_dml_debug_never_shows_values() {
+        let t = table();
+        let name = Value::Text("sekrit-name".into());
+        let id = Value::Int(424_242);
+        for d in [PG, MY, LITE] {
+            let set = [("name", &name)];
+            let filter = [("id", &id)];
+            let b = update_bound(d, &t, &set, &filter).unwrap();
+            let shown = format!("{b:?}");
+            assert!(!shown.contains("sekrit"), "{shown}");
+            assert!(!shown.contains("424242"), "{shown}");
+            assert!(!shown.contains("UPDATE"), "{shown}");
+            assert!(shown.contains("params: 2"), "{shown}");
+        }
     }
 
     #[test]

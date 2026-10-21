@@ -11,7 +11,9 @@ use super::plan::ApplyPlan;
 use super::plan::ConfirmedPlan;
 
 /// Why an apply was rolled back, or why its `COMMIT` is in doubt.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` prints the kind and numbers only: a driver message can quote the data.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ApplyFailure {
     /// A statement did not affect the expected number of rows.
@@ -27,8 +29,27 @@ pub enum ApplyFailure {
     Cancelled,
 }
 
+impl std::fmt::Debug for ApplyFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RowCount { expected, actual } => f
+                .debug_struct("RowCount")
+                .field("expected", expected)
+                .field("actual", actual)
+                .finish(),
+            Self::Driver(message) => f
+                .debug_struct("Driver")
+                .field("message_len", &message.len())
+                .finish(),
+            Self::Cancelled => f.write_str("Cancelled"),
+        }
+    }
+}
+
 /// The result of [`apply()`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` prints the kind and numbers only: a driver message can quote the data.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ApplyOutcome {
     /// Everything was committed; `applied` data statements ran. The caller clears the staged edits.
@@ -70,6 +91,39 @@ pub enum ApplyOutcome {
         /// The error of the `ROLLBACK` statement that followed, if it failed.
         rollback_error: Option<String>,
     },
+}
+
+impl std::fmt::Debug for ApplyOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Committed { applied } => f
+                .debug_struct("Committed")
+                .field("applied", applied)
+                .finish(),
+            Self::NotStarted { message } => f
+                .debug_struct("NotStarted")
+                .field("message_len", &message.len())
+                .finish(),
+            Self::RolledBack {
+                at,
+                failure,
+                rollback_error,
+            } => f
+                .debug_struct("RolledBack")
+                .field("at", at)
+                .field("failure", failure)
+                .field("rollback_failed", &rollback_error.is_some())
+                .finish(),
+            Self::CommitUnknown {
+                failure,
+                rollback_error,
+            } => f
+                .debug_struct("CommitUnknown")
+                .field("failure", failure)
+                .field("rollback_failed", &rollback_error.is_some())
+                .finish(),
+        }
+    }
 }
 
 /// Runs one statement and reads its stream to the end; returns the rows affected.
@@ -217,6 +271,32 @@ mod tests {
     use super::*;
     use crate::grid::edit::testing::{row, target};
     use crate::grid::edit::{ApplyPlan, ModelRow, StagedEdits};
+
+    #[test]
+    fn debug_never_shows_driver_messages() {
+        let secret = "Key (id)=(sekrit-424242) already exists";
+        let outcomes = [
+            ApplyOutcome::NotStarted {
+                message: secret.to_owned(),
+            },
+            ApplyOutcome::RolledBack {
+                at: Some(1),
+                failure: ApplyFailure::Driver(secret.to_owned()),
+                rollback_error: Some(secret.to_owned()),
+            },
+            ApplyOutcome::CommitUnknown {
+                failure: ApplyFailure::Driver(secret.to_owned()),
+                rollback_error: Some(secret.to_owned()),
+            },
+            ApplyOutcome::Committed { applied: 3 },
+        ];
+        for o in &outcomes {
+            let shown = format!("{o:?}");
+            assert!(!shown.contains("sekrit"), "{shown}");
+            assert!(!shown.contains("424242"), "{shown}");
+        }
+        assert!(format!("{:?}", outcomes[3]).contains("applied: 3"));
+    }
 
     /// What the scripted session answers for the n-th executed statement.
     #[derive(Clone)]

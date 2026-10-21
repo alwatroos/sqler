@@ -12,6 +12,7 @@ use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId, Query, Value};
 use sqler_driver_api::{DriverRegistry, Session, collect};
 use sqler_driver_sqlite::{DRIVER_ID, SqliteDriver};
 use sqler_sql::Dialect;
+use sqler_ui::grid::edit::SchemaProbe;
 use sqler_ui::grid::{GridCancel, GridLimits, GridModel, GridSink, IngestState, grid_channel_with};
 use sqler_ui::query::{
     BufferSnapshot, ParamInput, ParamKey, ParamKind, QueryJob, QueryJobDone, RunEvent, RunId,
@@ -69,6 +70,18 @@ fn start_with(
     inputs: &[ParamInput],
     limits: GridLimits,
 ) -> Started {
+    start_probed(rt, session, text, inputs, limits, |_| Vec::new())
+}
+
+/// Like [`start_with`], with the schema probes `probes` builds from the bound statements.
+fn start_probed(
+    rt: &Runtime,
+    session: Box<dyn Session>,
+    text: &str,
+    inputs: &[ParamInput],
+    limits: GridLimits,
+    probes: impl FnOnce(&[sqler_ui::query::BoundStatement]) -> Vec<Option<SchemaProbe>>,
+) -> Started {
     let buf = BufferSnapshot::at_cursor(text, 0);
     let plan = plan(D, &buf, RunMode::All).unwrap();
     let statements = bind(D, &plan, inputs).unwrap();
@@ -77,6 +90,7 @@ fn start_with(
     let cancels = sinks.iter().map(GridSink::canceller).collect();
     let (tx, events) = tokio::sync::mpsc::unbounded_channel();
     let stop = RunStop::new(&sinks);
+    let probes = probes(&statements);
     let job = QueryJob {
         tab: tab_id(),
         run: RunId::new(1),
@@ -85,6 +99,7 @@ fn start_with(
         sinks,
         stop: stop.clone(),
         events: tx,
+        probes,
     };
     let handle = rt.spawn(job.run());
     Started {
@@ -269,6 +284,7 @@ fn a_stop_flag_set_before_the_next_statement_cancels_it() {
         sinks,
         stop,
         events: tx,
+        probes: Vec::new(),
     };
     let done = rt.block_on(job.run());
     assert_eq!(done.run, RunId::new(3));
@@ -495,4 +511,170 @@ fn close_while_paused_returns_the_session_and_skips_later_statements() {
         Some(RunEvent::Cancelled { index: 0 })
     ));
     select_one(&rt, &mut done);
+}
+
+/// Probes the statements that are a plain `SELECT` from one unqualified table.
+fn probe_all(statements: &[sqler_ui::query::BoundStatement]) -> Vec<Option<SchemaProbe>> {
+    statements
+        .iter()
+        .map(|s| SchemaProbe::for_sql(Dialect::Sqlite, &s.sql))
+        .collect()
+}
+
+#[test]
+fn resolved_follows_an_eligible_finished_and_reads_the_runs_own_session() {
+    let rt = runtime();
+    let mut s = rt.block_on(session());
+    rt.block_on(async {
+        for sql in [
+            "CREATE TABLE t (id INTEGER)",
+            "CREATE TEMP TABLE t (id INTEGER)",
+            "CREATE TABLE only_main (id INTEGER)",
+        ] {
+            let q = Query::new(sql);
+            let mut stream = s.execute(&q).await.unwrap();
+            collect(&mut *stream).await.unwrap();
+        }
+    });
+    let mut run = start_probed(
+        &rt,
+        s,
+        "select * from t; select 1; select * from only_main; select * from main.only_main",
+        &[],
+        GridLimits::default(),
+        probe_all,
+    );
+    rt.block_on(&mut run.handle).unwrap();
+    let events = drain(&mut run.events);
+    let resolved: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            RunEvent::Resolved { index, schema } => Some((*index, schema.clone())),
+            _ => None,
+        })
+        .collect();
+    // The temp table shadows `main.t`; `select 1` and the qualified name have no probe.
+    assert_eq!(
+        resolved,
+        [(0, Some("temp".to_owned())), (2, Some("main".to_owned()))]
+    );
+    // Each answer comes right after its own statement's Finished.
+    let order: Vec<_> = events
+        .iter()
+        .map(|e| match e {
+            RunEvent::Started { index } => ('s', *index),
+            RunEvent::Finished { index, .. } => ('f', *index),
+            RunEvent::Resolved { index, .. } => ('r', *index),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        order,
+        [
+            ('s', 0),
+            ('f', 0),
+            ('r', 0),
+            ('s', 1),
+            ('f', 1),
+            ('s', 2),
+            ('f', 2),
+            ('r', 2),
+            ('s', 3),
+            ('f', 3),
+        ]
+    );
+}
+
+#[test]
+fn no_probes_means_no_resolved() {
+    let rt = runtime();
+    let s = rt.block_on(session());
+    let mut run = start(&rt, s, "select 1; select 2", &[]);
+    rt.block_on(&mut run.handle).unwrap();
+    assert!(
+        drain(&mut run.events)
+            .iter()
+            .all(|e| !matches!(e, RunEvent::Resolved { .. }))
+    );
+}
+
+#[test]
+fn a_failed_probe_resolves_to_none() {
+    let rt = runtime();
+    let s = rt.block_on(session());
+    let mut run = start_probed(
+        &rt,
+        s,
+        "create table t (id integer); select * from t",
+        &[],
+        GridLimits::default(),
+        // A `PostgreSQL` lookup on `SQLite` fails to prepare.
+        |statements| {
+            statements
+                .iter()
+                .map(|s| SchemaProbe::for_sql(Dialect::Postgres, &s.sql))
+                .collect()
+        },
+    );
+    rt.block_on(&mut run.handle).unwrap();
+    let events = drain(&mut run.events);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        RunEvent::Resolved {
+            index: 1,
+            schema: None
+        }
+    )));
+}
+
+#[test]
+fn nothing_is_resolved_after_a_cancel_or_a_failure() {
+    let rt = runtime();
+    // Cancelled before the first statement.
+    let s = rt.block_on(session());
+    let buf = BufferSnapshot::at_cursor("select * from sqlite_master", 0);
+    let plan = plan(D, &buf, RunMode::All).unwrap();
+    let statements = bind(D, &plan, &[]).unwrap();
+    let (_grids, sinks): (Vec<_>, Vec<_>) = statements
+        .iter()
+        .map(|_| grid_channel_with(GridLimits::default()))
+        .unzip();
+    let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let stop = RunStop::new(&sinks);
+    stop.cancel();
+    let probes = probe_all(&statements);
+    assert!(probes[0].is_some());
+    let job = QueryJob {
+        tab: tab_id(),
+        run: RunId::new(4),
+        session: s,
+        statements,
+        sinks,
+        stop,
+        events: tx,
+        probes,
+    };
+    rt.block_on(job.run());
+    let events = drain(&mut events);
+    assert_eq!(events.len(), 1);
+    assert!(matches!(events[0], RunEvent::Cancelled { index: 0 }));
+
+    // A statement that fails is not followed by a lookup.
+    let s = rt.block_on(session());
+    let mut run = start_probed(
+        &rt,
+        s,
+        "select * from missing_table",
+        &[],
+        GridLimits::default(),
+        probe_all,
+    );
+    rt.block_on(&mut run.handle).unwrap();
+    let events = drain(&mut run.events);
+    assert!(matches!(events.last(), Some(RunEvent::Failed { .. })));
+    assert!(
+        events
+            .iter()
+            .all(|e| !matches!(e, RunEvent::Resolved { .. }))
+    );
 }

@@ -10,6 +10,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::params::BoundStatement;
 use super::run::{RunEvent, RunId};
+use crate::grid::edit::SchemaProbe;
 use crate::grid::{GridCancel, GridSink, ingest};
 use crate::tabs::TabId;
 
@@ -31,6 +32,11 @@ pub struct QueryJob {
     pub stop: RunStop,
     /// Where progress is reported; a closed receiver is ignored.
     pub events: UnboundedSender<RunEvent>,
+    /// The schema lookup of each statement, parallel to `statements`; `None` for a statement
+    /// that needs none. An empty vector turns probing off. After a statement finishes, its
+    /// probe runs on the same session and the answer is sent as [`RunEvent::Resolved`] (the
+    /// editability of that result needs it, ADR-0030).
+    pub probes: Vec<Option<SchemaProbe>>,
 }
 
 impl std::fmt::Debug for QueryJob {
@@ -121,8 +127,10 @@ impl QueryJob {
     ///
     /// For each statement: if `stop` (or its sink) is cancelled, reports `Cancelled` and stops;
     /// else reports `Started`, executes it and streams the result into its sink, timed. `Finished`
-    /// follows success; a cancellation reports `Cancelled` and stops; any other error reports
-    /// `Failed` (the sink gets it too) and stops. The sinks of statements that did not run are
+    /// follows success, then, if the statement has a probe and the run is not being stopped, the
+    /// probe's single read-only lookup runs on the same session and `Resolved` reports its answer
+    /// (`None` when it failed). A cancellation reports `Cancelled` and stops; any other error
+    /// reports `Failed` (the sink gets it too) and stops; neither is followed by `Resolved`. The sinks of statements that did not run are
     /// dropped. The session is always returned; the job never panics.
     ///
     /// A statement whose grid fills its page pauses inside `ingest` and holds the run, and the
@@ -139,8 +147,9 @@ impl QueryJob {
                 sinks,
                 stop,
                 events,
+                probes,
             } = self;
-            for (stmt, sink) in statements.iter().zip(sinks) {
+            for (position, (stmt, sink)) in statements.iter().zip(sinks).enumerate() {
                 let index = stmt.index;
                 if stop.is_cancelled() || sink.is_cancelled() {
                     let _ = events.send(RunEvent::Cancelled { index });
@@ -158,6 +167,12 @@ impl QueryJob {
                             rows_affected,
                             duration,
                         });
+                        if let Some(Some(probe)) = probes.get(position)
+                            && !stop.is_cancelled()
+                        {
+                            let schema = probe.run(&mut *session).await;
+                            let _ = events.send(RunEvent::Resolved { index, schema });
+                        }
                     }
                     Err(DriverError::Cancelled) => {
                         let _ = events.send(RunEvent::Cancelled { index });

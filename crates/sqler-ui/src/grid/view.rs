@@ -21,6 +21,8 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
 use gpui_component::{ActiveTheme as _, Sizable as _};
 
+use super::edit::GridKey;
+use super::edit::view::{self as edit, CellInput};
 use super::layout::{MIN_COLUMN_PX, widest_text};
 use super::{
     ColumnHeader, GridAction, GridControls, GridTab, IngestState, POLL_BUDGET, ProbeReport,
@@ -66,9 +68,11 @@ pub(crate) fn init_keys(cx: &mut App) {
 
 /// The table delegate: a thin wrapper around a [`GridTab`].
 pub(crate) struct GridDelegate {
-    tab: GridTab,
-    controls: GridControls,
+    pub(crate) tab: GridTab,
+    pub(crate) controls: GridControls,
     columns: Vec<Column>,
+    /// The open cell editor's input (`None` for a boolean cell or when no cell is edited).
+    pub(crate) cell_editor: Option<CellInput>,
 }
 
 impl GridDelegate {
@@ -77,6 +81,7 @@ impl GridDelegate {
             tab,
             controls: GridControls::default(),
             columns: Vec::new(),
+            cell_editor: None,
         }
     }
 
@@ -93,7 +98,7 @@ impl GridDelegate {
     /// Whether the motion would change the active cell.
     pub(crate) fn motion_moves(&self, to: super::selection::Motion) -> bool {
         self.controls
-            .motion_moves(to, self.tab.row_count(), self.tab.visible())
+            .motion_moves(to, self.tab.display_row_count(), self.tab.visible())
     }
 
     /// Rebuilds the column list, in display order, from the tab's headers and the layout.
@@ -121,7 +126,7 @@ impl GridDelegate {
     }
 
     /// The model column drawn at a display position.
-    fn model_col(&self, display: usize) -> usize {
+    pub(crate) fn model_col(&self, display: usize) -> usize {
         self.controls
             .layout()
             .model_column(display)
@@ -135,7 +140,7 @@ impl TableDelegate for GridDelegate {
     }
 
     fn rows_count(&self, _: &App) -> usize {
-        self.tab.row_count()
+        self.tab.display_row_count()
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
@@ -153,7 +158,7 @@ impl TableDelegate for GridDelegate {
             .tab
             .header(self.model_col(col_ix))
             .map_or(("", ""), |h| (h.name.as_str(), h.type_label));
-        let rows = self.tab.row_count();
+        let rows = self.tab.display_row_count();
         div()
             .size_full()
             .flex()
@@ -186,7 +191,7 @@ impl TableDelegate for GridDelegate {
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
-        let rows = self.tab.row_count();
+        let rows = self.tab.display_row_count();
         self.tab.stats_mut().row_rendered(row_ix, rows);
         div().id(("row", row_ix))
     }
@@ -195,16 +200,27 @@ impl TableDelegate for GridDelegate {
         &mut self,
         row_ix: usize,
         col_ix: usize,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let rows = self.tab.row_count();
+        let rows = self.tab.display_row_count();
+        let model_col = self.model_col(col_ix);
         let selected = self.controls.is_selected(row_ix, col_ix, rows);
         let active = self.controls.selection().active().is_some_and(|c| {
             c.row == row_ix && self.controls.layout().display_column(c.col) == Some(col_ix)
         });
         let tokens = &cx.theme().tokens;
         let (fill, border) = (tokens.table_active, tokens.table_active_border);
+        if let Some(editor) = edit::editor_element(self, row_ix, model_col, window, cx) {
+            // The editor handles its own clicks; a click in it must not select the cell again
+            // (that would move the focus away and commit).
+            return div()
+                .size_full()
+                .overflow_hidden()
+                .border_1()
+                .border_color(border)
+                .child(editor);
+        }
         let mut cell = div()
             .size_full()
             .overflow_hidden()
@@ -213,6 +229,11 @@ impl TableDelegate for GridDelegate {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |state, e: &MouseDownEvent, window, cx| {
+                    if e.click_count == 2 {
+                        // A double-click edits the cell (the first click selected it).
+                        edit::start_cell_edit(state, window, cx);
+                        return;
+                    }
                     let hit = state.delegate_mut().controls.click_cell(
                         row_ix,
                         col_ix,
@@ -225,13 +246,29 @@ impl TableDelegate for GridDelegate {
                     }
                 }),
             );
-        if selected {
-            cell = cell.bg(fill);
-        }
         if active {
             cell = cell.border_1().border_color(border);
         }
-        cell.child(self.tab.cell_text(row_ix, self.model_col(col_ix)))
+        let shown = self.tab.display_cell(row_ix, model_col);
+        let mark = edit::mark_style(&shown, cx.theme());
+        if selected {
+            cell = cell.bg(fill);
+        } else if let Some(bg) = mark.background {
+            cell = cell.bg(bg);
+        }
+        if let Some(color) = mark.border.filter(|_| !active) {
+            cell = cell.border_1().border_color(color);
+        }
+        if let Some(color) = mark.text {
+            cell = cell.text_color(color);
+        }
+        if mark.italic {
+            cell = cell.italic();
+        }
+        if mark.strike {
+            cell = cell.line_through();
+        }
+        cell.child(edit::shown_text(&shown))
     }
 
     fn visible_rows_changed(
@@ -337,7 +374,12 @@ impl GridViews {
     }
 
     /// The body of a grid tab: toolbar above the table.
-    pub(crate) fn body(&self, tab: TabId, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
+    pub(crate) fn body(
+        &self,
+        view: &WorkspaceView,
+        tab: TabId,
+        cx: &mut Context<WorkspaceView>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let (border, muted) = (theme.border, theme.muted_foreground);
         let Some(table) = self.tables.get(&tab) else {
@@ -400,6 +442,7 @@ impl GridViews {
                             .run_action(tab, GridAction::ScrollToEnd, window, cx);
                     })),
             );
+        let bar = edit::edit_bar(view, GridKey { tab, result: None }, table, cx);
         div()
             .id("grid-body")
             .flex_1()
@@ -408,6 +451,7 @@ impl GridViews {
             .flex()
             .flex_col()
             .child(toolbar)
+            .children(bar)
             .child(grid_table(table, cx))
     }
 }
@@ -458,8 +502,11 @@ pub(crate) fn apply_action(
         }
         return fetched;
     }
+    if let Some(done) = edit::apply_edit_action(state, action, window, cx) {
+        return done;
+    }
     let delegate = state.delegate_mut();
-    let (rows, visible) = (delegate.tab.row_count(), delegate.tab.visible());
+    let (rows, visible) = (delegate.tab.display_row_count(), delegate.tab.visible());
     let applied = delegate.controls.apply(action, rows, visible);
     if applied.relayout {
         state.delegate_mut().rebuild_columns();

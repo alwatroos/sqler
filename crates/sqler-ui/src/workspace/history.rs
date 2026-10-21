@@ -108,6 +108,8 @@ impl Workspace {
                 self.history.started.insert(tab, now);
                 return Effect::None;
             }
+            // A lookup after a statement, not a statement of its own.
+            RunEvent::Resolved { .. } => return Effect::None,
             RunEvent::Finished { index, .. }
             | RunEvent::Failed { index, .. }
             | RunEvent::Cancelled { index } => *index,
@@ -949,6 +951,22 @@ mod tests {
         assert_eq!(entry.rows, Some(4));
         assert_eq!(entry.sql, "select 1");
         assert!(entry.started_at <= SystemTime::now());
+    }
+
+    #[test]
+    fn a_resolved_event_records_nothing_and_keeps_the_start_time() {
+        let mut w = ws();
+        let tab = open(&mut w, 0);
+        let (job, _) = start(&mut w, tab, "select 1");
+        w.query_event(tab, job.run, RunEvent::Started { index: 0 });
+        let resolved = RunEvent::Resolved {
+            index: 0,
+            schema: Some("main".to_owned()),
+        };
+        assert!(matches!(w.record_event(tab, &resolved), Effect::None));
+        let entry = recorded(w.query_event(tab, job.run, ended(12, 4)));
+        assert_eq!(entry.outcome, HistoryOutcome::Ok);
+        assert_eq!(entry.sql, "select 1");
     }
 
     #[test]

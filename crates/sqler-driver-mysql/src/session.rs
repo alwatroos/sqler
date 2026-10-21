@@ -225,12 +225,76 @@ impl MySqlSession {
     }
 }
 
+/// Whether `sql` is one `USE <database>` statement (an optional trailing `;` is fine; a `;`
+/// that starts a second statement is not).
+fn is_use(sql: &str) -> bool {
+    let mut words = sql.split_whitespace();
+    words.next().is_some_and(|w| w.eq_ignore_ascii_case("use"))
+        && words.next().is_some()
+        && !has_second_statement(sql)
+}
+
+/// Whether anything but whitespace follows a `;` outside quotes, backticks and comments.
+fn has_second_statement(sql: &str) -> bool {
+    let b = sql.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            q @ (b'\'' | b'"' | b'`') => {
+                i += 1;
+                while i < b.len() {
+                    if q != b'`' && b[i] == b'\\' {
+                        i += 1;
+                    } else if b[i] == q {
+                        if b.get(i + 1) == Some(&q) {
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    i += 1;
+                }
+            }
+            b'#' => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'-' if b.get(i + 1) == Some(&b'-') => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i < b.len() && !(b[i] == b'*' && b.get(i + 1) == Some(&b'/')) {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b';' => return !sql[i + 1..].trim().is_empty(),
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
 impl MySqlSession {
     async fn run<'s>(
         &'s mut self,
         query: &'s Query,
     ) -> Result<Box<dyn QueryStream + 's>, DriverError> {
         let cancel = self.cancel.clone();
+        if query.params.is_empty() && is_use(&query.sql) {
+            // MariaDB re-runs a prepared `USE` without switching the database, so a second
+            // `USE a` after `USE b` is silently ignored. The text protocol always switches.
+            let exec = sqlx::raw_sql(AssertSqlSafe(query.sql.clone())).execute(&mut self.conn);
+            return Ok(Box::new(MySqlQueryStream::executing(
+                Box::pin(exec),
+                cancel,
+            )));
+        }
         let statement = match (&mut self.conn).prepare(sql_str(&query.sql)).await {
             Ok(statement) => statement,
             Err(e) if query.params.is_empty() && mysql_code(&e) == Some(ER_UNSUPPORTED_PS) => {
@@ -296,6 +360,18 @@ mod tests {
     fn canceller() -> MySqlCanceller {
         let opts = MySqlConnectOptions::from_str("mysql://u:s3cret@127.0.0.1:1/x").unwrap();
         MySqlCanceller::new(opts, 42, None)
+    }
+
+    #[test]
+    fn use_statements_are_recognised() {
+        assert!(is_use("USE a"));
+        assert!(is_use("  use `a b`;"));
+        assert!(!is_use("SELECT 1"));
+        assert!(!is_use("use"));
+        assert!(!is_use("user_table"));
+        assert!(is_use("USE `a;b`;  "));
+        assert!(!is_use("USE a; DELETE FROM t"));
+        assert!(!is_use("use a;\nselect 1"));
     }
 
     #[test]

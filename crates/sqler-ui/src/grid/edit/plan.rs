@@ -16,7 +16,9 @@ use super::staged::{ChangeKind, EditError, RowRef, StagedEdits};
 use crate::grid::type_label;
 
 /// One data statement of the plan.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Debug` prints the kind, the row and counts: the bound values are user data.
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub struct PlannedStatement {
     /// What it does.
@@ -31,11 +33,26 @@ pub struct PlannedStatement {
     pub expected_rows: u64,
 }
 
+impl std::fmt::Debug for PlannedStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlannedStatement")
+            .field("kind", &self.kind)
+            .field("row", &self.row)
+            .field("sql_len", &self.query.sql.len())
+            .field("params", &self.query.params.len())
+            .field("expected_rows", &self.expected_rows)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The complete, ordered list of statements of one apply.
 ///
 /// `apply` executes exactly [`Self::begin`], [`Self::statements`], [`Self::commit`] and, on a
 /// failure, [`Self::rollback`], and nothing else.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Debug` prints the dialect and the statement count only: statement text and bound values are
+/// user data.
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ApplyPlan {
     dialect: Dialect,
@@ -44,6 +61,15 @@ pub struct ApplyPlan {
     commit: Query,
     rollback: Query,
     column_types: Vec<(String, &'static str)>,
+}
+
+impl std::fmt::Debug for ApplyPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApplyPlan")
+            .field("dialect", &self.dialect)
+            .field("statements", &self.statements.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// A production plan was not confirmed by the user.
@@ -64,11 +90,22 @@ pub struct ConfirmationRequired;
 /// at most one `ConfirmedPlan`, and `apply` consumes that. Applying again (a retry after a
 /// failure, or a second apply after `Committed`, which would repeat the `INSERT`s) means
 /// building a new plan from the staged edits and confirming it again.
-#[derive(Debug)]
+///
+/// `Debug` prints the flags and the statement count only.
 pub struct ConfirmedPlan {
     plan: ApplyPlan,
     production: bool,
     user_confirmed: bool,
+}
+
+impl std::fmt::Debug for ConfirmedPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfirmedPlan")
+            .field("statements", &self.plan.statements.len())
+            .field("production", &self.production)
+            .field("user_confirmed", &self.user_confirmed)
+            .finish()
+    }
 }
 
 impl ConfirmedPlan {
@@ -108,7 +145,9 @@ pub enum PreviewWhen {
 }
 
 /// One bound value of a previewed statement.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` prints the marker, the column and the length of the value, never the value.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PreviewParam {
     /// The marker in the SQL (`$1`, `?1`, `?`).
@@ -121,8 +160,21 @@ pub struct PreviewParam {
     pub type_label: &'static str,
 }
 
+impl std::fmt::Debug for PreviewParam {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreviewParam")
+            .field("marker", &self.marker)
+            .field("column", &self.column)
+            .field("value_len", &self.value.len())
+            .field("type_label", &self.type_label)
+            .finish()
+    }
+}
+
 /// One statement of the preview.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` prints counts only.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PreviewStatement {
     /// Position in the list, from 1.
@@ -135,6 +187,18 @@ pub struct PreviewStatement {
     pub expected_rows: Option<u64>,
     /// When it runs.
     pub when: PreviewWhen,
+}
+
+impl std::fmt::Debug for PreviewStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreviewStatement")
+            .field("ordinal", &self.ordinal)
+            .field("sql_len", &self.sql.len())
+            .field("params", &self.params.len())
+            .field("expected_rows", &self.expected_rows)
+            .field("when", &self.when)
+            .finish()
+    }
 }
 
 /// A value as shown in the preview: `NULL`, text and JSON in Rust debug quoting, bytes as hex with
@@ -405,6 +469,39 @@ mod tests {
     use super::*;
     use crate::grid::edit::ModelRow;
     use crate::grid::edit::testing::{row, target};
+
+    #[test]
+    fn debug_never_shows_values_sql_or_keys() {
+        let mut s = StagedEdits::new(target(false));
+        let n = s.add_row();
+        s.set_new_cell(n, 0, Some(Value::Int(616_161))).unwrap();
+        s.set_new_cell(n, 1, Some(Value::Text("sekrit-ins".into())))
+            .unwrap();
+        s.set_cell(
+            ModelRow(5),
+            &row(424_242, Some("sekrit-old")),
+            1,
+            Value::Text("sekrit-new".into()),
+        )
+        .unwrap();
+        s.delete_row(ModelRow(9), &row(515_151, Some("sekrit-del")))
+            .unwrap();
+        let plan = s.plan().unwrap();
+        let preview = plan.preview();
+        let mut shown = format!("{plan:?} {:?} {preview:?}", plan.statements());
+        for st in &preview {
+            let _ = write!(shown, "{st:?} {:?}", st.params);
+        }
+        let confirmed = plan.clone().confirm(true, true).unwrap();
+        let _ = write!(shown, "{confirmed:?}");
+        for secret in [
+            "sekrit", "424242", "515151", "616161", "UPDATE", "DELETE", "INSERT",
+        ] {
+            assert!(!shown.contains(secret), "{secret} in {shown}");
+        }
+        assert!(shown.contains("statements: 3"), "{shown}");
+        assert!(shown.contains("production: true"), "{shown}");
+    }
 
     #[test]
     fn display_values() {

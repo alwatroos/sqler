@@ -15,6 +15,8 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::InputState;
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
+use crate::grid::edit::GridKey;
+use crate::grid::edit::view::edit_bar;
 use crate::grid::view::{Table, grid_table, new_table};
 use crate::grid::{GridTab, IngestState};
 use crate::query::{Phase, QueryTab, StatementStatus};
@@ -131,7 +133,7 @@ impl QueryViews {
 
     /// The index of the result a query tab shows: the one the user picked, else the last
     /// statement that has started. `None` while there are no results.
-    fn shown_index(&self, ws: &Workspace, tab: TabId) -> Option<usize> {
+    pub(crate) fn shown_index(&self, ws: &Workspace, tab: TabId) -> Option<usize> {
         let entries = ws.query_tab(tab)?.results();
         if entries.is_empty() {
             return None;
@@ -150,7 +152,7 @@ impl QueryViews {
         self.table(tab, self.shown_index(ws, tab)?).cloned()
     }
 
-    fn table(&self, tab: TabId, index: usize) -> Option<&Table> {
+    pub(crate) fn table(&self, tab: TabId, index: usize) -> Option<&Table> {
         self.results.get(&tab)?.tables.get(index)
     }
 
@@ -385,12 +387,20 @@ pub(super) fn results_area(
         .queries
         .table(tab, index)
         .filter(|t| t.read(cx).delegate().grid().column_count() > 0);
+    let bar = table.and_then(|t| {
+        let key = GridKey {
+            tab,
+            result: Some(index),
+        };
+        edit_bar(view, key, t, cx)
+    });
     let body = match table {
         Some(table) => grid_table(table, cx).into_any_element(),
         None => div().flex_1().into_any_element(),
     };
     area.child(strip)
         .child(status)
+        .children(bar)
         .child(body)
         .into_any_element()
 }

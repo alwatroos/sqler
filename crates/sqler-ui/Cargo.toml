@@ -30,7 +30,10 @@ gpui_platform = { workspace = true, optional = true }
 lsp-types = { workspace = true, optional = true }
 
 [dev-dependencies]
+sqler-driver-mysql.workspace = true
+sqler-driver-postgres.workspace = true
 sqler-driver-sqlite.workspace = true
+proptest.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
 [[bench]]

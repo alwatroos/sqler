@@ -9,7 +9,9 @@ use sqler_sql::{
 };
 
 /// Where a result comes from.
-#[derive(Debug, Clone, Copy)]
+///
+/// `Debug` prints the kind only: the SQL text may hold literals.
+#[derive(Clone, Copy)]
 pub enum EditSource<'a> {
     /// A table-data tab showing `object`.
     TableData {
@@ -23,8 +25,25 @@ pub enum EditSource<'a> {
     },
 }
 
+impl std::fmt::Debug for EditSource<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TableData { object } => f
+                .debug_struct("TableData")
+                .field("kind", &object.kind)
+                .finish_non_exhaustive(),
+            Self::QueryResult { sql } => f
+                .debug_struct("QueryResult")
+                .field("sql_len", &sql.len())
+                .finish(),
+        }
+    }
+}
+
 /// Everything [`check_editable`] looks at.
-#[derive(Debug, Clone, Copy)]
+///
+/// `Debug` prints counts and flags: the query text is not shown.
+#[derive(Clone, Copy)]
 pub struct EditRequest<'a> {
     /// The connection's dialect; `None` when unknown.
     pub dialect: Option<Dialect>,
@@ -51,6 +70,19 @@ pub struct EditRequest<'a> {
     /// ([`ReadOnlyReason::TableMismatch`]) unless this equals the loaded table's schema, and
     /// whenever it is `None`. A qualified name is compared with the table's schema instead.
     pub resolved_schema: Option<&'a str>,
+}
+
+impl std::fmt::Debug for EditRequest<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditRequest")
+            .field("dialect", &self.dialect)
+            .field("source", &self.source)
+            .field("table_loaded", &self.table.is_some())
+            .field("columns", &self.columns.len())
+            .field("allow_keyless", &self.allow_keyless)
+            .field("resolved_schema", &self.resolved_schema)
+            .finish_non_exhaustive()
+    }
 }
 
 /// How a row is found again when the change is applied.
@@ -455,6 +487,24 @@ mod tests {
     use sqler_driver_api::sqler_core::{ColumnInfo, DataType, ObjectPath, PrimaryKey};
 
     use super::*;
+
+    #[test]
+    fn request_debug_does_not_show_the_query_text() {
+        let req = EditRequest {
+            dialect: Some(Dialect::Sqlite),
+            source: EditSource::QueryResult {
+                sql: "SELECT * FROM t WHERE name = 'sekrit-literal'",
+            },
+            table: None,
+            unique_keys: &[],
+            columns: &[],
+            allow_keyless: false,
+            resolved_schema: None,
+        };
+        let shown = format!("{req:?} {:?}", req.source);
+        assert!(!shown.contains("sekrit"), "{shown}");
+        assert!(!shown.contains("SELECT"), "{shown}");
+    }
 
     fn object(kind: ObjectKind) -> DbObject {
         DbObject::new(kind, ObjectPath::root().in_schema("public"), "t")

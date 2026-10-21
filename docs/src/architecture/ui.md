@@ -166,6 +166,18 @@ saved query edit (generation += 1) -> Effect::SaveSavedQueries -> blocking save_
 
 User view: [Query history and saved queries](../user-guide/query-history.md).
 
+## Inline editing
+
+[ADR-0033](../adr/0033-inline-editing-ui.md) on top of [ADR-0030](../adr/0030-staged-edits-and-dml.md). Two headless state machines and a thin view.
+
+- `grid::edit::GridEditor` (one per `GridTab`) holds editability, the cell editor, the `StagedEdits`, the overlay shown after a commit and the marks. It only reads the `GridModel`, which is never changed. `GridTab::display_cell` and `display_row_count` are what the view draws.
+- `workspace/edit.rs` owns the apply flow: the edit context (dialect, origin, catalog table, resolved schema, production), the per-tab transaction flag (`tx_effect`), the single confirmation, the apply job and the close and quit prompts. Every apply goes through `Workspace::request_apply`, which builds a new plan and derives `production` from the connection both when it is requested and when it is confirmed.
+- `SchemaProbe` (`grid/edit/probe.rs`) is one read-only statement the query job runs after an eligible single-table `SELECT`; it reports `RunEvent::Resolved`.
+- `ApplyJob` runs on the bridge like a query job. A query result applies on the tab's own session (lent as a run borrows it), a table-data tab on a short-lived `Connector` session.
+- Debug output of every type that holds values prints counts and kinds only.
+
+User view: [Results grid, Editing](../user-guide/results-grid.md#editing). Benchmark: `staged_*` in [Benchmarks](../benchmarks.md).
+
 ## Hook points
 
 - Themes (T7): the shell paints only with `gpui_component` theme tokens (`cx.theme()`), with no second palette. `theme::apply` (gui only) calls `Theme::change` and sets `Theme::font_size`. `workspace::run` applies the startup settings, `WorkspaceView::new` observes the OS appearance, and `Effect::ApplySettings` saves and re-applies. The prod tint uses the theme's `danger` token.

@@ -44,7 +44,7 @@ fn next_kind(kind: ParamKind) -> ParamKind {
     all[(at + 1) % all.len()]
 }
 
-fn scrim(id: &'static str) -> gpui::Stateful<Div> {
+pub(crate) fn scrim(id: &'static str) -> gpui::Stateful<Div> {
     div()
         .id(id)
         .absolute()

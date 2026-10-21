@@ -42,6 +42,8 @@ jobs:
             # Older base benches reject --reps (exit 2); pass it only if the base source knows it.
             REPS=""
             if grep -q -- '--reps' ../base/crates/sqler-ui/benches/grid_viewport.rs; then REPS="--reps 3"; fi
+            # --staged (staged edits on the grid) is newer still; pass it only if the base source knows it.
+            if grep -q -- '--staged' ../base/crates/sqler-ui/benches/grid_viewport.rs; then REPS="$REPS --staged 10000"; fi
             cd ../base
             rustup toolchain install
             # Exit 1 means the base itself broke the 1 ms budget; the file is saved first.
@@ -53,9 +55,9 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/target"
           if [ -f "$GITHUB_WORKSPACE/target/bench-base.txt" ]; then
-            cargo bench -p sqler-ui --bench grid_viewport -- --reps 3 --save "$GITHUB_WORKSPACE/target/bench-pr.txt" --compare "$GITHUB_WORKSPACE/target/bench-base.txt" --slack-ns 100
+            cargo bench -p sqler-ui --bench grid_viewport -- --reps 3 --staged 10000 --save "$GITHUB_WORKSPACE/target/bench-pr.txt" --compare "$GITHUB_WORKSPACE/target/bench-base.txt" --slack-ns 100
           else
-            cargo bench -p sqler-ui --bench grid_viewport -- --reps 3 --save "$GITHUB_WORKSPACE/target/bench-pr.txt"
+            cargo bench -p sqler-ui --bench grid_viewport -- --reps 3 --staged 10000 --save "$GITHUB_WORKSPACE/target/bench-pr.txt"
           fi
       - name: Baseline catalog bench on the base commit
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}

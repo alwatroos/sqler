@@ -15,7 +15,10 @@ use gpui::{
     InteractiveElement as _, IntoElement, KeyDownEvent, ListState, ParentElement as _, Render,
     Styled as _, Subscription, Task, Window, WindowBounds, WindowOptions, div, px, size,
 };
-use gpui_component::input::{InputEvent, InputState, MoveDown, MoveUp};
+use gpui_component::input::{
+    Enter as InputEnter, Escape as InputEscape, IndentInline, InputEvent, InputState, MoveDown,
+    MoveUp, OutdentInline,
+};
 use gpui_component::{ActiveTheme as _, Root, WindowExt as _};
 use sqler_catalog::{CacheKey, RefreshEvent};
 use sqler_config::{
@@ -23,6 +26,8 @@ use sqler_config::{
     Platform, SecretStore,
 };
 use tokio::sync::oneshot;
+
+mod edit_ui;
 
 use super::action::WorkspaceAction;
 use super::bridge::SessionBridge;
@@ -35,10 +40,11 @@ use crate::connections::FormField;
 use crate::connections::view::{DialogInputs, dialog_overlay};
 use crate::connections::{self, ConnectionAction, Connector, Dialog};
 use crate::editor::{self, EditorAction, view::EditorViews};
+use crate::grid::edit::EditorKey;
 use crate::grid::view::{
     GridProbe, GridViews, Table, action_for_command as grid_action_for, apply_action,
 };
-use crate::grid::{GridAction, grid_key_action};
+use crate::grid::{GridAction, Motion, grid_key_action};
 use crate::history::view::HistoryViews;
 use crate::history::{self, HistoryCommand, HistoryService};
 use crate::keymap::input::key_input;
@@ -53,6 +59,7 @@ use crate::tabs;
 use crate::tabs::TabId;
 use crate::theme::apply::{appearance_of, apply};
 use crate::theme::resolve;
+use edit_ui::EditUi;
 
 /// How long quitting waits for open sessions to close.
 const CLOSE_LIMIT: Duration = Duration::from_secs(2);
@@ -167,6 +174,8 @@ pub(crate) struct WorkspaceView {
     history: HistoryService,
     /// The inputs of the history tabs and the history dialogs.
     pub(crate) history_views: HistoryViews,
+    /// The editing dialogs and the contexts pushed to the grids.
+    edit_ui: EditUi,
     /// Keeps the OS appearance observer alive.
     _appearance: Subscription,
     /// Keeps the quit hook (closes sessions when the app quits any way) alive.
@@ -290,6 +299,7 @@ impl WorkspaceView {
             notices: Vec::new(),
             history,
             history_views: HistoryViews::default(),
+            edit_ui: EditUi::new(cx),
             _appearance: appearance,
             _quit: quit,
         };
@@ -355,8 +365,9 @@ impl WorkspaceView {
 
     /// Routes a key press before the focused element sees it.
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if event.is_held && self.ws.drop_dialog().is_some() {
-            // A held key (auto-repeat) must never confirm or cancel a DROP step.
+        if event.is_held && (self.ws.drop_dialog().is_some() || self.edit_overlay_open()) {
+            // A held key (auto-repeat) must never confirm or cancel a DROP step or an edit
+            // dialog (the production confirmation among them).
             cx.stop_propagation();
             return;
         }
@@ -377,6 +388,22 @@ impl WorkspaceView {
             // Escape closes the dialog; a host-key prompt counts as "do not trust".
             cx.stop_propagation();
             self.dispatch_connection(ConnectionAction::Cancel, cx);
+            return;
+        }
+        if !was_open
+            && self.edit_overlay_open()
+            && chord.key() == "escape"
+            && chord.modifiers() == Modifiers::default()
+        {
+            // Escape dismisses the preview, the confirmation, the warning or the close prompt;
+            // nothing is written.
+            cx.stop_propagation();
+            self.edit_escape(cx);
+            return;
+        }
+        if !was_open && self.cell_editor_key_event(event, window, cx) {
+            // Enter, Tab, Shift+Tab and Escape belong to the cell editor while it is open.
+            cx.stop_propagation();
             return;
         }
         if !was_open
@@ -467,17 +494,22 @@ impl WorkspaceView {
             || self.ws.dialog().is_some()
             || self.ws.drop_dialog().is_some()
             || self.query_overlay_tab().is_some()
-            || self.history_overlay_open();
+            || self.history_overlay_open()
+            || self.edit_overlay_open();
+        let editing = self.cell_editing(cx);
         let Some(action) = grid_key_action(
             &key_input(&event.keystroke),
             Platform::current(),
             focused,
             overlay,
+            editing,
             |m| table.read(cx).delegate().motion_moves(m),
         ) else {
             return false;
         };
-        table.update(cx, |state, cx| apply_action(state, action, window, cx));
+        if !self.edit_workspace_action(action, window, cx) {
+            table.update(cx, |state, cx| apply_action(state, action, window, cx));
+        }
         cx.notify();
         true
     }
@@ -572,9 +604,11 @@ impl WorkspaceView {
             } else {
                 match self.active_table() {
                     Some(table) => {
-                        table.update(cx, |state, cx| {
-                            apply_action(state, grid_action, window, cx);
-                        });
+                        if !self.edit_workspace_action(grid_action, window, cx) {
+                            table.update(cx, |state, cx| {
+                                apply_action(state, grid_action, window, cx);
+                            });
+                        }
                         grid_focus = Some(table);
                     }
                     None => window.push_notification("Open a results grid first.", cx),
@@ -840,6 +874,7 @@ impl WorkspaceView {
                 );
             }
             Effect::RunQuery { job, grids, events } => self.start_query_job(job, grids, events, cx),
+            Effect::ApplyEdits(job) => self.start_apply_job(job, cx),
             Effect::RecordHistory(_)
             | Effect::SearchHistory(_)
             | Effect::ClearHistory
@@ -1259,6 +1294,7 @@ impl Render for WorkspaceView {
         {
             self.editors.focus(tab, window, cx);
         }
+        self.sync_edit(window, cx);
         self.sync_dialog_inputs(window, cx);
         if self.history_views.materialize(&self.ws, window, cx) {
             // A history dialog or the picker closed: the root takes the focus back.
@@ -1294,7 +1330,7 @@ impl Render for WorkspaceView {
         {
             history::view::history_body(self, tab, cx)
         } else if let Some(grid) = self.ws_active_grid() {
-            self.grids.body(grid, cx).into_any_element()
+            self.grids.body(self, grid, cx).into_any_element()
         } else if let Some(tab) = self
             .ws
             .tabs()
@@ -1311,6 +1347,7 @@ impl Render for WorkspaceView {
             .query_overlay_tab()
             .and_then(|tab| query_overlay(self, tab, cx));
         let history_dialog = history::view::history_overlay(self, cx);
+        let edit_dialog = crate::grid::edit::view::edit_overlay(self, cx);
         let palette = self.palette.is_open().then(|| {
             let items = self.palette.items(&self.commands, &self.keys);
             palette::view::palette_overlay(
@@ -1328,6 +1365,24 @@ impl Render for WorkspaceView {
             .capture_action(
                 cx.listener(|this, _: &MoveUp, _, cx| this.move_palette_selection(-1, cx)),
             )
+            .capture_action(cx.listener(|this, a: &InputEnter, window, cx| {
+                if a.shift {
+                    cx.propagate();
+                } else {
+                    this.cell_editor_action(EditorKey::Commit { then: None }, window, cx);
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &InputEscape, window, cx| {
+                this.cell_editor_action(EditorKey::Cancel, window, cx);
+            }))
+            .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
+                let then = Some(Motion::Right);
+                this.cell_editor_action(EditorKey::Commit { then }, window, cx);
+            }))
+            .capture_action(cx.listener(|this, _: &OutdentInline, window, cx| {
+                let then = Some(Motion::Left);
+                this.cell_editor_action(EditorKey::Commit { then }, window, cx);
+            }))
             .capture_action(
                 cx.listener(|this, _: &MoveDown, _, cx| this.move_palette_selection(1, cx)),
             )
@@ -1359,6 +1414,7 @@ impl Render for WorkspaceView {
             .children(drop_dialog)
             .children(query_dialog)
             .children(history_dialog)
+            .children(edit_dialog)
             .children(palette)
     }
 }

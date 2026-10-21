@@ -59,6 +59,7 @@
   - [ADR-0028: Export writer API](adr/0028-export-writer-api.md)
   - [ADR-0029: Parquet and XLSX writers](adr/0029-parquet-and-xlsx-writers.md)
   - [ADR-0030: Staged edits and DML](adr/0030-staged-edits-and-dml.md)
+  - [ADR-0033: Inline editing](adr/0033-inline-editing-ui.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
 - [Benchmarks](benchmarks.md)

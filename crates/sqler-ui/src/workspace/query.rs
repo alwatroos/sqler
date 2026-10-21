@@ -15,6 +15,7 @@ use sqler_sql::Dialect;
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::state::{Effect, Workspace};
+use crate::grid::edit::SchemaProbe;
 use crate::grid::{GridLimits, GridTab, grid_channel_with};
 use crate::query::{
     BoundStatement, BufferSnapshot, ParamInput, ParamKind, Phase, QueryJob, QueryJobDone, QueryTab,
@@ -58,6 +59,11 @@ impl Workspace {
         ))
     }
 
+    /// Whether `run` is the run in progress on the tab.
+    pub(super) fn is_current_run(&self, tab: TabId, run: RunId) -> bool {
+        self.query_runs.get(&tab).is_some_and(|a| a.run == run)
+    }
+
     /// Runs part of the editor buffer of a query tab.
     ///
     /// Depending on the buffer and the connection this opens the parameter prompt, opens the
@@ -70,6 +76,10 @@ impl Workspace {
         };
         if self.tabs.get(tab).map(crate::tabs::Tab::kind) != Some(TabKind::Query) {
             return self.query_notice("Open a query tab first.");
+        }
+        // Pending edits belong to the grids of the last run; a new run would replace them.
+        if let Some(message) = self.run_blocked_by_edits(tab) {
+            return self.query_notice(message);
         }
         let Some(query) = self.queries.get_mut(&tab) else {
             return Effect::None;
@@ -138,6 +148,10 @@ impl Workspace {
 
     /// Lends the tab's session to a new job.
     fn start_query(&mut self, tab: TabId, statements: &[BoundStatement]) -> Effect {
+        // A prompt or confirmation can stay open while edits are staged on the old grids.
+        if let Some(message) = self.run_blocked_by_edits(tab) {
+            return self.query_notice(message);
+        }
         let Some(session) = self.take_session(tab) else {
             return self.query_notice("The connection of this tab is not available.");
         };
@@ -151,6 +165,15 @@ impl Workspace {
             grids.push(GridTab::new(model));
             sinks.push(sink);
         }
+        // One lookup per statement that reads a single unqualified table, run on the run's session
+        // right after it, so the grid can tell which schema that name means (ADR-0033).
+        let dialect = self.query_context(tab).and_then(|(dialect, _)| dialect);
+        let probes: Vec<Option<SchemaProbe>> = dialect.map_or_else(Vec::new, |d| {
+            statements
+                .iter()
+                .map(|s| SchemaProbe::for_sql(d, &s.sql))
+                .collect()
+        });
         let active = ActiveRun {
             run,
             handle: session.cancel_handle(),
@@ -165,7 +188,9 @@ impl Workspace {
             sinks,
             stop: active.stop.clone(),
             events,
+            probes,
         };
+        self.edit.run_started(tab);
         if let Some(query) = self.queries.get_mut(&tab) {
             query.started(run, statements);
         }
@@ -179,6 +204,9 @@ impl Workspace {
 
     /// Cancels the run of a query tab, or closes its prompt or confirmation.
     pub fn cancel_query(&mut self, tab: TabId) -> Effect {
+        if self.is_applying(tab) {
+            return self.cancel_apply(tab);
+        }
         let Some(query) = self.queries.get_mut(&tab) else {
             return Effect::None;
         };
@@ -226,12 +254,22 @@ impl Workspace {
     /// for the query history; every other event returns [`Effect::None`].
     #[allow(clippy::needless_pass_by_value)] // the view hands each event over
     pub fn query_event(&mut self, tab: TabId, run: RunId, event: RunEvent) -> Effect {
+        if !self.queries.contains_key(&tab) {
+            return Effect::None;
+        }
+        // The schema lookup is not a status: the workspace keeps it for the editing flow.
+        if let RunEvent::Resolved { index, schema } = event {
+            self.keep_resolved(tab, run, index, schema);
+            return Effect::None;
+        }
+        let before = self.statement_before(tab, &event);
         let Some(query) = self.queries.get_mut(&tab) else {
             return Effect::None;
         };
         if !query.event(run, event.clone()) {
             return Effect::None;
         }
+        self.follow_transaction(tab, &event, before);
         self.record_event(tab, &event)
     }
 
@@ -258,6 +296,7 @@ impl Workspace {
         if self.query_runs.get(&tab).is_some_and(|a| a.run == run) {
             self.query_runs.remove(&tab);
         }
+        self.edit.session_gone(tab);
         if let Some(query) = self.queries.get_mut(&tab)
             && query.lost(run)
         {
