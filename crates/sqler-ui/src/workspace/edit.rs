@@ -49,6 +49,13 @@ const CHANGED_SINCE_PREVIEW: &str =
 const NO_SESSION: &str = "The connection of this tab is not available.";
 const NO_SOURCE: &str = "This grid has no source table.";
 
+/// What a pushed edit context was built from; see `Workspace::edit_push_stale`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EditPushState {
+    generation: u64,
+    apply_block: Option<String>,
+}
+
 /// An apply in flight on a tab.
 pub(super) struct ActiveApply {
     run: ApplyId,
@@ -379,6 +386,22 @@ impl Workspace {
     #[must_use]
     pub fn edit_generation(&self) -> u64 {
         self.edit.generation
+    }
+
+    /// What a context pushed now depends on: the generation and the apply gate, which changes
+    /// with the run phase and the session without bumping the generation.
+    #[must_use]
+    pub fn edit_push_state(&self, key: GridKey) -> EditPushState {
+        EditPushState {
+            generation: self.edit.generation,
+            apply_block: self.apply_block(key),
+        }
+    }
+
+    /// Whether a context pushed when [`Self::edit_push_state`] was `seen` is out of date.
+    #[must_use]
+    pub fn edit_push_stale(&self, key: GridKey, seen: &EditPushState) -> bool {
+        self.edit_push_state(key) != *seen
     }
 
     /// Whether the connection of the tab is `prod`, as the gate sees it.

@@ -27,7 +27,8 @@ pub use action::{WorkspaceAction, register_commands};
 pub use bridge::{PendingConnect, PendingTrust, SessionBridge};
 pub use browser::{BrowserJob, BrowserJobResult, BrowserNote, CatalogResult, OpenDataJob};
 pub use edit::{
-    ApplyFinished, ClosePrompt, CloseTarget, EditConfirm, EditPreview, lost_apply_outcome,
+    ApplyFinished, ClosePrompt, CloseTarget, EditConfirm, EditPreview, EditPushState,
+    lost_apply_outcome,
 };
 pub use state::{Effect, Purpose, RequestId, SecretOp, Workspace};
 #[cfg(feature = "gui")]

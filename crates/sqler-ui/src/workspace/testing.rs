@@ -951,6 +951,47 @@ mod flow {
     }
 
     #[test]
+    fn a_context_pushed_mid_run_is_stale_once_the_run_ended() {
+        let mut f = Flow::new(None);
+        let tab = f.open();
+        let key = key_of(tab);
+        let effect = f.w.run_query(
+            tab,
+            RunMode::All,
+            BufferSnapshot::at_cursor("SELECT * FROM t", 0),
+        );
+        let Effect::RunQuery {
+            job,
+            mut grids,
+            mut events,
+        } = effect
+        else {
+            panic!("not started");
+        };
+        // What the view pushed while the run was going.
+        let seen = f.w.edit_push_state(key);
+        let (ctx, _) = f.w.edit_context(key).unwrap();
+        assert!(ctx.apply_block.is_some_and(|m| m.contains("running")));
+        assert!(!f.w.edit_push_stale(key, &seen));
+        let run = job.run;
+        let done = f.rt.block_on(job.run());
+        while let Ok(event) = events.try_recv() {
+            let next = f.w.query_event(tab, run, event);
+            if !matches!(next, Effect::RecordHistory(_)) {
+                f.pump(next);
+            }
+        }
+        let next = f.w.query_finished(done);
+        f.pump(next);
+        assert!(grids.pop().is_some());
+        // The view pushes again whatever happened to the generation.
+        assert!(f.w.edit_push_stale(key, &seen));
+        let (ctx, _) = f.w.edit_context(key).unwrap();
+        assert_eq!(ctx.apply_block, None);
+        assert!(!f.w.edit_push_stale(key, &f.w.edit_push_state(key)));
+    }
+
+    #[test]
     fn begin_blocks_the_apply_and_commit_releases_it() {
         let mut f = Flow::new(None);
         let tab = f.open();

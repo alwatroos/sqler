@@ -19,12 +19,12 @@ use crate::grid::edit::view::{cancel_cell_edit, commit_cell_edit, is_editing, ne
 use crate::grid::edit::{ApplyId, ApplyJobDone, EditorKey, GridKey, cell_editor_key};
 use crate::grid::view::{Table, apply_action};
 use crate::keymap::input::key_input;
-use crate::workspace::{Effect, lost_apply_outcome};
+use crate::workspace::{EditPushState, Effect, lost_apply_outcome};
 
 /// The view state of the editing dialogs and the contexts already pushed to the grids.
 pub(super) struct EditUi {
-    /// The context generation and table each grid was last given a context for.
-    pushed: HashMap<GridKey, (u64, EntityId)>,
+    /// What each grid was last given a context for, and the table it went to.
+    pushed: HashMap<GridKey, (EditPushState, EntityId)>,
     /// The grid whose "edit without a key" warning is on screen.
     keyless: Option<(GridKey, Table)>,
     /// The focus target of the dialogs (their Cancel button).
@@ -356,8 +356,12 @@ impl WorkspaceView {
     pub(super) fn sync_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((key, table)) = self.active_edit_grid() {
             let id = table.entity_id();
-            let generation = self.ws.edit_generation();
-            if self.edit_ui.pushed.get(&key) != Some(&(generation, id)) {
+            let stale = match self.edit_ui.pushed.get(&key) {
+                Some((seen, pushed_id)) => *pushed_id != id || self.ws.edit_push_stale(key, seen),
+                None => true,
+            };
+            if stale {
+                let before = self.ws.edit_push_state(key);
                 if let Some((ctx, effect)) = self.ws.edit_context(key) {
                     table.update(cx, |state, cx| {
                         state.delegate_mut().tab.set_edit_context(ctx);
@@ -365,9 +369,8 @@ impl WorkspaceView {
                     });
                     self.apply(effect, cx);
                 }
-                self.edit_ui
-                    .pushed
-                    .insert(key, (self.ws.edit_generation(), id));
+                // The state from before `edit_context`: a bump it caused re-pushes next frame.
+                self.edit_ui.pushed.insert(key, (before, id));
             }
             let pending = table.read(cx).delegate().tab.edit().pending();
             self.ws.set_pending_edits(key, pending);

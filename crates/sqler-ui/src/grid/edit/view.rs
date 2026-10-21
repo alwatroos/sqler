@@ -127,6 +127,10 @@ pub(crate) fn start_cell_edit(
         notify(window, cx, "Select a cell first.".to_owned());
         return false;
     };
+    if delegate.tab.grid_rows().display_row(pos.row).is_none() {
+        notify(window, cx, "Select a cell first.".to_owned());
+        return false;
+    }
     let opened = {
         let (model, editor) = delegate.tab.edit_parts();
         editor

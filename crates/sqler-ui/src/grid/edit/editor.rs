@@ -35,9 +35,9 @@ use crate::tabs::TabId;
 pub const COMMIT_UNKNOWN: &str = "The outcome is uncertain: re-read before retrying.";
 
 /// Part of every text the preview and the confirmation show.
-pub const LAST_WRITER_WINS: &str = "Rows are found by their key and the values that were read. \
-A change someone else made to such a row since then is overwritten (last writer wins); a keyless \
-match fails instead and nothing is written.";
+pub const LAST_WRITER_WINS: &str = "Rows are found by their key only; a change someone else \
+made to such a row since you read it is overwritten (last writer wins). With the keyless opt-in, \
+rows are matched on all values read, and a mismatch fails and rolls back.";
 
 /// The warning shown before the user opts into editing a result that has no usable key.
 pub const KEYLESS_WARNING: &str = "This result has no usable key. Rows will be found by all their \
