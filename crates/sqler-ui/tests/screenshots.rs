@@ -245,7 +245,7 @@ fn run() -> Result<bool, String> {
             let label = format!("{}-{}", scene.name, theme.name());
             let mut context = gpui::HeadlessAppContext::with_platform(
                 text.clone(),
-                Arc::new(()),
+                Arc::new(sqler_ui::theme::icons::AppAssets),
                 gpui_platform::current_headless_renderer,
             );
             context.allow_parking();

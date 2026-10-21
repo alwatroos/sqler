@@ -6,6 +6,16 @@
 
 #[cfg(feature = "gui")]
 pub(crate) mod apply;
+#[cfg(feature = "gui")]
+pub mod icons;
+mod tokens;
+#[cfg(feature = "gui")]
+pub mod widgets;
+
+pub use tokens::{
+    EnvAccent, SPACE, THEMES_JSON, TypeScale, activity_foreground, contrast, env_accent, env_label,
+    tooltip_text, type_scale,
+};
 
 use sqler_config::ThemePreference;
 

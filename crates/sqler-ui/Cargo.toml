@@ -14,7 +14,7 @@ workspace = true
 
 [features]
 # GPUI views. Off by default so `cargo test -p sqler-ui` never builds GPUI; `sqler-app` turns it on.
-gui = ["dep:gpui-component", "dep:gpui", "dep:gpui_platform", "dep:lsp-types"]
+gui = ["dep:gpui-component", "dep:gpui", "dep:gpui_platform", "dep:lsp-types", "dep:gpui-kit-assets"]
 # The headless screenshot harness (`tests/screenshots.rs`, `workspace::scene`); never part of the app.
 screenshots = ["gui", "gpui/test-support", "gpui_platform/test-support"]
 
@@ -29,6 +29,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 gpui-component = { workspace = true, optional = true }
 gpui = { workspace = true, optional = true }
+gpui-kit-assets = { workspace = true, optional = true }
 gpui_platform = { workspace = true, optional = true }
 lsp-types = { workspace = true, optional = true }
 serde.workspace = true
