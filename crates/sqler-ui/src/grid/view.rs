@@ -39,9 +39,10 @@ use super::{
     OrderProgress, POLL_BUDGET, ProbeReport, QuickFilter,
 };
 use crate::command::CommandId;
-use crate::tabs::{TabId, TabStrip};
+use crate::tabs::view::breadcrumbs_element;
+use crate::tabs::{Breadcrumbs, TabId, TabStrip};
 use crate::theme::icons::AppIcon;
-use crate::theme::widgets::icon_button;
+use crate::theme::widgets::{env_chip, icon_button};
 use crate::theme::{SPACE, tooltip_text};
 use crate::workspace::chrome::{ICON_SM, TOOLBAR_HEIGHT, hinted_item, ui_scale};
 use crate::workspace::{Effect, WorkspaceAction, WorkspaceView};
@@ -617,6 +618,7 @@ impl GridViews {
                 matches!(grid.state(), IngestState::Paused),
             )
         };
+        let crumbs = view.workspace().breadcrumbs(tab);
         let toolbar = div()
             .id("grid-toolbar")
             .w_full()
@@ -629,6 +631,7 @@ impl GridViews {
             .px(px(SPACE[3]))
             .border_b_1()
             .border_color(border)
+            .children(crumbs.map(|crumbs| toolbar_crumbs(&crumbs, cx)))
             .child(div().text_size(px(scale.sm)).child(status))
             .children(range.map(|r| div().text_size(px(scale.sm)).text_color(muted).child(r)))
             .child(div().flex_1())
@@ -677,6 +680,19 @@ impl GridViews {
             .children(bar)
             .child(grid_table(table, cx))
     }
+}
+
+/// The breadcrumbs and the environment chip at the left of the grid toolbar.
+fn toolbar_crumbs(crumbs: &Breadcrumbs, cx: &App) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .min_w_0()
+        .overflow_hidden()
+        .gap(px(SPACE[3]))
+        .child(breadcrumbs_element(crumbs, cx))
+        .children(crumbs.env.map(|env| env_chip(env, cx)))
 }
 
 /// Builds the table entity of a grid: columns can be resized and moved, the table's own

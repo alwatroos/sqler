@@ -171,6 +171,10 @@ The Settings tab is one tab. While it is open, it replaces the tab body, and the
 the tab strip has a **×** button that closes it (the command `tab:close` closes it as well). Your
 connection tabs stay open behind it.
 
+### AI
+
+The page ends with the **AI** section (providers, models, redaction, limits), described in [AI](ai.md#settings--ai). The page scrolls.
+
 ### Theme
 
 The tab offers three choices:

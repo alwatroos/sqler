@@ -65,6 +65,14 @@ flate2 = "1.1.10"
 calamine = { version = "0.37.0", default-features = false }
 memory-stats = "1.2.0"
 bytes = "1.12.1"
+# HTTP client of the AI providers (T3): the 0.12 line on the rustls/ring/native-roots stack already in Cargo.lock
+# (hyper-rustls 0.27, rustls 0.23); no default-tls (OpenSSL), no webpki-roots, no aws-lc provider. 0.13 would add both.
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-native-roots"] }
+# Same 0.22 line reqwest 0.12 uses, so Cargo.lock keeps one base64; the newest line is 0.23.1.
+base64 = "0.22.1"
+# Dev only (T4): capture log and tracing output in the secret-redaction test; both are already in Cargo.lock.
+log = "0.4.34"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 gpui-component = { version = "0.8.0", features = ["tree-sitter-sql"] }
 # Lucide icon assets (ADR-0044); pinned to the version gpui-component 0.8.0 resolves.
 gpui-kit-assets = "=0.8.0"

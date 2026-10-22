@@ -4,22 +4,24 @@
 //! The tab bar and tab body views: render `TabStrip` groups; clicks become `WorkspaceAction`s.
 
 use gpui::{
-    AnyElement, AppContext as _, ClickEvent, Context, ElementId, InteractiveElement as _,
+    AnyElement, App, AppContext as _, ClickEvent, Context, Div, ElementId, InteractiveElement as _,
     IntoElement, MouseButton, ParentElement as _, Render, Role, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
-    rgb,
+    Stateful, StatefulInteractiveElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px, rgb,
 };
+use gpui_component::breadcrumb::Breadcrumb;
 use gpui_component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_component::spinner::Spinner;
 use gpui_component::tooltip::Tooltip;
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
+use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 
 use super::bar::{self, MENU, MenuEntry, Trailing};
-use super::{GroupId, Rgb, TabDecor, TabId, TabKind};
-use crate::browser::{BrowserAction, ObjectTab, ObjectTabContent};
+use super::{Breadcrumbs, GroupId, Rgb, TabDecor, TabId, TabKind};
+use crate::browser::{BrowserAction, ObjectTabContent};
 use crate::theme::icons::AppIcon;
-use crate::theme::widgets::{env_chip, icon_button};
-use crate::theme::{Appearance, env_accent};
+use crate::theme::widgets::{env_chip, icon_button, toolbar_button};
+use crate::theme::{Appearance, SPACE, env_accent, tooltip_text};
+use crate::workspace::chrome::{LABEL_WIDTH, TOOLBAR_HEIGHT, ui_scale};
 use crate::workspace::{Effect, WorkspaceAction, WorkspaceView};
 
 /// The height of a tab bar, in pixels.
@@ -454,13 +456,100 @@ pub(crate) fn tab_body(
         .child(text)
 }
 
-#[allow(clippy::too_many_lines)] // one declarative element tree
-/// Renders the body of a DDL or properties tab: read-only monospace text, or a two-column table
-/// of fields, with a Copy button; or the loading or failure message.
-pub(crate) fn object_tab_body(
-    tab: &ObjectTab,
+/// The segments of a tab's breadcrumbs as one muted trail (text only, no navigation).
+pub(crate) fn breadcrumbs_element(crumbs: &Breadcrumbs, cx: &App) -> Div {
+    div().flex().items_center().min_w_0().child(
+        Breadcrumb::new()
+            .text_size(px(ui_scale(cx).sm))
+            .children(crumbs.items.iter().cloned().map(SharedString::from)),
+    )
+}
+
+/// The toolbar above an editor, a data grid or an object view: the breadcrumbs and the
+/// environment chip on the left, `actions` on the right.
+pub(crate) fn editor_toolbar(
+    id: impl Into<ElementId>,
+    crumbs: Option<&Breadcrumbs>,
+    actions: Vec<AnyElement>,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+    let mut left = div()
+        .id("editor-toolbar-crumbs")
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(SPACE[3]));
+    if let Some(crumbs) = crumbs {
+        let label = SharedString::from(crumbs.label());
+        left = left
+            .child(breadcrumbs_element(crumbs, cx))
+            .children(crumbs.env.map(|env| env_chip(env, cx)))
+            .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx));
+    }
+    div()
+        .id(id)
+        .role(Role::Toolbar)
+        .aria_label("Editor toolbar")
+        .w_full()
+        .h(px(TOOLBAR_HEIGHT))
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(SPACE[3]))
+        .px(px(SPACE[4]))
+        .bg(theme.background)
+        .border_b_1()
+        .border_color(theme.border)
+        .child(left)
+        .child(
+            div()
+                .flex_none()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(SPACE[1]))
+                .children(actions),
+        )
+}
+
+/// A toolbar button that runs the browser action `action`.
+fn object_button(
+    view: &WorkspaceView,
+    id: &'static str,
+    icon: AppIcon,
+    title: &'static str,
+    action: BrowserAction,
+    reason: Option<&str>,
     cx: &mut Context<WorkspaceView>,
-) -> impl IntoElement + use<> {
+) -> AnyElement {
+    let tooltip = match reason {
+        Some(reason) => format!("{title}: {reason}"),
+        None => tooltip_text(title, view.shortcut_hint(&action.command_id()).as_deref()),
+    };
+    toolbar_button(id, icon, title, tooltip)
+        .accessibility_label(title)
+        .disabled(reason.is_some())
+        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            view.dispatch_browser(action, cx);
+        }))
+        .into_any_element()
+}
+
+#[allow(clippy::too_many_lines)] // one declarative element tree
+/// The body of a DDL or properties tab: the toolbar (breadcrumbs, Open in Editor, Copy), then
+/// read-only monospace text or a two-column table of fields, or the loading or failure message.
+/// `None` if `tab` is not an object tab.
+pub(crate) fn object_tab_body(
+    view: &WorkspaceView,
+    tab: TabId,
+    cx: &mut Context<WorkspaceView>,
+) -> Option<AnyElement> {
+    let object = view.workspace().object_tab(tab)?;
     let theme = cx.theme();
     let (muted, danger, border, mono) = (
         theme.muted_foreground,
@@ -468,6 +557,7 @@ pub(crate) fn object_tab_body(
         theme.border,
         theme.mono_font_family.clone(),
     );
+    let scale = ui_scale(cx);
     let message = |text: String, color| -> AnyElement {
         div()
             .id("object-tab-message")
@@ -480,81 +570,60 @@ pub(crate) fn object_tab_body(
             .child(text)
             .into_any_element()
     };
-    let copy = |label: &'static str, cx: &mut Context<WorkspaceView>| {
-        div()
-            .id("object-tab-copy")
-            .px_2()
-            .py_0p5()
-            .rounded_md()
-            .border_1()
-            .border_color(border)
-            .text_sm()
-            .cursor_pointer()
-            .child(label)
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                view.dispatch_browser(BrowserAction::CopyTabText, cx);
-            }))
+    let reason = match &object.content {
+        ObjectTabContent::Loading => Some("The object is still loading."),
+        ObjectTabContent::Failed(_) => Some("Nothing to copy."),
+        _ => None,
     };
-    let open_in_editor = |cx: &mut Context<WorkspaceView>| {
-        div()
-            .id("object-tab-open-in-editor")
-            .px_2()
-            .py_0p5()
-            .rounded_md()
-            .border_1()
-            .border_color(border)
-            .text_sm()
-            .cursor_pointer()
-            .child("Open in Editor")
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                view.dispatch_browser(BrowserAction::OpenTabInEditor, cx);
-            }))
-    };
-    let body = match &tab.content {
-        ObjectTabContent::Loading => message(format!("{}…", tab.title), muted),
+    let mut actions = Vec::new();
+    if matches!(object.content, ObjectTabContent::Script(_)) {
+        actions.push(object_button(
+            view,
+            "object-tab-open-in-editor",
+            AppIcon::FileCode,
+            "Open in Editor",
+            BrowserAction::OpenTabInEditor,
+            None,
+            cx,
+        ));
+    }
+    actions.push(object_button(
+        view,
+        "object-tab-copy",
+        AppIcon::Copy,
+        "Copy",
+        BrowserAction::CopyTabText,
+        reason,
+        cx,
+    ));
+    let crumbs = view.workspace().breadcrumbs(tab);
+    let toolbar = editor_toolbar("object-tab-toolbar", crumbs.as_ref(), actions, cx);
+    let body = match &object.content {
+        ObjectTabContent::Loading => message(format!("{}…", object.title), muted),
         ObjectTabContent::Failed(error) => message(error.clone(), danger),
         ObjectTabContent::Script(text) => div()
-            .id("object-tab-text")
+            .id("object-tab-scroll")
             .flex_1()
             .min_h_0()
-            .w_full()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_end()
-                    .gap_1()
-                    .p_1()
-                    .child(open_in_editor(cx))
-                    .child(copy("Copy", cx)),
-            )
-            .child(
-                div()
-                    .id("object-tab-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px_3()
-                    .pb_3()
-                    .font_family(mono)
-                    .text_sm()
-                    .child(text.clone()),
-            )
+            .overflow_y_scroll()
+            .px(px(SPACE[4]))
+            .py(px(SPACE[3]))
+            .font_family(mono)
+            .text_size(px(scale.sm))
+            .child(text.clone())
             .into_any_element(),
         ObjectTabContent::Properties(fields) => {
             let rows = fields.iter().map(|field| {
                 div()
                     .flex()
                     .flex_row()
-                    .gap_3()
-                    .py_0p5()
+                    .gap(px(SPACE[4]))
+                    .py(px(SPACE[1]))
                     .border_b_1()
                     .border_color(border)
                     .child(
                         div()
-                            .w(px(180.))
+                            .w(px(LABEL_WIDTH * 1.5))
                             .flex_none()
                             .text_color(muted)
                             .child(field.label.clone()),
@@ -562,40 +631,27 @@ pub(crate) fn object_tab_body(
                     .child(div().flex_1().min_w_0().child(field.value.clone()))
             });
             div()
-                .id("object-tab-properties")
+                .id("object-tab-scroll")
                 .flex_1()
                 .min_h_0()
-                .w_full()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .p_1()
-                        .child(copy("Copy", cx)),
-                )
-                .child(
-                    div()
-                        .id("object-tab-scroll")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .px_3()
-                        .pb_3()
-                        .text_sm()
-                        .children(rows),
-                )
+                .overflow_y_scroll()
+                .px(px(SPACE[4]))
+                .py(px(SPACE[3]))
+                .text_size(px(scale.sm))
+                .children(rows)
                 .into_any_element()
         }
     };
-    div()
-        .id("object-tab")
-        .flex_1()
-        .min_h_0()
-        .w_full()
-        .flex()
-        .flex_col()
-        .child(body)
+    Some(
+        div()
+            .id("object-tab")
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(toolbar)
+            .child(body)
+            .into_any_element(),
+    )
 }

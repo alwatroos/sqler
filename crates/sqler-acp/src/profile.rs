@@ -401,9 +401,11 @@ mod tests {
         let name = "demo-acp";
         let exe = make_exe(&dir, name);
         let path = std::env::join_paths([dir.clone()]).expect("join");
+        // PATHEXT supplies the extension in its own case on Windows.
+        let found = resolve_program("demo-acp", Some(&path)).expect("found on PATH");
         assert_eq!(
-            resolve_program("demo-acp", Some(&path)),
-            Some(dir.join(name))
+            found.to_string_lossy().to_lowercase(),
+            dir.join(name).to_string_lossy().to_lowercase()
         );
         assert_eq!(resolve_program("missing-acp", Some(&path)), None);
         assert_eq!(resolve_program("demo-acp", None), None);

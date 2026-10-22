@@ -11,3 +11,20 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-core.workspace = true
+sqler-ai-api.workspace = true
+sqler-catalog.workspace = true
+sqler-driver-api.workspace = true
+sqler-sql.workspace = true
+sqler-config.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+sqler-driver-sqlite.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+proptest.workspace = true

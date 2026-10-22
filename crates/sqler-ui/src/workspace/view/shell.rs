@@ -279,7 +279,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if position == 0 && self.ws.settings_tab_active() {
-            return settings::view::page(&self.ws, cx).into_any_element();
+            return settings::view::page(self, cx).into_any_element();
         }
         let Some(tab) = active else {
             return self.fallback_body(group, cx);
@@ -288,13 +288,13 @@ impl WorkspaceView {
         if kind == Some(TabKind::Query)
             && let Some(editor) = self.editors.body(tab)
         {
-            return query_editor_body(editor.into_any_element(), cx);
+            return query_editor_body(self, tab, editor.into_any_element(), cx);
         }
         if kind == Some(TabKind::Grid) {
             return self.grids.body(self, tab, cx).into_any_element();
         }
-        if let Some(object) = self.ws.object_tab(tab) {
-            return tabs::view::object_tab_body(object, cx).into_any_element();
+        if let Some(body) = tabs::view::object_tab_body(self, tab, cx) {
+            return body;
         }
         self.fallback_body(group, cx)
     }

@@ -29,7 +29,7 @@ use crate::browser::{
 use crate::connections::{ConnectFailure, ConnectRequest, Connector};
 use crate::grid::{GridLimits, GridSink, GridTab, grid_channel_with};
 use crate::sidebar::{RowKind, Selection, SidebarItem, SidebarRow};
-use crate::tabs::{TabId, TabKind};
+use crate::tabs::{TabId, TabKind, object_segments};
 
 /// Where a connection's browser stands.
 pub(super) enum BrowserStatus {
@@ -701,6 +701,7 @@ impl Workspace {
                 else {
                     return Effect::None;
                 };
+                self.object_crumbs.insert(tab, object_segments(&obj));
                 let object_tab = ObjectTab::loading(format!("Properties: {name}"));
                 self.object_tabs.insert(tab, object_tab);
                 Self::after_close(
@@ -718,6 +719,9 @@ impl Workspace {
                 else {
                     return Effect::None;
                 };
+                let mut crumbs = object_segments(&table);
+                crumbs.push(column.name.clone());
+                self.object_crumbs.insert(tab, crumbs);
                 let mut object_tab = ObjectTab::loading(format!("Properties: {name}"));
                 object_tab.content =
                     ObjectTabContent::Properties(column_properties(&table, &column));
@@ -744,6 +748,7 @@ impl Workspace {
         let Some((tab, close)) = self.open_object_preview(conn, TabKind::Grid, &name) else {
             return Effect::None;
         };
+        self.object_crumbs.insert(tab, object_segments(obj));
         // The grid edits this object (the editing flow reads it back).
         self.edit.data_tabs.insert(tab, obj.clone());
         let limits = GridLimits::from_settings(self.settings().settings());
@@ -797,6 +802,7 @@ impl Workspace {
         let Some((tab, close)) = self.open_object_preview(conn, TabKind::Ddl, &name) else {
             return Effect::None;
         };
+        self.object_crumbs.insert(tab, object_segments(&obj));
         let object_tab = ObjectTab::loading(format!("DDL: {name}"));
         let cancel = object_tab.cancel.clone();
         self.object_tabs.insert(tab, object_tab);

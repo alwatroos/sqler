@@ -24,6 +24,12 @@ const SCANNED: &[(&str, &str)] = &[
     ("export/view.rs", ""),
     ("settings/view.rs", ""),
     ("history/view.rs", ""),
+    ("query/view/toolbar.rs", ""),
+    ("query/view/mod.rs", ""),
+    ("tabs/view.rs", "pub(crate) fn breadcrumbs_element("),
+    ("query/view/results.rs", ""),
+    ("ai/hub/view.rs", ""),
+    ("ai/settings/view.rs", ""),
 ];
 
 /// Spacing helper prefixes: `.p_2()`, `.gap_1()` and friends.

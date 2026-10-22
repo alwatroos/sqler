@@ -9,6 +9,6 @@ Providers, per-use-case models, redaction and limits are configured in `ai.toml`
 Planned topics:
 
 - [Providers](providers.md): the provider contract (ADR-0034)
-- Tool contract: planned (M5)
-- Safety model: planned (M5)
+- [Tool contract](tool-contract.md): tools, guards and host interfaces (ADR-0036)
+- [Safety](safety.md): redaction, untrusted-data envelope and audit log (ADR-0037)
 - Prompt templates: planned (M5)
