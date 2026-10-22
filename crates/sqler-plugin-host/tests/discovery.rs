@@ -407,7 +407,7 @@ fn hostile_manifests() {
             "unknown",
             format!("{}\n[evil]\nx = 1\n", manifest("unknown", None)).into_bytes(),
         ),
-        ("nul", b"[plugin]\nid = \"nul\"\x00\n".to_vec()),
+        ("nul-byte", b"[plugin]\nid = \"nul\"\x00\n".to_vec()),
     ];
     for (name, bytes) in &cases {
         let d = s.path(name);
