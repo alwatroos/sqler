@@ -1,0 +1,89 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "id": "mistral-small-latest",
+   "object": "model",
+   "created": 1760000000,
+   "owned_by": "mistralai",
+   "capabilities": {
+    "completion_chat": true,
+    "completion_fim": false,
+    "function_calling": true,
+    "fine_tuning": true,
+    "vision": true,
+    "classification": false
+   },
+   "name": "mistral-small-2506",
+   "description": "Small model",
+   "max_context_length": 131072,
+   "aliases": [
+    "mistral-small-2506"
+   ],
+   "deprecation": null,
+   "default_model_temperature": 0.3,
+   "type": "base"
+  },
+  {
+   "id": "codestral-embed",
+   "object": "model",
+   "created": 1760000000,
+   "owned_by": "mistralai",
+   "capabilities": {
+    "completion_chat": false,
+    "completion_fim": false,
+    "function_calling": false,
+    "fine_tuning": false,
+    "vision": false,
+    "classification": false
+   },
+   "name": "codestral-embed",
+   "max_context_length": 8192,
+   "type": "base"
+  },
+  {
+   "id": "mistral-large-latest",
+   "object": "model",
+   "created": 1760000000,
+   "owned_by": "mistralai",
+   "capabilities": {
+    "completion_chat": true,
+    "function_calling": true,
+    "vision": false
+   },
+   "name": "mistral-large-latest",
+   "description": null,
+   "max_context_length": 131072,
+   "type": "base"
+  },
+  {
+   "id": "ft:open-mistral-7b:abc",
+   "object": "model",
+   "created": 1760000000,
+   "owned_by": "user-1",
+   "capabilities": {
+    "completion_chat": true,
+    "function_calling": false,
+    "vision": false
+   },
+   "name": null,
+   "job": "job-1",
+   "root": "open-mistral-7b",
+   "archived": false,
+   "max_context_length": 32768,
+   "type": "fine-tuned"
+  },
+  {
+   "id": "huge",
+   "object": "model",
+   "capabilities": {
+    "completion_chat": true
+   },
+   "max_context_length": 99999999999
+  },
+  {
+   "id": "bare-model",
+   "object": "model"
+  }
+ ]
+}

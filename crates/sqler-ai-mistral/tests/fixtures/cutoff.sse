@@ -1,0 +1,8 @@
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]}
+
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"tool_calls": [{"id": "cut000001", "function": {"name": "run_query", "arguments": "{\"sql\": \"SELECT * FR"}, "index": 0}]}, "finish_reason": null}]}
+
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "length"}], "usage": {"prompt_tokens": 40, "total_tokens": 240, "completion_tokens": 200}}
+
+data: [DONE]
+
