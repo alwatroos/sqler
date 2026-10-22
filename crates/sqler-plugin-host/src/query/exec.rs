@@ -67,12 +67,13 @@ pub(crate) fn data_error(e: &DataError) -> PluginError {
 }
 
 /// What the plugin learns of a driver error on the execute and stream path. Only `DriverError::Query` text (the
-/// database's own message about the statement: syntax, constraint) passes, clipped. Every other variant (connection,
+/// database's own message about the statement) passes, after `scrub::query_text`: a denial becomes a fixed text, and
+/// accounts, hosts, addresses and paths are redacted, then it is clipped. Every other variant (connection,
 /// backend, I/O, TLS, auth, timeout, and any variant added later) can name the host, the user or the database when a
 /// connection drops mid-statement, so it becomes a fixed text per category.
 pub(crate) fn driver_error(e: &DriverError) -> PluginError {
     match e {
-        DriverError::Query(text) => plugin_error(ErrorCode::Failed, clip(text)),
+        DriverError::Query(text) => plugin_error(ErrorCode::Failed, super::scrub::query_text(text)),
         DriverError::Cancelled => plugin_error(ErrorCode::Failed, "the statement was cancelled"),
         DriverError::Unsupported(_) => plugin_error(
             ErrorCode::Failed,

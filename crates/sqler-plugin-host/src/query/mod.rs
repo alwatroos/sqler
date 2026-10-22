@@ -18,6 +18,7 @@
 mod convert;
 mod exec;
 mod guard;
+mod scrub;
 mod service;
 
 #[cfg(test)]
