@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-/// How a failed model step is retried. Only `RateLimited` and `Network` errors that arrive
+/// How a failed model step is retried. Only `RateLimited`, `Overloaded` and `Network` errors that arrive
 /// before any text or tool call are retried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

@@ -7,14 +7,13 @@
 use std::sync::Arc;
 
 use sqler_ai_tools::{
-    Assist, AssistError, AuditSink, ConnectionInfo, Conversation, FixProposal, Surface, ToolSet,
-    unified_diff,
+    Assist, AssistError, ConnectionInfo, Conversation, FixProposal, Surface, ToolSet, unified_diff,
 };
 use sqler_catalog::Catalog;
 use sqler_config::{AiConfig, ProviderConfig, contains_redaction};
 
 use super::{AssistOutcome, AssistRequest, CANCELLED, EditorSource};
-use crate::ai::AiProviderFactory;
+use crate::ai::{AiAudit, AiProviderFactory};
 use crate::tabs::TabId;
 
 /// Everything a request needs, owned so it can move to tokio. `Debug` prints the id, the tab and
@@ -36,8 +35,8 @@ pub struct AssistJob {
     pub catalog: Option<Catalog>,
     /// The limits and the redaction list.
     pub config: AiConfig,
-    /// Where the tool calls are audited; the view sets it.
-    pub audit: Option<Arc<dyn AuditSink>>,
+    /// Where the tool calls are audited (required).
+    pub audit: AiAudit,
 }
 
 impl std::fmt::Debug for AssistJob {
@@ -92,10 +91,8 @@ async fn work(
         .map_err(|_| "The AI provider could not be started.".to_owned())?
         .map_err(|e| e.to_string())?;
     let connection = info.id.clone();
-    let mut tools = ToolSet::configured(Arc::new(EditorSource::new(info, catalog)), &config);
-    if let Some(sink) = audit {
-        tools = tools.with_audit(sink, Surface::Assist);
-    }
+    let tools = ToolSet::configured(Arc::new(EditorSource::new(info, catalog)), &config);
+    let tools = audit.attach(tools, Surface::Assist);
     let assist = Assist::new(tools, provider, model);
     let mut conv = Conversation::new();
     match request {
@@ -108,6 +105,7 @@ async fn work(
                 sql: answer.sql,
                 rationale: answer.rationale,
                 tables: answer.tables.into_iter().map(|t| t.name).collect(),
+                applicable: answer.applicable,
                 inserted: false,
             })
         }
@@ -170,6 +168,8 @@ pub(crate) mod tests {
         ModelInfo, StopReason,
     };
     use sqler_ai_tools::{MemoryAudit, UNTRUSTED_OPEN};
+
+    use crate::ai::AiAudit;
     use sqler_config::{ProviderId, ProviderKind, Secret};
     use sqler_driver_api::sqler_core::{
         ColumnInfo, DataType, DbObject, DriverId, ObjectKind, ObjectPath, Table,
@@ -239,7 +239,7 @@ pub(crate) mod tests {
             info: info(),
             catalog,
             config: AiConfig::default(),
-            audit: None,
+            audit: AiAudit::new(Arc::new(MemoryAudit::new())),
         }
     }
 
@@ -450,7 +450,7 @@ pub(crate) mod tests {
             },
             Some(catalog),
         );
-        j.audit = Some(sink.clone());
+        j.audit = AiAudit::new(sink.clone());
         let out = run(&rt, j, p.clone()).unwrap();
         assert!(matches!(out, AssistOutcome::Sql { .. }));
         let requests = p.requests();

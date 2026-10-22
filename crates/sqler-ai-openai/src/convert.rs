@@ -12,7 +12,7 @@ use sqler_ai_api::{
     AiError, ChatEvent, ChatRequest, Part, ResponseFormat, Role, StopReason, ToolCall, Usage,
 };
 
-use crate::error::{scrub, stream_error, truncate};
+use crate::error::{malformed, scrub, stream_error, truncate};
 use crate::provider::Flavor;
 use crate::sse::SseEvent;
 use crate::wire::{
@@ -227,8 +227,7 @@ impl ChunkMapper {
         if data.is_empty() {
             return Ok(false);
         }
-        let chunk: Chunk = serde_json::from_str(data)
-            .map_err(|e| AiError::Protocol(format!("malformed SSE data: {e}")))?;
+        let chunk: Chunk = serde_json::from_str(data).map_err(|e| malformed("SSE data", &e))?;
         if let Some(err) = chunk.error.filter(|e| !e.is_null()) {
             return Err(stream_error(&json!({ "error": err }), self.key.as_deref()));
         }

@@ -18,6 +18,9 @@ use crate::wire::ErrorBody;
 const MAX_ERROR_CHARS: usize = 200;
 /// How much of an error body is read.
 const MAX_ERROR_BODY: usize = 64 * 1024;
+/// The longest `Retry-After` reported (one hour), so a hostile header cannot
+/// make `Instant::now() + retry_after` overflow.
+const MAX_RETRY_AFTER_SECS: u64 = 3600;
 
 /// Cuts text to 200 characters.
 pub(crate) fn truncate(text: &str) -> String {
@@ -38,17 +41,24 @@ pub(crate) fn clean(text: &str, key: &str) -> String {
     truncate(&scrub(text, key))
 }
 
+/// `Retry-After` as whole seconds, clamped to one hour. A date, a float, a
+/// negative number or junk gives `None`.
+fn retry_after_of(value: Option<&str>) -> Option<Duration> {
+    value
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|n| Duration::from_secs(n.min(MAX_RETRY_AFTER_SECS)))
+}
+
 /// Maps a non-success status. `message` is already cleaned.
 pub(crate) fn from_status(code: u16, retry_after: Option<&str>, message: &str) -> AiError {
     match code {
         401 | 403 => AiError::Auth(format!("HTTP {code}")),
         429 => AiError::RateLimited {
-            retry_after: retry_after
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .map(Duration::from_secs),
+            retry_after: retry_after_of(retry_after),
         },
-        529 if message.is_empty() => AiError::Provider("overloaded (HTTP 529)".to_owned()),
-        529 => AiError::Provider(format!("overloaded (HTTP 529): {message}")),
+        529 => AiError::Overloaded {
+            retry_after: retry_after_of(retry_after),
+        },
         _ if message.is_empty() => AiError::Provider(format!("HTTP {code}")),
         _ => AiError::Provider(format!("HTTP {code}: {message}")),
     }
@@ -60,11 +70,29 @@ pub(crate) fn from_event_error(kind: &str, message: &str) -> AiError {
     match kind {
         "authentication_error" | "permission_error" => AiError::Auth(kind.to_owned()),
         "rate_limit_error" => AiError::RateLimited { retry_after: None },
-        "overloaded_error" => AiError::Provider(format!("overloaded: {message}")),
+        "overloaded_error" => AiError::Overloaded { retry_after: None },
         _ if kind.is_empty() && message.is_empty() => AiError::Provider("error event".to_owned()),
         _ if kind.is_empty() => AiError::Provider(message.to_owned()),
         _ => AiError::Provider(format!("{kind}: {message}")),
     }
+}
+
+/// A `Protocol` error for JSON that does not parse. The text of a `serde_json`
+/// error can quote the offending value, which is server data and might hold
+/// the key, so only its category and position are kept.
+pub(crate) fn malformed(what: &str, e: &serde_json::Error) -> AiError {
+    use serde_json::error::Category;
+    let kind = match e.classify() {
+        Category::Io => "read error",
+        Category::Syntax => "syntax error",
+        Category::Data => "unexpected shape",
+        Category::Eof => "unexpected end",
+    };
+    AiError::Protocol(format!(
+        "malformed {what}: {kind} at line {} column {}",
+        e.line(),
+        e.column()
+    ))
 }
 
 /// Maps a transport error. The URL is removed first.
@@ -169,11 +197,19 @@ mod tests {
         );
         assert_eq!(
             from_status(529, None, "Overloaded"),
-            AiError::Provider("overloaded (HTTP 529): Overloaded".into())
+            AiError::Overloaded { retry_after: None }
         );
         assert_eq!(
-            from_status(529, None, ""),
-            AiError::Provider("overloaded (HTTP 529)".into())
+            from_status(529, Some("99999"), ""),
+            AiError::Overloaded {
+                retry_after: Some(Duration::from_secs(3600))
+            }
+        );
+        assert_eq!(
+            from_status(429, Some("99999"), ""),
+            AiError::RateLimited {
+                retry_after: Some(Duration::from_secs(3600))
+            }
         );
         assert_eq!(
             from_status(400, None, "bad"),
@@ -196,7 +232,7 @@ mod tests {
         );
         assert_eq!(
             from_event_error("overloaded_error", "Overloaded"),
-            AiError::Provider("overloaded: Overloaded".into())
+            AiError::Overloaded { retry_after: None }
         );
         assert_eq!(
             from_event_error("api_error", "boom"),
@@ -206,6 +242,16 @@ mod tests {
             from_event_error("", ""),
             AiError::Provider("error event".into())
         );
+    }
+
+    #[test]
+    fn malformed_never_quotes_the_value() {
+        let e = serde_json::from_str::<serde_json::Value>("{\"k\": sk-secret-value}").unwrap_err();
+        let AiError::Protocol(m) = malformed("SSE event", &e) else {
+            panic!("expected Protocol");
+        };
+        assert!(!m.contains("sk-secret"), "{m}");
+        assert!(m.starts_with("malformed SSE event: syntax error at line 1"));
     }
 
     #[test]

@@ -258,7 +258,15 @@ async fn status_errors_are_the_first_item() {
             529,
             ERROR_529,
             None,
-            AiError::Provider("overloaded (HTTP 529): Overloaded".into()),
+            AiError::Overloaded { retry_after: None },
+        ),
+        (
+            529,
+            ERROR_529,
+            Some(("Retry-After", "99999")),
+            AiError::Overloaded {
+                retry_after: Some(Duration::from_secs(3600)),
+            },
         ),
         (
             400,
@@ -304,7 +312,7 @@ async fn error_event_after_a_text_delta() {
     );
     assert_eq!(
         s.next_event().await.unwrap().unwrap_err(),
-        AiError::Provider("overloaded: Overloaded".into())
+        AiError::Overloaded { retry_after: None }
     );
     assert!(s.next_event().await.is_none());
     assert!(s.next_event().await.is_none());
@@ -478,4 +486,20 @@ fn constructor_rules() {
         assert!(!format!("{e}{e:?}").contains("secret"));
     }
     assert!(AnthropicProvider::new(KEY, Some("http://127.0.0.1:1")).is_ok());
+}
+
+#[tokio::test]
+async fn silent_stream_times_out() {
+    let server = MockServer::start(messages_route(Reply::sse("", 64, Finish::Hold))).await;
+    let p = provider(&server)
+        .with_read_timeout(Duration::from_millis(50))
+        .unwrap();
+    let mut s = p.stream(request());
+    let first = tokio::time::timeout(Duration::from_secs(5), s.next_event())
+        .await
+        .expect("the read timeout must end the wait");
+    assert_eq!(
+        first.unwrap().unwrap_err(),
+        AiError::Network("timed out".into())
+    );
 }

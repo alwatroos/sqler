@@ -105,3 +105,8 @@ Dropping the future drops the provider stream and any in-flight tool call. On to
 - Separate `Assist` plus `DataSearch`: chosen.
 - `similar` for the diff: a new dependency for about 80 lines. Rejected.
 - Send the full schema to the model: does not fit a large catalog and puts unranked database text in the prompt. Rejected.
+
+## Addendum: budgets from the room left, and SqlAnswer.applicable
+
+- The budgets are derived from the room left after the fixed part, not from the total alone. `room = total - HEADROOM - fixed` (saturating), where `fixed` is the system prompt plus the user-supplied text (request, statement, error, live context). `grounding = clamp(room / 2, min(MIN_GROUNDING, room), MAX_GROUNDING)` and `history = min(room - grounding, total / 5)`. So `fixed + grounding + history + HEADROOM <= total` for every window, including small ones where `MIN_GROUNDING` was more than half of the total. A call whose fixed part leaves no room still fails with `TooLarge`.
+- `SqlAnswer` has a flag `applicable`, true when the SQL contains no redaction placeholder (`!contains_redaction(sql)`), like `FixProposal.applicable`. A host inserts the SQL only when it is true; the editor actions use the flag and no longer check the placeholder themselves.

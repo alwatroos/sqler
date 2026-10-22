@@ -16,7 +16,7 @@ use sqler_ai_api::{
 use tokio::task::JoinSet;
 
 use crate::convert::{capabilities_from_show, context_length, request_body};
-use crate::error::{from_reqwest, from_response, read_capped};
+use crate::error::{from_reqwest, from_response, malformed, read_capped};
 use crate::stream::OllamaStream;
 use crate::wire::{Show, ShowBody, Tags};
 
@@ -24,6 +24,9 @@ use crate::wire::{Show, ShowBody, Tags};
 pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:11434";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a response may stay silent before the request fails. A model that
+/// is still loading from a slow disk can exceed it; see `with_read_timeout`.
+const READ_TIMEOUT: Duration = Duration::from_secs(120);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How many `/api/show` calls `list_models` keeps in flight.
 const SHOW_CONCURRENCY: usize = 4;
@@ -83,21 +86,24 @@ impl OllamaProvider {
             ));
         }
         let local = host_is_local(&url);
-        let mut builder = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .redirect(Policy::none());
-        if local {
-            // A loopback server must not be reached through an environment proxy.
-            builder = builder.no_proxy();
-        }
-        let client = builder
-            .build()
-            .map_err(|_| AiError::Provider("cannot build the HTTP client".to_owned()))?;
+        let client = build_client(local, READ_TIMEOUT)?;
         Ok(Self {
             client,
             endpoint: raw.trim_end_matches('/').to_owned(),
             local,
         })
+    }
+
+    /// Sets how long a response may stay silent (no byte received) before the
+    /// request fails with `Network("timed out")`. The default is 120 seconds;
+    /// raise it when a large model loads slowly.
+    ///
+    /// # Errors
+    ///
+    /// [`AiError::Provider`] when the HTTP client cannot be rebuilt.
+    pub fn with_read_timeout(mut self, timeout: Duration) -> Result<Self, AiError> {
+        self.client = build_client(self.local, timeout)?;
+        Ok(self)
     }
 
     /// The endpoint as configured, without a trailing `/`.
@@ -150,8 +156,7 @@ impl OllamaProvider {
             return Err(from_response(resp).await);
         }
         let bytes = read_capped(&mut resp, MAX_JSON_BODY).await?;
-        serde_json::from_slice(&bytes)
-            .map_err(|e| AiError::Protocol(format!("malformed JSON response: {e}")))
+        serde_json::from_slice(&bytes).map_err(|e| malformed("JSON response", &e))
     }
 }
 
@@ -185,6 +190,20 @@ where
     // Jobs that never started keep `None`.
     out.extend(pending.map(|_| None));
     out
+}
+
+fn build_client(local: bool, read_timeout: Duration) -> Result<Client, AiError> {
+    let mut builder = Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(read_timeout)
+        .redirect(Policy::none());
+    if local {
+        // A loopback server must not be reached through an environment proxy.
+        builder = builder.no_proxy();
+    }
+    builder
+        .build()
+        .map_err(|_| AiError::Provider("cannot build the HTTP client".to_owned()))
 }
 
 fn host_is_local(url: &Url) -> bool {

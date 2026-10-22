@@ -365,3 +365,29 @@ async fn futures_are_send() {
     is_send(&assist.fix("syn", "select 1", "e", &mut conv));
     is_send(&assist.ground("syn", "q"));
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_applicable_flag_is_false_for_a_redacted_answer() {
+    let source = SyntheticSource::new();
+    let provider = scripted(
+        false,
+        false,
+        vec![
+            answer("```sql\nSELECT * FROM customers WHERE token = '<redacted>'\n```\nBy token."),
+            answer("```sql\nSELECT * FROM customers\n```\nAll."),
+        ],
+    );
+    let assist = engine(&source, &provider);
+    let mut conv = Conversation::new();
+    let redacted = assist
+        .nl_to_sql("syn", "customers by token", &mut conv)
+        .await
+        .unwrap();
+    assert!(redacted.sql.contains("<redacted>"), "{}", redacted.sql);
+    assert!(!redacted.applicable);
+    let plain = assist
+        .nl_to_sql("syn", "all customers", &mut conv)
+        .await
+        .unwrap();
+    assert!(plain.applicable);
+}

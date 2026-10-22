@@ -20,13 +20,14 @@ use sqler_acp::{
     AcpError, AgentEvent, AgentEvents, AgentHandle, AgentInfo, AgentProfile, ExitInfo,
     LaunchOptions, McpServerDescriptor, SessionId, StopReason,
 };
-use sqler_ai_tools::{AuditSink, ConnectionInfo, ToolSet};
+use sqler_ai_tools::{ConnectionInfo, ToolSet};
 use sqler_config::AiConfig;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::{oneshot, watch};
 
 use super::endpoint::{Endpoint, bind_endpoint};
 use super::host::{AgentMsg, TabAcpHost};
+use crate::ai::AiAudit;
 use crate::ai::approval::ChannelApprover;
 use crate::ai::session::TabSource;
 use crate::connections::{ConnectRequest, Connector};
@@ -134,8 +135,8 @@ pub struct AgentStart {
     pub request: ConnectRequest,
     /// The AI limits and the redaction list the tools use.
     pub config: AiConfig,
-    /// Where the audit entries go, as surface `agent`.
-    pub audit: Option<Arc<dyn AuditSink>>,
+    /// Where the audit entries go, as surface `agent` (required).
+    pub audit: AiAudit,
     /// The working folder of the agent session (absolute; created when missing).
     pub cwd: PathBuf,
     /// The time limits of the agent.
@@ -324,7 +325,7 @@ pub async fn start_agent(
     let source = Arc::new(TabSource::new(info, request, connector));
     let approver = Arc::new(ChannelApprover::new(tx.clone(), AgentMsg::Ask));
     let tools = ToolSet::configured(source.clone(), &config).with_approver(approver);
-    let (endpoint, token) = match bind_endpoint(tools, audit).await {
+    let (endpoint, token) = match bind_endpoint(tools, &audit).await {
         Ok(bound) => bound,
         Err(message) => {
             close_source(&source).await;

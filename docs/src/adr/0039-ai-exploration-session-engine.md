@@ -88,3 +88,8 @@ The host (the session UI, T13) builds the `ToolSet` over a `SessionSource` that 
 - Positive: guards live in one place; a limit, loop or cancel always ends the turn cleanly; the UI gets events and a typed transcript.
 - Negative: the tool set is rebuilt once per session by `with_approver` (the definition cache is dropped once); refused calls have no entry in the model's history.
 - Follow-ups: map the limits to `ai.toml`; the session UI.
+
+## Addendum: overload retry and the transcript cap
+
+- `AiError::Overloaded` (ADR-0034) is retried like `RateLimited`: before any text or tool call, at most `max_retries` times, with the same delay rule and `Notice::Retrying`.
+- The engine transcript keeps at most `MAX_TRANSCRIPT_ENTRIES` (500) entries between turns. Pushing a `User` entry first drops the oldest entries until fewer than the maximum remain; nothing is dropped anywhere else, so the indices inside a turn (`emit_since`) stay valid and one turn may end above the maximum. `Transcript::dropped()` counts the entries dropped so far. The stable number of `entries()[i]` is `dropped() + i`; it never changes when older entries are dropped (see the addendum of ADR-0053).

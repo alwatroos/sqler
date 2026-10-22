@@ -50,3 +50,7 @@ Chosen: option 2, in the style of `sqler-driver-api` (ADR-0004).
 - `async-trait` plus `BoxStream`: matches the prompt text, but adds a proc-macro dependency for what plain boxing does, and `futures-core::Stream` needs `StreamExt` for `next()`. Rejected.
 - Boxed futures plus a crate-owned stream trait: chosen, see above.
 - `rig`, `genai`, `async-openai`: they bring their own HTTP stack and message model, which is an abstraction leak (§6), and pull a large dependency tree into L1. Rejected.
+
+## Addendum: AiError::Overloaded
+
+`AiError` gets a variant `Overloaded { retry_after: Option<Duration> }` (display text `provider overloaded`; the enum is `non_exhaustive`, so this is additive). It carries no server message, like `RateLimited`. The Anthropic provider maps HTTP 529 (with the `Retry-After` header clamped to 1 hour) and a stream `overloaded_error` event (no `retry_after`) to it. Other providers keep mapping their overload status (such as HTTP 503) to `Provider`. A client that matches `AiError` must keep a wildcard arm.

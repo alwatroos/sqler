@@ -16,6 +16,9 @@ use crate::wire::ErrorBody;
 const MAX_ERROR_CHARS: usize = 200;
 /// How much of an error body is read.
 const MAX_ERROR_BODY: usize = 64 * 1024;
+/// The longest `Retry-After` reported (one hour), so a hostile header cannot
+/// make `Instant::now() + retry_after` overflow.
+const MAX_RETRY_AFTER_SECS: u64 = 3600;
 
 /// Cuts text to 200 characters.
 pub(crate) fn truncate(text: &str) -> String {
@@ -30,12 +33,30 @@ pub(crate) fn from_status(code: u16, retry_after: Option<&str>, error: &str) -> 
         429 => AiError::RateLimited {
             retry_after: retry_after
                 .and_then(|v| v.trim().parse::<u64>().ok())
-                .map(Duration::from_secs),
+                .map(|n| Duration::from_secs(n.min(MAX_RETRY_AFTER_SECS))),
         },
         400 if error.contains("does not support") => AiError::Unsupported(text),
         _ if text.is_empty() => AiError::Provider(format!("HTTP {code}")),
         _ => AiError::Provider(format!("HTTP {code}: {text}")),
     }
+}
+
+/// A `Protocol` error for JSON that does not parse. The text of a `serde_json`
+/// error can quote the offending value, which is server data and might hold
+/// the key, so only its category and position are kept.
+pub(crate) fn malformed(what: &str, e: &serde_json::Error) -> AiError {
+    use serde_json::error::Category;
+    let kind = match e.classify() {
+        Category::Io => "read error",
+        Category::Syntax => "syntax error",
+        Category::Data => "unexpected shape",
+        Category::Eof => "unexpected end",
+    };
+    AiError::Protocol(format!(
+        "malformed {what}: {kind} at line {} column {}",
+        e.line(),
+        e.column()
+    ))
 }
 
 /// Maps a transport error. The URL is removed first.
@@ -87,6 +108,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn malformed_never_quotes_the_value() {
+        let e = serde_json::from_str::<serde_json::Value>("{\"k\": sk-secret-value}").unwrap_err();
+        let AiError::Protocol(m) = malformed("data", &e) else {
+            panic!("expected Protocol");
+        };
+        assert!(!m.contains("sk-secret"), "{m}");
+        assert!(m.starts_with("malformed data: syntax error at line 1"));
+    }
+
+    #[test]
     fn status_table() {
         assert!(matches!(from_status(401, None, "x"), AiError::Auth(_)));
         assert!(matches!(from_status(403, None, "x"), AiError::Auth(_)));
@@ -99,6 +130,12 @@ mod tests {
         assert_eq!(
             from_status(429, Some("Wed, 21 Oct 2026 07:28:00 GMT"), ""),
             AiError::RateLimited { retry_after: None }
+        );
+        assert_eq!(
+            from_status(429, Some("99999"), ""),
+            AiError::RateLimited {
+                retry_after: Some(Duration::from_secs(3600))
+            }
         );
         assert_eq!(
             from_status(429, None, ""),

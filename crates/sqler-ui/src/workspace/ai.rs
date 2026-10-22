@@ -365,7 +365,9 @@ mod tests {
                 None,
             )
             .unwrap();
-        Workspace::new(sidebar).with_ai(ai)
+        Workspace::new(sidebar)
+            .with_ai(ai)
+            .with_ai_audit(Some(crate::ai::AiAudit::in_memory()))
     }
 
     fn ws() -> Workspace {

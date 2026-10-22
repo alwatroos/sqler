@@ -13,7 +13,7 @@ use sqler_ai_api::{
     ToolCall, Usage,
 };
 
-use crate::error::{clean, from_event_error};
+use crate::error::{clean, from_event_error, malformed};
 use crate::provider::DEFAULT_MAX_TOKENS;
 use crate::sse::SseEvent;
 use crate::wire::{
@@ -199,12 +199,8 @@ impl SseMapper {
         key: &str,
         out: &mut VecDeque<Result<ChatEvent, AiError>>,
     ) -> Result<bool, AiError> {
-        let parsed: Event = serde_json::from_str(&ev.data).map_err(|e| {
-            AiError::Protocol(format!(
-                "malformed SSE event: {}",
-                clean(&e.to_string(), key)
-            ))
-        })?;
+        let parsed: Event =
+            serde_json::from_str(&ev.data).map_err(|e| malformed("SSE event", &e))?;
         match parsed {
             Event::MessageStart { message } => self.usage(message.usage.as_ref(), out),
             Event::ContentBlockStart {
@@ -658,10 +654,7 @@ mod tests {
         ]);
         assert!(!done);
         assert_eq!(items[0], Ok(ChatEvent::TextDelta("a".into())));
-        assert_eq!(
-            items[1],
-            Err(AiError::Provider("overloaded: Overloaded ***".into()))
-        );
+        assert_eq!(items[1], Err(AiError::Overloaded { retry_after: None }));
 
         let mut m = SseMapper::default();
         let bad = SseEvent {
