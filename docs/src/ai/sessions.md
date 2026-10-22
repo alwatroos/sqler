@@ -33,7 +33,7 @@ When a limit is reached the turn ends with a notice and the session stays usable
 
 ## Cancel
 
-Cancel stops the stream, the pending tool call (the driver is cancelled) or the wait for an approval. The turn ends as cancelled; you can send the next message right away. Closing the tab drops the session.
+Cancel stops the stream, the pending tool call (the driver is cancelled) or the wait for an approval. The turn ends as cancelled; you can send the next message right away. A cancel while you are still asked to approve runs nothing and the call is listed as "not run". A cancel after that is listed as "cancelled", not "not run": the statement may already have run, and the audit log has one `cancelled` entry that says which statements were sent. Closing the tab drops the session.
 
 ## Re-run
 

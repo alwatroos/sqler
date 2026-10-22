@@ -23,8 +23,10 @@ use sqler_ai_tools::session::{
 use sqler_ai_tools::{
     ApprovalRequest, Approver, ConnectionInfo, Decision, SessionSource, ToolError, ToolSet,
 };
+use sqler_ai_tools::{AuditEntry, CallOutcome, MemoryAudit, Surface};
 use sqler_catalog::Catalog;
-use sqler_driver_api::Session;
+use sqler_driver_api::sqler_core::Query;
+use sqler_driver_api::{CancelHandle, DriverError, Introspect, QueryStream, Session};
 
 const INSERT: &str =
     r#"{"connection":"db","sql":"insert into users (id, name) values (9, 'zed')"}"#;
@@ -167,7 +169,7 @@ async fn cancel_mid_tool_drops_the_call() {
     assert!(source.dropped.load(Ordering::SeqCst));
     assert_eq!(
         tool_entries(s.transcript())[0].status,
-        ToolCallStatus::NotRun(NotRunReason::Cancelled)
+        ToolCallStatus::Cancelled
     );
 }
 
@@ -206,4 +208,98 @@ async fn a_cancelled_session_resets_the_flag_for_the_next_turn() {
     assert_eq!(s.send("b").await, TurnOutcome::Completed);
     assert!(!s.cancel_handle().is_cancelled());
     assert_eq!(s.state(), SessionState::Done);
+}
+
+/// A session whose `execute` cancels the session and then never finishes.
+struct HangingExecute {
+    inner: Box<dyn Session>,
+    cancel: SessionCancel,
+}
+
+impl Session for HangingExecute {
+    fn cancel_handle(&self) -> CancelHandle {
+        self.inner.cancel_handle()
+    }
+
+    fn execute<'s>(
+        &'s mut self,
+        _query: &'s Query,
+    ) -> BoxFuture<'s, Result<Box<dyn QueryStream + 's>, DriverError>> {
+        self.cancel.cancel();
+        Box::pin(std::future::pending())
+    }
+
+    fn introspection(&mut self) -> Option<&mut dyn Introspect> {
+        None
+    }
+
+    fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), DriverError>> {
+        self.inner.close()
+    }
+}
+
+struct SlowSource {
+    inner: Arc<SqliteSource>,
+    cancel: Mutex<Option<SessionCancel>>,
+}
+
+impl SessionSource for SlowSource {
+    fn connections(&self) -> Vec<ConnectionInfo> {
+        self.inner.connections()
+    }
+
+    fn catalog(&self, connection: &str) -> Option<Catalog> {
+        self.inner.catalog(connection)
+    }
+
+    fn acquire<'a>(
+        &'a self,
+        connection: &'a str,
+    ) -> BoxFuture<'a, Result<Box<dyn Session>, ToolError>> {
+        Box::pin(async move {
+            let inner = self.inner.acquire(connection).await?;
+            let cancel = self.cancel.lock().unwrap().clone().unwrap();
+            Ok(Box::new(HangingExecute { inner, cancel }) as Box<dyn Session>)
+        })
+    }
+
+    fn release(&self, connection: &str, session: Box<dyn Session>) -> BoxFuture<'static, ()> {
+        self.inner.release(connection, session)
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancel_during_an_approved_write_is_not_reported_as_not_run() {
+    let base = SqliteSource::new("c6", None).await;
+    let source = Arc::new(SlowSource {
+        inner: Arc::clone(&base),
+        cancel: Mutex::new(None),
+    });
+    let audit = Arc::new(MemoryAudit::new());
+    let tool_set =
+        ToolSet::new(source.clone(), common::limits()).with_audit(audit.clone(), Surface::Session);
+    let p = TestProvider::new(vec![events(tools(&[("c1", "run_query", INSERT)]))]);
+    let approver = common::ScriptedApprover::always(Decision::Approve);
+    let mut s = ExplorationSession::new(
+        p,
+        tool_set,
+        base.info.clone(),
+        Some(approver),
+        SessionConfig::new("m"),
+    )
+    .unwrap();
+    *source.cancel.lock().unwrap() = Some(s.cancel_handle());
+    assert_eq!(s.send("add").await, TurnOutcome::Cancelled);
+
+    let entries: Vec<AuditEntry> = audit.entries();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].outcome, CallOutcome::Cancelled);
+    assert_eq!(entries[0].surface, Surface::Session);
+    assert!(entries[0].statements.iter().all(|st| st.ran));
+    assert_eq!(entries[0].statements.len(), 1);
+
+    let status = tool_entries(s.transcript())[0].status.clone();
+    assert_eq!(status, ToolCallStatus::Cancelled);
+    assert_ne!(status, ToolCallStatus::NotRun(NotRunReason::Cancelled));
+    assert_eq!(s.transcript().sql().count(), 0);
 }

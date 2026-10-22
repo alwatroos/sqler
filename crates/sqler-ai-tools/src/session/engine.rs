@@ -375,7 +375,14 @@ impl ExplorationSession {
                 dispatched.push(call.clone());
                 results.push(report.result);
             } else {
-                self.transcript.push_not_run(call, NotRunReason::Cancelled);
+                // A cancel while the user is still asked cannot have run anything. After that
+                // the call may have sent statements; the tool set recorded the details in one
+                // `cancelled` audit entry when it dropped the call.
+                if self.state() == SessionState::AwaitingApproval {
+                    self.transcript.push_not_run(call, NotRunReason::Cancelled);
+                } else {
+                    self.transcript.push_cancelled(call);
+                }
                 self.emit_since(self.transcript.entries().len() - 1);
                 halt = Some((TurnOutcome::Cancelled, NotRunReason::Cancelled));
             }

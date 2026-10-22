@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use sqler_ai_api::ToolCall;
+use sqler_config::redact_credentials;
 use sqler_sql::StatementClass;
 
 use crate::session::LimitKind;
@@ -43,6 +44,11 @@ pub enum ToolCallStatus {
     },
     /// The session did not run the call. The model never saw it.
     NotRun(NotRunReason),
+    /// The turn was cancelled while the call was in flight, after the approval step. Statements
+    /// may have run, so this is not a promise that nothing happened. The audit log has one
+    /// `cancelled` entry for the call that says which statements were sent. The model never saw
+    /// it.
+    Cancelled,
 }
 
 /// One tool call of the model.
@@ -63,7 +69,10 @@ pub struct ToolCallEntry {
 }
 
 /// A statement the database ran for a tool call.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The exact SQL is kept private, for [`SqlEntry::rerun`] only. Everything that shows or logs
+/// the entry (the events, `Debug`) uses the credential-redacted `display_sql`.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SqlEntry {
     /// The call that ran it.
@@ -71,9 +80,9 @@ pub struct SqlEntry {
     /// The id of the connection.
     pub connection: String,
     /// The exact SQL that was sent, for a re-run.
-    pub sql: String,
-    /// The SQL to show: the audit copy (credential-redacted, capped), or `sql` beyond the
-    /// audit statement cap.
+    pub(crate) sql: String,
+    /// The SQL to show: the audit copy (credential-redacted, capped), or the
+    /// credential-redacted SQL beyond the audit statement cap.
     pub display_sql: String,
     /// The statement class.
     pub class: StatementClass,
@@ -96,6 +105,21 @@ pub struct RerunRequest {
     pub connection: String,
     /// The exact SQL.
     pub sql: String,
+}
+
+impl std::fmt::Debug for SqlEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqlEntry")
+            .field("call_id", &self.call_id)
+            .field("connection", &self.connection)
+            .field("display_sql", &self.display_sql)
+            .field("class", &self.class)
+            .field("approved", &self.approved)
+            .field("rows", &self.rows)
+            .field("truncated", &self.truncated)
+            .field("failed", &self.failed)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SqlEntry {
@@ -196,6 +220,17 @@ impl Transcript {
         }));
     }
 
+    /// Appends the entry of a call whose future was dropped by a cancel after the approval step.
+    pub(crate) fn push_cancelled(&mut self, call: &ToolCall) {
+        self.entries.push(TranscriptEntry::ToolCall(ToolCallEntry {
+            call_id: call.id.clone(),
+            tool: call.name.clone(),
+            arguments: Value::Null,
+            status: ToolCallStatus::Cancelled,
+            result: Value::Null,
+        }));
+    }
+
     /// Appends the `ToolCall` entry of a call that ran, then one `Sql` entry per statement.
     pub(crate) fn push_report(&mut self, call: &ToolCall, report: &CallReport) {
         let status = match &report.audit.error {
@@ -217,11 +252,10 @@ impl Transcript {
         }));
         let connection = report.connection.clone().unwrap_or_default();
         for (i, run) in report.executed.iter().enumerate() {
-            let display_sql = report
-                .audit
-                .statements
-                .get(i)
-                .map_or_else(|| run.sql.clone(), |s| s.sql.clone());
+            let display_sql = report.audit.statements.get(i).map_or_else(
+                || redact_credentials(&run.sql).into_owned(),
+                |s| s.sql.clone(),
+            );
             self.entries.push(TranscriptEntry::Sql(SqlEntry {
                 call_id: call.id.clone(),
                 connection: connection.clone(),
@@ -341,6 +375,25 @@ mod tests {
         let r = t.sql().next().unwrap().rerun();
         assert_eq!(r.connection, "db");
         assert_eq!(r.sql, "select  1 -- x");
+    }
+
+    #[test]
+    fn debug_and_display_never_show_the_exact_sql_beyond_the_audit_cap() {
+        let secret = "update t set k = 'AKIAIOSFODNN7EXAMPLE' where password = 'hunter2'";
+        let call = ToolCall::new("c1", "run_query", "{}");
+        let mut t = Transcript::default();
+        t.push_report(
+            &call,
+            &report(vec![executed(secret)], AuditEntry::default()),
+        );
+        let entry = t.sql().next().unwrap();
+        assert!(!format!("{entry:?}").contains("hunter2"), "{entry:?}");
+        assert!(
+            !entry.display_sql.contains("hunter2"),
+            "{}",
+            entry.display_sql
+        );
+        assert_eq!(entry.rerun().sql, secret);
     }
 
     #[test]
