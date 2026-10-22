@@ -1,0 +1,68 @@
+# The host tests (crates/sqler-plugin-host/tests/guests.rs) drive every command and status item below.
+[plugin]
+id = "probe"
+name = "Probe"
+version = "0.1.0"
+api = "0.1.0"
+description = "Test fixture: misbehaves on command and reports what the sandbox exposes."
+capabilities = ["fs.read:data", "fs.read:plugin"]
+
+[entry]
+component = "probe.wasm"
+
+[[commands]]
+id = "ok"
+title = "OK"
+
+[[commands]]
+id = "spin"
+title = "Spin"
+
+[[commands]]
+id = "alloc"
+title = "Allocate until the memory cap"
+
+[[commands]]
+id = "panic"
+title = "Panic"
+
+[[commands]]
+id = "trap"
+title = "Trap"
+
+[[commands]]
+id = "sleep"
+title = "Sleep for an hour"
+
+[[commands]]
+id = "log-flood"
+title = "Write 1000 log lines"
+
+[[status-items]]
+id = "env"
+
+[[status-items]]
+id = "read-data"
+
+[[status-items]]
+id = "read-plugin"
+
+[[status-items]]
+id = "read-escape"
+
+[[status-items]]
+id = "read-root"
+
+[[status-items]]
+id = "setting"
+
+[[status-items]]
+id = "http"
+
+[[status-items]]
+id = "http-other"
+
+[[settings]]
+key = "url"
+label = "URL the http status items fetch"
+default = ""

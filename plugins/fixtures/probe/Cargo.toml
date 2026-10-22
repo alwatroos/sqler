@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "sqler-fixture-probe"
+description = "Probe fixture plugin: misbehaves on command (panic, OOM, sleep, floods) and reports what the sandbox lets it see"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen.workspace = true
+wasip2.workspace = true
+
+[lints]
+workspace = true

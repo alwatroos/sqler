@@ -14,11 +14,18 @@ pub struct PluginRow {
 }
 
 /// Every plugin.
-pub const PLUGINS: &[PluginRow] = &[PluginRow {
-    name: "smoke",
-    dir: "plugins/fixtures/smoke",
-    package: Some("sqler-fixture-smoke"),
-}];
+pub const PLUGINS: &[PluginRow] = &[
+    PluginRow {
+        name: "smoke",
+        dir: "plugins/fixtures/smoke",
+        package: Some("sqler-fixture-smoke"),
+    },
+    PluginRow {
+        name: "probe",
+        dir: "plugins/fixtures/probe",
+        package: Some("sqler-fixture-probe"),
+    },
+];
 
 #[cfg(test)]
 mod tests {

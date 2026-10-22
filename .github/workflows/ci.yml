@@ -49,6 +49,9 @@ jobs:
           tool: cargo-nextest@0.9.148
       - name: Test
         run: cargo nextest run --workspace --no-tests=pass
+      # The plugin host's runtime and egress layers are off by default (ADR-0057), so the workspace run above skips them.
+      - name: Test (plugin host runtime and egress)
+        run: cargo nextest run -p sqler-plugin-host --features cl,net --no-tests=fail
       - name: Check sqler-export feature sets
         if: runner.os == 'Linux'
         run: |
@@ -161,6 +164,10 @@ jobs:
           cargo tree --workspace -i gpui-pre --depth 0 >/dev/null
           if cargo tree --workspace -i gpui 2>/dev/null; then echo "upstream gpui is in the tree"; exit 1; fi
           if cargo tree --workspace -i gpui-ce 2>/dev/null; then echo "gpui-ce is in the tree"; exit 1; fi
+          # The shipped binary does not link the plugin runtime until a later item turns a feature on (ADR-0054, ADR-0057).
+          # `cargo tree` runs on its own so a failure of the command itself fails the step instead of passing the grep.
+          tree=$(cargo tree -p sqler-app -e normal --prefix none) || { echo "cargo tree failed"; exit 1; }
+          if printf '%s\n' "$tree" | grep -q '^wasmtime '; then echo "wasmtime is in the default sqler-app tree"; exit 1; fi
 
   plugins:
     name: plugins (${{ matrix.os }})
@@ -186,6 +193,13 @@ jobs:
       - name: Staged files exist
         shell: bash
         run: test -f target/plugins/release/smoke/smoke.wasm && test -f target/plugins/release/smoke/sqler.toml
+      # End-to-end: the host runs the staged debug guests. A missing fixture is a failure here, not a skip.
+      - name: Guest tests (plugin host)
+        shell: bash
+        env:
+          SQLER_PLUGIN_FIXTURES: target/plugins/debug
+          SQLER_TEST_REQUIRE_PLUGINS: "1"
+        run: cargo test --locked -p sqler-plugin-host --features cl,net --test guests
       - name: Format and clippy (Linux)
         if: runner.os == 'Linux'
         shell: bash
