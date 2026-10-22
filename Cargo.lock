@@ -7569,6 +7569,16 @@ dependencies = [
 [[package]]
 name = "sqler-ai-mistral"
 version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqler-ai-api",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "sqler-ai-ollama"
@@ -7598,6 +7608,7 @@ dependencies = [
 name = "sqler-ai-tools"
 version = "0.1.0"
 dependencies = [
+ "insta",
  "proptest",
  "serde",
  "serde_json",

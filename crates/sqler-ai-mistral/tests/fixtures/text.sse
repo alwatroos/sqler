@@ -1,0 +1,14 @@
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]}
+
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": null}]}
+
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"content": [{"type": "thinking", "thinking": [{"type": "text", "text": "quiet thought"}]}]}, "finish_reason": null}]}
+
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"content": " zażółć"}, "finish_reason": null}]}
+
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"content": [{"type": "text", "text": " 日本"}]}, "finish_reason": null}]}
+
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 26, "total_tokens": 35, "completion_tokens": 9}}
+
+data: [DONE]
+

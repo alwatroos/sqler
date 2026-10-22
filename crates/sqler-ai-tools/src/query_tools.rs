@@ -22,7 +22,7 @@ use crate::toolset::{ExecutedStatement, Inner, Phase, Ran, Truncation};
 const DEFAULT_SAMPLE_ROWS: u32 = 50;
 
 /// Plans, asks for approvals, runs and renders one call.
-async fn run_sql(
+pub(crate) async fn run_sql(
     ts: &Inner,
     tool: &'static str,
     info: &ConnectionInfo,
@@ -140,7 +140,7 @@ pub(crate) async fn run_query(
     .await
 }
 
-fn positive(name: &str, value: Option<u32>) -> Result<(), ToolError> {
+pub(crate) fn positive(name: &str, value: Option<u32>) -> Result<(), ToolError> {
     if value == Some(0) {
         return Err(ToolError::InvalidArguments(format!(
             "`{name}` must be at least 1"

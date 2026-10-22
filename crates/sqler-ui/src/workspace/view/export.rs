@@ -458,8 +458,10 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(2);
         let mut pending = None;
         // Columns + one rows batch fill the channel; the third message waits.
-        assert!(!copy_slice(&mut cursor, &mut pending, &tx, &model));
-        assert!(pending.is_some());
+        // A slice may also end early on its time budget (slow runner), so call until it waits.
+        while pending.is_none() {
+            assert!(!copy_slice(&mut cursor, &mut pending, &tx, &model));
+        }
         assert!(matches!(rx.try_recv(), Ok(Feed::Columns(_))));
         assert!(rx.try_recv().is_ok());
         // Room again: the kept batch goes first, nothing is lost or reordered.
