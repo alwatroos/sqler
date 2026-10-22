@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# The same fixture via `cargo component build` (toolchain comparison; its own workspace).
+[workspace]
+
+[package]
+name = "hello-cc"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+authors = ["The SQLer Authors"]
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen-rt = { version = "0.41.0", features = ["bitflags"] }
+
+[package.metadata.component]
+package = "sqler-spike:fixture"
+
+[package.metadata.component.target]
+path = "../../wit/spike.wit"
+world = "fixture"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
+
+[profile.release]
+strip = "symbols"
+codegen-units = 1
+opt-level = "s"
+lto = true

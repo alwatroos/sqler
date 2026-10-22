@@ -1,0 +1,6 @@
+SPIKE variant=base
+SPIKE os=linux
+SPIKE arch=x86_64
+SPIKE wasmtime_version=none
+SPIKE features=
+SPIKE binary_bytes=360000

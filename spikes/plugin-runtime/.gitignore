@@ -1,0 +1,5 @@
+# Measurement output of scripts/measure.sh (results dir), build output, local tool installs.
+/results/
+/target/
+/guests/*/target/
+/.tools/

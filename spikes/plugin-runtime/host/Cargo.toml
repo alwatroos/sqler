@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "plugin-spike-host"
+description = "Throwaway wasmtime host for the plugin-runtime spike (ADR-0054)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# One engine feature per build (`base` = none). The wasmtime feature names were read from
+# `cargo info wasmtime@50.0.0`. With several enabled, `cfg` priority picks one (see `variant.rs`).
+[features]
+default = []
+# Internal: any wasmtime runtime at all (runtime + component model + WASI p2).
+engine = [
+    "dep:wasmtime",
+    "dep:wasmtime-wasi",
+    "wasmtime/runtime",
+    "wasmtime/component-model",
+    "wasmtime/async",
+    "wasmtime/std",
+]
+# Internal: a compiler is linked (`Component::new` and `precompile` work).
+compiler = []
+# Internal: the engine targets the Pulley interpreter.
+pulley-target = ["wasmtime/pulley"]
+cl = ["engine", "compiler", "wasmtime/cranelift"]
+cl-default = ["engine", "compiler", "wasmtime/default"]
+pulley = ["engine", "compiler", "pulley-target", "wasmtime/cranelift"]
+pulley-rt = ["engine", "pulley-target"]
+winch = ["engine", "compiler", "wasmtime/winch"]
+
+[dependencies]
+memory-stats = "1.2.0"
+wasmtime = { version = "50.0.0", optional = true, default-features = false }
+wasmtime-wasi = { version = "50.0.0", optional = true, default-features = false, features = ["p2"] }
+
+# Own lints table: the one `Component::deserialize` call site needs `unsafe`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
