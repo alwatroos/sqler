@@ -118,7 +118,7 @@ jobs:
         with:
           # check, screenshots, db and docs build the same debug tree; only this job saves it.
           shared-key: debug
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci-speedup' }}
       - name: Linux system packages (GPUI build)
         if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         run: |
@@ -178,7 +178,7 @@ jobs:
         with:
           # Clippy builds the check profile, not the test tree `check` caches, so it keeps its own key.
           shared-key: clippy
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci-speedup' }}
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -334,7 +334,7 @@ jobs:
         with:
           # The guest workspace builds into target/plugins/cargo, which the root target dir already caches.
           workspaces: . -> target
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci-speedup' }}
       - name: Build the plugins (debug)
         if: needs.changes.outputs.plugins == 'true'
         shell: bash
