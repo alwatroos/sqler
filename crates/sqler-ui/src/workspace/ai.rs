@@ -135,6 +135,9 @@ impl Workspace {
     /// Runs an AI action. The returned effect is carried out by the view.
     #[allow(clippy::too_many_lines)] // one arm per action
     pub fn dispatch_ai(&mut self, action: AiAction) -> Effect {
+        if action.is_assist() {
+            return self.dispatch_assist(action, None);
+        }
         let changes_config = !matches!(
             action,
             AiAction::OpenSettings
@@ -214,6 +217,8 @@ impl Workspace {
             | AiAction::CopyAuditSql
             | AiAction::SetAuditFilter(_)
             | AiAction::SelectAuditEntry(_)) => self.dispatch_audit(audit),
+            // Routed above; kept so a new assist action cannot fall through unhandled.
+            assist => self.dispatch_assist(assist, None),
         }
     }
 
@@ -242,7 +247,7 @@ impl Workspace {
     }
 
     /// Explains how to set a provider up and shows the AI view.
-    fn no_provider(&mut self) -> Effect {
+    pub(super) fn no_provider(&mut self) -> Effect {
         self.layout
             .apply(WorkbenchAction::ShowSideView(SideView::Ai));
         self.ai_notice(NO_PROVIDER)

@@ -27,7 +27,17 @@ A query tab has a toolbar above the editor. At the left are the breadcrumbs (con
 | Format | `editor:format-sql` | Formats the buffer. |
 | Save | `query:save` | Saves the query. |
 
-The tooltip of a button shows its title and shortcut. A button that cannot act is dimmed, and its tooltip says why: Run, Run All and Explain are disabled while another run is active or waiting for input ("A query is already running or waiting for input") and while the connection of the tab is not available; Explain is also disabled when the driver has no explain; Cancel is disabled while nothing runs ("No query is running.") or while the cancel is in progress. Tab inside the editor indents, so reach the toolbar with the pointer or from the focus cycle (`F6`); every button also has a command in the palette.
+After a divider come three AI buttons, available when AI is on for the connection (see [AI in the SQL editor](ai.md#in-the-sql-editor)):
+
+| Button | Command | What it does |
+| ------ | ------- | ------------ |
+| Generate SQL (sparkles) | `ai:generate-sql`, `Cmd/Ctrl+I` | Opens a prompt bar; the generated SQL is inserted at the cursor. |
+| Explain (message) | `ai:explain-query` | Explains the selection, or the statement at the cursor, in the Assistant view. Not the same as Explain above: it shows no plan. |
+| Fix (wrench) | `ai:fix-query` | Proposes a fix for the first failed statement as a diff in the Assistant view. |
+
+![The query toolbar with the AI buttons](../screenshots/after/editor-results-dark.png)
+
+The tooltip of a button shows its title and shortcut. A button that cannot act is dimmed, and its tooltip says why: Run, Run All and Explain are disabled while another run is active or waiting for input ("A query is already running or waiting for input") and while the connection of the tab is not available; Explain is also disabled when the driver has no explain; Cancel is disabled while nothing runs ("No query is running.") or while the cancel is in progress. Tab inside the editor indents, so reach the toolbar with the pointer or from the focus cycle (`F6`); every button also has a command in the palette. The AI buttons say why they are off in the same way: "Open a SQL editor first.", "AI is off for this connection. Turn it on in the AI view.", "ai.toml could not be read; fix it to use AI.", "No AI provider is set up. Add one in Settings > AI.", "This AI provider is not available in this build.", "An AI request is already running in this tab." and, for Fix, "No failed statement to fix in this tab."
 
 Object tabs (DDL, properties) and data tabs show breadcrumbs too: the connection, the schema (or database), the table and the object. Object tabs have **Open in Editor** (DDL only) and **Copy** in the toolbar.
 
@@ -69,6 +79,10 @@ Each statement gets its own segment in a strip above the grid, titled with its n
 - `3 rows affected · 4 ms` for one that did not;
 - `Error: <message>` when it failed;
 - `Cancelled` or `Not run`.
+
+A failed statement also has an **AI fix** button (wrench) in the results toolbar and on its row in the Messages view. It proposes a fix for that statement in the Assistant view, and it is disabled with the same reasons as the toolbar button. AI never runs anything: you run a fix yourself with Run, and on a `prod` connection that asks for confirmation as usual.
+
+![The query toolbar on a prod connection](../screenshots/after/prod-editor-dark.png)
 
 A statement that returns columns shows them in the same grid as an opened table. The run stops at the first error or cancel, and the statements after it show `Not run`. Rows arrive while the statement is still running.
 

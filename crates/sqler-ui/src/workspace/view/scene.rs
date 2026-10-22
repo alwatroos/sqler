@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use gpui::{App, AppContext as _, Entity, Window};
 use gpui_component::Root;
 use sqler_ai_api::mock::ScriptedProvider;
-use sqler_ai_api::{AiError, AiProvider, ModelInfo};
+use sqler_ai_api::{AiError, AiProvider, ChatEvent, ModelInfo, StopReason};
 use sqler_config::{
     AiConfig, ConnectionAi, ConnectionId, ConnectionSpec, ConnectionStore, KeybindingOverrides,
     MemoryStore, ModelChoice, ProviderConfig, ProviderId, ProviderKind, Secret, ThemePreference,
@@ -146,6 +146,18 @@ pub const SCENES: &[Scene] = &[
         name: "connection-dialog-ai",
         pending: None,
     },
+    Scene {
+        name: "ai-generate",
+        pending: None,
+    },
+    Scene {
+        name: "ai-explain",
+        pending: None,
+    },
+    Scene {
+        name: "ai-fix-diff",
+        pending: None,
+    },
 ];
 
 /// The window size of every scene, in logical pixels.
@@ -192,6 +204,10 @@ enum Wait {
     },
     /// The active tab shows a generated script.
     Ddl,
+    /// The prompt bar of the active tab has its input.
+    PromptInput,
+    /// The assistant of the active tab has answered: it is neither idle nor running.
+    Assist,
 }
 
 impl Wait {
@@ -201,6 +217,8 @@ impl Wait {
             Self::RunDone => "the run to end".to_owned(),
             Self::Table { name, .. } => format!("table {name} in the object browser"),
             Self::Ddl => "the DDL tab".to_owned(),
+            Self::PromptInput => "the AI prompt bar".to_owned(),
+            Self::Assist => "the AI answer".to_owned(),
         }
     }
 }
@@ -226,6 +244,10 @@ enum Step {
     CloseAll,
     /// Marks the n-th query tab as edited (a stand-in for typing).
     MarkDirty(usize),
+    /// Types a question into the prompt bar and submits it.
+    Prompt(&'static str),
+    /// Lets `n` more frames pass, so a layout change settles before the capture.
+    Pause(u8),
     /// Fills the audit view with the sample entries.
     AuditFixture,
     /// Waits.
@@ -252,6 +274,7 @@ fn editors(conn: &'static str, count: usize, first: usize) -> Vec<Step> {
     steps
 }
 
+#[allow(clippy::too_many_lines)] // one arm per scene
 fn steps_of(scene: &Scene) -> Vec<Step> {
     match scene.name {
         "editor-results" => vec![
@@ -317,6 +340,32 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Wait(Wait::RunDone),
             Step::Command("workbench:show-messages"),
         ],
+        "ai-generate" => vec![
+            open_step("dev", ""),
+            Step::Wait(Wait::Editors(1)),
+            Step::Command("ai:generate-sql"),
+            Step::Wait(Wait::PromptInput),
+            Step::Prompt("total order value per customer"),
+            Step::Wait(Wait::Assist),
+            Step::Pause(4),
+        ],
+        "ai-explain" => vec![
+            open_step(
+                "dev",
+                "select c.name, sum(o.total) from customers c join orders o on o.customer_id = c.id group by c.name;",
+            ),
+            Step::Wait(Wait::Editors(1)),
+            Step::Command("ai:explain-query"),
+            Step::Wait(Wait::Assist),
+        ],
+        "ai-fix-diff" => vec![
+            open_step("dev", "select id, nme from customers;"),
+            Step::Wait(Wait::Editors(1)),
+            Step::Command("query:run-all"),
+            Step::Wait(Wait::RunDone),
+            Step::Command("ai:fix-query"),
+            Step::Wait(Wait::Assist),
+        ],
         "settings" => vec![Step::Command("settings:open")],
         "panels-collapsed" => vec![
             open_step("dev", "select * from customers;"),
@@ -360,7 +409,10 @@ fn store(scene: &Scene) -> Result<ConnectionStore, String> {
         return Ok(store);
     }
     let driver = DriverId::new("sqlite").map_err(|err| err.to_string())?;
-    let dev_ai = if scene.name == "ai-side-view" {
+    let dev_ai = if matches!(
+        scene.name,
+        "ai-side-view" | "ai-generate" | "ai-explain" | "ai-fix-diff"
+    ) {
         ConnectionAi::new(true)
     } else {
         ConnectionAi::default()
@@ -410,7 +462,10 @@ fn startup(
 const SCENE_MODEL: &str = "qwen2.5-coder:7b";
 
 /// A factory whose providers answer from a script: no network, no keychain, no key text.
-struct SceneProviders;
+struct SceneProviders {
+    /// The scripted answer of the scene, pushed once per `build`.
+    answer: Option<&'static str>,
+}
 
 impl AiProviderFactory for SceneProviders {
     fn kinds(&self) -> Vec<ProviderKind> {
@@ -422,9 +477,32 @@ impl AiProviderFactory for SceneProviders {
         _provider: &ProviderConfig,
         _key: Option<&Secret>,
     ) -> Result<Arc<dyn AiProvider>, AiError> {
-        Ok(Arc::new(
-            ScriptedProvider::new("mock").with_models(vec![ModelInfo::new(SCENE_MODEL)]),
-        ))
+        let provider = ScriptedProvider::new("mock").with_models(vec![ModelInfo::new(SCENE_MODEL)]);
+        if let Some(answer) = self.answer {
+            provider.push_script(vec![
+                Ok(ChatEvent::TextDelta(answer.to_owned())),
+                Ok(ChatEvent::Done {
+                    stop: StopReason::EndTurn,
+                }),
+            ]);
+        }
+        Ok(Arc::new(provider))
+    }
+}
+
+/// The answer the scripted provider gives in the scenes that ask the editor AI.
+fn scene_answer(scene: &Scene) -> Option<&'static str> {
+    match scene.name {
+        "ai-generate" => Some(
+            "```sql\nselect c.name, sum(o.total) as total_value\nfrom customers c join orders o on o.customer_id = c.id group by c.name;\n```\nSums the order totals per customer.",
+        ),
+        "ai-explain" => Some(
+            "The query joins every order to its customer and adds up the order totals for each customer name.\n\nIt returns one row per customer who has at least one order. Customers without orders are left out because the join is an inner join.",
+        ),
+        "ai-fix-diff" => Some(
+            "```sql\nselect id, name from customers;\n```\nThe column is called name, not nme.",
+        ),
+        _ => None,
     }
 }
 
@@ -434,7 +512,13 @@ fn ai_startup(scene: &Scene) -> AiStartup {
     if let Ok(ollama) = ProviderId::new("ollama") {
         if matches!(
             scene.name,
-            "ai-side-view" | "ai-settings" | "ai-provider-editor" | "connection-dialog-ai"
+            "ai-side-view"
+                | "ai-settings"
+                | "ai-provider-editor"
+                | "connection-dialog-ai"
+                | "ai-generate"
+                | "ai-explain"
+                | "ai-fix-diff"
         ) {
             config.providers.push(
                 ProviderConfig::new(ollama.clone(), ProviderKind::Ollama)
@@ -456,7 +540,9 @@ fn ai_startup(scene: &Scene) -> AiStartup {
     AiStartup {
         config: Ok(config),
         dir: None,
-        factory: Arc::new(SceneProviders),
+        factory: Arc::new(SceneProviders {
+            answer: scene_answer(scene),
+        }),
     }
 }
 
@@ -522,6 +608,11 @@ impl ScenePlayer {
                         self.scene.name,
                         wait.label()
                     ));
+                }
+                Step::Pause(n) if n > 0 => {
+                    self.steps[0] = Step::Pause(n - 1);
+                    self.view.update(cx, |_, cx| cx.notify());
+                    return ScenePoll::Waiting;
                 }
                 other => {
                     self.steps.pop_front();
@@ -607,6 +698,16 @@ impl WorkspaceView {
                     .ok_or_else(|| format!("no query tab number {n}"))?;
                 self.editor_changed(tab, cx);
             }
+            Step::Prompt(text) => {
+                let tab = self.ws_active_query().ok_or("no query tab")?;
+                let input = self
+                    .assist_input(tab)
+                    .cloned()
+                    .ok_or("the prompt bar has no input")?;
+                input.update(cx, |state, cx| state.set_value(*text, window, cx));
+                self.dispatch_ai(AiAction::SetPrompt((*text).to_owned()), cx);
+                self.dispatch_ai(AiAction::SubmitPrompt, cx);
+            }
             Step::AuditFixture => {
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -615,7 +716,7 @@ impl WorkspaceView {
                     .audit_fixture(crate::ai::audit::fixture::entries(now_ms));
                 cx.notify();
             }
-            Step::Wait(_) => {}
+            Step::Pause(_) | Step::Wait(_) => {}
         }
         cx.notify();
         Ok(())
@@ -644,6 +745,21 @@ impl WorkspaceView {
                 self.ws
                     .query_tab(tab)
                     .is_some_and(|q| !q.is_running() && !q.results().is_empty())
+            }
+            Wait::PromptInput => self
+                .ws_active_query()
+                .is_some_and(|tab| self.assist_input(tab).is_some()),
+            Wait::Assist => {
+                self.assist_edits.is_empty()
+                    && self.ws_active_query().is_some_and(|tab| {
+                        self.ws.assist(tab).is_some_and(|a| {
+                            !matches!(
+                                a.state,
+                                crate::ai::AssistState::Idle
+                                    | crate::ai::AssistState::Running { .. }
+                            )
+                        })
+                    })
             }
             Wait::Table { conn, name } => self.table_found(conn, name, cx),
             Wait::Ddl => self.ws.tabs().active().is_some_and(|tab| {

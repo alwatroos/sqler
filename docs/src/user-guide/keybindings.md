@@ -29,6 +29,7 @@ The palette lists commands that need no argument. `connection:select`, `tab:acti
 | `workbench:toggle-side-panel` | Cmd+B | Ctrl+B |
 | `workbench:show-connections` | Cmd+Shift+E | Ctrl+Shift+E |
 | `workbench:show-ai` | Cmd+Shift+A | Ctrl+Shift+A |
+| `ai:generate-sql` | Cmd+I | Ctrl+I |
 | `workbench:toggle-bottom-panel` | Cmd+J | Ctrl+J |
 | `workbench:focus-next-region` | F6 | F6 |
 | `workbench:focus-previous-region` | Shift+F6 | Shift+F6 |
@@ -46,7 +47,7 @@ The palette lists commands that need no argument. `connection:select`, `tab:acti
 
 The `query:*` commands are described in [Running queries](running-queries.md). `query:explain` has no default shortcut; add it to `keybindings.toml` to bind one.
 
-The `ai:*` commands have no default shortcut, see [AI](ai.md#commands). The `workbench:*` and `pane:*` commands are described in [Workspace](workspace.md). The other workbench commands have no default shortcut: `workbench:show-saved-queries`, `workbench:show-results`, `workbench:show-messages`, `workbench:reset-layout`, `pane:focus-next`, `pane:focus-previous`, `pane:move-tab-to-next`, `pane:move-tab-to-previous`, `tab:pin`, `tab:close-others`, `tab:close-to-the-right` and `tab:close-all`. `workbench:set-side-width`, `workbench:set-panel-height` and `pane:focus` take a value and are driven by the mouse.
+Of the `ai:*` commands only `ai:generate-sql` has a default shortcut; the others have none, see [AI](ai.md#commands). The `workbench:*` and `pane:*` commands are described in [Workspace](workspace.md). The other workbench commands have no default shortcut: `workbench:show-saved-queries`, `workbench:show-results`, `workbench:show-messages`, `workbench:show-assistant`, `workbench:reset-layout`, `pane:focus-next`, `pane:focus-previous`, `pane:move-tab-to-next`, `pane:move-tab-to-previous`, `tab:pin`, `tab:close-others`, `tab:close-to-the-right` and `tab:close-all`. `workbench:set-side-width`, `workbench:set-panel-height` and `pane:focus` take a value and are driven by the mouse.
 
 Keyboard in the workbench: `F6` and `Shift+F6` cycle the regions (activity bar, side panel, editor, bottom panel, status bar). Tab and Shift+Tab move between the controls of the activity bar and the status bar, Enter or Space activates the focused control, and Escape in the bottom panel returns to the editor.
 

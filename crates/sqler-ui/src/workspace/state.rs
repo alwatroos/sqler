@@ -23,7 +23,7 @@ use super::edit::EditFlow;
 use super::export::ExportCenter;
 use super::history::HistoryWorkspace;
 use super::query::ActiveRun;
-use crate::ai::{AiState, AiStatus, ai_status};
+use crate::ai::{AiState, AiStatus, AssistJob, EditorAssist, ai_status};
 use crate::ai::{AuditPanel, AuditRead};
 use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
 use crate::connections::{
@@ -258,6 +258,12 @@ pub enum Effect {
         /// A typed key that is not stored yet.
         key: Option<Secret>,
     },
+    /// Run an editor assist request on tokio (`run_assist` through `SessionBridge::spawn`), then
+    /// report with [`Workspace::assist_finished`]. Its answer never runs: generated SQL goes into
+    /// the editor through `EditorEdit` only.
+    RunAssist(Box<AssistJob>),
+    /// Send the cancel signal of this assist request.
+    CancelAssist(u64),
 }
 
 impl std::fmt::Debug for Effect {
@@ -400,6 +406,14 @@ impl std::fmt::Debug for Effect {
                 .field("provider", &provider.id.as_str())
                 .field("key", &key.is_some())
                 .finish(),
+            // Never the question or the SQL: the job's own Debug has the id, tab and kind only.
+            Self::RunAssist(job) => f
+                .debug_struct("RunAssist")
+                .field("id", &job.id)
+                .field("tab", &job.tab)
+                .field("kind", &job.request.kind())
+                .finish(),
+            Self::CancelAssist(id) => f.debug_tuple("CancelAssist").field(id).finish(),
         }
     }
 }
@@ -485,6 +499,8 @@ pub struct Workspace {
     recent_connections: RecentConnections,
     /// The AI settings: providers, models, drafts and test status.
     pub(super) ai: AiState,
+    /// The editor assistant of every query tab (ADR-0052).
+    pub(super) assist: EditorAssist,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -545,6 +561,7 @@ impl Workspace {
             workbench_newer: false,
             recent_connections: RecentConnections::default(),
             ai: AiState::default(),
+            assist: EditorAssist::default(),
         }
     }
 

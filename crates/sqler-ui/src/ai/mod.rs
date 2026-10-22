@@ -9,6 +9,7 @@
 
 mod action;
 pub mod audit;
+pub mod editor;
 pub mod hub;
 pub mod indicator;
 mod models;
@@ -21,6 +22,10 @@ pub use audit::{
     AUDIT_DECISIONS, AUDIT_PAGE, AUDIT_SURFACES, AUDIT_TOOLS, AuditBatch, AuditFilterChange,
     AuditFilters, AuditLoad, AuditPanel, AuditRead, AuditRow, AuditTone, audit_row, decision_label,
     entry_sql, surface_label, wire_label,
+};
+pub use editor::{
+    AssistJob, AssistKind, AssistOutcome, AssistRequest, AssistState, EditorAssist, EditorSource,
+    PromptBar, TabAssist, run_assist,
 };
 pub use hub::{HubConnection, HubModel, ProviderRow, hub_model};
 pub use indicator::{AiStatus, ai_status, is_local, main_choice};

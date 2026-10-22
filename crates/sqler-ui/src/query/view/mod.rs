@@ -40,6 +40,7 @@ pub(crate) fn query_editor_body(
         .flex()
         .flex_col()
         .child(toolbar::query_toolbar(view, tab, cx))
+        .children(crate::ai::editor::view::prompt_bar(view, tab, cx))
         .child(
             div()
                 .id("query-editor")

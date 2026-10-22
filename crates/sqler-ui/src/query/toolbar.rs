@@ -5,6 +5,7 @@
 //!
 //! Headless; the view only renders it and runs `command_id` through the command pipeline.
 
+use crate::ai::editor::NO_EDITOR;
 use crate::command::CommandId;
 
 use super::explain::EXPLAIN_UNSUPPORTED;
@@ -28,6 +29,12 @@ pub enum ToolbarItem {
     Format,
     /// Save the query.
     Save,
+    /// Generate SQL from a question (AI).
+    AiGenerate,
+    /// Explain the statement at the cursor (AI).
+    AiExplain,
+    /// Fix the failed statement (AI).
+    AiFix,
 }
 
 impl ToolbarItem {
@@ -41,6 +48,9 @@ impl ToolbarItem {
         Self::Save,
     ];
 
+    /// The AI items, in toolbar order. They follow [`Self::ALL`] after a divider.
+    pub const AI: [Self; 3] = [Self::AiGenerate, Self::AiExplain, Self::AiFix];
+
     fn id_str(self) -> &'static str {
         match self {
             Self::Run => "query:run-statement",
@@ -49,6 +59,9 @@ impl ToolbarItem {
             Self::Explain => "query:explain",
             Self::Format => "editor:format-sql",
             Self::Save => "query:save",
+            Self::AiGenerate => "ai:generate-sql",
+            Self::AiExplain => "ai:explain-query",
+            Self::AiFix => "ai:fix-query",
         }
     }
 
@@ -73,6 +86,9 @@ impl ToolbarItem {
             Self::Explain => "Explain Statement at Cursor",
             Self::Format => "Format SQL",
             Self::Save => "Save Query",
+            Self::AiGenerate => "AI: Generate SQL",
+            Self::AiExplain => "AI: Explain Query",
+            Self::AiFix => "AI: Fix Failed Query",
         }
     }
 }
@@ -90,6 +106,29 @@ pub enum RunState {
     Cancelling,
 }
 
+/// Why each AI item is disabled (`None` = enabled).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AiToolbar {
+    /// Generate SQL.
+    pub generate: Option<&'static str>,
+    /// Explain Query.
+    pub explain: Option<&'static str>,
+    /// Fix Failed Query.
+    pub fix: Option<&'static str>,
+}
+
+impl AiToolbar {
+    /// Every item disabled: there is no SQL editor.
+    #[must_use]
+    pub fn unavailable() -> Self {
+        Self {
+            generate: Some(NO_EDITOR),
+            explain: Some(NO_EDITOR),
+            fix: Some(NO_EDITOR),
+        }
+    }
+}
+
 /// What decides which items are enabled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolbarContext {
@@ -99,6 +138,8 @@ pub struct ToolbarContext {
     pub connected: bool,
     /// The driver has an explain form.
     pub explain: bool,
+    /// Why the AI items are disabled.
+    pub ai: AiToolbar,
 }
 
 impl ToolbarContext {
@@ -123,6 +164,9 @@ impl ToolbarContext {
                 RunState::Busy | RunState::Running => None,
             },
             ToolbarItem::Format | ToolbarItem::Save => None,
+            ToolbarItem::AiGenerate => self.ai.generate,
+            ToolbarItem::AiExplain => self.ai.explain,
+            ToolbarItem::AiFix => self.ai.fix,
         }
     }
 }
@@ -147,6 +191,11 @@ mod tests {
             run,
             connected,
             explain,
+            ai: AiToolbar {
+                generate: None,
+                explain: None,
+                fix: None,
+            },
         }
     }
 
@@ -164,6 +213,39 @@ mod tests {
             assert_eq!(item.command_id().as_str(), id);
             assert_eq!(item.title(), title);
         }
+    }
+
+    #[test]
+    fn ai_items_follow_the_all_items_and_have_valid_ids() {
+        let expected = [
+            ("ai:generate-sql", "AI: Generate SQL"),
+            ("ai:explain-query", "AI: Explain Query"),
+            ("ai:fix-query", "AI: Fix Failed Query"),
+        ];
+        for (item, (id, title)) in ToolbarItem::AI.into_iter().zip(expected) {
+            assert_eq!(item.command_id().as_str(), id);
+            assert_eq!(item.title(), title);
+            assert!(!ToolbarItem::ALL.contains(&item));
+        }
+        assert_eq!(ToolbarItem::ALL.len(), 6);
+    }
+
+    #[test]
+    fn ai_reasons_come_from_the_context() {
+        let mut c = ctx(RunState::Idle, true, true);
+        for item in ToolbarItem::AI {
+            assert_eq!(c.disabled_reason(item), None);
+        }
+        c.ai = AiToolbar::unavailable();
+        for item in ToolbarItem::AI {
+            assert_eq!(c.disabled_reason(item), Some(NO_EDITOR));
+        }
+        c.ai.fix = Some("x");
+        c.ai.generate = None;
+        assert_eq!(c.disabled_reason(ToolbarItem::AiFix), Some("x"));
+        assert_eq!(c.disabled_reason(ToolbarItem::AiGenerate), None);
+        // The run items do not depend on the AI reasons.
+        assert_eq!(c.disabled_reason(ToolbarItem::Run), None);
     }
 
     #[test]

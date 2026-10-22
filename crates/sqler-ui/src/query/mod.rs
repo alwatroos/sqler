@@ -65,4 +65,4 @@ pub use params::{
 pub use plan::{Plan, PlanError, PlannedStatement, plan};
 pub use run::{Phase, QueryTab, ResultEntry, RunError, RunEvent, RunId, StatementStatus, Step};
 pub use strip::{StatusTone, status_tone, status_word};
-pub use toolbar::{RunState, ToolbarContext, ToolbarItem, toolbar_tooltip};
+pub use toolbar::{AiToolbar, RunState, ToolbarContext, ToolbarItem, toolbar_tooltip};

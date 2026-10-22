@@ -17,6 +17,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("workbench:show-results", "View: Show Results"),
     ("workbench:show-messages", "View: Show Messages"),
     ("workbench:show-audit", "View: Show Audit Log"),
+    ("workbench:show-assistant", "View: Show Assistant"),
     ("workbench:focus-next-region", "View: Focus Next Region"),
     (
         "workbench:focus-previous-region",
@@ -77,6 +78,7 @@ pub fn action_for(id: &CommandId) -> Option<WorkbenchAction> {
         "workbench:show-results" => WorkbenchAction::ShowPanelView(PanelView::Results),
         "workbench:show-messages" => WorkbenchAction::ShowPanelView(PanelView::Messages),
         "workbench:show-audit" => WorkbenchAction::ShowPanelView(PanelView::Audit),
+        "workbench:show-assistant" => WorkbenchAction::ShowPanelView(PanelView::Assistant),
         "workbench:focus-next-region" => WorkbenchAction::FocusNextRegion,
         "workbench:focus-previous-region" => WorkbenchAction::FocusPreviousRegion,
         "workbench:reset-layout" => WorkbenchAction::ResetLayout,

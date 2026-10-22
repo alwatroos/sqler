@@ -39,7 +39,7 @@ pub const MAX_RECENT_CONNECTIONS: usize = 5;
 pub const SIDE_VIEWS: [&str; 3] = ["connections", "saved-queries", "ai"];
 
 /// The known views of the bottom panel.
-pub const BOTTOM_VIEWS: [&str; 4] = ["results", "messages", "history", "ai-audit"];
+pub const BOTTOM_VIEWS: [&str; 5] = ["results", "messages", "history", "ai-audit", "assistant"];
 
 const DEFAULT_SIDE_SIZE: f32 = 260.0;
 const DEFAULT_BOTTOM_SIZE: f32 = 380.0;
@@ -467,6 +467,28 @@ mod tests {
         let old = loaded("[side_panel]\nview = \"saved-queries\"\nsize = 300");
         assert_eq!(old.side_panel.view, "saved-queries");
         assert_eq!(old.side_panel.size, 300.0);
+    }
+
+    #[test]
+    fn the_assistant_panel_view_loads_and_an_unknown_one_falls_back() {
+        assert_eq!(
+            loaded("[bottom_panel]\nview = \"assistant\"")
+                .bottom_panel
+                .view,
+            "assistant"
+        );
+        assert_eq!(BOTTOM_VIEWS.last(), Some(&"assistant"));
+        assert_eq!(
+            loaded("[bottom_panel]\nview = \"assistants\"")
+                .bottom_panel
+                .view,
+            "results"
+        );
+        let (_t, d) = dir();
+        let mut s = WorkbenchState::default();
+        s.bottom_panel.view = "assistant".into();
+        d.save_workbench_state(&s).unwrap();
+        assert_eq!(d.load_workbench_state(), WorkbenchLoad::Loaded(s));
     }
 
     #[test]
