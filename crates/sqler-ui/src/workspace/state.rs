@@ -23,7 +23,8 @@ use super::edit::EditFlow;
 use super::export::ExportCenter;
 use super::history::HistoryWorkspace;
 use super::query::ActiveRun;
-use crate::ai::{AiState, AiStatus, AssistJob, EditorAssist, ai_status};
+use crate::ai::session::{AiSessionStart, AiTurnJob};
+use crate::ai::{AiSessions, AiState, AiStatus, AssistJob, EditorAssist, HostMsg, ai_status};
 use crate::ai::{AuditPanel, AuditRead};
 use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
 use crate::connections::{
@@ -258,6 +259,19 @@ pub enum Effect {
         /// A typed key that is not stored yet.
         key: Option<Secret>,
     },
+    /// Build the session of a new AI session tab on tokio (`SessionBridge::spawn` with
+    /// `build_session`), report with [`Workspace::ai_session_ready`], and follow the host channel
+    /// with [`Workspace::ai_session_message`].
+    StartAiSession {
+        /// What to build the session from.
+        start: Box<AiSessionStart>,
+        /// Everything the session tells the tab, in order.
+        host: tokio::sync::mpsc::UnboundedReceiver<HostMsg>,
+    },
+    /// Run one turn of an AI session on tokio (`SessionBridge::spawn` with `AiTurnJob::run`). The
+    /// session comes back in `HostMsg::TurnDone`; a lost job is reported with
+    /// [`Workspace::ai_turn_lost`].
+    RunAiTurn(Box<AiTurnJob>),
     /// Run an editor assist request on tokio (`run_assist` through `SessionBridge::spawn`), then
     /// report with [`Workspace::assist_finished`]. Its answer never runs: generated SQL goes into
     /// the editor through `EditorEdit` only.
@@ -406,6 +420,16 @@ impl std::fmt::Debug for Effect {
                 .field("provider", &provider.id.as_str())
                 .field("key", &key.is_some())
                 .finish(),
+            // Ids only: never the message, the SQL or the provider.
+            Self::StartAiSession { start, .. } => f
+                .debug_struct("StartAiSession")
+                .field("tab", &start.tab)
+                .finish_non_exhaustive(),
+            Self::RunAiTurn(job) => f
+                .debug_struct("RunAiTurn")
+                .field("tab", &job.tab)
+                .field("turn", &job.turn)
+                .finish_non_exhaustive(),
             // Never the question or the SQL: the job's own Debug has the id, tab and kind only.
             Self::RunAssist(job) => f
                 .debug_struct("RunAssist")
@@ -499,6 +523,8 @@ pub struct Workspace {
     recent_connections: RecentConnections,
     /// The AI settings: providers, models, drafts and test status.
     pub(super) ai: AiState,
+    /// The AI session tabs.
+    pub(super) ai_sessions: AiSessions,
     /// The editor assistant of every query tab (ADR-0052).
     pub(super) assist: EditorAssist,
 }
@@ -561,6 +587,7 @@ impl Workspace {
             workbench_newer: false,
             recent_connections: RecentConnections::default(),
             ai: AiState::default(),
+            ai_sessions: AiSessions::default(),
             assist: EditorAssist::default(),
         }
     }
@@ -684,6 +711,8 @@ impl Workspace {
         let mut items = vec![conn.name.clone()];
         if tab.kind() == TabKind::Query {
             items.extend(self.tab_database(id));
+        } else if tab.kind() == TabKind::AiSession {
+            items.push("AI session".to_owned());
         } else if let Some(crumbs) = self.object_crumbs.get(&id) {
             items.extend(crumbs.iter().cloned());
         } else {
@@ -1067,6 +1096,7 @@ impl Workspace {
         self.cancel_all_exports();
         let mut cancels = self.cancel_all_queries();
         cancels.extend(self.edit.stop_all_applies());
+        cancels.extend(self.cancel_ai_sessions());
         // Ends every grid ingestion, waking one that is paused on a full page.
         for (_, grid) in self.grid_cancels.drain() {
             grid.cancel();
@@ -1220,10 +1250,15 @@ impl Workspace {
             self.settings_tab = SettingsTab::Active;
         }
         // A session on loan comes back through `query_finished`, which closes it.
-        match (self.sessions.remove(&id), cancel) {
+        let closing = match (self.sessions.remove(&id), cancel) {
             (Some(session), _) => Effect::CloseSession(session),
             (None, Some(handle)) => Effect::CancelQuery(handle),
             (None, None) => Effect::None,
+        };
+        match (closing, self.close_ai_session(id)) {
+            (Effect::None, ai) => ai,
+            (closing, Effect::None) => closing,
+            (closing, ai) => Effect::Batch(vec![closing, ai]),
         }
     }
 
@@ -1239,6 +1274,7 @@ impl Workspace {
         result: Result<Box<dyn Session>, ConnectFailure>,
     ) -> Effect {
         let seed = self.editor_seeds.remove(&request);
+        let rerun = self.ai_sessions.reruns.remove(&request);
         let pending = self.history.take_pending(request);
         let before = self.tabs.active().map(crate::tabs::Tab::id);
         let Some(purpose) = self.requests.remove(&request) else {
@@ -1250,7 +1286,12 @@ impl Workspace {
         match purpose {
             Purpose::Open(id) => {
                 let effect = self.open_finished(&id, result, seed);
-                self.after_history_open(before, pending, effect)
+                let effect = self.after_history_open(before, pending, effect);
+                match rerun {
+                    // An AI session's re-run: the new editor runs the statement it was seeded with.
+                    Some(sql) => self.rerun_opened(before, effect, sql),
+                    None => effect,
+                }
             }
             Purpose::Browse(id) => self.browse_finished(&id, result),
             Purpose::Test => self.test_finished(request, result),
@@ -1423,7 +1464,10 @@ impl Workspace {
 
     /// Takes every open session out (to close them on quit).
     pub fn take_all_sessions(&mut self) -> Vec<Box<dyn Session>> {
-        self.sessions.drain().map(|(_, session)| session).collect()
+        let mut sessions: Vec<Box<dyn Session>> =
+            self.sessions.drain().map(|(_, session)| session).collect();
+        sessions.extend(self.shut_ai_sources());
+        sessions
     }
 
     // ---- connection manager ----

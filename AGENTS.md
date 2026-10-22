@@ -270,6 +270,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0047](docs/src/adr/0047-screenshot-harness.md) | Screenshot harness: headless GPUI renderer, scenes in both themes, Linux CI artifact | accepted |
 | [0050](docs/src/adr/0050-ai-surfaces-in-the-workbench.md) | AI surfaces in the workbench: activity item, side view, status item, command ids, additive `side_view` value, provider factory | accepted |
 | [0052](docs/src/adr/0052-ai-editor-actions.md) | Editor AI actions: generate, explain and fix in the SQL editor, catalog-only source, never run, exact-match fix, Assistant panel view | accepted |
+| [0053](docs/src/adr/0053-ai-session-tab-and-approvals.md) | AI session tab and approvals: pinned tab kind, lend/return turn, host channel, exact-SQL approval card, production gate reuse, UI-only tools, cancel semantics | accepted |
 
 ## 9. Roadmap status
 

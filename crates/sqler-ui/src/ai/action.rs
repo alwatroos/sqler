@@ -4,11 +4,13 @@
 //! `AiAction`: every action of the AI settings and the AI view, each mapped to a command ID.
 //! Later AI features add their rows here (ADR-0050).
 
+use sqler_ai_tools::session::TranscriptEntry;
 use sqler_config::{ModelChoice, ProviderId, ProviderKind, UseCase};
 
 use super::audit::AuditFilterChange;
 use super::settings::AiField;
 use crate::command::{Command, CommandError, CommandId, CommandRegistry};
+use crate::tabs::TabId;
 use crate::workspace::Workspace;
 
 /// A user action on the AI settings or the AI side view.
@@ -84,6 +86,41 @@ pub enum AiAction {
     SetAuditFilter(AuditFilterChange),
     /// Select a row of the audit log.
     SelectAuditEntry(usize),
+    /// Open an AI session tab on the connection the user works on.
+    OpenSession,
+    /// Set the text in the composer of an AI session tab.
+    SetSessionDraft(TabId, String),
+    /// Send the composer text of an AI session tab to the model.
+    SendMessage(TabId),
+    /// Cancel the running turn of an AI session tab.
+    CancelSession(TabId),
+    /// Approve the statement with this ask id that waits in an AI session tab. It answers only
+    /// that ask, and only while it is the one shown.
+    ApproveStatement(TabId, u64),
+    /// Deny the statement with this ask id that waits in an AI session tab.
+    DenyStatement(TabId, u64),
+    /// Run a statement of the transcript again (stable entry number) in a new editor tab.
+    RerunSql(TabId, usize),
+    /// Open a statement of the transcript (stable entry number) in a new editor tab.
+    OpenSqlInEditor(TabId, usize),
+}
+
+impl AiAction {
+    /// Whether the AI session tab handles this action.
+    #[must_use]
+    pub fn is_session(&self) -> bool {
+        matches!(
+            self,
+            Self::OpenSession
+                | Self::SetSessionDraft(..)
+                | Self::SendMessage(_)
+                | Self::CancelSession(_)
+                | Self::ApproveStatement(..)
+                | Self::DenyStatement(..)
+                | Self::RerunSql(..)
+                | Self::OpenSqlInEditor(..)
+        )
+    }
 }
 
 // A typed API key travels in `SetText`; its `Debug` must not show it.
@@ -136,6 +173,29 @@ impl std::fmt::Debug for AiAction {
             Self::CopyAuditSql => f.write_str("CopyAuditSql"),
             Self::SetAuditFilter(change) => f.debug_tuple("SetAuditFilter").field(change).finish(),
             Self::SelectAuditEntry(ix) => f.debug_tuple("SelectAuditEntry").field(ix).finish(),
+            Self::OpenSession => f.write_str("OpenSession"),
+            // The length only: the draft is the user's message.
+            Self::SetSessionDraft(tab, text) => f
+                .debug_struct("SetSessionDraft")
+                .field("tab", tab)
+                .field("len", &text.len())
+                .finish(),
+            Self::SendMessage(tab) => f.debug_tuple("SendMessage").field(tab).finish(),
+            Self::CancelSession(tab) => f.debug_tuple("CancelSession").field(tab).finish(),
+            Self::ApproveStatement(tab, id) => f
+                .debug_tuple("ApproveStatement")
+                .field(tab)
+                .field(id)
+                .finish(),
+            Self::DenyStatement(tab, id) => {
+                f.debug_tuple("DenyStatement").field(tab).field(id).finish()
+            }
+            Self::RerunSql(tab, ix) => f.debug_tuple("RerunSql").field(tab).field(ix).finish(),
+            Self::OpenSqlInEditor(tab, ix) => f
+                .debug_tuple("OpenSqlInEditor")
+                .field(tab)
+                .field(ix)
+                .finish(),
         }
     }
 }
@@ -161,6 +221,13 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("ai:open-audit-log", "AI: Open Audit Log"),
     ("ai:load-more-audit", "AI: Load More Audit Entries"),
     ("ai:copy-audit-sql", "AI: Copy SQL of Audit Entry"),
+    ("ai:open-session", "AI: Open Session"),
+    ("ai:send-message", "AI: Send Message"),
+    ("ai:cancel-session", "AI: Cancel Session Turn"),
+    ("ai:approve-statement", "AI: Approve Statement"),
+    ("ai:deny-statement", "AI: Deny Statement"),
+    ("ai:rerun-sql", "AI: Re-run SQL"),
+    ("ai:open-sql-in-editor", "AI: Open SQL in Editor"),
 ];
 
 impl AiAction {
@@ -201,6 +268,13 @@ impl AiAction {
             }
             Self::LoadMoreAudit => "ai:load-more-audit",
             Self::CopyAuditSql => "ai:copy-audit-sql",
+            Self::OpenSession => "ai:open-session",
+            Self::SetSessionDraft(..) | Self::SendMessage(_) => "ai:send-message",
+            Self::CancelSession(_) => "ai:cancel-session",
+            Self::ApproveStatement(..) => "ai:approve-statement",
+            Self::DenyStatement(..) => "ai:deny-statement",
+            Self::RerunSql(..) => "ai:rerun-sql",
+            Self::OpenSqlInEditor(..) => "ai:open-sql-in-editor",
         };
         CommandId::new(id).expect("constant command ID is valid")
     }
@@ -276,6 +350,40 @@ pub fn action_for(id: &CommandId, ws: &Workspace) -> Option<AiAction> {
             .selected_sql()
             .is_some()
             .then_some(AiAction::CopyAuditSql),
+        "ai:open-session" => Some(AiAction::OpenSession),
+        "ai:send-message"
+        | "ai:cancel-session"
+        | "ai:approve-statement"
+        | "ai:deny-statement"
+        | "ai:rerun-sql"
+        | "ai:open-sql-in-editor" => session_action(id.as_str(), ws),
+        _ => None,
+    }
+}
+
+/// The session tab commands: they apply only while the active tab is an AI session.
+fn session_action(id: &str, ws: &Workspace) -> Option<AiAction> {
+    let (tab, session) = ws.active_ai_session()?;
+    let last_sql = || {
+        session
+            .entries()
+            .iter()
+            .rposition(|e| matches!(e, TranscriptEntry::Sql(_)))
+            .map(|ix| session.dropped() + ix)
+    };
+    let shown = || {
+        session
+            .approvals()
+            .shown_current(sqler_ai_tools::ApprovalStage::Confirm)
+    };
+    match id {
+        "ai:send-message" => Some(AiAction::SendMessage(tab)),
+        "ai:cancel-session" => session.is_running().then_some(AiAction::CancelSession(tab)),
+        // Only the ask whose card the user has seen with its exact SQL (ADR-0053).
+        "ai:approve-statement" => shown().map(|id| AiAction::ApproveStatement(tab, id)),
+        "ai:deny-statement" => shown().map(|id| AiAction::DenyStatement(tab, id)),
+        "ai:rerun-sql" => last_sql().map(|ix| AiAction::RerunSql(tab, ix)),
+        "ai:open-sql-in-editor" => last_sql().map(|ix| AiAction::OpenSqlInEditor(tab, ix)),
         _ => None,
     }
 }
@@ -289,6 +397,16 @@ mod tests {
 
     fn pid(s: &str) -> ProviderId {
         ProviderId::new(s).unwrap()
+    }
+
+    fn tab() -> TabId {
+        let conn = crate::tabs::TabConnection {
+            name: "db".into(),
+            driver: sqler_driver_api::sqler_core::DriverId::new("sqlite").unwrap(),
+            color: None,
+            environment: None,
+        };
+        crate::tabs::TabStrip::default().open(conn, crate::tabs::TabKind::AiSession)
     }
 
     fn all() -> Vec<AiAction> {
@@ -329,6 +447,14 @@ mod tests {
             AiAction::CopyAuditSql,
             AiAction::SetAuditFilter(AuditFilterChange::Tool(None)),
             AiAction::SelectAuditEntry(0),
+            AiAction::OpenSession,
+            AiAction::SetSessionDraft(tab(), String::new()),
+            AiAction::SendMessage(tab()),
+            AiAction::CancelSession(tab()),
+            AiAction::ApproveStatement(tab(), 0),
+            AiAction::DenyStatement(tab(), 0),
+            AiAction::RerunSql(tab(), 0),
+            AiAction::OpenSqlInEditor(tab(), 0),
         ]
     }
 
@@ -421,6 +547,7 @@ mod tests {
     fn assist_actions_are_marked() {
         for a in all() {
             let assist = a.command_id().as_str().starts_with("ai:")
+                && !a.is_session()
                 && !matches!(
                     a.command_id().as_str(),
                     "ai:open-settings"
@@ -495,5 +622,39 @@ mod tests {
             text: "m1".into(),
         };
         assert!(format!("{b:?}").contains("m1"));
+    }
+
+    #[test]
+    fn session_actions_are_ours_and_hide_the_message() {
+        let secret = "canary message";
+        let draft = AiAction::SetSessionDraft(tab(), secret.into());
+        assert!(draft.is_session());
+        let text = format!("{draft:?}");
+        assert!(!text.contains(secret));
+        assert!(text.contains("len"));
+        assert!(AiAction::OpenSession.is_session());
+        assert!(!AiAction::ToggleConnection.is_session());
+        assert_eq!(
+            AiAction::SetSessionDraft(tab(), String::new())
+                .command_id()
+                .as_str(),
+            "ai:send-message"
+        );
+    }
+
+    #[test]
+    fn session_commands_need_a_session_tab() {
+        let w = Workspace::new(SidebarModel::default());
+        assert_eq!(act("ai:open-session", &w), Some(AiAction::OpenSession));
+        for id in [
+            "ai:send-message",
+            "ai:cancel-session",
+            "ai:approve-statement",
+            "ai:deny-statement",
+            "ai:rerun-sql",
+            "ai:open-sql-in-editor",
+        ] {
+            assert_eq!(act(id, &w), None, "{id}");
+        }
     }
 }

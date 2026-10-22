@@ -55,6 +55,17 @@ pub enum TabKind {
     Properties,
     /// The query history of one connection, with a search box.
     History,
+    /// An AI exploration session on one connection.
+    AiSession,
+}
+
+impl TabKind {
+    /// Whether the tab owns a run gate (the production confirmation of ADR-0024): a query tab
+    /// runs statements through it, an AI session tab opens it for the second confirmation.
+    #[must_use]
+    pub fn uses_run_gate(self) -> bool {
+        matches!(self, Self::Query | Self::AiSession)
+    }
 }
 
 /// The connection data a tab needs to render its header.
@@ -128,6 +139,7 @@ impl Tab {
                 TabKind::Properties => format!("Properties: {object}"),
                 TabKind::Grid => format!("Results: {object}"),
                 TabKind::History => format!("History: {object}"),
+                TabKind::AiSession => format!("AI: {object}"),
                 TabKind::Query => object.clone(),
             };
         }
@@ -139,6 +151,7 @@ impl Tab {
         match self.kind {
             TabKind::Grid => format!("Results: {base}"),
             TabKind::History => format!("History: {base}"),
+            TabKind::AiSession => format!("AI: {base}"),
             TabKind::Query | TabKind::Ddl | TabKind::Properties => base,
         }
     }
@@ -709,6 +722,19 @@ mod tests {
         let plain = s.open(conn("y"), TabKind::History);
         assert_eq!(s.get(named).unwrap().title(), "History: prod");
         assert_eq!(s.get(plain).unwrap().title(), "History: y");
+    }
+
+    #[test]
+    fn ai_session_tab_title_and_run_gate() {
+        let mut s = TabStrip::default();
+        let plain = s.open(conn("x"), TabKind::AiSession);
+        let named = s.open_object(conn("y"), TabKind::AiSession, "orders");
+        assert_eq!(s.get(plain).unwrap().title(), "AI: x");
+        assert_eq!(s.get(named).unwrap().title(), "AI: orders");
+        assert!(TabKind::AiSession.uses_run_gate());
+        assert!(TabKind::Query.uses_run_gate());
+        assert!(!TabKind::Grid.uses_run_gate());
+        assert!(!TabKind::History.uses_run_gate());
     }
 
     fn titles(s: &TabStrip, g: GroupId) -> Vec<TabId> {
