@@ -55,6 +55,16 @@ pub const TAB_CLOSED: &str = "the AI session tab was closed";
 /// A UI tool or a re-run named another connection than the tab's.
 pub const WRONG_CONNECTION: &str = "this session can only use its own connection";
 
+/// An approve or deny named a statement that no longer waits; nothing was answered.
+pub const STALE_ANSWER: &str =
+    "That statement is not the one waiting any more, so nothing was approved or denied.";
+/// A statement of the transcript is no longer kept.
+pub const ENTRY_GONE: &str = "That statement is no longer in the transcript.";
+/// How many transcript entries a tab keeps. The older ones are dropped and the view says so.
+pub const MAX_ENTRIES: usize = 500;
+/// The line that stands for the dropped entries.
+pub const DROPPED_MARKER: &str = "Older entries were dropped to keep this session light.";
+
 /// Where a session tab is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionPhase {
@@ -78,6 +88,9 @@ pub struct AiSessionTab {
     pub(crate) status: Option<AiStatus>,
     pub(crate) phase: SessionPhase,
     pub(crate) entries: Vec<TranscriptEntry>,
+    /// How many entries before `entries[0]` were dropped. `dropped + i` is the stable number of
+    /// `entries[i]`: the position in the engine transcript, which only grows.
+    pub(crate) dropped: usize,
     pub(crate) streaming: String,
     pub(crate) state: SessionState,
     pub(crate) draft: String,
@@ -116,6 +129,7 @@ impl AiSessionTab {
             status,
             phase: SessionPhase::Starting,
             entries: Vec::new(),
+            dropped: 0,
             streaming: String::new(),
             state: SessionState::Idle,
             draft: String::new(),
@@ -156,6 +170,39 @@ impl AiSessionTab {
     #[must_use]
     pub fn entries(&self) -> &[TranscriptEntry] {
         &self.entries
+    }
+
+    /// How many older entries the tab no longer keeps.
+    #[must_use]
+    pub fn dropped(&self) -> usize {
+        self.dropped
+    }
+
+    /// The entry with the stable number `no`, if it is still kept.
+    #[must_use]
+    pub fn entry(&self, no: usize) -> Option<&TranscriptEntry> {
+        self.entries.get(no.checked_sub(self.dropped)?)
+    }
+
+    /// Adds one entry; the oldest go when there are more than [`MAX_ENTRIES`].
+    pub(crate) fn push_entry(&mut self, entry: TranscriptEntry) {
+        self.entries.push(entry);
+        self.trim();
+    }
+
+    /// Replaces the entries by the whole engine transcript.
+    pub(crate) fn set_entries(&mut self, all: &[TranscriptEntry]) {
+        self.entries = all.to_vec();
+        self.dropped = 0;
+        self.trim();
+    }
+
+    fn trim(&mut self) {
+        let extra = self.entries.len().saturating_sub(MAX_ENTRIES);
+        if extra > 0 {
+            self.entries.drain(..extra);
+            self.dropped += extra;
+        }
     }
 
     /// The answer the model is streaming now.

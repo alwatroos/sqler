@@ -225,8 +225,8 @@ impl Workspace {
             | AiAction::SetSessionDraft(..)
             | AiAction::SendMessage(_)
             | AiAction::CancelSession(_)
-            | AiAction::ApproveStatement(_)
-            | AiAction::DenyStatement(_)
+            | AiAction::ApproveStatement(..)
+            | AiAction::DenyStatement(..)
             | AiAction::RerunSql(..)
             | AiAction::OpenSqlInEditor(..)) => self.dispatch_session(session),
             // Routed above; kept so a new assist action cannot fall through unhandled.

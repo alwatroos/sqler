@@ -94,13 +94,14 @@ pub enum AiAction {
     SendMessage(TabId),
     /// Cancel the running turn of an AI session tab.
     CancelSession(TabId),
-    /// Approve the statement that waits in an AI session tab.
-    ApproveStatement(TabId),
-    /// Deny the statement that waits in an AI session tab.
-    DenyStatement(TabId),
-    /// Run a statement of the transcript again (entry index) in a new editor tab.
+    /// Approve the statement with this ask id that waits in an AI session tab. It answers only
+    /// that ask, and only while it is the one shown.
+    ApproveStatement(TabId, u64),
+    /// Deny the statement with this ask id that waits in an AI session tab.
+    DenyStatement(TabId, u64),
+    /// Run a statement of the transcript again (stable entry number) in a new editor tab.
     RerunSql(TabId, usize),
-    /// Open a statement of the transcript (entry index) in a new editor tab.
+    /// Open a statement of the transcript (stable entry number) in a new editor tab.
     OpenSqlInEditor(TabId, usize),
 }
 
@@ -114,8 +115,8 @@ impl AiAction {
                 | Self::SetSessionDraft(..)
                 | Self::SendMessage(_)
                 | Self::CancelSession(_)
-                | Self::ApproveStatement(_)
-                | Self::DenyStatement(_)
+                | Self::ApproveStatement(..)
+                | Self::DenyStatement(..)
                 | Self::RerunSql(..)
                 | Self::OpenSqlInEditor(..)
         )
@@ -181,8 +182,14 @@ impl std::fmt::Debug for AiAction {
                 .finish(),
             Self::SendMessage(tab) => f.debug_tuple("SendMessage").field(tab).finish(),
             Self::CancelSession(tab) => f.debug_tuple("CancelSession").field(tab).finish(),
-            Self::ApproveStatement(tab) => f.debug_tuple("ApproveStatement").field(tab).finish(),
-            Self::DenyStatement(tab) => f.debug_tuple("DenyStatement").field(tab).finish(),
+            Self::ApproveStatement(tab, id) => f
+                .debug_tuple("ApproveStatement")
+                .field(tab)
+                .field(id)
+                .finish(),
+            Self::DenyStatement(tab, id) => {
+                f.debug_tuple("DenyStatement").field(tab).field(id).finish()
+            }
             Self::RerunSql(tab, ix) => f.debug_tuple("RerunSql").field(tab).field(ix).finish(),
             Self::OpenSqlInEditor(tab, ix) => f
                 .debug_tuple("OpenSqlInEditor")
@@ -264,8 +271,8 @@ impl AiAction {
             Self::OpenSession => "ai:open-session",
             Self::SetSessionDraft(..) | Self::SendMessage(_) => "ai:send-message",
             Self::CancelSession(_) => "ai:cancel-session",
-            Self::ApproveStatement(_) => "ai:approve-statement",
-            Self::DenyStatement(_) => "ai:deny-statement",
+            Self::ApproveStatement(..) => "ai:approve-statement",
+            Self::DenyStatement(..) => "ai:deny-statement",
             Self::RerunSql(..) => "ai:rerun-sql",
             Self::OpenSqlInEditor(..) => "ai:open-sql-in-editor",
         };
@@ -362,18 +369,19 @@ fn session_action(id: &str, ws: &Workspace) -> Option<AiAction> {
             .entries()
             .iter()
             .rposition(|e| matches!(e, TranscriptEntry::Sql(_)))
+            .map(|ix| session.dropped() + ix)
+    };
+    let shown = || {
+        session
+            .approvals()
+            .shown_current(sqler_ai_tools::ApprovalStage::Confirm)
     };
     match id {
         "ai:send-message" => Some(AiAction::SendMessage(tab)),
         "ai:cancel-session" => session.is_running().then_some(AiAction::CancelSession(tab)),
-        "ai:approve-statement" => session
-            .approvals()
-            .is_waiting()
-            .then_some(AiAction::ApproveStatement(tab)),
-        "ai:deny-statement" => session
-            .approvals()
-            .is_waiting()
-            .then_some(AiAction::DenyStatement(tab)),
+        // Only the ask whose card the user has seen with its exact SQL (ADR-0053).
+        "ai:approve-statement" => shown().map(|id| AiAction::ApproveStatement(tab, id)),
+        "ai:deny-statement" => shown().map(|id| AiAction::DenyStatement(tab, id)),
         "ai:rerun-sql" => last_sql().map(|ix| AiAction::RerunSql(tab, ix)),
         "ai:open-sql-in-editor" => last_sql().map(|ix| AiAction::OpenSqlInEditor(tab, ix)),
         _ => None,
@@ -443,8 +451,8 @@ mod tests {
             AiAction::SetSessionDraft(tab(), String::new()),
             AiAction::SendMessage(tab()),
             AiAction::CancelSession(tab()),
-            AiAction::ApproveStatement(tab()),
-            AiAction::DenyStatement(tab()),
+            AiAction::ApproveStatement(tab(), 0),
+            AiAction::DenyStatement(tab(), 0),
             AiAction::RerunSql(tab(), 0),
             AiAction::OpenSqlInEditor(tab(), 0),
         ]

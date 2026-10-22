@@ -11,9 +11,10 @@
 //! The second confirmation on a production connection reuses the run gate of ADR-0024:
 //! [`open_prod_gate`] opens it on a [`QueryTab`] with the exact SQL.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 
-use sqler_ai_tools::{ApprovalRequest, Approver, Decision};
+use sqler_ai_tools::{ApprovalRequest, ApprovalStage, Approver, Decision};
 use sqler_driver_api::BoxFuture;
 use sqler_driver_api::sqler_core::DriverId;
 use sqler_sql::Dialect;
@@ -114,6 +115,10 @@ impl std::fmt::Debug for PendingApproval {
 pub struct ApprovalQueue {
     waiting: VecDeque<PendingApproval>,
     next_id: u64,
+    /// The id of the ask whose card the view drew with its exact SQL.
+    shown: Cell<Option<u64>>,
+    /// The ask the production gate was opened for.
+    gate: Option<u64>,
 }
 
 impl ApprovalQueue {
@@ -135,8 +140,46 @@ impl ApprovalQueue {
         self.waiting.front()
     }
 
-    /// Answers the current ask. Returns whether there was one.
-    pub fn answer(&mut self, decision: Decision) -> bool {
+    /// Records that the card of ask `id` was drawn with its exact SQL. Called by the view.
+    pub fn mark_shown(&self, id: u64) {
+        self.shown.set(Some(id));
+    }
+
+    /// The id of the current ask when it is at `stage` and the user has seen it; a command that
+    /// has no card to click (the palette) may answer only this ask.
+    #[must_use]
+    pub fn shown_current(&self, stage: ApprovalStage) -> Option<u64> {
+        let current = self.current()?;
+        (current.request.stage == stage && self.shown.get() == Some(current.id))
+            .then_some(current.id)
+    }
+
+    /// Records that the production gate shows the SQL of ask `id`.
+    pub fn bind_gate(&mut self, id: u64) {
+        self.gate = Some(id);
+    }
+
+    /// The id of the current ask when it waits at `stage` and the production gate shows exactly
+    /// its SQL: the one ask a gate click may answer.
+    #[must_use]
+    pub fn gated_current(&self) -> Option<u64> {
+        let current = self.current()?;
+        (current.request.stage == ApprovalStage::ProdSecond && self.gate == Some(current.id))
+            .then_some(current.id)
+    }
+
+    /// Answers the ask `id` when it is the current one and at `stage`. Any other id (a card that
+    /// is gone, an ask that was answered) is a no-op: it never answers another ask. Returns
+    /// whether it answered.
+    pub fn answer_id(&mut self, id: u64, stage: ApprovalStage, decision: Decision) -> bool {
+        let is_it = self
+            .current()
+            .is_some_and(|p| p.id == id && p.request.stage == stage);
+        is_it && self.answer(decision)
+    }
+
+    /// Answers the current ask, whichever it is. Private: callers name the ask they answer.
+    fn answer(&mut self, decision: Decision) -> bool {
         match self.waiting.pop_front() {
             Some(pending) => {
                 // A dropped receiver means the turn is gone; nothing waits for the answer.
@@ -382,7 +425,7 @@ mod tests {
         let mut queue = ApprovalQueue::default();
         assert!(!queue.is_waiting());
         assert!(queue.current().is_none());
-        assert!(!queue.answer(Decision::Approve));
+        assert!(!queue.answer_id(0, ApprovalStage::Confirm, Decision::Approve));
         let mut tasks = Vec::new();
         let mut ids = Vec::new();
         for (ask, task) in requests {
@@ -393,7 +436,7 @@ mod tests {
         assert_eq!(queue.len(), 3);
         assert_eq!(queue.current().unwrap().id, 0);
         assert_eq!(queue.current().unwrap().request.sql, "update t set a = 1");
-        assert!(queue.answer(Decision::Deny));
+        assert!(queue.answer_id(0, ApprovalStage::Confirm, Decision::Deny));
         assert_eq!(queue.current().unwrap().request.sql, "delete from t");
         queue.deny_all();
         assert!(queue.is_empty());
@@ -403,6 +446,110 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert!(result.content.contains("denied"));
+        }
+    }
+
+    /// A queue with one ask per statement, and the tasks that wait for the answers.
+    async fn queued(
+        sqls: &[&str],
+    ) -> (
+        ApprovalQueue,
+        Vec<u64>,
+        Vec<tokio::task::JoinHandle<sqler_ai_api::ToolResult>>,
+    ) {
+        let (_runs, tools) = fixture(None);
+        let mut queue = ApprovalQueue::default();
+        let (mut ids, mut tasks) = (Vec::new(), Vec::new());
+        for sql in sqls {
+            let (tx, mut rx) = unbounded_channel();
+            let tools = tools.with_approver(Arc::new(ChannelApprover::new(tx, Msg::Ask)));
+            let c = call(sql);
+            tasks.push(tokio::spawn(async move { tools.call(&c).await }));
+            let Some(Msg::Ask(ask)) = rx.recv().await else {
+                panic!("no ask");
+            };
+            ids.push(queue.push(ask));
+        }
+        (queue, ids, tasks)
+    }
+
+    async fn result_of(task: tokio::task::JoinHandle<sqler_ai_api::ToolResult>) -> String {
+        tokio::time::timeout(std::time::Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .content
+    }
+
+    #[tokio::test]
+    async fn a_stale_id_answers_nothing_and_never_the_next_ask() {
+        let (mut queue, ids, mut tasks) = queued(&["update t set a = 1", "delete from t"]).await;
+        let (first, second) = (ids[0], ids[1]);
+        assert!(queue.answer_id(first, ApprovalStage::Confirm, Decision::Deny));
+        // The click that was meant for the first card lands after the queue advanced.
+        assert!(!queue.answer_id(first, ApprovalStage::Confirm, Decision::Approve));
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.current().unwrap().id, second);
+        // The wrong stage is a no-op too.
+        assert!(!queue.answer_id(second, ApprovalStage::ProdSecond, Decision::Approve));
+        assert_eq!(queue.len(), 1);
+        assert!(result_of(tasks.remove(0)).await.contains("denied"));
+        queue.deny_all();
+        assert!(result_of(tasks.remove(0)).await.contains("denied"));
+    }
+
+    #[tokio::test]
+    async fn two_asks_are_answered_in_order_by_id() {
+        let (mut queue, ids, mut tasks) = queued(&["update t set a = 1", "delete from t"]).await;
+        // The second id is not the front: nothing happens.
+        assert!(!queue.answer_id(ids[1], ApprovalStage::Confirm, Decision::Approve));
+        assert_eq!(queue.len(), 2);
+        assert!(queue.answer_id(ids[0], ApprovalStage::Confirm, Decision::Approve));
+        assert!(queue.answer_id(ids[1], ApprovalStage::Confirm, Decision::Deny));
+        assert!(queue.is_empty());
+        assert!(!result_of(tasks.remove(0)).await.contains("denied"));
+        assert!(result_of(tasks.remove(0)).await.contains("denied"));
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_answer_to_one_id_is_a_no_op() {
+        let (mut queue, ids, mut tasks) = queued(&["update t set a = 1", "delete from t"]).await;
+        assert!(queue.answer_id(ids[0], ApprovalStage::Confirm, Decision::Deny));
+        assert!(!queue.answer_id(ids[0], ApprovalStage::Confirm, Decision::Approve));
+        assert_eq!(queue.current().unwrap().id, ids[1]);
+        queue.deny_all();
+        for task in tasks.drain(..) {
+            assert!(result_of(task).await.contains("denied"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_command_answers_only_an_ask_that_was_shown() {
+        let (mut queue, ids, tasks) = queued(&["update t set a = 1", "delete from t"]).await;
+        assert_eq!(queue.shown_current(ApprovalStage::Confirm), None);
+        queue.mark_shown(ids[0]);
+        assert_eq!(queue.shown_current(ApprovalStage::Confirm), Some(ids[0]));
+        assert_eq!(queue.shown_current(ApprovalStage::ProdSecond), None);
+        assert!(queue.answer_id(ids[0], ApprovalStage::Confirm, Decision::Deny));
+        // The second ask became the front but its card was not drawn yet.
+        assert_eq!(queue.shown_current(ApprovalStage::Confirm), None);
+        queue.mark_shown(ids[1]);
+        assert_eq!(queue.shown_current(ApprovalStage::Confirm), Some(ids[1]));
+        queue.deny_all();
+        for task in tasks {
+            assert!(result_of(task).await.contains("denied"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_gate_click_answers_only_the_ask_the_gate_shows() {
+        let (mut queue, ids, tasks) = queued(&["update t set a = 1"]).await;
+        assert_eq!(queue.gated_current(), None);
+        queue.bind_gate(ids[0] + 7);
+        assert_eq!(queue.gated_current(), None);
+        queue.deny_all();
+        for task in tasks {
+            result_of(task).await;
         }
     }
 

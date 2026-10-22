@@ -176,7 +176,7 @@ Type in the composer and press **Send** (`ai:send-message`). The transcript show
 
 ![An AI session tab with an approval card](../screenshots/after/ai-session-dark.png)
 
-**Approvals.** Reads run without asking. Every other statement stops at an approval card that shows the exact SQL that will run and its class. **Deny** has the focus, so a stray Enter refuses. **Approve** (`ai:approve-statement`) lets the statement run; **Deny** (`ai:deny-statement`) runs nothing and the model is told not to retry.
+**Approvals.** Reads run without asking. Every other statement stops at an approval card that shows the exact SQL that will run and its class. **Deny** has the focus, so a stray Enter refuses. **Approve** (`ai:approve-statement`) lets the statement run; **Deny** (`ai:deny-statement`) runs nothing and the model is told not to retry. A button answers the statement on its own card only; if that statement is no longer the one waiting, nothing is approved. The two commands act only on a card that is on screen.
 
 **Production connections ask twice.** After **Approve** the same confirmation dialog as for a manual run on production appears (ADR-0024); only its confirmation runs the statement. Cancelling it denies the statement.
 

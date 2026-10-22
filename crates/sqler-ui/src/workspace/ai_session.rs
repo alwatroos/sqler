@@ -25,9 +25,10 @@ use super::ai::NO_PROVIDER;
 use super::browser::OpenDataJob;
 use super::state::{Effect, Workspace, tab_connection};
 use crate::ai::session::{
-    AiSessionStart, AiSessionTab, AiTurnJob, HostMsg, SESSION_AI_OFF, SESSION_BUSY,
+    AiSessionStart, AiSessionTab, AiTurnJob, ENTRY_GONE, HostMsg, SESSION_AI_OFF, SESSION_BUSY,
     SESSION_CONFIG_BROKEN, SESSION_EMPTY, SESSION_NO_CONNECTION, SESSION_NOT_BUILT,
-    SESSION_STARTING, SessionPhase, SessionReady, TAB_CLOSED, UiCall, UiRequest, WRONG_CONNECTION,
+    SESSION_STARTING, STALE_ANSWER, SessionPhase, SessionReady, TAB_CLOSED, UiCall, UiRequest,
+    WRONG_CONNECTION,
 };
 use crate::ai::{AiAction, ApprovalQueue, HubModel, SessionRow, ai_status, open_prod_gate};
 use crate::connections::ConnectRequest;
@@ -139,8 +140,8 @@ impl Workspace {
             }
             AiAction::SendMessage(tab) => self.send_ai_message(tab),
             AiAction::CancelSession(tab) => self.cancel_ai_session(tab),
-            AiAction::ApproveStatement(tab) => self.answer_card(tab, Decision::Approve),
-            AiAction::DenyStatement(tab) => self.answer_card(tab, Decision::Deny),
+            AiAction::ApproveStatement(tab, id) => self.answer_card(tab, id, Decision::Approve),
+            AiAction::DenyStatement(tab, id) => self.answer_card(tab, id, Decision::Deny),
             AiAction::RerunSql(tab, index) => self.open_sql(tab, index, true),
             AiAction::OpenSqlInEditor(tab, index) => self.open_sql(tab, index, false),
             _ => Effect::None,
@@ -298,13 +299,17 @@ impl Workspace {
 
     /// Answers the approval card (the `Confirm` stage). The production second confirmation is
     /// answered through the gate only.
-    fn answer_card(&mut self, tab: TabId, decision: Decision) -> Effect {
-        if let Some(t) = self.ai_sessions.tabs.get_mut(&tab)
-            && t.approvals.current().map(|p| p.request.stage) == Some(ApprovalStage::Confirm)
-        {
-            t.approvals.answer(decision);
+    ///
+    /// The answer names the ask it is for. When that ask is not the one that waits any more, it
+    /// does nothing but tell the user; it never answers another ask.
+    fn answer_card(&mut self, tab: TabId, id: u64, decision: Decision) -> Effect {
+        let Some(t) = self.ai_sessions.tabs.get_mut(&tab) else {
+            return Effect::None;
+        };
+        if t.approvals.answer_id(id, ApprovalStage::Confirm, decision) {
+            return Effect::None;
         }
-        Effect::None
+        self.session_notice(STALE_ANSWER)
     }
 
     /// The user answered the production confirmation of an AI tab: confirm or dismiss the gate,
@@ -313,12 +318,14 @@ impl Workspace {
         let waiting = self
             .ai_sessions
             .get(tab)
-            .and_then(|t| t.approvals.current())
-            .is_some_and(|p| p.request.stage == ApprovalStage::ProdSecond);
+            .and_then(|t| t.approvals.gated_current());
         let Some(gate) = self.queries.get_mut(&tab) else {
             return;
         };
-        if !waiting || !matches!(gate.phase(), Phase::Confirming(_)) {
+        let Some(id) = waiting else {
+            return;
+        };
+        if !matches!(gate.phase(), Phase::Confirming(_)) {
             return;
         }
         match decision {
@@ -328,7 +335,8 @@ impl Workspace {
             _ => gate.dismiss(),
         }
         if let Some(t) = self.ai_sessions.tabs.get_mut(&tab) {
-            t.approvals.answer(decision);
+            t.approvals
+                .answer_id(id, ApprovalStage::ProdSecond, decision);
         }
     }
 
@@ -338,8 +346,8 @@ impl Workspace {
         let Some(t) = self.ai_sessions.get(tab) else {
             return Effect::None;
         };
-        let Some(TranscriptEntry::Sql(entry)) = t.entries().get(index) else {
-            return Effect::None;
+        let Some(TranscriptEntry::Sql(entry)) = t.entry(index) else {
+            return self.session_notice(ENTRY_GONE);
         };
         let rerun = entry.rerun();
         if rerun.connection != t.info().id {
@@ -401,7 +409,7 @@ impl Workspace {
                     // A turn that is no longer the current one: its session is dropped.
                     return Effect::None;
                 }
-                t.entries = done.session.transcript().entries().to_vec();
+                t.set_entries(done.session.transcript().entries());
                 t.session = Some(Box::new(done.session));
                 t.phase = SessionPhase::Ready;
                 t.streaming.clear();
@@ -423,7 +431,7 @@ impl Workspace {
                 if matches!(entry, TranscriptEntry::Assistant { .. }) {
                     t.streaming.clear();
                 }
-                t.entries.push(entry);
+                t.push_entry(entry);
             }
             SessionEvent::TextDelta(text) => t.streaming.push_str(&text),
             SessionEvent::State(state) => t.state = state,
@@ -434,6 +442,16 @@ impl Workspace {
 
     fn ai_ask(&mut self, tab: TabId, ask: crate::ai::ApprovalAsk) {
         if ask.request.stage == ApprovalStage::ProdSecond {
+            let busy = self
+                .ai_sessions
+                .get(tab)
+                .is_some_and(|t| t.approvals.is_waiting());
+            if busy {
+                // The gate holds one statement; a second one cannot be shown beside it.
+                let _ = ask.reply.send(Decision::Deny);
+                self.notice = Some(STALE_ANSWER.to_owned());
+                return;
+            }
             let driver = ask.request.connection.driver.clone();
             let opened = match self.queries.get_mut(&tab) {
                 Some(gate) => open_prod_gate(gate, &driver, &ask.request.sql),
@@ -447,7 +465,11 @@ impl Workspace {
             }
         }
         if let Some(t) = self.ai_sessions.tabs.get_mut(&tab) {
-            t.approvals.push(ask);
+            let prod = ask.request.stage == ApprovalStage::ProdSecond;
+            let id = t.approvals.push(ask);
+            if prod {
+                t.approvals.bind_gate(id);
+            }
         }
     }
 

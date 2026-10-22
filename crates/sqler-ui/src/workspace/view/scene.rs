@@ -819,11 +819,15 @@ impl WorkspaceView {
                 self.ai_type_and_send(tab, text, window, cx);
             }
             Step::AiApprove => {
-                let (tab, _) = self
+                let (tab, session) = self
                     .ws
                     .active_ai_session()
                     .ok_or("no AI session tab is active")?;
-                self.dispatch_ai(AiAction::ApproveStatement(tab), cx);
+                let id = session
+                    .approvals()
+                    .shown_current(sqler_ai_tools::ApprovalStage::Confirm)
+                    .ok_or("no approval card is shown")?;
+                self.dispatch_ai(AiAction::ApproveStatement(tab, id), cx);
             }
             Step::Pause(_) | Step::Wait(_) => {}
         }

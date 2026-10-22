@@ -35,6 +35,11 @@ pub(crate) fn approval_card(
     ask: &PendingApproval,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
+    // The card carries its exact SQL: palette commands may now answer this ask.
+    if let Some(session) = view.workspace().ai_session(tab) {
+        session.approvals().mark_shown(ask.id);
+    }
+    let id = ask.id;
     let scale = ui_scale(cx);
     let theme = cx.theme();
     let (border, muted, radius) = (theme.border, theme.muted_foreground, theme.radius);
@@ -75,7 +80,7 @@ pub(crate) fn approval_card(
             .outline()
             .small()
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.dispatch_ai(AiAction::DenyStatement(tab), cx);
+                view.dispatch_ai(AiAction::DenyStatement(tab, id), cx);
             })),
     );
     if let Some(focus) = view.ai_deny_focus(tab) {
@@ -88,7 +93,7 @@ pub(crate) fn approval_card(
         .when_prod(prod)
         .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
             if event.click_count() == 1 {
-                view.dispatch_ai(AiAction::ApproveStatement(tab), cx);
+                view.dispatch_ai(AiAction::ApproveStatement(tab, id), cx);
             }
         }));
     div()

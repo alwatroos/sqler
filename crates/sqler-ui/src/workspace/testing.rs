@@ -1541,10 +1541,10 @@ mod ai_session_flow {
 
     use super::*;
     use crate::ai::session::{
-        AiSessionStart, AiSessionTab, HostMsg, NO_TOOLS, SESSION_AI_OFF, SESSION_BUSY,
-        SESSION_CONFIG_BROKEN, SESSION_EMPTY, SESSION_NO_CONNECTION, SESSION_NOT_BUILT,
-        SESSION_STARTING, SessionPhase, TAB_CLOSED, TurnDone, UiCall, UiRequest, WRONG_CONNECTION,
-        build_session, sql_footer,
+        AiSessionStart, AiSessionTab, ENTRY_GONE, HostMsg, MAX_ENTRIES, NO_TOOLS, SESSION_AI_OFF,
+        SESSION_BUSY, SESSION_CONFIG_BROKEN, SESSION_EMPTY, SESSION_NO_CONNECTION,
+        SESSION_NOT_BUILT, SESSION_STARTING, STALE_ANSWER, SessionPhase, TAB_CLOSED, TurnDone,
+        UiCall, UiRequest, WRONG_CONNECTION, build_session, sql_footer,
     };
     use crate::ai::{AiAction, AiProviderFactory, AiStartup, AiState, NoProviders};
     use crate::query::{Phase, QueryTab, RunMode};
@@ -2000,6 +2000,27 @@ mod ai_session_flow {
             });
         }
 
+        /// The id of the ask at the front of the queue.
+        fn front(&self) -> u64 {
+            self.session()
+                .approvals()
+                .current()
+                .expect("an ask waits")
+                .id
+        }
+
+        /// Approves the front ask by its id, as the card's button does.
+        fn approve(&mut self, tab: TabId) -> Effect {
+            let id = self.front();
+            self.w.dispatch_ai(AiAction::ApproveStatement(tab, id))
+        }
+
+        /// Denies the front ask by its id, as the card's button does.
+        fn deny(&mut self, tab: TabId) -> Effect {
+            let id = self.front();
+            self.w.dispatch_ai(AiAction::DenyStatement(tab, id))
+        }
+
         fn until_asked(&mut self) {
             self.until("an approval waits", |w, t| {
                 w.ai_session(t).is_some_and(|s| s.approvals().is_waiting())
@@ -2243,7 +2264,7 @@ mod ai_session_flow {
         }
         assert_eq!(chat.session().label(), "Waiting for your approval");
         assert_eq!(chat.country(2), "DE", "nothing runs before the answer");
-        chat.w.dispatch_ai(AiAction::ApproveStatement(tab));
+        chat.approve(tab);
         chat.until_ready();
         assert_eq!(chat.country(2), "GB");
         let sqls = chat.sqls();
@@ -2260,7 +2281,7 @@ mod ai_session_flow {
         p.push_script(text("Understood, I left it."));
         chat.say("and Globex");
         chat.until_asked();
-        chat.w.dispatch_ai(AiAction::DenyStatement(tab));
+        chat.deny(tab);
         chat.until_ready();
         assert_eq!(chat.country(3), "FR");
         assert!(chat.tool_statuses().iter().any(denied));
@@ -2268,6 +2289,161 @@ mod ai_session_flow {
         assert_eq!(
             assistant_texts(&chat).last().unwrap(),
             "Understood, I left it."
+        );
+    }
+
+    const UPDATE_B: &str = "update customers set country = 'XX' where id = 3";
+
+    #[test]
+    fn a_stale_click_after_the_queue_advanced_approves_nothing() {
+        let p = scripted();
+        p.push_script(run_query("c1", UPDATE));
+        p.push_script(text("one"));
+        let mut chat = Chat::new(Some(Environment::Dev), p.clone());
+        let tab = chat.open_session();
+        chat.say("first");
+        chat.until_asked();
+        let first = chat.front();
+        chat.approve(tab);
+        chat.until_ready();
+        assert_eq!(chat.country(2), "GB");
+
+        p.push_script(run_query("c2", UPDATE_B));
+        p.push_script(text("two"));
+        chat.say("second");
+        chat.until_asked();
+        assert_ne!(chat.front(), first);
+        // The click on the first card lands now.
+        let effect = chat.w.dispatch_ai(AiAction::ApproveStatement(tab, first));
+        assert!(matches!(effect, Effect::None));
+        assert!(
+            chat.session().approvals().is_waiting(),
+            "the ask still waits"
+        );
+        assert_eq!(chat.country(3), "FR", "the second statement did not run");
+        assert!(chat.w.take_notice().is_some_and(|n| n == STALE_ANSWER));
+        chat.w.dispatch_ai(AiAction::DenyStatement(tab, first));
+        assert!(chat.session().approvals().is_waiting());
+        chat.deny(tab);
+        chat.until_ready();
+        assert_eq!(chat.country(3), "FR");
+    }
+
+    #[test]
+    fn the_palette_answers_only_an_ask_whose_card_was_shown() {
+        let p = scripted();
+        p.push_script(run_query("c1", UPDATE));
+        p.push_script(text("done"));
+        let mut chat = Chat::new(Some(Environment::Dev), p);
+        let tab = chat.open_session();
+        chat.say("go");
+        chat.until_asked();
+        let approve = crate::command::CommandId::new("ai:approve-statement").unwrap();
+        let deny = crate::command::CommandId::new("ai:deny-statement").unwrap();
+        // The view has not drawn the card yet.
+        assert_eq!(crate::ai::action_for(&approve, &chat.w), None);
+        assert_eq!(crate::ai::action_for(&deny, &chat.w), None);
+        assert_eq!(chat.country(2), "DE");
+        // The view draws it.
+        let id = chat.front();
+        chat.session().approvals().mark_shown(id);
+        assert_eq!(
+            crate::ai::action_for(&approve, &chat.w),
+            Some(AiAction::ApproveStatement(tab, id))
+        );
+        chat.w.dispatch_ai(AiAction::ApproveStatement(tab, id));
+        chat.until_ready();
+        assert_eq!(chat.country(2), "GB");
+    }
+
+    #[test]
+    fn a_duplicate_answer_to_one_ask_is_ignored() {
+        let p = scripted();
+        p.push_script(run_query("c1", UPDATE));
+        p.push_script(text("done"));
+        let mut chat = Chat::new(Some(Environment::Dev), p);
+        let tab = chat.open_session();
+        chat.say("go");
+        chat.until_asked();
+        let id = chat.front();
+        chat.w.dispatch_ai(AiAction::DenyStatement(tab, id));
+        // Approving the same, already answered ask changes nothing.
+        chat.w.dispatch_ai(AiAction::ApproveStatement(tab, id));
+        chat.until_ready();
+        assert_eq!(chat.country(2), "DE");
+        assert_eq!(chat.sqls().len(), 0);
+    }
+
+    #[test]
+    fn a_rerun_is_keyed_by_a_stable_entry_number() {
+        let p = scripted();
+        p.push_script(run_query("c1", "select name from customers where id = 1"));
+        p.push_script(text("Acme"));
+        let mut chat = Chat::new(Some(Environment::Dev), p);
+        let tab = chat.open_session();
+        chat.ask("who is 1?");
+        let no = chat.session().dropped()
+            + chat
+                .entries()
+                .iter()
+                .position(|e| matches!(e, TranscriptEntry::Sql(_)))
+                .unwrap();
+        // The turn ended and replaced the entries by the engine transcript; the number still
+        // names the same statement.
+        let TranscriptEntry::Sql(entry) = chat.session().entry(no).unwrap() else {
+            panic!("not a statement");
+        };
+        assert_eq!(entry.rerun().sql, "select name from customers where id = 1");
+        // Entries that were dropped are gone, not shifted.
+        chat.w.ai_sessions.tabs.get_mut(&tab).unwrap().dropped = no + 1;
+        assert!(chat.session().entry(no).is_none());
+        assert!(matches!(
+            chat.w.dispatch_ai(AiAction::RerunSql(tab, no)),
+            Effect::None
+        ));
+        assert_eq!(chat.w.take_notice().as_deref(), Some(ENTRY_GONE));
+    }
+
+    #[test]
+    fn the_transcript_is_capped_and_numbers_stay_stable() {
+        let p = scripted();
+        let mut chat = Chat::new(Some(Environment::Dev), p);
+        let tab = chat.open_session();
+        let many: Vec<TranscriptEntry> = (0..MAX_ENTRIES + 10)
+            .map(|i| TranscriptEntry::User {
+                text: format!("m{i}"),
+            })
+            .collect();
+        chat.w
+            .ai_sessions
+            .tabs
+            .get_mut(&tab)
+            .unwrap()
+            .set_entries(&many);
+        let t = chat.session();
+        assert_eq!(t.entries().len(), MAX_ENTRIES);
+        assert_eq!(t.dropped(), 10);
+        assert_eq!(
+            t.entry(10),
+            Some(&TranscriptEntry::User { text: "m10".into() })
+        );
+        assert!(t.entry(9).is_none());
+        chat.w
+            .ai_sessions
+            .tabs
+            .get_mut(&tab)
+            .unwrap()
+            .push_entry(TranscriptEntry::User {
+                text: "last".into(),
+            });
+        let t = chat.session();
+        assert_eq!(t.entries().len(), MAX_ENTRIES);
+        assert_eq!(t.dropped(), 11);
+        assert_eq!(
+            t.entry(MAX_ENTRIES + 10),
+            Some(&TranscriptEntry::User {
+                text: "last".into()
+            })
         );
     }
 
@@ -2286,7 +2462,7 @@ mod ai_session_flow {
         chat.w.dismiss_query_prompt(tab);
         assert!(chat.session().approvals().is_waiting());
         assert_eq!(chat.country(2), "DE");
-        chat.w.dispatch_ai(AiAction::DenyStatement(tab));
+        chat.deny(tab);
         chat.until_ready();
     }
 
@@ -2305,7 +2481,7 @@ mod ai_session_flow {
             ApprovalStage::Confirm
         );
         assert_eq!(chat.w.query_tab(tab).unwrap().phase(), &Phase::Idle);
-        chat.w.dispatch_ai(AiAction::ApproveStatement(tab));
+        chat.approve(tab);
         // The second stage opens the ADR-0024 gate with the exact SQL.
         chat.until("the gate opens", |w, t| {
             matches!(
@@ -2325,7 +2501,7 @@ mod ai_session_flow {
             ApprovalStage::ProdSecond
         );
         // The card commands do not answer the second stage.
-        chat.w.dispatch_ai(AiAction::ApproveStatement(tab));
+        chat.approve(tab);
         assert!(chat.session().approvals().is_waiting());
         assert_eq!(chat.country(2), "DE");
         assert!(matches!(chat.w.confirm_query(tab), Effect::None));
@@ -2342,7 +2518,7 @@ mod ai_session_flow {
         p.push_script(text("ok, not run"));
         chat.say("Initech");
         chat.until_asked();
-        chat.w.dispatch_ai(AiAction::ApproveStatement(tab));
+        chat.approve(tab);
         chat.until("the gate opens", |w, t| {
             matches!(
                 w.query_tab(t).map(QueryTab::phase),
@@ -2647,7 +2823,7 @@ mod ai_session_flow {
         assert!(chat.w.tabs().groups()[1].tabs().contains(&tab));
         assert!(chat.session().approvals().is_waiting());
         assert_ne!(chat.entries().len(), 0);
-        chat.w.dispatch_ai(AiAction::ApproveStatement(tab));
+        chat.approve(tab);
         chat.until_ready();
         assert_eq!(chat.country(2), "GB");
         // A send works from the new group.
@@ -2775,7 +2951,7 @@ mod ai_session_flow {
             chat.w.hub_model().sessions[0].label,
             "Waiting for your approval"
         );
-        chat.w.dispatch_ai(AiAction::ApproveStatement(tab));
+        chat.approve(tab);
         chat.until_ready();
     }
 
@@ -2830,7 +3006,7 @@ mod ai_session_flow {
         let tab = chat.open_session();
         chat.say("go");
         chat.until_asked();
-        chat.w.dispatch_ai(AiAction::ApproveStatement(tab));
+        chat.approve(tab);
         chat.until("the gate opens", |w, t| {
             matches!(
                 w.query_tab(t).map(QueryTab::phase),
@@ -2989,7 +3165,7 @@ mod ai_session_flow {
                     "{:?}",
                     chat.session().approvals().current().unwrap()
                 ));
-                chat.w.dispatch_ai(AiAction::DenyStatement(tab));
+                chat.deny(tab);
                 continue;
             }
             let done = matches!(message, HostMsg::TurnDone(_));

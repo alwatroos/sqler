@@ -148,8 +148,16 @@ fn chat(
                 .child(HELLO_LINE),
         );
     }
+    if session.dropped() > 0 {
+        column = column.child(
+            div()
+                .text_size(px(ui_scale(cx).xs))
+                .text_color(cx.theme().muted_foreground)
+                .child(crate::ai::session::DROPPED_MARKER),
+        );
+    }
     for (index, entry) in session.entries().iter().enumerate() {
-        if let Some(row) = entry_row(tab, index, entry, cx) {
+        if let Some(row) = entry_row(tab, session.dropped() + index, entry, cx) {
             column = column.child(row);
         }
     }
