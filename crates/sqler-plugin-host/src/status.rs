@@ -8,6 +8,7 @@ use std::time::Duration;
 use sqler_plugin_api::{CapabilitySet, Deadlines, GrantKey, PluginId};
 
 use crate::error::{CallError, LoadError};
+use crate::scope::ScopeIssue;
 
 /// What a call into a plugin is for; it picks the wall-clock deadline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -91,6 +92,9 @@ pub struct PluginStatus {
     pub effective: CapabilitySet,
     /// The grant key of this build.
     pub key: GrantKey,
+    /// Granted `fs.read` scopes that got no preopen the last time the plugin was instantiated, with the reason
+    /// (`Display`): a missing directory, or a `plugin`/`data` root that is a link leaving its owner.
+    pub scope_issues: Vec<ScopeIssue>,
 }
 
 #[cfg(test)]

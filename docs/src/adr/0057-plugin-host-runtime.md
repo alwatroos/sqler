@@ -56,10 +56,32 @@ features (`deny` job), so the shipped binary does not grow until a later item tu
 wasmtime **50.0.0**, the newest non-yanked release on 2026-10-22; wasmtime-wasi and wasmtime-wasi-http have the same
 version. One `Engine` per `PluginHost`, created on the first compile (`OnceLock`), never in `PluginHost::new`. The
 configuration is the ADR-0054 one: component model on, epoch interruption on, fuel off, `wasm_backtrace_details`
-disabled, Cranelift at `OptLevel::Speed` under `cl`. No on-disk cache and no parallel compilation: compile happens when
+disabled, Cranelift at `OptLevel::Speed` under `cl`, and every WebAssembly proposal pinned (next section). No on-disk cache and no parallel compilation: compile happens when
 a plugin is first called, on a blocking thread, and the result is cached in memory by `ComponentDigest`. On compile the
 file is read again and hashed again; a different digest is `LoadError::ComponentChanged`, so a component swapped after
 discovery never runs under the grant of the old one. (`async_support` is a no-op in wasmtime 50 and is not called.)
+
+#### Pinned proposals
+
+`engine::FEATURES` sets every proposal explicitly, so a wasmtime update that changes a default cannot widen the guest
+surface. The reason that mattered: wasmtime enables the **threads** proposal by default, and a core module inside a
+component could then declare `(memory 1 65536 shared)`. Growth of a shared memory does not go through the
+`ResourceLimiter`, so one guest could reach its declared maximum (4 GiB) past `memory_bytes`. The ABI has no use for
+threads, so they are off, and `Config::shared_memory(false)` (wasmtime's own default) is set as well. A shared memory and
+a `memory64` memory are tested to fail at compile time (`tests/fixtures/wat/shared-memory.wat`, `memory64.wat`); the
+shared-memory test fails when the proposal is turned back on.
+
+| proposal | state | why |
+| -------- | ----- | --- |
+| bulk-memory, multi-value, reference-types, SIMD, mutable-global, sign-extension, non-trapping float-to-int, extended-const | on | standard in Rust's `wasm32-wasip2` output; no effect on memory accounting |
+| multi-memory | on | every memory is counted by the limiter, in a total across the store (`memories_count_together_against_the_cap`); the 16-memory limit applies |
+| threads, shared-everything-threads | **off** | shared memories bypass the limiter |
+| memory64 | **off** | not needed by the ABI (wasm32); larger declarations |
+| GC, function-references | off | not used by the toolchains the SDK supports |
+| relaxed-SIMD | off | results may differ between hosts |
+| tail-call | off | not emitted by default; keeps stack use predictable under the epoch yields |
+| exceptions, legacy exceptions, stack-switching, wide-arithmetic, custom-page-sizes | off | not used |
+| component model: async, async-stackful, more-async-builtins, threading, error-context, GC, 64-bit, map | off | the p2 ABI of ADR-0055 uses none of them |
 
 wasmtime installs its trap handlers process-wide when the first engine is created. That is lazy here, and in the shipped
 default it never happens.
@@ -70,8 +92,12 @@ default it never happens.
 (registered), `Live` (instantiated) or `Disabled { reason }` with `Faults { count, last }`, `Load(LoadError)` or `User`.
 `init` is the first call: it instantiates if needed, which links with the effective grants and runs `lifecycle.init`
 under the init deadline. Every later (re)instantiation runs `init` again. An `init` error counts as a fault. The WIT
-`lifecycle` has no shutdown, so unloading drops the store. `refresh_grants` drops the instance; the next call relinks with
-the grants as they are then. A load error (`Link`, `Compile`, `ComponentChanged`, `EntryMissing`, `NoCompiler`) disables
+`lifecycle` has no shutdown, so unloading drops the store. `refresh_grants` bumps the grant generation, **cancels the
+calls in flight** (they end with `Cancelled`, which is not a fault) and drops the instance; the next call relinks with the
+grants as they are then. Without the cancel a revoked `net.http` or `fs.read` would keep working until the running call's
+deadline (30 s for commands, 300 s for driver calls). The effective set a call sees is fixed when its instance is built;
+what changes at `refresh_grants` is only that the old instance stops at once. Calls queued behind the one running are
+cancelled with it (they hold a token of the same generation) and the caller retries. A load error (`Link`, `Compile`, `ComponentChanged`, `EntryMissing`, `NoCompiler`) disables
 the plugin with `DisableReason::Load`; `enable` retries. A missing export is `CallError::MissingExport` and leaves the
 plugin `Idle`.
 
@@ -101,8 +127,19 @@ An own `ResourceLimiter` per store with running totals: linear memory capped at 
 all of the store's memories (64 MiB; 256 MiB when the manifest has a guest driver), and 1,000,000 table elements in total
 across all tables; a request past either sets a flag and fails (a growth is an error, which traps); 64 instances, 64
 tables, 16 memories. The WASI resource table (streams, `wasi:http` fields and bodies) is capped at 10,000 entries per
-plugin; the memory behind one entry, for example a body being buffered, is host heap outside the memory cap, bounded by
-the call deadline and the egress body caps (residual risk).
+plugin; the memory behind one entry, for example a body being buffered, is host heap outside the memory cap. It is
+bounded by the egress budget (next paragraph), the body caps and the call deadline (residual risk).
+
+Egress concurrency is capped in the send hook, before anything is buffered: a plugin may have **4** requests in flight
+(`EGRESS_MAX_REQUESTS_PER_PLUGIN`) and hold **32 MiB** of request and response bytes
+(`EGRESS_MAX_BYTES_PER_PLUGIN`); across all plugins of one host the numbers are **16** requests and **96 MiB**. A request
+over any of them is refused at once with the wasi-http error `connection-limit-reached`, never queued. Request bytes are
+charged as they are read and given back when the request ends; response bytes are charged when it arrives and stay
+charged until the guest drops the response body, so unread responses cannot pile up either. The budgets belong to the
+plugin entry (like the log limit), so a restart does not refill them, and leases are given back when the request future
+is dropped (cancel, unload). Residual: the bytes of a request still being sent (up to 8 MiB request plus 16 MiB response
+each) are not charged before they exist, so the worst case is 4 x 24 MiB per plugin and 16 x 24 MiB per host, plus one
+blocking-pool thread per DNS lookup in flight (at most the request cap).
 
 | outcome | `CallError` | counts as a fault |
 | ------- | ----------- | ----------------- |
@@ -136,14 +173,19 @@ The honest statement about clocks and random: **they stay linked**. [ADR-0055](0
 that grants them, and the Rust standard library needs them (`HashMap` seeds, `Instant`, `thread::sleep`). A plugin can
 therefore read the time and draw random numbers, and it can sleep. Sleeping is harmless because every wait is bounded by
 the call deadline (the probe's one-hour `sleep` command ends in `Timeout`). Reading the clock gives a plugin a timing side
-channel; the project accepts it. Scopes that cannot be resolved (`Missing`, `Escapes`, `NoHome`) get no preopen and a
-warning in the log; the plugin still loads.
+channel; the project accepts it. Scopes that cannot be resolved (`Missing`, `Escapes`, `NoHome`) get no preopen, a
+warning in the log and an entry in `PluginStatus::scope_issues` (with a `Display` reason the app can show); the plugin
+still loads. The `plugin` and `data` roots are owned by the package author and the host respectively, so they are not
+followed through links: the root must not itself be a symlink (or junction on Windows) and its canonical path must be
+`<canonical parent>/<name>`. Otherwise a package could ship `data -> ~/.ssh` and `fs.read:data` would expose it. Only
+the `home` root (a place the user chose) may be a link. The `data` directory is created by the host, never taken from the
+package; a root that is a file is `Missing`.
 
 ### Outgoing HTTP
 
 wasmtime-wasi-http is built without its default sender (it brings tokio-rustls and `webpki-roots`, licence
 `CDLA-Permissive-2.0`, and a second TLS stack). The send hook maps the request to an `EgressRequest` (body over 8 MiB is
-`HttpRequestBodySize`) and calls the plugin's `Egress`, created at link from `EgressFactory::for_plugin(id, effective)`.
+`HttpRequestBodySize`) and calls the plugin's `Egress`, created when the instance is built from `EgressFactory::for_plugin(id, effective)`.
 `EgressError` maps to the wasi-http error codes: `Denied` to `HttpRequestDenied`, `Dns` to `DnsError`, `Connect` to
 `ConnectionRefused`, `Tls` to `TlsProtocolError`, `TooLarge` to `HttpResponseBodySize`, `Protocol` to `HttpProtocolError`.
 Without the `net` feature the factory is `NoEgress`: every request is denied.
@@ -160,6 +202,9 @@ Without the `net` feature the factory is `NoEgress`: every request is denied.
    refused if **any** address is forbidden or there is none, so DNS rebinding and `nip.io`-style names fail. The
    connection uses the vetted list, not a second lookup.
 
+So the claim "the sandbox never reaches a non-public address" holds for every name except an explicitly granted
+`localhost`, which reaches loopback on purpose (the tests and local services rely on it).
+
 Forbidden addresses: unspecified, loopback, private, CGNAT `100.64/10`, link-local, multicast, broadcast, reserved
 `240/4`, documentation, benchmarking `198.18/15`, `192.0.0/24`, ULA `fc00::/7`, `fe80::/10`, `fec0::/10`,
 `2001:db8::/32`, and the IPv4-mapped, NAT64 `64:ff9b::/96`, 6to4 and Teredo forms of a forbidden v4.
@@ -170,6 +215,12 @@ hop-by-hop headers are dropped. Bodies are buffered: 8 MiB for a request, 16 MiB
 `content-length` and while reading). Connect timeout 10 s, total 30 s. Streaming is a later, additive change.
 
 ### Grants, settings and logs
+
+The effective set is **enforced per call, not by the linker**. One shared `Linker` links every interface for every
+plugin, so an import is present whether or not it is granted. What denies is the per-call check: `effective` and
+`sqler_plugin_api::gate` in the host interfaces and the `unbound` stubs, the `Egress` of the plugin (denying all without a
+`net.http` grant), and the empty preopen set. P5 and P8 to P12 must therefore not assume that an import is absent when
+ungranted, and must gate every call themselves.
 
 The host reads grants through `GrantSource::approved(&GrantKey) -> Option<CapabilitySet>`, defined in
 `sqler-plugin-api` (ADR-0059) and re-exported by this crate; the grants store of P6 implements it. The effective set is `declared ∩ approved`; a key the user never approved gives the empty set, and the plugin still loads and

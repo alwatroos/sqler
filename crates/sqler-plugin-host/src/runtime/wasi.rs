@@ -29,7 +29,7 @@ pub(crate) fn build(
     log: &SharedLimiter,
 ) -> WasiCtx {
     for issue in issues {
-        tracing::warn!(plugin = %plugin, ?issue, "fs.read scope has no preopen");
+        tracing::warn!(plugin = %plugin, %issue, "fs.read scope has no preopen");
     }
     let mut b = WasiCtxBuilder::new();
     b.allow_tcp(false)
@@ -64,19 +64,31 @@ impl SinkInner {
         );
     }
 
+    /// One pass over `data`: each byte is looked at once and copied at most once, whatever the number of newlines.
+    /// This is host code the epoch deadline cannot interrupt, so its cost must stay linear in the write.
     fn push(&mut self, data: &[u8]) {
-        self.buf.extend_from_slice(data);
-        while let Some(pos) = self.buf.iter().position(|b| *b == b'\n') {
-            let rest = self.buf.split_off(pos + 1);
-            self.buf.pop();
+        let mut rest = data;
+        while let Some(pos) = rest.iter().position(|b| *b == b'\n') {
+            let (head, tail) = rest.split_at(pos);
+            self.append(head);
             self.line(&self.buf);
-            self.buf = rest;
+            self.buf.clear();
+            rest = &tail[1..];
         }
-        // A guest that never writes a newline must not grow the buffer without bound.
-        while self.buf.len() >= LOG_MAX_BYTES {
-            let rest = self.buf.split_off(LOG_MAX_BYTES);
-            self.line(&self.buf);
-            self.buf = rest;
+        self.append(rest);
+    }
+
+    /// Adds a newline-free chunk. A line that reaches [`LOG_MAX_BYTES`] is emitted when more of it follows, so a guest
+    /// that never writes a newline cannot grow the buffer without bound, while a line of exactly the cap stays one.
+    fn append(&mut self, mut chunk: &[u8]) {
+        while !chunk.is_empty() {
+            if self.buf.len() >= LOG_MAX_BYTES {
+                self.line(&self.buf);
+                self.buf.clear();
+            }
+            let take = chunk.len().min(LOG_MAX_BYTES - self.buf.len());
+            self.buf.extend_from_slice(&chunk[..take]);
+            chunk = &chunk[take..];
         }
     }
 
@@ -175,5 +187,39 @@ mod tests {
         let mut inner = s.0.lock().unwrap();
         inner.push(&vec![b'a'; LOG_MAX_BYTES + 10]);
         assert_eq!(inner.buf.len(), 10);
+        inner.push(&vec![b'a'; LOG_MAX_BYTES - 10]);
+        assert_eq!(inner.buf.len(), LOG_MAX_BYTES);
+        inner.push(b"z");
+        assert_eq!(inner.buf, b"z");
+    }
+
+    #[test]
+    fn a_line_of_exactly_the_cap_is_one_line() {
+        let (s, _) = sink();
+        let mut inner = s.0.lock().unwrap();
+        inner.push(&vec![b'a'; LOG_MAX_BYTES]);
+        inner.push(b"\n");
+        assert_eq!(inner.buf, b"");
+    }
+
+    #[test]
+    fn a_write_of_a_million_newlines_is_linear() {
+        let (s, _) = sink();
+        let mut inner = s.0.lock().unwrap();
+        let data = vec![b'\n'; 1_000_000];
+        let t = std::time::Instant::now();
+        inner.push(&data);
+        // Quadratic copying would be 5e11 bytes (minutes); linear is milliseconds even unoptimised.
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(10),
+            "{:?}",
+            t.elapsed()
+        );
+        assert_eq!(inner.buf, b"");
+        // Short lines followed by a tail keep exactly the tail.
+        let mut text = b"ab\n".repeat(300_000);
+        text.extend_from_slice(b"tail");
+        inner.push(&text);
+        assert_eq!(inner.buf, b"tail");
     }
 }

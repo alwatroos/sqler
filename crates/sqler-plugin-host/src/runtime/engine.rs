@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use sqler_plugin_api::ComponentDigest;
 use wasmtime::component::{Component, Linker};
-use wasmtime::{Config, Engine};
+use wasmtime::{Config, Engine, WasmFeatures};
 
 use super::link::add_imports;
 use super::state::HostState;
@@ -155,18 +155,66 @@ fn compile(_engine: &Engine, _bytes: &[u8]) -> Result<Component, LoadError> {
     Err(LoadError::NoCompiler)
 }
 
-/// ADR-0054: component model, epoch interruption, no fuel, no on-disk cache, no parallel compilation, no backtrace
-/// details; Cranelift at `Speed`.
+/// ADR-0054 and ADR-0057: component model, epoch interruption, no fuel, no on-disk cache, no backtrace details;
+/// Cranelift at `Speed`.
+///
+/// Every WebAssembly proposal is pinned to a value this function chose, so a wasmtime update that changes a default
+/// cannot widen what a guest may use. The matrix is in ADR-0057. The ones that matter for the memory cap:
+/// `threads` (shared memories, whose growth does not go through the `ResourceLimiter`) and `memory64` (4 GiB-plus
+/// declarations) are off. Multi-memory stays on because every memory is counted by the limiter, together with the
+/// others of the same store.
 fn config() -> Config {
     let mut c = Config::new();
     c.wasm_component_model(true)
         .epoch_interruption(true)
         .consume_fuel(false)
         .wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Disable);
+    for (feature, on) in FEATURES {
+        c.wasm_features(*feature, *on);
+    }
+    // Belt and braces for the one that matters most: wasmtime would also refuse to create a shared memory by itself.
+    c.shared_memory(false);
     #[cfg(feature = "cl")]
     c.cranelift_opt_level(wasmtime::OptLevel::Speed);
     c
 }
+
+/// The proposal matrix. `true` is what Rust's `wasm32-wasip2` output and the component model need, plus the
+/// harmless standardised ones; `false` is everything else this wasmtime knows.
+const FEATURES: &[(WasmFeatures, bool)] = &[
+    // On: standardised, used by the toolchains, no effect on the memory accounting.
+    (WasmFeatures::BULK_MEMORY, true),
+    (WasmFeatures::MULTI_VALUE, true),
+    (WasmFeatures::REFERENCE_TYPES, true),
+    (WasmFeatures::SIMD, true),
+    (WasmFeatures::MUTABLE_GLOBAL, true),
+    (WasmFeatures::SATURATING_FLOAT_TO_INT, true),
+    (WasmFeatures::SIGN_EXTENSION, true),
+    (WasmFeatures::EXTENDED_CONST, true),
+    // Every memory is counted by the limiter, together with the others of the store.
+    (WasmFeatures::MULTI_MEMORY, true),
+    // Off: not needed by the ABI, or outside the limiter.
+    (WasmFeatures::THREADS, false),
+    (WasmFeatures::SHARED_EVERYTHING_THREADS, false),
+    (WasmFeatures::MEMORY64, false),
+    (WasmFeatures::GC, false),
+    (WasmFeatures::FUNCTION_REFERENCES, false),
+    (WasmFeatures::RELAXED_SIMD, false),
+    (WasmFeatures::TAIL_CALL, false),
+    (WasmFeatures::EXCEPTIONS, false),
+    (WasmFeatures::LEGACY_EXCEPTIONS, false),
+    (WasmFeatures::STACK_SWITCHING, false),
+    (WasmFeatures::WIDE_ARITHMETIC, false),
+    (WasmFeatures::CUSTOM_PAGE_SIZES, false),
+    (WasmFeatures::CM_ASYNC, false),
+    (WasmFeatures::CM_ASYNC_STACKFUL, false),
+    (WasmFeatures::CM_MORE_ASYNC_BUILTINS, false),
+    (WasmFeatures::CM_THREADING, false),
+    (WasmFeatures::CM_ERROR_CONTEXT, false),
+    (WasmFeatures::CM_GC, false),
+    (WasmFeatures::CM64, false),
+    (WasmFeatures::CM_MAP, false),
+];
 
 struct EpochShared {
     stop: Mutex<bool>,

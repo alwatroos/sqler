@@ -16,7 +16,7 @@ use wasmtime_wasi::I32Exit;
 use super::bindings::exports::sqler::plugin::lifecycle;
 use super::engine::EngineHost;
 use super::host::{EngineError, Inner, PluginEntry, shut_down_error};
-use super::http::EgressHooks;
+use super::http::{Budgets, EgressHooks};
 use super::limiter::PluginLimiter;
 use super::state::HostState;
 use super::wasi;
@@ -148,6 +148,12 @@ fn prepare(
     }
     let effective = effective(&plugin.manifest.capabilities, approved);
     let (preopens, issues) = resolve_preopens(&effective, &plugin.roots);
+    entry
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .scope_issues
+        .clone_from(&issues);
     let id: PluginId = plugin.manifest.id.clone();
     let log = Arc::clone(&entry.log);
     let wasi = wasi::build(&id, &preopens, &issues, &log);
@@ -172,7 +178,13 @@ fn prepare(
         PluginLimiter::new(cap),
         log,
         wasi,
-        EgressHooks::new(egress),
+        EgressHooks::new(
+            egress,
+            Budgets {
+                plugin: Arc::clone(&entry.egress),
+                global: Arc::clone(&inner.egress_global),
+            },
+        ),
     );
     Ok(Prepared {
         host,

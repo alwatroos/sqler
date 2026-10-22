@@ -6,6 +6,12 @@
 //! Two layers. The engine-free core (default features) discovers plugins, validates manifests, computes the
 //! component digest and grant key, resolves `fs.read` scopes and defines the traits the runtime consumes. The
 //! `runtime` layer (features `cl` / `pulley-rt`) adds the wasmtime engine; `net` adds the HTTP egress.
+//!
+//! Grants are enforced **per call**, not at link time: one shared linker links every interface for every plugin, so an
+//! import is present whether or not it is granted, and the checks are the capability gates, the empty preopen set and
+//! the plugin's `Egress`. `refresh_grants` cancels the calls in flight and drops the instance, so a revoked capability
+//! stops working at once instead of at the call's deadline. The network check refuses every non-public address except
+//! the exact name `localhost` when a `net.http` pattern names it.
 
 #![forbid(unsafe_code)]
 
@@ -32,8 +38,9 @@ pub use discovery::{
     MAX_ENTRIES_PER_ROOT, PluginSource, discover,
 };
 pub use egress::{
-    DenyReason, Egress, EgressError, EgressFactory, EgressFuture, EgressRequest, EgressResponse,
-    MAX_REQUEST_BODY, MAX_RESPONSE_BODY, NoEgress,
+    DenyReason, EGRESS_MAX_BYTES_GLOBAL, EGRESS_MAX_BYTES_PER_PLUGIN, EGRESS_MAX_REQUESTS_GLOBAL,
+    EGRESS_MAX_REQUESTS_PER_PLUGIN, Egress, EgressError, EgressFactory, EgressFuture,
+    EgressRequest, EgressResponse, MAX_REQUEST_BODY, MAX_RESPONSE_BODY, NoEgress,
 };
 pub use error::{CallError, ErrorCode, GuestError, LoadError, SettingsError};
 pub use grant::{DenyAll, GrantSource, effective};

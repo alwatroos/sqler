@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::call::PendingCall;
 use super::engine::EngineHost;
+use super::http::Budget;
 use super::instance::Live;
 use super::log_host::SharedLimiter;
 use super::services::Services;
@@ -21,6 +22,7 @@ use crate::egress::EgressFactory;
 use crate::error::{CallError, LoadError, SettingsError};
 use crate::grant::{GrantSource, effective};
 use crate::log::LogLimiter;
+use crate::scope::ScopeIssue;
 use crate::settings::{SettingsStore, write_setting};
 use crate::status::{DisableReason, PluginState, PluginStatus};
 
@@ -66,6 +68,8 @@ pub(super) struct EntryState {
     pub disabled: Option<DisableReason>,
     pub faults: u32,
     pub live: bool,
+    /// `fs.read` scopes the last instantiation could not preopen (and why), for the plugin list.
+    pub scope_issues: Vec<ScopeIssue>,
 }
 
 /// The error a call gets once the host is shut down.
@@ -87,6 +91,8 @@ pub(super) struct PluginEntry {
     /// The log rate limit. It belongs to the plugin, not to an instance: re-instantiating after a fault or an exit
     /// must not refill the bucket.
     pub log: SharedLimiter,
+    /// The egress budget of the plugin; like the log limit it outlives instances, so a restart does not refill it.
+    pub egress: Arc<Budget>,
     /// The instance. Held for the whole of a call, which serialises the calls of one plugin.
     pub live: tokio::sync::Mutex<Option<Live>>,
     pub state: Mutex<EntryState>,
@@ -104,11 +110,13 @@ impl PluginEntry {
         Self {
             plugin,
             log: Arc::new(Mutex::new(LogLimiter::new())),
+            egress: Budget::per_plugin(),
             live: tokio::sync::Mutex::new(None),
             state: Mutex::new(EntryState {
                 disabled: None,
                 faults: 0,
                 live: false,
+                scope_issues: Vec::new(),
             }),
             kill: Mutex::new(CancellationToken::new()),
             generation: AtomicU64::new(0),
@@ -150,6 +158,8 @@ pub(super) struct Inner {
     engine_gate: Mutex<()>,
     touched: AtomicBool,
     pub shutdown: AtomicBool,
+    /// The egress budget shared by every plugin of this host.
+    pub egress_global: Arc<Budget>,
     registry: Mutex<Registry>,
     metrics: Mutex<Metrics>,
 }
@@ -218,6 +228,7 @@ impl PluginHost {
                 engine_gate: Mutex::new(()),
                 touched: AtomicBool::new(false),
                 shutdown: AtomicBool::new(false),
+                egress_global: Budget::global(),
                 registry: Mutex::new(Registry::default()),
                 metrics: Mutex::new(Metrics::default()),
             }),
@@ -285,15 +296,16 @@ impl PluginHost {
             .iter()
             .map(|e| {
                 let m = &e.plugin.manifest;
-                let state = {
+                let (state, scope_issues) = {
                     let st = lock(&e.state);
-                    match &st.disabled {
+                    let state = match &st.disabled {
                         Some(reason) => PluginState::Disabled {
                             reason: reason.clone(),
                         },
                         None if st.live => PluginState::Live,
                         None => PluginState::Idle,
-                    }
+                    };
+                    (state, st.scope_issues.clone())
                 };
                 let approved = self.inner.opts.grants.approved(&e.plugin.key);
                 PluginStatus {
@@ -301,6 +313,7 @@ impl PluginHost {
                     state,
                     effective: effective(&m.capabilities, approved.as_ref()),
                     key: e.plugin.key.clone(),
+                    scope_issues,
                 }
             })
             .collect()
@@ -315,12 +328,13 @@ impl PluginHost {
         )
     }
 
-    /// Drops the instance; the next call relinks with the grants as they are then.
+    /// Cancels the calls in flight (they end with `Cancelled`, so a revoked capability cannot keep working until the
+    /// call's deadline) and drops the instance; the next call relinks with the grants as they are then.
     pub fn refresh_grants(&self, id: &PluginId) {
         if let Some(e) = self.inner.entry(id) {
             e.generation.fetch_add(1, Ordering::SeqCst);
             e.set_live(false);
-            self.drop_live(&e);
+            self.retire_calls(&e);
         }
     }
 

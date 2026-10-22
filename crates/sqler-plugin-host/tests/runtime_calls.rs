@@ -149,6 +149,34 @@ fn memories_count_together_against_the_cap() {
     s.host.shutdown();
 }
 
+/// A module using a proposal the engine pins off must not even compile, so it never reaches a limiter.
+fn assert_refused_at_compile(fixture: &str) {
+    let s = setup(fixture, &[("alpha", fixture)], LONG);
+    let e = block_on(&s.rt, s.host.init(&id("alpha"))).unwrap_err();
+    let CallError::Load(LoadError::Compile { message }) = &e else {
+        panic!("{e:?}")
+    };
+    println!("{message}");
+    assert!(!e.is_fault());
+    assert!(matches!(
+        s.host.plugins()[0].state,
+        PluginState::Disabled {
+            reason: DisableReason::Load(_)
+        }
+    ));
+    s.host.shutdown();
+}
+
+#[test]
+fn a_shared_memory_is_refused_because_the_limiter_cannot_see_it() {
+    assert_refused_at_compile("shared-memory");
+}
+
+#[test]
+fn a_64_bit_memory_is_refused() {
+    assert_refused_at_compile("memory64");
+}
+
 #[test]
 fn tables_count_together_against_their_cap() {
     // Sixty tables of 20000 elements: 1.2 million together, 1 million at most.
@@ -308,6 +336,47 @@ fn cancel_ends_a_spinning_call() {
     assert_eq!(e, CallError::Cancelled);
     assert_eq!(s.host.plugins()[0].state, PluginState::Idle);
     s.host.shutdown();
+}
+
+#[test]
+fn refresh_grants_cancels_a_call_in_flight() {
+    // A revoked capability must not keep working until the call's deadline (30 s for commands).
+    let s = setup("refresh-cancel", &[("alpha", "spin")], LONG);
+    let a = id("alpha");
+    let started = std::time::Instant::now();
+    let e = block_on(&s.rt, async {
+        let call = s.host.init(&a);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        s.host.refresh_grants(&a);
+        call.await
+    })
+    .unwrap_err();
+    assert_eq!(e, CallError::Cancelled);
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(!e.is_fault());
+    s.host.shutdown();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_data_root_that_leaves_the_plugin_is_reported_in_the_status() {
+    let scratch = Scratch::new("data-link");
+    let dir = write_plugin(scratch.path(), "alpha", "ok", &["fs.read:data"]);
+    let elsewhere = scratch.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, dir.join("data")).unwrap();
+    let d = discover_all(&[dir]);
+    let grants = Arc::new(Grants::default());
+    grants.approve_declared(&d);
+    let rt = runtime();
+    let host = host(&rt, grants, &test_limits(LONG));
+    assert_eq!(host.load(d).len(), 0);
+    assert_eq!(host.plugins()[0].scope_issues, []);
+    block_on(&rt, host.init(&id("alpha"))).unwrap();
+    let issues = host.plugins()[0].scope_issues.clone();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert!(issues[0].to_string().contains("fs.read:data"));
+    host.shutdown();
 }
 
 #[test]

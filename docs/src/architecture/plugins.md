@@ -51,7 +51,9 @@ A granted `fs.read` scope appears at `/` + the scope text, read-only:
 | `fs.read:data/cache` | `/data/cache` | that subdirectory |
 | `fs.read:home/projects` | `/home/projects` | `<home>/projects` |
 
-A scope that is missing, escapes its root through a symlink or has no home directory gets no preopen and a warning.
+A scope that is missing, escapes its root through a symlink or has no home directory gets no preopen, a warning in the log, and an entry in `PluginStatus::scope_issues` with the reason. The `plugin` and `data` roots must themselves be real directories directly inside their parent (the plugin's own directory, the host-owned data directory of that plugin id); a root that is a symlink or a junction is refused, so a package cannot ship `data -> ~/.ssh`. Only `home` may be a link.
+
+Grants are enforced per call, not by the linker: one shared `Linker` links every interface for every plugin, so an ungranted import is present and answers `capability-denied` (or has an empty preopen set, or a denying `Egress`). Later items must not assume an import is absent when ungranted. A grant change takes effect through `refresh_grants`, which cancels the calls in flight and drops the instance.
 
 ## How later items plug in
 

@@ -177,8 +177,13 @@ fn symlink_inside_the_root_pointing_inside_is_fine() {
     assert_eq!(ok[0].guest, "/data/alias");
 }
 
+fn escapes(s: &str) -> ScopeIssue {
+    ScopeIssue::Escapes { scope: scope(s) }
+}
+
 #[test]
-fn a_root_that_is_itself_a_symlink_is_followed() {
+fn a_data_root_that_is_itself_a_symlink_is_refused() {
+    // A package ships `data -> <somewhere else>`; `fs.read:data` must not expose it.
     let s = Scratch::new("rootlink");
     let mut r = roots(&s);
     fs::create_dir_all(s.0.join("real-data/cache")).unwrap();
@@ -186,9 +191,146 @@ fn a_root_that_is_itself_a_symlink_is_followed() {
         return;
     }
     r.data_dir = s.0.join("linked-data");
+    let (ok, issues) = resolve_preopens(&caps(&["data", "data/cache"]), &r);
+    assert_eq!(ok, []);
+    assert_eq!(issues, [escapes("data"), escapes("data/cache")]);
+}
+
+#[test]
+fn data_pointing_at_an_unrelated_directory_is_refused() {
+    // `data -> /etc` in spirit: a sibling tree the package has no business with. Uses a real second tree, `/etc` itself
+    // on Unix, so the test also holds for a directory that certainly exists.
+    let s = Scratch::new("data-etc");
+    let mut r = roots(&s);
+    fs::remove_dir_all(s.0.join("data")).unwrap();
+    let target = if cfg!(unix) {
+        PathBuf::from("/etc")
+    } else {
+        fs::create_dir_all(s.0.join("elsewhere")).unwrap();
+        s.0.join("elsewhere")
+    };
+    if symlink(&target, &s.0.join("data")).is_none() {
+        return;
+    }
+    r.data_dir = s.0.join("data");
+    let (ok, issues) = resolve_preopens(&caps(&["data"]), &r);
+    assert_eq!(ok, []);
+    assert_eq!(issues, [escapes("data")]);
+}
+
+#[test]
+fn a_plugin_root_that_is_a_symlink_is_refused() {
+    let s = Scratch::new("pluginlink");
+    let mut r = roots(&s);
+    fs::create_dir_all(s.0.join("other")).unwrap();
+    if symlink(&s.0.join("other"), &s.0.join("linked-plugin")).is_none() {
+        return;
+    }
+    r.plugin_dir = s.0.join("linked-plugin");
+    let (ok, issues) = resolve_preopens(&caps(&["plugin"]), &r);
+    assert_eq!(ok, []);
+    assert_eq!(issues, [escapes("plugin")]);
+}
+
+#[test]
+fn a_subdirectory_of_the_plugin_pointing_to_its_parent_escapes() {
+    let s = Scratch::new("plugin-sub");
+    let r = roots(&s);
+    if symlink(&s.0, &s.0.join("plugin/sub")).is_none() {
+        return;
+    }
+    let (ok, issues) = resolve_preopens(&caps(&["plugin/sub", "plugin"]), &r);
+    assert_eq!(issues, [escapes("plugin/sub")]);
+    // The plugin directory itself is still fine.
+    assert_eq!(ok.len(), 1);
+    assert_eq!(ok[0].host, s.0.join("plugin"));
+}
+
+#[test]
+fn a_data_root_below_a_symlinked_ancestor_is_fine() {
+    // The parent may be reached through a link (macOS `/var`, a user's linked config directory): only the root itself
+    // must be a real directory.
+    let s = Scratch::new("ancestor");
+    let mut r = roots(&s);
+    if symlink(&s.0, &s.0.join("alias")).is_none() {
+        return;
+    }
+    r.data_dir = s.0.join("alias/data");
     let (ok, issues) = resolve_preopens(&caps(&["data/cache"]), &r);
     assert!(issues.is_empty(), "{issues:?}");
-    assert_eq!(ok[0].host, s.0.join("real-data/cache"));
+    assert_eq!(ok[0].host, s.0.join("data/cache"));
+}
+
+#[test]
+fn a_data_root_that_is_a_file_is_missing() {
+    let s = Scratch::new("data-file");
+    let mut r = roots(&s);
+    fs::write(s.0.join("data-file"), "x").unwrap();
+    r.data_dir = s.0.join("data-file");
+    let (ok, issues) = resolve_preopens(&caps(&["data"]), &r);
+    assert_eq!(ok, []);
+    assert_eq!(
+        issues,
+        [ScopeIssue::Missing {
+            scope: scope("data")
+        }]
+    );
+}
+
+#[test]
+fn a_root_without_a_name_is_refused() {
+    let s = Scratch::new("dotdot");
+    let mut r = roots(&s);
+    r.data_dir = s.0.join("data/..");
+    let (ok, issues) = resolve_preopens(&caps(&["data"]), &r);
+    assert_eq!(ok, []);
+    assert_eq!(issues, [escapes("data")]);
+}
+
+#[test]
+fn a_home_root_may_be_a_link() {
+    // `home` is a place the user chose; only plugin and data are the package's or the host's own.
+    let s = Scratch::new("homelink");
+    let mut r = roots(&s);
+    fs::create_dir_all(s.0.join("real-home/docs")).unwrap();
+    if symlink(&s.0.join("real-home"), &s.0.join("linked-home")).is_none() {
+        return;
+    }
+    r.home_dir = Some(s.0.join("linked-home"));
+    let (ok, issues) = resolve_preopens(&caps(&["home/docs"]), &r);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(ok[0].host, s.0.join("real-home/docs"));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_junction_as_the_data_root_is_refused() {
+    let s = Scratch::new("junction");
+    let mut r = roots(&s);
+    fs::create_dir_all(s.0.join("elsewhere")).unwrap();
+    let junction = s.0.join("junction-data");
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(s.0.join("elsewhere"))
+        .output();
+    if !made.is_ok_and(|o| o.status.success()) {
+        println!("skipped: cannot create junctions here");
+        return;
+    }
+    r.data_dir = junction;
+    let (ok, issues) = resolve_preopens(&caps(&["data"]), &r);
+    assert_eq!(ok, []);
+    assert_eq!(issues, [escapes("data")]);
+}
+
+#[test]
+fn issues_have_a_reason_the_app_can_show() {
+    let text = escapes("data").to_string();
+    assert!(
+        text.contains("fs.read:data") && text.contains("not granted"),
+        "{text}"
+    );
 }
 
 #[test]

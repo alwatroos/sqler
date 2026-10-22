@@ -18,6 +18,16 @@ pub const MAX_REQUEST_BODY: usize = 8 << 20;
 /// Largest response body handed to a plugin.
 pub const MAX_RESPONSE_BODY: usize = 16 << 20;
 
+/// Requests one plugin may have in flight at once (plus unread responses it still holds); more are refused with
+/// `connection-limit-reached`, not queued.
+pub const EGRESS_MAX_REQUESTS_PER_PLUGIN: usize = 4;
+/// Bytes one plugin may hold in the host at once: request bodies being sent and response bodies it has not dropped.
+pub const EGRESS_MAX_BYTES_PER_PLUGIN: usize = 32 << 20;
+/// Requests in flight across every plugin of one host.
+pub const EGRESS_MAX_REQUESTS_GLOBAL: usize = 16;
+/// Bytes held across every plugin of one host.
+pub const EGRESS_MAX_BYTES_GLOBAL: usize = 96 << 20;
+
 /// One outgoing request.
 #[derive(Debug, Clone)]
 pub struct EgressRequest {
