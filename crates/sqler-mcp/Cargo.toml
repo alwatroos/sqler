@@ -1,6 +1,6 @@
 [package]
 name = "sqler-mcp"
-description = "MCP server (rmcp) exposing the sqler-ai-tools tool set to external agents."
+description = "MCP server (stdio and streamable HTTP) exposing the sqler-ai-tools tool set to external agents."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,3 +11,29 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-ai-api.workspace = true
+sqler-ai-tools.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "net", "io-util", "io-std"] }
+tokio-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+http.workspace = true
+bytes.workspace = true
+subtle.workspace = true
+ring.workspace = true
+base64.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+sqler-driver-sqlite.workspace = true
+sqler-catalog.workspace = true
+sqler-driver-api.workspace = true
+sqler-core.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
+hyper = { workspace = true, features = ["client"] }
+tracing.workspace = true
