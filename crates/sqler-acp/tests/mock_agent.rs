@@ -353,6 +353,29 @@ async fn crash_fails_the_prompt_and_reports_the_exit() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn noisy_stderr_is_bounded_and_the_session_stays_healthy() {
+    let (handle, mut events, _host) = launch(&[], Mode::Allow).await;
+    let id = session(&handle).await;
+    // Nobody drains the events during the prompt: the reader must neither stall nor grow without bound.
+    let reply = within("prompt", handle.prompt(&id, "noisy".to_owned())).await;
+    assert!(reply.is_ok(), "{reply:?}");
+    assert_eq!(next_message(&mut events).await, "noisy ok");
+    // The session still works after the flood.
+    let reply = within("prompt", handle.prompt(&id, "echo".to_owned())).await;
+    assert!(reply.is_ok(), "{reply:?}");
+    let exit = within("close", handle.close()).await;
+    assert!(
+        exit.stderr_tail.len() <= 64 && exit.stderr_tail.iter().all(|l| l.chars().count() <= 4096),
+        "{} lines",
+        exit.stderr_tail.len()
+    );
+    assert!(
+        exit.stderr_tail.iter().any(|l| l == "mock: noisy done"),
+        "tail lost the last line"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn crash_on_init_fails_the_launch() {
     let host = TestHost::new(Mode::Allow);
     let result = within(

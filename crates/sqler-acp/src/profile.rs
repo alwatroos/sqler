@@ -216,25 +216,34 @@ fn is_runnable(path: &Path) -> bool {
 /// Find the program to run.
 ///
 /// A command with a path separator (absolute or relative) is used as is when it exists. A bare name is
-/// searched in `path` (the current directory is not searched); on Windows the `PATHEXT` extensions are tried
-/// so that npm `.cmd` shims are found.
+/// searched in `path` (the current directory is not searched). On Windows a name without an extension is
+/// tried with the `PATHEXT` extensions first and never bare, because npm installs an extensionless shell
+/// script next to its `.cmd` shim and only the shim can be spawned; a name that already has an extension is
+/// tried as it is.
 #[must_use]
 pub fn resolve_program(command: &str, path: Option<&OsStr>) -> Option<PathBuf> {
+    let pathext = cfg!(windows)
+        .then(|| std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned()));
+    resolve_with(command, path, pathext.as_deref())
+}
+
+/// `resolve_program` with the Windows behaviour chosen by `pathext` (`Some` is the `PATHEXT` value).
+fn resolve_with(command: &str, path: Option<&OsStr>, pathext: Option<&str>) -> Option<PathBuf> {
     let direct = Path::new(command);
     if command.contains('/') || command.contains(std::path::MAIN_SEPARATOR) {
         return is_runnable(direct).then(|| direct.to_path_buf());
     }
-    let extensions: Vec<String> = if cfg!(windows) {
-        let raw = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
-        std::iter::once(String::new())
-            .chain(raw.split(';').filter(|e| !e.is_empty()).map(str::to_owned))
-            .collect()
-    } else {
-        vec![String::new()]
+    let names: Vec<String> = match pathext {
+        Some(raw) if direct.extension().is_none() => raw
+            .split(';')
+            .filter(|e| !e.is_empty())
+            .map(|ext| format!("{command}{ext}"))
+            .collect(),
+        _ => vec![command.to_owned()],
     };
     for dir in std::env::split_paths(path?) {
-        for ext in &extensions {
-            let candidate = dir.join(format!("{command}{ext}"));
+        for name in &names {
+            let candidate = dir.join(name);
             if is_runnable(&candidate) {
                 return Some(candidate);
             }
@@ -417,6 +426,32 @@ mod tests {
             resolve_program(dir.join("nope").to_str().expect("utf8"), None),
             None
         );
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn windows_resolution_prefers_the_shim_over_the_extensionless_script() {
+        let dir = temp_dir("shim");
+        make_exe(&dir, "x");
+        make_exe(&dir, "x.CMD");
+        make_exe(&dir, "y.CMD");
+        let path = std::env::join_paths([dir.clone()]).expect("join");
+        let lower = |p: Option<PathBuf>| p.map(|p| p.to_string_lossy().to_lowercase());
+        let want = |name: &str| Some(dir.join(name).to_string_lossy().to_lowercase());
+        let exts = Some(".COM;.EXE;.BAT;.CMD");
+        // Without an extension the bare script is never picked, whatever the case of the shim.
+        assert_eq!(lower(resolve_with("x", Some(&path), exts)), want("x.cmd"));
+        assert_eq!(lower(resolve_with("y", Some(&path), exts)), want("y.cmd"));
+        // A command with an extension is tried as it is.
+        assert_eq!(
+            lower(resolve_with("x.CMD", Some(&path), exts)),
+            want("x.cmd")
+        );
+        // A bare script alone is not a Windows program.
+        make_exe(&dir, "z");
+        assert_eq!(resolve_with("z", Some(&path), exts), None);
+        // Other platforms keep the bare name.
+        assert_eq!(resolve_with("x", Some(&path), None), Some(dir.join("x")));
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 

@@ -10,6 +10,8 @@
 //! - `permission`: a tool call and a permission request with the four option kinds, then a message
 //!   `selected:<id>` or `cancelled`.
 //! - `crash`: writes `mock: crashing` to stderr and exits with code 3.
+//! - `noisy`: writes 8 MiB of one line with no delimiter, then 4 MiB of `\r` redraws, then a final
+//!   line `mock: noisy done` to stderr, then answers `end_turn`.
 //! - `hang`: waits for a cancel, then answers `cancelled`.
 //! - `hang-deaf`: never answers and ignores a cancel.
 //! - `env`: a message with a JSON object `{"args": [...], "env": {...}}` of the agent's own arguments
@@ -157,6 +159,25 @@ async fn run_prompt(
         "crash" => {
             eprintln!("mock: crashing");
             std::process::exit(3);
+        }
+        "noisy" => {
+            use std::io::Write;
+            let mut err = std::io::stderr().lock();
+            let block = vec![b'n'; 65536];
+            for _ in 0..128 {
+                let _ = err.write_all(&block);
+            }
+            let _ = err.write_all(b"\n");
+            let spin = vec![b'\r'; 65536];
+            for _ in 0..64 {
+                let _ = err.write_all(&spin);
+                let _ = err.write_all(b"spin\r");
+            }
+            let _ = err.write_all(b"mock: noisy done\n");
+            let _ = err.flush();
+            drop(err);
+            message(&cx, &session, "noisy ok")?;
+            Ok(StopReason::EndTurn)
         }
         "hang" => {
             wait_for_cancel(&state).await;

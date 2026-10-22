@@ -42,7 +42,7 @@ Nothing else is passed, so a variable such as `SQLER_*` or a cloud credential in
 When a session is created, `SQLer` hands the agent a list of `MCP` servers. Two shapes exist, matching the transports of `SQLer`'s `MCP` server:
 
 - **Stdio:** a command (and arguments and environment) the agent starts itself. Its arguments and environment go to the agent as they are, so put no credential in them.
-- **HTTP:** a URL on `127.0.0.1`, `[::1]` or `localhost`, plus a token. The token is sent only in the header `Authorization: Bearer <token>` of the session creation message. A URL on any other host is refused, and so is an HTTP server for an agent that did not say it supports HTTP `MCP`.
+- **HTTP:** a plain `http` URL with an explicit port on `127.0.0.1`, `[::1]` or `localhost` (the local `MCP` server speaks plain HTTP and checks the bound port), plus a token. The token is sent only in the header `Authorization: Bearer <token>` of the session creation message. A URL on any other host is refused, and so is an HTTP server for an agent that did not say it supports HTTP `MCP`.
 
 ## What the agent may do on your machine
 

@@ -64,8 +64,8 @@ pub enum McpServerDescriptor {
         /// Environment variables for that program.
         env: Vec<(String, String)>,
     },
-    /// A loopback `MCP` endpoint with a bearer token. The host of `url` must be `127.0.0.1`, `[::1]` or
-    /// `localhost`.
+    /// A loopback `MCP` endpoint with a bearer token. The `url` must use plain `http`, an explicit port and
+    /// the host `127.0.0.1`, `[::1]` or `localhost`.
     Http {
         /// Server name shown to the agent.
         name: String,
@@ -76,12 +76,13 @@ pub enum McpServerDescriptor {
     },
 }
 
-/// Whether the host of `url` is a loopback name (`127.0.0.1`, `[::1]`, `localhost`).
+/// Whether `url` is a plain `http` URL with an explicit port on a loopback host (`127.0.0.1`, `[::1]`,
+/// `localhost`). `sqler-mcp` speaks plain HTTP only and checks the bound port in `Host`.
 pub(crate) fn is_loopback_url(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
     };
-    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+    if !scheme.eq_ignore_ascii_case("http") {
         return false;
     }
     let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
@@ -103,7 +104,7 @@ pub(crate) fn is_loopback_url(url: &str) -> bool {
             None => (authority, None),
         }
     };
-    if port.is_some_and(|p| p.is_empty() || p.parse::<u16>().is_err()) {
+    if port.is_none_or(|p| p.parse::<u16>().is_err()) {
         return false;
     }
     host == "127.0.0.1" || host == "::1" || host.eq_ignore_ascii_case("localhost")
@@ -128,7 +129,7 @@ impl McpServerDescriptor {
                 }
                 if !is_loopback_url(url) {
                     return Err(AcpError::InvalidDescriptor(
-                        "the HTTP endpoint must be on 127.0.0.1, [::1] or localhost".to_owned(),
+                        "the HTTP endpoint must be an http URL with a port on 127.0.0.1, [::1] or localhost".to_owned(),
                     ));
                 }
             }
@@ -175,11 +176,10 @@ mod tests {
     fn loopback_hosts_are_accepted() {
         for url in [
             "http://127.0.0.1:8080/mcp",
-            "http://localhost/mcp",
+            "http://localhost:3000/mcp",
             "http://LOCALHOST:1/",
             "http://[::1]:9000/mcp",
-            "https://127.0.0.1",
-            "http://127.0.0.1?x=1",
+            "http://127.0.0.1:80?x=1",
         ] {
             assert!(is_loopback_url(url), "{url}");
         }
@@ -196,6 +196,11 @@ mod tests {
             "http://10.0.0.1/",
             "http://0.0.0.0:80/",
             "http://[::2]/",
+            "https://127.0.0.1:8080/mcp",
+            "http://127.0.0.1/mcp",
+            "http://localhost/",
+            "http://[::1]/mcp",
+            "http://127.0.0.1:/mcp",
             "http://127.0.0.1:port/",
             "ftp://127.0.0.1/",
             "127.0.0.1:80",

@@ -22,6 +22,8 @@ use crate::types::{AgentEvent, ExitInfo};
 const TAIL_LINES: usize = 64;
 /// Longest stderr line kept or forwarded, in characters.
 const MAX_LINE_CHARS: usize = 4096;
+/// Most bytes of one stderr line held in memory (four bytes per character at most).
+const MAX_LINE_BYTES: usize = MAX_LINE_CHARS * 4;
 /// How long to wait for the stderr reader to finish after the process ended.
 const STDERR_DRAIN: Duration = Duration::from_millis(500);
 
@@ -98,21 +100,63 @@ pub(crate) fn install_hint(profile: &AgentProfile) -> String {
         .unwrap_or_else(|| "install the agent and make sure it is on PATH".to_owned())
 }
 
-async fn read_stderr(stderr: ChildStderr, events: mpsc::Sender<AgentEvent>, tail: Tail) {
-    let mut reader = BufReader::new(stderr);
-    let mut buf = Vec::new();
-    loop {
-        buf.clear();
-        match reader.read_until(b'\n', &mut buf).await {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
+/// Splits stderr bytes into lines on `\n` and `\r` while holding at most `MAX_LINE_BYTES` of a line in
+/// memory. The rest of an over-long line is discarded up to the next delimiter.
+#[derive(Default)]
+struct LineSplitter {
+    buf: Vec<u8>,
+    /// The line is over the limit; skip bytes until a delimiter.
+    overflow: bool,
+    /// The previous byte was `\r`, so a following `\n` is the second half of `\r\n`.
+    after_cr: bool,
+}
+
+impl LineSplitter {
+    fn feed(&mut self, bytes: &[u8], mut line: impl FnMut(String)) {
+        for &byte in bytes {
+            if byte == b'\n' || byte == b'\r' {
+                let skip = byte == b'\n' && self.after_cr;
+                // An empty segment from `\r` (a spinner redraw) is noise; an empty `\n` line is kept.
+                let keep = !skip && (byte == b'\n' || !self.buf.is_empty());
+                self.after_cr = byte == b'\r';
+                if keep {
+                    line(self.take());
+                }
+                self.buf.clear();
+                self.overflow = false;
+                continue;
+            }
+            self.after_cr = false;
+            if self.overflow {
+                continue;
+            }
+            if self.buf.len() >= MAX_LINE_BYTES {
+                self.overflow = true;
+            } else {
+                self.buf.push(byte);
+            }
         }
-        let text = String::from_utf8_lossy(&buf);
-        let line: String = text
-            .trim_end_matches(['\n', '\r'])
+    }
+
+    /// The last line when the stream ends without a delimiter.
+    fn finish(&mut self, line: impl FnOnce(String)) {
+        if !self.buf.is_empty() {
+            line(self.take());
+        }
+    }
+
+    fn take(&mut self) -> String {
+        String::from_utf8_lossy(&self.buf)
             .chars()
             .take(MAX_LINE_CHARS)
-            .collect();
+            .collect()
+    }
+}
+
+async fn read_stderr(stderr: ChildStderr, events: mpsc::Sender<AgentEvent>, tail: Tail) {
+    let mut reader = BufReader::new(stderr);
+    let mut splitter = LineSplitter::default();
+    let record = |line: String| {
         {
             let mut guard = tail.lock().unwrap_or_else(PoisonError::into_inner);
             if guard.len() == TAIL_LINES {
@@ -120,9 +164,20 @@ async fn read_stderr(stderr: ChildStderr, events: mpsc::Sender<AgentEvent>, tail
             }
             guard.push_back(line.clone());
         }
-        // A closed or slow event channel must not stop the capture of the tail.
-        let _ = events.send(AgentEvent::Stderr(line)).await;
+        // The tail is already kept, so the live event is best effort: when nobody drains the 256-slot
+        // channel the line is dropped rather than stalling the reader and filling the agent's pipe.
+        let _ = events.try_send(AgentEvent::Stderr(line));
+    };
+    loop {
+        let chunk = match reader.fill_buf().await {
+            Ok([]) | Err(_) => break,
+            Ok(chunk) => chunk,
+        };
+        let n = chunk.len();
+        splitter.feed(chunk, &record);
+        reader.consume(n);
     }
+    splitter.finish(record);
 }
 
 /// Reap the child and report. The caller has already dropped the child's `stdin` (EOF is the polite request).
@@ -170,4 +225,48 @@ fn signal_of(status: ExitStatus) -> Option<i32> {
 #[cfg(not(unix))]
 fn signal_of(_status: ExitStatus) -> Option<i32> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn split(chunks: &[&[u8]]) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut splitter = LineSplitter::default();
+        for chunk in chunks {
+            splitter.feed(chunk, |l| out.push(l));
+        }
+        splitter.finish(|l| out.push(l));
+        out
+    }
+
+    #[test]
+    fn splits_on_newline_and_carriage_return() {
+        assert_eq!(
+            split(&[b"a\nb\r", b"\nc\rd\r\r", b"e"]),
+            ["a", "b", "c", "d", "e"]
+        );
+        assert_eq!(split(&[b"x\n\ny\n"]), ["x", "", "y"]);
+    }
+
+    #[test]
+    fn a_huge_line_is_bounded_and_the_next_line_is_intact() {
+        let huge = vec![b'z'; MAX_LINE_BYTES * 50];
+        let mut splitter = LineSplitter::default();
+        let mut out = Vec::new();
+        splitter.feed(&huge, |l| out.push(l));
+        assert!(splitter.buf.len() <= MAX_LINE_BYTES);
+        splitter.feed(b"\nok\n", |l| out.push(l));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].chars().count(), MAX_LINE_CHARS);
+        assert_eq!(out[1], "ok");
+    }
+
+    #[test]
+    fn endless_carriage_returns_hold_nothing() {
+        let mut splitter = LineSplitter::default();
+        splitter.feed(&b"\r".repeat(1_000_000), |_| panic!("no line"));
+        assert_eq!(splitter.buf.len(), 0);
+    }
 }
