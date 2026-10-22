@@ -127,6 +127,10 @@ pub const SCENES: &[Scene] = &[
         pending: None,
     },
     Scene {
+        name: "ai-audit",
+        pending: None,
+    },
+    Scene {
         name: "ai-side-view-empty",
         pending: None,
     },
@@ -222,6 +226,8 @@ enum Step {
     CloseAll,
     /// Marks the n-th query tab as edited (a stand-in for typing).
     MarkDirty(usize),
+    /// Fills the audit view with the sample entries.
+    AuditFixture,
     /// Waits.
     Wait(Wait),
 }
@@ -323,6 +329,7 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Wait(Wait::Editors(1)),
             Step::Command("workbench:show-ai"),
         ],
+        "ai-audit" => vec![Step::Command("ai:open-audit-log"), Step::AuditFixture],
         "ai-side-view-empty" => vec![Step::Command("workbench:show-ai")],
         "ai-settings" => vec![Step::Command("ai:open-settings")],
         "ai-provider-editor" => vec![
@@ -599,6 +606,14 @@ impl WorkspaceView {
                     .nth(*n)
                     .ok_or_else(|| format!("no query tab number {n}"))?;
                 self.editor_changed(tab, cx);
+            }
+            Step::AuditFixture => {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
+                self.ws
+                    .audit_fixture(crate::ai::audit::fixture::entries(now_ms));
+                cx.notify();
             }
             Step::Wait(_) => {}
         }

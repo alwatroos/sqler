@@ -7844,6 +7844,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqler-ai-api",
+ "sqler-ai-tools",
  "sqler-catalog",
  "sqler-completion",
  "sqler-config",
