@@ -257,7 +257,7 @@ impl Transcript {
 }
 
 /// The longest prefix of `text` that is at most `limit` bytes and ends on a character boundary.
-fn cut_str(text: &str, limit: usize) -> &str {
+pub(super) fn cut_str(text: &str, limit: usize) -> &str {
     let mut end = text.len().min(limit);
     while !text.is_char_boundary(end) {
         end -= 1;

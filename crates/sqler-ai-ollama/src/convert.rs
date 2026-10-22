@@ -12,7 +12,7 @@ use sqler_ai_api::{
     AiError, Capabilities, ChatEvent, ChatRequest, Part, ResponseFormat, Role, StopReason, Usage,
 };
 
-use crate::error::truncate;
+use crate::error::{malformed, truncate};
 use crate::wire::{
     ChatBody, ChatLine, Show, WireCall, WireMessage, WireOptions, WireTool, WireToolCall,
     WireToolFunction,
@@ -162,8 +162,8 @@ impl LineMapper {
         line: &[u8],
         out: &mut VecDeque<Result<ChatEvent, AiError>>,
     ) -> Result<bool, AiError> {
-        let parsed: ChatLine = serde_json::from_slice(line)
-            .map_err(|e| AiError::Protocol(format!("malformed NDJSON line: {e}")))?;
+        let parsed: ChatLine =
+            serde_json::from_slice(line).map_err(|e| malformed("NDJSON line", &e))?;
         if let Some(err) = parsed.error {
             return Err(AiError::Provider(truncate(&err)));
         }

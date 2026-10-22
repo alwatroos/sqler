@@ -123,11 +123,7 @@ impl WorkspaceView {
     }
 
     /// Runs a request on tokio and reports the answer with the editor text at that moment.
-    pub(super) fn run_assist_effect(&mut self, mut job: Box<AssistJob>, cx: &mut Context<Self>) {
-        job.audit = self
-            .audit_log
-            .clone()
-            .map(|log| log as Arc<dyn sqler_ai_tools::AuditSink>);
+    pub(super) fn run_assist_effect(&mut self, job: Box<AssistJob>, cx: &mut Context<Self>) {
         let id = job.id;
         let (cancel, signal) = tokio::sync::oneshot::channel();
         self.assist_cancels.insert(id, cancel);

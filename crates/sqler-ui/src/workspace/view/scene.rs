@@ -771,6 +771,10 @@ pub fn open(
 ) -> (Entity<Root>, ScenePlayer) {
     let startup = startup(scene, theme, connector, runtime);
     let view = cx.new(|cx| WorkspaceView::new(startup, window, cx));
+    // The scenes have no config folder, so no audit log; the AI scenes use a sink in memory.
+    view.update(cx, |view, _| {
+        view.ws.ai_audit = Some(crate::ai::AiAudit::in_memory());
+    });
     let root = cx.new(|cx| Root::new(view.clone(), window, cx));
     let player = ScenePlayer {
         view,

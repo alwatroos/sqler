@@ -7,7 +7,6 @@
 //! drained into `Workspace::agent_message`.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
@@ -15,7 +14,6 @@ use gpui::{
 };
 use gpui_component::input::{InputEvent, InputState};
 use sqler_acp::ExitInfo;
-use sqler_ai_tools::AuditSink;
 use sqler_config::ConfigDir;
 use std::collections::HashMap;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -220,7 +218,6 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         let tab = start.tab;
-        start.audit = self.audit_log.clone().map(|log| log as Arc<dyn AuditSink>);
         start.cwd = agent_cwd(self.ws.ai().dir());
         let (exit_tx, exit_rx) = oneshot::channel();
         self.agent_views.runs.push(exit_rx);

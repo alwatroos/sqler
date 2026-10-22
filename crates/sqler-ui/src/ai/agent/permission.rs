@@ -8,7 +8,12 @@
 //! it: an ask has an id, only the front ask can be answered, an answer names the ask and an
 //! option the agent offered, a command may answer only an ask whose card was drawn, and a dropped
 //! queue or reply cancels the request. The tests mirror the approval tests one by one so the two
-//! stay provably equivalent. Follow-up: make the approval queue generic and fold this one in.
+//! stay provably equivalent.
+//!
+//! The agent's text is bounded the way the transcript bounds it: the title, the kind, every option
+//! name and the text lines are cut to [`MAX_ENTRY_BYTES`] (the lines share one budget), and option
+//! ids are never cut, because an answer names them. At most [`MAX_WAITING`] asks wait; the next
+//! one is answered `Cancelled` at once. Follow-up: make the approval queue generic and fold this one in.
 
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -17,6 +22,10 @@ use sqler_acp::{PermissionDecision, PermissionRequest};
 use tokio::sync::oneshot;
 
 use super::host::PermissionAsk;
+use super::transcript::{MAX_ENTRY_BYTES, cut_str};
+
+/// The most asks that wait at once. A further ask is cancelled when it arrives.
+pub const MAX_WAITING: usize = 8;
 
 /// An ask that waits for the user.
 pub struct PendingPermission {
@@ -37,6 +46,28 @@ impl std::fmt::Debug for PendingPermission {
     }
 }
 
+/// Cuts the texts of the agent in `request` to [`MAX_ENTRY_BYTES`]. Option ids stay whole.
+fn cap_request(request: &mut PermissionRequest) {
+    let call = &mut request.tool_call;
+    if let Some(title) = &mut call.title {
+        title.truncate(cut_str(title, MAX_ENTRY_BYTES).len());
+    }
+    if let Some(kind) = &mut call.kind {
+        kind.truncate(cut_str(kind, MAX_ENTRY_BYTES).len());
+    }
+    let mut room = MAX_ENTRY_BYTES;
+    for line in &mut call.text {
+        let keep = cut_str(line, room).len();
+        line.truncate(keep);
+        room -= keep;
+    }
+    for option in &mut request.options {
+        option
+            .name
+            .truncate(cut_str(&option.name, MAX_ENTRY_BYTES).len());
+    }
+}
+
 /// The permission requests that wait for the user, oldest first. The oldest one is shown.
 #[derive(Debug, Default)]
 pub struct PermissionQueue {
@@ -47,16 +78,24 @@ pub struct PermissionQueue {
 }
 
 impl PermissionQueue {
-    /// Adds an ask and returns its id.
-    pub fn push(&mut self, ask: PermissionAsk) -> u64 {
+    /// Adds an ask and returns its id. Its texts are cut to [`MAX_ENTRY_BYTES`]. When
+    /// `MAX_WAITING` asks wait already, the ask is answered `Cancelled` and `None` is returned.
+    pub fn push(&mut self, ask: PermissionAsk) -> Option<u64> {
+        if self.waiting.len() >= MAX_WAITING {
+            // A dropped receiver means the agent is gone; nothing waits for the answer.
+            let _ = ask.reply.send(PermissionDecision::Cancelled);
+            return None;
+        }
         let id = self.next_id;
         self.next_id += 1;
+        let mut request = ask.request;
+        cap_request(&mut request);
         self.waiting.push_back(PendingPermission {
             id,
-            request: ask.request,
+            request,
             reply: ask.reply,
         });
-        id
+        Some(id)
     }
 
     /// The ask the user answers now.
@@ -181,7 +220,7 @@ mod tests {
         let (mut ids, mut tasks) = (Vec::new(), Vec::new());
         for title in titles {
             let (ask, task) = make_ask(title).await;
-            ids.push(queue.push(ask));
+            ids.push(queue.push(ask).unwrap());
             tasks.push(task);
         }
         (queue, ids, tasks)
@@ -223,6 +262,57 @@ mod tests {
         for task in tasks {
             assert_eq!(decision(task).await, PermissionDecision::Cancelled);
         }
+    }
+
+    #[tokio::test]
+    async fn the_ninth_ask_is_cancelled_and_not_queued() {
+        let mut queue = PermissionQueue::default();
+        let mut tasks = Vec::new();
+        for i in 0..MAX_WAITING {
+            let (ask, task) = make_ask(&format!("ask {i}")).await;
+            assert_eq!(queue.push(ask), Some(i as u64));
+            tasks.push(task);
+        }
+        let (ask, task) = make_ask("one too many").await;
+        assert_eq!(queue.push(ask), None);
+        assert_eq!(decision(task).await, PermissionDecision::Cancelled);
+        assert_eq!(queue.len(), MAX_WAITING);
+        // Room again after an answer.
+        assert!(queue.answer_id(0, "reject-once"));
+        let (ask, _task) = make_ask("fits now").await;
+        assert_eq!(queue.push(ask), Some(MAX_WAITING as u64));
+        queue.cancel_all();
+    }
+
+    #[tokio::test]
+    async fn oversize_texts_are_cut_on_char_boundaries_and_ids_are_kept() {
+        // Two-byte characters, so an odd limit cuts inside one.
+        let big = "é".repeat(MAX_ENTRY_BYTES);
+        let (tx, mut rx) = unbounded_channel();
+        let host = TabAcpHost(tx);
+        let mut req = request(&big);
+        req.tool_call.kind = Some(big.clone());
+        req.tool_call.text = vec![big.clone(), big.clone(), "tail".to_owned()];
+        req.options[0].name = big.clone();
+        let long_id = "i".repeat(MAX_ENTRY_BYTES + 5);
+        req.options[1].id.clone_from(&long_id);
+        let _waiting = tokio::spawn(async move { host.request_permission(req).await });
+        let Some(AgentMsg::Permission(ask)) = rx.recv().await else {
+            panic!("no ask");
+        };
+        let mut queue = PermissionQueue::default();
+        queue.push(ask).unwrap();
+        let r = &queue.current().unwrap().request;
+        let call = &r.tool_call;
+        assert!(call.title.as_ref().unwrap().len() <= MAX_ENTRY_BYTES);
+        assert!(call.kind.as_ref().unwrap().len() <= MAX_ENTRY_BYTES);
+        assert!(call.text.iter().map(String::len).sum::<usize>() <= MAX_ENTRY_BYTES);
+        assert_eq!(call.text.len(), 3);
+        assert!(r.options[0].name.len() <= MAX_ENTRY_BYTES);
+        assert!(r.options[0].name.chars().all(|c| c == 'é'));
+        assert_eq!(r.options[0].id, "allow-once");
+        assert_eq!(r.options[1].id, long_id);
+        queue.cancel_all();
     }
 
     #[tokio::test]
@@ -327,7 +417,7 @@ mod tests {
             .contains(SECRET)
         );
         let mut queue = PermissionQueue::default();
-        queue.push(ask);
+        queue.push(ask).unwrap();
         assert!(!format!("{queue:?}").contains(SECRET));
         assert!(!format!("{:?}", queue.current().unwrap()).contains(SECRET));
     }

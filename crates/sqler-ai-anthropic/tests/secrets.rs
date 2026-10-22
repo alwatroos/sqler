@@ -17,6 +17,8 @@ use sqler_ai_api::{AiError, AiProvider, ChatRequest, Message};
 use support::{Finish, MockServer, Reply, Route, dead_port_url};
 
 const KEY: &str = "sk-ant-test-0123456789SECRET";
+/// The head of the key: a cut that leaves only this part must be caught too.
+const KEY_HEAD: &str = "sk-ant-test-0123456789";
 
 static CAPTURED: Mutex<String> = Mutex::new(String::new());
 
@@ -112,6 +114,7 @@ fn assert_clean(what: &str, e: &AiError) {
     for shown in [e.to_string(), format!("{e:?}")] {
         assert!(!shown.contains(KEY), "{what}: key in {shown}");
         assert!(!shown.contains("SECRET"), "{what}: key piece in {shown}");
+        assert!(!shown.contains(KEY_HEAD), "{what}: key prefix in {shown}");
     }
 }
 
@@ -240,6 +243,10 @@ async fn the_key_never_leaks() {
         "the capture saw nothing: the test would prove nothing"
     );
     assert!(!logs.contains(KEY), "key in log or tracing output:\n{logs}");
+    assert!(
+        !logs.contains(KEY_HEAD),
+        "key prefix in log or tracing output:\n{logs}"
+    );
     assert!(
         !logs.contains("SECRET"),
         "key piece in log or tracing output:\n{logs}"

@@ -15,7 +15,7 @@ use sqler_ai_api::{
 };
 
 use crate::convert::request_body;
-use crate::error::{from_reqwest, from_response, read_capped};
+use crate::error::{from_reqwest, from_response, malformed, read_capped};
 use crate::stream::OpenAiStream;
 use crate::wire::Models;
 
@@ -246,8 +246,7 @@ impl OpenAiProvider {
             return Err(from_response(resp, self.key().as_deref()).await);
         }
         let bytes = read_capped(&mut resp, MAX_JSON_BODY).await?;
-        serde_json::from_slice(&bytes)
-            .map_err(|e| AiError::Protocol(format!("malformed JSON response: {e}")))
+        serde_json::from_slice(&bytes).map_err(|e| malformed("JSON response", &e))
     }
 }
 

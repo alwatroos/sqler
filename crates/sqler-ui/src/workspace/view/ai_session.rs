@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use gpui::{AppContext as _, Context, Entity, FocusHandle, ScrollHandle, Subscription, Window};
 use gpui_component::input::{InputEvent, InputState};
-use sqler_ai_tools::{ApprovalStage, AuditSink};
+use sqler_ai_tools::ApprovalStage;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::WorkspaceView;
@@ -184,12 +184,11 @@ impl WorkspaceView {
     /// Builds the session on tokio and follows its host channel until the tab is gone.
     fn start_ai_session(
         &mut self,
-        mut start: AiSessionStart,
+        start: AiSessionStart,
         mut host: UnboundedReceiver<HostMsg>,
         cx: &mut Context<Self>,
     ) {
         let tab = start.tab;
-        start.audit = self.audit_log.clone().map(|log| log as Arc<dyn AuditSink>);
         let factory = Arc::clone(&self.ai_factory);
         let done = self
             .bridge

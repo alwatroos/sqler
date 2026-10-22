@@ -190,10 +190,11 @@ impl AiSessionTab {
         self.trim();
     }
 
-    /// Replaces the entries by the whole engine transcript.
-    pub(crate) fn set_entries(&mut self, all: &[TranscriptEntry]) {
+    /// Replaces the entries by the whole engine transcript. `dropped` is how many entries the
+    /// engine already cut from its front, so stable numbers stay as they were.
+    pub(crate) fn set_entries(&mut self, all: &[TranscriptEntry], dropped: usize) {
         self.entries = all.to_vec();
-        self.dropped = 0;
+        self.dropped = dropped;
         self.trim();
     }
 

@@ -62,7 +62,7 @@ use sqler_ui::ai::agent::{
     AgentAbort, AgentMsg, AgentStart, PermissionAsk, PermissionQueue, start_agent,
 };
 use sqler_ui::ai::session::TabSource;
-use sqler_ui::ai::{ApprovalAsk, ApprovalQueue, ChannelApprover, HostMsg, open_prod_gate};
+use sqler_ui::ai::{AiAudit, ApprovalAsk, ApprovalQueue, ChannelApprover, HostMsg, open_prod_gate};
 use sqler_ui::browser::{ConnectFailure, ConnectRequest, Connector, HostKeyPrompt, SecretSource};
 use sqler_ui::query::{Phase, QueryTab};
 use sqler_ui::tabs::{TabConnection, TabId, TabKind, TabStrip};
@@ -791,7 +791,7 @@ impl AcpRig {
             info: info.clone(),
             request,
             config: config(),
-            audit: Some(audit),
+            audit: AiAudit::new(audit),
             cwd,
             launch,
             tx,
@@ -1422,7 +1422,7 @@ async fn permission_round(
                     options,
                     ["allow-once", "allow-always", "reject-once", "reject-always"]
                 );
-                let id = queue.push(ask);
+                let id = queue.push(ask).expect("room in the queue");
                 assert_eq!(queue.len(), 1);
                 (answer.take().expect("one permission request"))(&mut queue, id, rig);
                 answered = true;

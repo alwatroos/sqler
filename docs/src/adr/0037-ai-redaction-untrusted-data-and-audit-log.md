@@ -114,3 +114,17 @@ A tool call can be dropped after statements were approved or sent (the client ca
 - A JSON envelope object (`{"untrusted":{..}}`): the model still reads the data as part of one JSON document, with no textual boundary. Rejected.
 - A random-nonce delimiter: the model cannot know the nonce is meaningful, and tests and clients cannot match a fixed tag. Escaping `<` and `>` makes a fixed tag unforgeable. Rejected.
 - Fail-closed audit (a failed write fails the call): a full disk would stop read-only work; the failure is counted and reported instead. Rejected.
+
+## Addendum: hosts without an audit sink
+
+Decision: an AI surface that can run tools does not start when the app has no audit sink. This covers the AI session tab, the Agent tab and the editor AI actions (generate, explain, fix, which use catalog tools). Reads and catalog calls are refused too, not only writes. The sink is a required value (`AiAudit`, `sqler-ui`): the `Workspace` owns it and passes it into the session start, the assist job and the agent start, so a surface without a sink cannot be built. A surface gets its sink only through that one helper, which also sets the `Surface` tag; a source-scan test keeps other code from attaching a sink.
+
+Reason: ADR-0003 says every call is auditable and guardrail 5 says there is an audit log for every tool call, with no exception for reads or catalog calls. `sqler-cli mcp` already refuses to start without a config directory. Before this addendum the session and the editor actions attached no sink and the Agent tab used a `NullAudit`, so calls (approved writes included) ran unaudited and silently.
+
+The sink is missing only when the platform gives no config directory (`ConfigDir::platform()` fails), so the log file cannot be opened. The surfaces then show this disabled reason in the hub buttons, the query toolbar and the notice:
+
+> AI is off: SQLer found no config folder for the AI audit log, and every AI tool call must be audited.
+
+It is checked after "no connection", "AI off" and "config broken", and before the provider and model checks.
+
+Difference from fail-open writes (above): a sink that exists but cannot write (a full disk, a lost file) still lets the call go through; the failure is counted and shown by the host. That is a runtime fault of an audit that is in place. A missing sink is a configuration the app can see before the call, so it refuses before anything runs.

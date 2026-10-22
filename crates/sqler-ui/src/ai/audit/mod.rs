@@ -16,6 +16,9 @@ use crate::grid::{group_thousands, human_bytes};
 
 #[cfg(any(test, feature = "screenshots"))]
 pub mod fixture;
+mod sink;
+
+pub use sink::{AiAudit, NO_AUDIT};
 
 /// How many entries one page holds.
 pub const AUDIT_PAGE: usize = 200;

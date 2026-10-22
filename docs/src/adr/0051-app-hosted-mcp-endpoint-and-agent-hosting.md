@@ -53,4 +53,8 @@ Option 1b, 2a, 3a and 4b.
 - Interrupt `SQLite` in the middle of a statement in the driver (`sqlite3_interrupt` or a progress handler), so that a cancel or a time limit frees the session at once.
 - `PermissionQueue` duplicates the contract of `ApprovalQueue` because `ApprovalRequest` is `#[non_exhaustive]` with no constructor. Make `ApprovalQueue` generic and fold `PermissionQueue` in; the unit tests mirror each other one to one until then.
 - The guard suite drives the endpoint with a stand-in MCP client, because the mock agent cannot call MCP. Add an `mcp-call` prompt to the mock agent and drop the stand-in.
-- The engine transcript in `sqler-ai-tools` is unbounded.
+- The engine transcript in `sqler-ai-tools` is unbounded. (Capped at 500 entries since H1, see the ADR-0039 addendum.)
+
+## Addendum: permission card caps and queue bound
+
+The permission card shows agent-supplied text, so `PermissionQueue` caps it and bounds the queue. The title, the kind, each option name and the tool text lines (one shared budget, as in the transcript's `merge_tool`) are cut to `MAX_ENTRY_BYTES` on a character boundary; option ids are never cut, because the answer must return the id the agent sent. At most `MAX_WAITING` (8) requests wait: a request that arrives with the queue full is answered `Cancelled` at once and is not shown (`push` returns `None`). The number of options per request is still not limited.

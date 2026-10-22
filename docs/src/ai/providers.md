@@ -41,6 +41,7 @@ Cancel by dropping the stream. The provider must tie the lifetime of the HTTP re
 | ------- | ------- |
 | `Auth` | authentication failed |
 | `RateLimited` | rate limited; optional `retry_after` |
+| `Overloaded` | the provider is overloaded (Anthropic HTTP 529 or an `overloaded_error` stream event); optional `retry_after`, no server text; the session retries it like a rate limit |
 | `Network` | transport failure |
 | `Provider` | the provider reported an error |
 | `Cancelled` | request cancelled |
@@ -81,7 +82,7 @@ The `sqler-ai-ollama` crate implements `AiProvider` as `OllamaProvider` over Oll
 
 ### Endpoint and locality
 
-`OllamaProvider::new(None)` uses `DEFAULT_ENDPOINT`, `http://127.0.0.1:11434`; `new(Some(url))` takes any `http` or `https` URL with a host (anything else is `AiError::Invalid`, as is a URL with a user name or password, so a secret never reaches a `Debug` print). `endpoint()` returns the URL as configured, without a trailing `/`. Redirects are not followed, the connect timeout is 10 s, and a chat has no overall timeout. `/api/tags` and `/api/show` time out after 30 s.
+`OllamaProvider::new(None)` uses `DEFAULT_ENDPOINT`, `http://127.0.0.1:11434`; `new(Some(url))` takes any `http` or `https` URL with a host (anything else is `AiError::Invalid`, as is a URL with a user name or password, so a secret never reaches a `Debug` print). `endpoint()` returns the URL as configured, without a trailing `/`. Redirects are not followed, the connect timeout is 10 s, and a chat has no overall timeout but fails with `Network("timed out")` after 120 s of silence (`with_read_timeout` changes that; raise it when a large model loads slowly from a slow disk, because the first byte can take longer than 120 s). `/api/tags` and `/api/show` time out after 30 s.
 
 `is_local()` is decided by the endpoint host: `localhost` (ASCII case-insensitive) or a loopback address (`127.0.0.0/8`, `::1`) is local; every other host, including a LAN address, is remote. Use it for the privacy indicator. A local endpoint is also reached without an environment proxy. `is_local` and `model_capabilities` are inherent methods, so a caller that needs them builds the concrete `OllamaProvider`.
 
@@ -110,11 +111,11 @@ No deviation from the document was found. The optional fields (`tool_calls[].id`
 | Case | `AiError` |
 | ---- | --------- |
 | HTTP 401 or 403 | `Auth` |
-| HTTP 429 | `RateLimited` with `Retry-After` seconds |
+| HTTP 429 | `RateLimited` with `Retry-After` whole seconds, clamped to 3600 s |
 | HTTP 400 with "does not support" (a model without tools) | `Unsupported` |
 | other non-2xx | `Provider("HTTP <code>: <error>")` |
 | timeout, connection refused, body cut off, other transport failure | `Network("timed out" \| "cannot connect to the Ollama server" \| "response interrupted" \| "request failed")` |
-| malformed line, line over 8 MiB, end of stream without `done` | `Protocol` |
+| malformed line (only the kind and position are reported, never the server's text), line over 8 MiB, end of stream without `done` | `Protocol` |
 | `{"error": "..."}` line | `Provider` |
 
 The text comes from Ollama's `error` field, cut to 200 characters; it never holds the URL, a header or the prompt. After `Done` or any `Err` the stream returns `None`. Dropping the stream drops the HTTP response and closes the connection.
@@ -133,7 +134,7 @@ Chat Completions is primary, not the Responses API. Every OpenAI-compatible serv
 
 The host `api.openai.com` selects `Flavor::OpenAi`; every other host is `Flavor::Compatible`. The flavours differ in two things: the output cap is `max_completion_tokens` for `OpenAi` and `max_tokens` for `Compatible`, and the default capabilities (below). `with_capabilities(caps)` overrides the defaults for a server that differs.
 
-`is_local()` is true when the host is `localhost` (a trailing `.` and case are ignored) or a loopback address (`127.0.0.0/8`, `::1`); every other host, including a LAN address, is remote. A local host is reached without an environment proxy. Redirects are not followed (the key never goes to a second host), the connect timeout is 10 s, `/models` times out after 30 s and a chat has no overall timeout.
+`is_local()` is true when the host is `localhost` (a trailing `.` and case are ignored) or a loopback address (`127.0.0.0/8`, `::1`); every other host, including a LAN address, is remote. A local host is reached without an environment proxy. Redirects are not followed (the key never goes to a second host), the connect timeout is 10 s, `/models` times out after 30 s and a chat has no overall timeout but fails after 120 s of silence (`with_read_timeout` changes that).
 
 ### API key
 
@@ -170,7 +171,7 @@ What the live check found. Confirmed: `stream_options.include_usage` and a last 
 | HTTP 400 with code `unsupported_parameter` or `unsupported_value`, or text "does not support" or "not supported" | `Unsupported` |
 | other non-2xx | `Provider("HTTP <code>: <message>")`, or `Provider("HTTP <code>")` without a message |
 | timeout, connection refused, body cut off, other transport failure | `Network("timed out" \| "cannot connect to the server" \| "response interrupted" \| "request failed")` |
-| malformed `data`, oversize line or event, end of stream before `[DONE]` or a `finish_reason` | `Protocol` |
+| malformed `data` (only the kind and position are reported, never the server's text), oversize line or event, end of stream before `[DONE]` or a `finish_reason` | `Protocol` |
 | `error` payload in the stream | `Provider` |
 
 The message is the first of `error.message`, `error` as a string, `message` or `detail`, with the key replaced by `***` and cut to 200 characters. A server that rejects `stream_options` or `max_completion_tokens` answers 400, which is `Provider` or `Unsupported`; there is no retry. Reasoning models (o-series, gpt-5) reject a `temperature` other than the default, which comes back as `Unsupported`; the caller decides whether to leave the temperature out. After `Done` or any `Err` the stream returns `None`. Dropping the stream drops the HTTP response and closes the connection.
@@ -183,7 +184,7 @@ The `sqler-ai-anthropic` crate implements `AiProvider` as `AnthropicProvider` ov
 
 ### Endpoint, key and remote
 
-`AnthropicProvider::new(api_key, None)` uses `DEFAULT_ENDPOINT`, `https://api.anthropic.com`; `new(api_key, Some(url))` takes an `https` URL with a host, or an `http` URL whose host is `localhost` or a loopback address (a test server or a local proxy), so the key never travels in clear text. A URL with a user name, a password, a query or a fragment is `AiError::Invalid`, as is an empty key or one with characters that cannot be in a header (the key is never echoed). Redirects are not followed, the connect timeout is 10 s, a loopback endpoint is reached without an environment proxy, and a chat has no overall timeout. `GET /v1/models` pages time out after 30 s.
+`AnthropicProvider::new(api_key, None)` uses `DEFAULT_ENDPOINT`, `https://api.anthropic.com`; `new(api_key, Some(url))` takes an `https` URL with a host, or an `http` URL whose host is `localhost` or a loopback address (a test server or a local proxy), so the key never travels in clear text. A URL with a user name, a password, a query or a fragment is `AiError::Invalid`, as is an empty key or one with characters that cannot be in a header (the key is never echoed). Redirects are not followed, the connect timeout is 10 s, a loopback endpoint is reached without an environment proxy, and a chat has no overall timeout but fails with `Network("timed out")` after 120 s of silence (`with_read_timeout` changes that, which also covers a stream that stalls). `GET /v1/models` pages time out after 30 s.
 
 The caller passes the key (T11 reads it from the keychain). It is kept only as a sensitive header value and sent as `x-api-key`; it is never in a URL. `Debug` of the provider prints `api_key: "<redacted>"`. Every error text has the key replaced by `***` before it is cut to 200 characters, and `crates/sqler-ai-anthropic/tests/secrets.rs` checks that the key is in no error text, `Debug` print, `log` record or `tracing` event or span.
 
@@ -227,17 +228,17 @@ JSON mode is off, and a request with `ResponseFormat::Json` fails with `AiError:
 | Case | `AiError` |
 | ---- | --------- |
 | HTTP 401 or 403 | `Auth("HTTP <code>")` |
-| HTTP 429 | `RateLimited` with integer `Retry-After` seconds |
-| HTTP 529 | `Provider("overloaded (HTTP 529): <message>")` |
+| HTTP 429 | `RateLimited` with integer `Retry-After` seconds, clamped to 3600 s (a date, a float or junk gives `None`) |
+| HTTP 529 | `Overloaded` with the clamped `Retry-After`, if any |
 | other non-2xx | `Provider("HTTP <code>: <message>")`, or `"HTTP <code>"` without a message |
 | SSE `error` event `authentication_error`, `permission_error` | `Auth(<type>)` |
 | SSE `error` event `rate_limit_error` | `RateLimited` without a delay |
-| SSE `error` event `overloaded_error` | `Provider("overloaded: <message>")` |
+| SSE `error` event `overloaded_error` | `Overloaded { retry_after: None }` |
 | other SSE `error` event | `Provider("<type>: <message>")` |
 | timeout, connection refused, body cut off, other transport failure | `Network("timed out" \| "cannot connect to the Anthropic API" \| "response interrupted" \| "request failed")` |
-| malformed event, event over 8 MiB, end of stream before `message_stop` | `Protocol` |
+| malformed event (only the kind and position are reported, never the server's text), event over 8 MiB, end of stream before `message_stop` | `Protocol` |
 
-An overload is a `Provider` error, not `RateLimited`: it is the service, not the caller's quota, and the UI should not say "rate limited". A dedicated `AiError::Overloaded` is a follow-up change to `sqler-ai-api`. The message is the API's `error.message`; it never holds the URL, a header or the prompt. After `Done` or any `Err` the stream returns `None`. Dropping the stream drops the HTTP response and closes the connection.
+An overload is `AiError::Overloaded`, not `RateLimited`: it is the service, not the caller's quota, and the UI should not say "rate limited". It carries no server text. The session retries it with the same back-off as a rate limit. Other messages are the API's `error.message`; they never hold the URL, a header or the prompt. After `Done` or any `Err` the stream returns `None`. Dropping the stream drops the HTTP response and closes the connection.
 
 Tests run against a loopback mock server with fixtures hand-written from the documentation's example transcripts. One real streamed call with tools on a real key is pending (maintainer).
 

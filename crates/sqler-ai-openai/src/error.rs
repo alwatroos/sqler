@@ -149,6 +149,24 @@ pub(crate) async fn from_response(mut resp: Response, key: Option<&str>) -> AiEr
     from_status(code, &headers, &body, key)
 }
 
+/// A `Protocol` error for JSON that does not parse. The text of a `serde_json`
+/// error can quote the offending value, which is server data and might hold
+/// the key, so only its category and position are kept.
+pub(crate) fn malformed(what: &str, e: &serde_json::Error) -> AiError {
+    use serde_json::error::Category;
+    let kind = match e.classify() {
+        Category::Io => "read error",
+        Category::Syntax => "syntax error",
+        Category::Data => "unexpected shape",
+        Category::Eof => "unexpected end",
+    };
+    AiError::Protocol(format!(
+        "malformed {what}: {kind} at line {} column {}",
+        e.line(),
+        e.column()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use reqwest::header::{HeaderName, HeaderValue};
@@ -168,6 +186,16 @@ mod tests {
 
     fn st(code: u16, h: &[(&str, &str)], body: &str) -> AiError {
         from_status(code, &headers(h), body.as_bytes(), Some("sk-secret"))
+    }
+
+    #[test]
+    fn malformed_never_quotes_the_value() {
+        let e = serde_json::from_str::<serde_json::Value>("{\"k\": sk-secret-value}").unwrap_err();
+        let AiError::Protocol(m) = malformed("data", &e) else {
+            panic!("expected Protocol");
+        };
+        assert!(!m.contains("sk-secret"), "{m}");
+        assert!(m.starts_with("malformed data: syntax error at line 1"));
     }
 
     #[test]

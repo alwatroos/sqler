@@ -16,7 +16,7 @@ use sqler_ai_api::{
 };
 
 use crate::convert::{model_capabilities_for, request_body};
-use crate::error::{from_reqwest, from_response, read_capped};
+use crate::error::{from_reqwest, from_response, malformed, read_capped};
 use crate::stream::AnthropicStream;
 use crate::wire::ModelsPage;
 
@@ -29,6 +29,8 @@ pub const API_VERSION: &str = "2023-06-01";
 pub const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a response may stay silent before the request fails.
+const READ_TIMEOUT: Duration = Duration::from_secs(120);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_JSON_BODY: usize = 16 * 1024 * 1024;
 const MODELS_PAGE_SIZE: &str = "1000";
@@ -65,6 +67,7 @@ pub struct AnthropicProvider {
     client: Client,
     endpoint: String,
     key: HeaderValue,
+    loopback: bool,
 }
 
 impl fmt::Debug for AnthropicProvider {
@@ -128,21 +131,24 @@ impl AnthropicProvider {
                 "the Anthropic endpoint must use https unless it is a loopback address".to_owned(),
             ));
         }
-        let mut builder = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .redirect(Policy::none());
-        if loopback {
-            // A loopback server must not be reached through an environment proxy.
-            builder = builder.no_proxy();
-        }
-        let client = builder
-            .build()
-            .map_err(|_| AiError::Provider("cannot build the HTTP client".to_owned()))?;
+        let client = build_client(loopback, READ_TIMEOUT)?;
         Ok(Self {
             client,
             endpoint: raw.trim_end_matches('/').to_owned(),
             key,
+            loopback,
         })
+    }
+
+    /// Sets how long a response may stay silent (no byte received) before the
+    /// request fails with `Network("timed out")`. The default is 120 seconds.
+    ///
+    /// # Errors
+    ///
+    /// [`AiError::Provider`] when the HTTP client cannot be rebuilt.
+    pub fn with_read_timeout(mut self, timeout: Duration) -> Result<Self, AiError> {
+        self.client = build_client(self.loopback, timeout)?;
+        Ok(self)
     }
 
     /// The endpoint as configured, without a trailing `/`.
@@ -193,9 +199,22 @@ impl AnthropicProvider {
             return Err(from_response(resp, self.key_text()).await);
         }
         let bytes = read_capped(&mut resp, MAX_JSON_BODY).await?;
-        serde_json::from_slice(&bytes)
-            .map_err(|_| AiError::Protocol("malformed JSON response".to_owned()))
+        serde_json::from_slice(&bytes).map_err(|e| malformed("JSON response", &e))
     }
+}
+
+fn build_client(loopback: bool, read_timeout: Duration) -> Result<Client, AiError> {
+    let mut builder = Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(read_timeout)
+        .redirect(Policy::none());
+    if loopback {
+        // A loopback server must not be reached through an environment proxy.
+        builder = builder.no_proxy();
+    }
+    builder
+        .build()
+        .map_err(|_| AiError::Provider("cannot build the HTTP client".to_owned()))
 }
 
 fn host_is_loopback(url: &Url) -> bool {

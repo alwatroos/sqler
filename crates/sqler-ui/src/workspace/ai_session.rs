@@ -98,6 +98,7 @@ impl Workspace {
         if self.ai.load_error().is_some() {
             return Err(SESSION_CONFIG_BROKEN);
         }
+        self.ai_audit()?;
         let config = self.ai.config();
         let choice = config
             .models
@@ -186,6 +187,10 @@ impl Workspace {
         .with_send_rows(profile.ai_sends_rows());
         let status = ai_status(self.ai.config(), Some(spec));
         let connection = tab_connection(self.sidebar.entries()[index].config());
+        let audit = match self.ai_audit() {
+            Ok(audit) => audit.clone(),
+            Err(message) => return self.session_notice(message),
+        };
         let tab = self.tabs.open(connection, TabKind::AiSession);
         self.tab_conns.insert(tab, conn.clone());
         // The gate of the production second confirmation (ADR-0024).
@@ -203,7 +208,7 @@ impl Workspace {
             info,
             request,
             config: self.ai.config().clone(),
-            audit: None,
+            audit,
             tx,
         };
         join(
@@ -415,7 +420,8 @@ impl Workspace {
                     // A turn that is no longer the current one: its session is dropped.
                     return Effect::None;
                 }
-                t.set_entries(done.session.transcript().entries());
+                let transcript = done.session.transcript();
+                t.set_entries(transcript.entries(), transcript.dropped());
                 t.session = Some(Box::new(done.session));
                 t.phase = SessionPhase::Ready;
                 t.streaming.clear();
