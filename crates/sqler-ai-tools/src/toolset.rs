@@ -15,6 +15,7 @@ use sqler_driver_api::sqler_core::DbObject;
 use sqler_sql::{Dialect, StatementClass};
 
 use crate::approve::Approver;
+use crate::assist::DataSearch;
 use crate::audit::{
     AuditDraft, AuditEntry, AuditSink, CancelPoint, DraftError, DraftRun, DraftStatement, Surface,
 };
@@ -248,6 +249,7 @@ pub(crate) struct Inner {
     pub redaction: Redaction,
     pub audit: Option<Arc<dyn AuditSink>>,
     pub surface: Surface,
+    pub data_search: Option<Arc<dyn DataSearch>>,
     definitions: Mutex<HashMap<DefinitionKey, Option<String>>>,
 }
 
@@ -319,6 +321,7 @@ impl std::fmt::Debug for ToolSet {
             .field("limits", &self.inner.limits)
             .field("approver", &self.inner.approver.is_some())
             .field("ui_host", &self.inner.ui.is_some())
+            .field("data_search", &self.inner.data_search.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -336,6 +339,7 @@ impl ToolSet {
                 redaction: Redaction::default(),
                 audit: None,
                 surface: Surface::Unspecified,
+                data_search: None,
                 definitions: Mutex::new(HashMap::new()),
             }),
         }
@@ -356,6 +360,7 @@ impl ToolSet {
             redaction: self.inner.redaction.clone(),
             audit: self.inner.audit.clone(),
             surface: self.inner.surface,
+            data_search: self.inner.data_search.clone(),
             definitions: Mutex::new(HashMap::new()),
         };
         change(&mut inner);
@@ -391,10 +396,36 @@ impl ToolSet {
         })
     }
 
-    /// The tool definitions to export to providers and MCP.
+    /// Attaches the host that writes SQL for `search_data`. Only then is the tool listed and
+    /// callable. The host's own tool set must not hold this one (see [`DataSearch`]).
+    #[must_use]
+    pub fn with_data_search(&self, search: Arc<dyn DataSearch>) -> Self {
+        self.rebuilt(|i| i.data_search = Some(search))
+    }
+
+    /// The redaction rules every result of this tool set passes.
+    #[must_use]
+    pub fn redaction(&self) -> &Redaction {
+        &self.inner.redaction
+    }
+
+    /// The connection named by `name` (an id, else a unique display name).
+    ///
+    /// # Errors
+    /// [`ToolError::UnknownConnection`] if the host lends no such connection.
+    pub fn connection_info(&self, name: &str) -> Result<ConnectionInfo, ToolError> {
+        self.inner.resolve(name)
+    }
+
+    /// The tool definitions to export to providers and MCP. `search_data` is included only
+    /// when a [`DataSearch`] is attached.
     #[must_use]
     pub fn definitions(&self) -> Vec<ToolDefinition> {
-        schema::definitions(self.inner.ui.is_some())
+        let mut tools = schema::definitions(self.inner.ui.is_some());
+        if self.inner.data_search.is_some() {
+            tools.push(schema::search_data_definition());
+        }
+        tools
     }
 
     /// Runs one tool call. Never fails: errors become error results.
@@ -560,9 +591,16 @@ impl ToolSet {
                 let info = self.connection(&a.connection, ran)?;
                 query_tools::open_results_tab(ts, &info, &a).await
             }
-            names::SEARCH_DATA => Err(ToolError::NotAvailable(
-                "search_data is not available in this host".to_owned(),
-            )),
+            names::SEARCH_DATA => {
+                let Some(search) = ts.data_search.as_deref() else {
+                    return Err(ToolError::NotAvailable(
+                        "search_data is not available in this host".to_owned(),
+                    ));
+                };
+                let a: schema::SearchDataArgs = schema::parse(args)?;
+                let info = self.connection(&a.connection, ran)?;
+                crate::assist::search_data(ts, search, &info, &a, ran).await
+            }
             other => Err(ToolError::UnknownTool(other.to_owned())),
         }
     }

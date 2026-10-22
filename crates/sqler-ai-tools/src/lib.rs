@@ -53,6 +53,7 @@
 #![forbid(unsafe_code)]
 
 mod approve;
+mod assist;
 mod audit;
 mod catalog_tools;
 mod error;
@@ -69,6 +70,11 @@ mod ui;
 mod untrusted;
 
 pub use approve::{ApprovalReason, ApprovalRequest, ApprovalStage, Approver, Decision};
+pub use assist::{
+    Assist, AssistError, AssistOptions, AssistSearch, Conversation, DataSearch, Explanation,
+    FixProposal, GeneratedSql, GroundedTable, Grounding, PROMPT_VERSION, ParsedAnswer, SqlAnswer,
+    Turn, TurnKind, extract_sql, parse_sql_answer, unified_diff,
+};
 pub use audit::{
     AUDIT_FILE_NAME, AUDIT_FORMAT_VERSION, ApprovalOutcome, AuditConnection, AuditCursor,
     AuditEntry, AuditError, AuditFailure, AuditLog, AuditOptions, AuditPage, AuditQuery, AuditSink,

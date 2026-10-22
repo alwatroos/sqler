@@ -7347,6 +7347,7 @@ dependencies = [
 name = "sqler-ai-tools"
 version = "0.1.0"
 dependencies = [
+ "insta",
  "proptest",
  "serde",
  "serde_json",
