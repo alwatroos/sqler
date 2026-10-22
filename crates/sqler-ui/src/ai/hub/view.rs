@@ -305,4 +305,11 @@ fn buttons_section(cx: &mut Context<WorkspaceView>) -> Div {
             false,
             cx,
         ))
+        .child(action_button(
+            "ai-audit",
+            "Audit log",
+            AiAction::OpenAuditLog,
+            false,
+            cx,
+        ))
 }

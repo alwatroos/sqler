@@ -6,6 +6,7 @@
 
 use sqler_config::{ModelChoice, ProviderId, ProviderKind, UseCase};
 
+use super::audit::AuditFilterChange;
 use super::settings::AiField;
 use crate::command::{Command, CommandError, CommandId, CommandRegistry};
 use crate::workspace::Workspace;
@@ -73,6 +74,16 @@ pub enum AiAction {
     AcceptFix,
     /// Dismiss the proposed fix.
     RejectFix,
+    /// Show the audit log view and read its first page.
+    OpenAuditLog,
+    /// Read the next page of the audit log.
+    LoadMoreAudit,
+    /// Copy the SQL of the selected audit entry.
+    CopyAuditSql,
+    /// Change one audit filter.
+    SetAuditFilter(AuditFilterChange),
+    /// Select a row of the audit log.
+    SelectAuditEntry(usize),
 }
 
 // A typed API key travels in `SetText`; its `Debug` must not show it.
@@ -120,6 +131,11 @@ impl std::fmt::Debug for AiAction {
             Self::CancelAssist => f.write_str("CancelAssist"),
             Self::AcceptFix => f.write_str("AcceptFix"),
             Self::RejectFix => f.write_str("RejectFix"),
+            Self::OpenAuditLog => f.write_str("OpenAuditLog"),
+            Self::LoadMoreAudit => f.write_str("LoadMoreAudit"),
+            Self::CopyAuditSql => f.write_str("CopyAuditSql"),
+            Self::SetAuditFilter(change) => f.debug_tuple("SetAuditFilter").field(change).finish(),
+            Self::SelectAuditEntry(ix) => f.debug_tuple("SelectAuditEntry").field(ix).finish(),
         }
     }
 }
@@ -142,6 +158,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("ai:cancel-assist", "AI: Cancel Request"),
     ("ai:accept-fix", "AI: Accept Fix"),
     ("ai:reject-fix", "AI: Reject Fix"),
+    ("ai:open-audit-log", "AI: Open Audit Log"),
+    ("ai:load-more-audit", "AI: Load More Audit Entries"),
+    ("ai:copy-audit-sql", "AI: Copy SQL of Audit Entry"),
 ];
 
 impl AiAction {
@@ -177,6 +196,11 @@ impl AiAction {
             Self::CancelAssist => "ai:cancel-assist",
             Self::AcceptFix => "ai:accept-fix",
             Self::RejectFix => "ai:reject-fix",
+            Self::OpenAuditLog | Self::SetAuditFilter(_) | Self::SelectAuditEntry(_) => {
+                "ai:open-audit-log"
+            }
+            Self::LoadMoreAudit => "ai:load-more-audit",
+            Self::CopyAuditSql => "ai:copy-audit-sql",
         };
         CommandId::new(id).expect("constant command ID is valid")
     }
@@ -245,6 +269,13 @@ pub fn action_for(id: &CommandId, ws: &Workspace) -> Option<AiAction> {
             .assist_tab()
             .filter(|tab| ws.assist_has_fix(*tab))
             .map(|_| AiAction::RejectFix),
+        "ai:open-audit-log" => Some(AiAction::OpenAuditLog),
+        "ai:load-more-audit" => ws.audit().has_more().then_some(AiAction::LoadMoreAudit),
+        "ai:copy-audit-sql" => ws
+            .audit()
+            .selected_sql()
+            .is_some()
+            .then_some(AiAction::CopyAuditSql),
         _ => None,
     }
 }
@@ -293,6 +324,11 @@ mod tests {
             AiAction::CancelAssist,
             AiAction::AcceptFix,
             AiAction::RejectFix,
+            AiAction::OpenAuditLog,
+            AiAction::LoadMoreAudit,
+            AiAction::CopyAuditSql,
+            AiAction::SetAuditFilter(AuditFilterChange::Tool(None)),
+            AiAction::SelectAuditEntry(0),
         ]
     }
 
@@ -394,6 +430,9 @@ mod tests {
                         | "ai:cancel-provider"
                         | "ai:edit-settings"
                         | "ai:toggle-connection"
+                        | "ai:open-audit-log"
+                        | "ai:load-more-audit"
+                        | "ai:copy-audit-sql"
                 );
             assert_eq!(a.is_assist(), assist, "{a:?}");
         }
@@ -407,6 +446,22 @@ mod tests {
     fn a_typed_question_is_not_in_debug_output() {
         let text = format!("{:?}", AiAction::SetPrompt("CANARY-QUESTION".into()));
         assert!(!text.contains("CANARY"), "{text}");
+    }
+
+    #[test]
+    fn audit_commands_apply_when_they_can_run() {
+        let mut w = Workspace::new(SidebarModel::default());
+        assert_eq!(act("ai:open-audit-log", &w), Some(AiAction::OpenAuditLog));
+        assert_eq!(act("ai:load-more-audit", &w), None);
+        assert_eq!(act("ai:copy-audit-sql", &w), None);
+        assert_eq!(
+            AiAction::SelectAuditEntry(3).command_id().as_str(),
+            "ai:open-audit-log"
+        );
+        w.audit_fixture(crate::ai::audit::fixture::entries(1_800_000_000_000));
+        assert_eq!(act("ai:copy-audit-sql", &w), None);
+        w.dispatch_ai(AiAction::SelectAuditEntry(0));
+        assert_eq!(act("ai:copy-audit-sql", &w), Some(AiAction::CopyAuditSql));
     }
 
     #[test]

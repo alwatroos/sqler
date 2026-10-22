@@ -127,6 +127,10 @@ pub const SCENES: &[Scene] = &[
         pending: None,
     },
     Scene {
+        name: "ai-audit",
+        pending: None,
+    },
+    Scene {
         name: "ai-side-view-empty",
         pending: None,
     },
@@ -244,6 +248,8 @@ enum Step {
     Prompt(&'static str),
     /// Lets `n` more frames pass, so a layout change settles before the capture.
     Pause(u8),
+    /// Fills the audit view with the sample entries.
+    AuditFixture,
     /// Waits.
     Wait(Wait),
 }
@@ -372,6 +378,7 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Wait(Wait::Editors(1)),
             Step::Command("workbench:show-ai"),
         ],
+        "ai-audit" => vec![Step::Command("ai:open-audit-log"), Step::AuditFixture],
         "ai-side-view-empty" => vec![Step::Command("workbench:show-ai")],
         "ai-settings" => vec![Step::Command("ai:open-settings")],
         "ai-provider-editor" => vec![
@@ -700,6 +707,14 @@ impl WorkspaceView {
                 input.update(cx, |state, cx| state.set_value(*text, window, cx));
                 self.dispatch_ai(AiAction::SetPrompt((*text).to_owned()), cx);
                 self.dispatch_ai(AiAction::SubmitPrompt, cx);
+            }
+            Step::AuditFixture => {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
+                self.ws
+                    .audit_fixture(crate::ai::audit::fixture::entries(now_ms));
+                cx.notify();
             }
             Step::Pause(_) | Step::Wait(_) => {}
         }

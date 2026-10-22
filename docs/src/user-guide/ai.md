@@ -204,11 +204,37 @@ keeps these settings.
 | `ai:accept-fix` | AI: Accept Fix |
 | `ai:reject-fix` | AI: Reject Fix |
 | `workbench:show-assistant` | View: Show Assistant |
+| `ai:open-audit-log` | AI: Open Audit Log |
+| `ai:load-more-audit` | AI: Load More Audit Entries |
+| `ai:copy-audit-sql` | AI: Copy SQL of Audit Entry |
+| `workbench:show-audit` | View: Show Audit Log |
 
 Only `workbench:show-ai` and `ai:generate-sql` (`Cmd/Ctrl+I`) have a default shortcut. See the [placement decisions](../adr/0050-ai-surfaces-in-the-workbench.md).
 
 ## Audit log and redaction
 
 Every AI tool call is recorded in `ai-audit.jsonl` in the config directory (cell values are never stored), and listed columns are hidden from the model. See [Safety](../ai/safety.md).
+
+### The audit log
+
+The Audit panel lists the tool calls recorded in `ai-audit.jsonl`, newest first. It is a tab of the bottom panel, next to Results, Messages and History. Open it with the **Audit** tab, the **Audit log** button of the AI view, or the commands `ai:open-audit-log` ("AI: Open Audit Log") and `workbench:show-audit` ("View: Show Audit Log"). The log is read when you open the panel, never at startup; if SQLer restores the panel from the last session, it shows a **Load audit log** button first.
+
+![The Audit panel](../screenshots/after/ai-audit-dark.png)
+
+Each row shows:
+
+- **When**: the age of the call (`just now`, `N min ago`, `N h ago`, `N d ago`).
+- **Surface**: `In-app assistant`, `In-app session`, `MCP` or `ACP agent`.
+- **Connection**: the connection name, or `—` when the call had none.
+- **Tool**: the tool that was called.
+- **SQL**: the first line of the statement, cut at 200 characters, with `+N` when the call had more statements. SQL is shown as stored: values that were masked stay masked (`update acct set ssn = ?`).
+- **Decision**: `Not needed`, `Approved`, `Denied`, `Refused` or `Not asked`. Denied and Refused are shown in the danger colour, Approved in the success colour.
+- **Result**: `N rows · size` for a successful call, `Error: <code>` for a failed one, and `Cancelled` for a call that was dropped before it finished, and the outcome name otherwise.
+
+The toolbar has four filters: connection (**All connections** or a saved connection), surface, tool and decision. Opening the panel sets the connection filter to the connection of the active tab, or of the selected sidebar connection; choose **All connections** to see every call. Changing a filter reads the log again from the newest entry. The status line shows the number of entries, `Loading…` while a read runs, an error if the read failed, and a note when lines of the file were skipped (damaged lines) or are newer than this version understands.
+
+A page holds 200 entries. When there are more, **Load more** (`ai:load-more-audit`) appends the next page. Click a row to select it, then **Copy SQL** (`ai:copy-audit-sql`) copies its statements, joined with `;` and a newline. The command is available only when the selected entry has SQL.
+
+The panel is read-only: it has no way to edit or delete entries. It never shows the tool arguments (except the `sql` text), the text of error messages, cell values or API keys.
 
 Redaction works on names. It does not catch a flagged column that is renamed before the model sees it: through a view (`create view v as select password as p ...`), a `union` behind a dummy first select, a CTE column list, or a Postgres whole-row reference such as `row_to_json(c)`. It also does not look inside cells, so JSON text with a `password` key is sent as it is. Use `send_rows = false` on connections where this matters. On Unix the audit file is readable by you only (0600); on Windows it relies on your profile's permissions.

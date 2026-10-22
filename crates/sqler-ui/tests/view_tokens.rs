@@ -24,6 +24,7 @@ const SCANNED: &[(&str, &str)] = &[
     ("export/view.rs", ""),
     ("settings/view.rs", ""),
     ("history/view.rs", ""),
+    ("workspace/view/audit.rs", ""),
     ("query/view/toolbar.rs", ""),
     ("query/view/mod.rs", ""),
     ("tabs/view.rs", "pub(crate) fn breadcrumbs_element("),

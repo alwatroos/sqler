@@ -22,10 +22,11 @@ use crate::workspace::WorkspaceView;
 const HEADER_HEIGHT: f32 = 30.;
 
 /// The tabs of the header: view, label and the command that shows it.
-const TABS: [(PanelView, &str, &str); 4] = [
+const TABS: [(PanelView, &str, &str); 5] = [
     (PanelView::Results, "Results", "workbench:show-results"),
     (PanelView::Messages, "Messages", "workbench:show-messages"),
     (PanelView::History, "History", "history:open"),
+    (PanelView::Audit, "Audit", "workbench:show-audit"),
     (
         PanelView::Assistant,
         "Assistant",

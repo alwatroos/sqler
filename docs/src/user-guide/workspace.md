@@ -19,12 +19,12 @@ The window has five regions. `F6` moves the focus to the next one and `Shift+F6`
 | Activity bar | Icons for Connections, Saved Queries and History at the top, AI and Settings at the bottom (AI shows the [AI view](ai.md#the-ai-view); Settings opens the Settings tab, where the theme is chosen). |
 | Side panel | The Connections tree, the Saved Queries list or the AI view, depending on the activity item. |
 | Editor groups | One to four groups side by side, each with a tab bar and the body of its active tab. |
-| Bottom panel | Results, Messages, History and Assistant, as tabs. |
+| Bottom panel | Results, Messages, History, Audit and Assistant, as tabs. |
 | Status bar | The environment, connection and database of the active tab, the [AI state](ai.md#the-status-bar), the run state, row count and timing, and the toggles for the two panels (filled while the panel is open). |
 
 - **Activity bar.** Clicking the active item hides the side panel, as in VS Code. The History item shows or hides the bottom panel on History. Each item has a tooltip with its shortcut.
 - **Side panel and bottom panel.** Drag the divider to resize; the size is kept when you restart. Show or hide them with `Cmd/Ctrl+B` and `Cmd/Ctrl+J` or the buttons at the right end of the status bar. "View: Reset Layout" restores the defaults. Running a query shows the Results view.
-- **Results, Messages, History.** Results is the grid of the active query (one toolbar row with the result chips, the status and the edit buttons, then a one-line filter bar; the panel opens 380 px high, enough for eight rows at 1280x800) (or "Run a query to see results here" with the shortcut). Messages lists the statements of the last run with their duration; a failed statement has an alert icon and the error text. History is the query history of the connection of the active tab, with the same actions as before.
+- **Results, Messages, History.** Results is the grid of the active query (one toolbar row with the result chips, the status and the edit buttons, then a one-line filter bar; the panel opens 380 px high, enough for eight rows at 1280x800) (or "Run a query to see results here" with the shortcut). Messages lists the statements of the last run with their duration; a failed statement has an alert icon and the error text. History is the query history of the connection of the active tab, with the same actions as before. Audit lists the AI tool calls ([the audit log](ai.md#the-audit-log)).
 - **Assistant.** Shows the answer of the AI actions of the active query tab: an explanation, or a proposed fix as a diff (see [AI in the SQL editor](ai.md#in-the-sql-editor)). `workbench:show-assistant` ("View: Show Assistant") opens it, and explain and fix open it themselves. Like Results and Messages it follows the active tab.
 - **Escape** in the bottom panel moves the focus back to the editor.
 

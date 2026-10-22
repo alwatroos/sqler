@@ -8,6 +8,7 @@
 //! implements per cargo feature. Keys live in the OS keychain only.
 
 mod action;
+pub mod audit;
 pub mod editor;
 pub mod hub;
 pub mod indicator;
@@ -17,6 +18,11 @@ pub mod settings;
 pub(crate) mod state;
 
 pub use action::{AiAction, COMMANDS, action_for, register_commands};
+pub use audit::{
+    AUDIT_DECISIONS, AUDIT_PAGE, AUDIT_SURFACES, AUDIT_TOOLS, AuditBatch, AuditFilterChange,
+    AuditFilters, AuditLoad, AuditPanel, AuditRead, AuditRow, AuditTone, audit_row, decision_label,
+    entry_sql, surface_label, wire_label,
+};
 pub use editor::{
     AssistJob, AssistKind, AssistOutcome, AssistRequest, AssistState, EditorAssist, EditorSource,
     PromptBar, TabAssist, run_assist,

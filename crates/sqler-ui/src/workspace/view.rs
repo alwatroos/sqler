@@ -31,6 +31,7 @@ use tokio::sync::oneshot;
 
 mod ai;
 mod assist;
+mod audit;
 mod edit_ui;
 mod shell;
 
@@ -101,7 +102,8 @@ pub struct Startup {
     pub settings: SettingsModel,
     /// The user keybinding overrides, or why they could not be loaded.
     pub keybindings: Result<KeybindingOverrides, String>,
-    /// Where the query history and the saved queries live; `None` without a config directory.
+    /// Where the query history, the saved queries and the AI audit log (`ai-audit.jsonl`) live;
+    /// `None` without a config directory.
     pub history_dir: Option<ConfigDir>,
     /// Workbench layout state, loaded by the binary.
     pub workbench: crate::workbench::WorkbenchStartup,
@@ -212,8 +214,6 @@ pub(crate) struct WorkspaceView {
     assist_cancels: HashMap<u64, oneshot::Sender<()>>,
     /// Editor edits from the AI actions, applied at the next frame (they need the window).
     assist_edits: Vec<Effect>,
-    /// Where the assist tool calls are audited; `None` without a config directory.
-    audit: Option<Arc<dyn sqler_ai_tools::AuditSink>>,
     /// Takes the keys while the sidebar has the focus.
     sidebar_focus: FocusHandle,
     /// The virtualized sidebar list and the lines it shows.
@@ -227,6 +227,9 @@ pub(crate) struct WorkspaceView {
     copy_task: Option<Task<()>>,
     /// The blocking store behind the history and the saved queries.
     history: HistoryService,
+    /// The AI audit log the Audit view reads; `None` without a config directory. Opening it
+    /// does no I/O; reads run on the blocking pool.
+    audit_log: Option<Arc<sqler_ai_tools::AuditLog>>,
     /// The inputs of the history tabs and the history dialogs.
     pub(crate) history_views: HistoryViews,
     /// The editing dialogs and the contexts pushed to the grids.
@@ -396,9 +399,10 @@ impl WorkspaceView {
                 let _ = runs.await;
             }
         });
-        let audit = startup.history_dir.as_ref().map(|dir| {
-            Arc::new(sqler_ai_tools::AuditLog::open(dir)) as Arc<dyn sqler_ai_tools::AuditSink>
-        });
+        let audit_log = startup
+            .history_dir
+            .as_ref()
+            .map(|dir| Arc::new(sqler_ai_tools::AuditLog::open(dir)));
         let history = HistoryService::new(startup.history_dir, HistoryOptions::default());
         let bounds =
             cx.observe_window_bounds(window, |view, window, cx| {
@@ -434,7 +438,6 @@ impl WorkspaceView {
             assist_inputs: assist::AssistInputs::default(),
             assist_cancels: HashMap::new(),
             assist_edits: Vec::new(),
-            audit,
             sidebar_focus: cx.focus_handle(),
             sidebar_list: new_list_state(),
             list_entries: Vec::new(),
@@ -442,6 +445,7 @@ impl WorkspaceView {
             notices: Vec::new(),
             copy_task: None,
             history,
+            audit_log,
             history_views: HistoryViews::default(),
             edit_ui: EditUi::new(cx),
             export_inputs: None,
@@ -1186,6 +1190,7 @@ impl WorkspaceView {
             | Effect::SearchHistory(_)
             | Effect::ClearHistory
             | Effect::SaveSavedQueries { .. } => self.apply_history(effect, cx),
+            Effect::ReadAudit(read) => self.read_audit(read, cx),
             Effect::PickExportPath { .. } | Effect::RunExport(_) => self.apply_export(effect, cx),
             Effect::SaveAiConfig { .. } | Effect::TestAiProvider { .. } => {
                 self.apply_ai(effect, cx);
