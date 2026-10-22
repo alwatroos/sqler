@@ -11,14 +11,17 @@ on:
     paths:
       - "spikes/ui-framework/**"
       - ".github/workflows/spike.yml"
+  # push only on main: a PR branch is covered by the pull_request trigger, so it no longer runs twice.
   push:
+    branches: [main]
     paths:
       - "spikes/ui-framework/**"
       - ".github/workflows/spike.yml"
 
+# Cancel superseded runs on pull requests only; every main run completes (own group per run).
 concurrency:
-  group: spike-${{ github.ref }}
-  cancel-in-progress: true
+  group: spike-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
