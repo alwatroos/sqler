@@ -568,3 +568,15 @@ Watch it when the real UI lands.
 start is the `hyperfine` mean of the whole process (`--exit-after-first-frame`, 3 warm-ups, 20 runs).
 The procedure is `spikes/ui-framework/scripts/measure.sh` (Linux, macOS) and
 `spikes/ui-framework/scripts/measure.ps1` (Windows); CI runs it in `.github/workflows/spike.yml`.
+
+## Plugins in the app (P7)
+
+Measured for [ADR-0060](adr/0060-plugins-in-the-workbench.md) on macOS 27.0.1 arm64 (Apple M4 Pro), local release builds of the uncommitted P7 tree, `--locked`; Linux and Windows sizes come from the `Binary size` workflow of the pull request (no GUI runner for cold start).
+
+| Build | Size (bytes) | Cold start, hyperfine mean of 20 (ms), three rounds |
+| ----- | ------------ | ------------------------------------------------------ |
+| default | 38,186,592 | 119.1, 122.3, 115.8 (sigma 2.3 to 9.3) |
+| `--features plugins` | 49,272,272 (+11,085,680) | 117.6, 123.0, 117.5 (sigma 2.1 to 4.3) |
+| `--features plugins`, `--plugin-dir` (a staged 143 KB component, not approved) | same binary | 123.3, 117.3, 117.7 (sigma 2.2 to 3.4) |
+
+Method: `hyperfine -N -w 3 -r 20 "<binary> --exit-after-first-frame"` with `HOME` pointing at a scratch directory whose configuration folder holds `plugins/smoke` (the staged `smoke` fixture); the three commands in one hyperfine call, the order rotated between the rounds. The differences are inside the noise, in both directions: the plugins build adds only the construction of the grant book and an idle backend before the first frame, and the first scan (`refresh`) is requested after it. The 143 KB component of `--plugin-dir` is read and hashed by that scan, never compiled, because it is not approved. Linux and Windows cold start: not measured.

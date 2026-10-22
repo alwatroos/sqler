@@ -30,6 +30,8 @@ pub enum SideView {
     SavedQueries,
     /// The AI view: provider, model and opt-in of the active connection.
     Ai,
+    /// The plugin manager: the plugins found, their permissions and state.
+    Plugins,
 }
 
 impl SideView {
@@ -40,6 +42,7 @@ impl SideView {
             Self::Connections => SIDE_VIEWS[0],
             Self::SavedQueries => SIDE_VIEWS[1],
             Self::Ai => SIDE_VIEWS[2],
+            Self::Plugins => SIDE_VIEWS[3],
         }
     }
 
@@ -50,6 +53,7 @@ impl SideView {
             "connections" => Some(Self::Connections),
             "saved-queries" => Some(Self::SavedQueries),
             "ai" => Some(Self::Ai),
+            "plugins" => Some(Self::Plugins),
             _ => None,
         }
     }
@@ -333,6 +337,7 @@ mod tests {
             (SideView::Connections, "connections"),
             (SideView::SavedQueries, "saved-queries"),
             (SideView::Ai, "ai"),
+            (SideView::Plugins, "plugins"),
         ] {
             assert_eq!(v.as_str(), s);
             assert_eq!(SideView::parse(s), Some(v));

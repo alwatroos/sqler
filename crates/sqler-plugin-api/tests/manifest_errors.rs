@@ -33,23 +33,23 @@ fn err(text: &str) -> ManifestError {
 #[test]
 fn full_fixture_round_trips_all_fields() {
     let m = Manifest::parse(FULL).expect("full fixture parses");
-    assert_eq!(m.id.as_str(), "demo-plugin");
-    assert_eq!(m.name, "Demo plugin");
-    assert_eq!(m.version.to_string(), "1.2.3");
-    assert_eq!(m.api, API_VERSION);
-    assert_eq!(m.description.as_deref(), Some("Exercises every key."));
-    assert_eq!(m.authors, ["Ada", "Grace"]);
-    assert_eq!(m.license.as_deref(), Some("Apache-2.0"));
-    assert_eq!(m.capabilities.len(), 8);
+    assert_eq!(m.id().as_str(), "demo-plugin");
+    assert_eq!(m.name(), "Demo plugin");
+    assert_eq!(m.version().to_string(), "1.2.3");
+    assert_eq!(m.api(), API_VERSION);
+    assert_eq!(m.description(), Some("Exercises every key."));
+    assert_eq!(m.authors(), ["Ada", "Grace"]);
+    assert_eq!(m.license(), Some("Apache-2.0"));
+    assert_eq!(m.capabilities().len(), 8);
     assert!(
-        m.capabilities
+        m.capabilities()
             .contains(&"fs.read:data/cache".parse::<Capability>().unwrap())
     );
-    assert_eq!(m.entry.as_ref().unwrap().component, "bin/plugin.wasm");
-    let c = &m.contributes;
+    assert_eq!(m.entry().unwrap().component, "bin/plugin.wasm");
+    let c = m.contributes();
     assert_eq!(c.commands.len(), 1);
     assert_eq!(
-        command_id(&m.id, &c.commands[0].id),
+        command_id(m.id(), &c.commands[0].id),
         "plugin:demo-plugin:run"
     );
     assert_eq!(c.panels[0].title, "Main");
@@ -79,8 +79,8 @@ fn full_fixture_round_trips_all_fields() {
 #[test]
 fn minimal_is_declarative_only() {
     let m = Manifest::parse(MINIMAL).expect("parses");
-    assert!(m.entry.is_none());
-    assert!(m.capabilities.is_empty());
+    assert!(m.entry().is_none());
+    assert!(m.capabilities().is_empty());
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn compat_error() {
     assert_eq!(
         m.check_api(host),
         Err(CompatError::Incompatible {
-            required: m.api,
+            required: m.api(),
             host
         })
     );
@@ -387,7 +387,7 @@ fn entry_and_schema_errors() {
     assert!(matches!(err(&tool(&big)), E::BadSchema { .. }));
     let ok = Manifest::parse(&tool("{ when = 1979-05-27T07:32:00Z }")).unwrap();
     assert_eq!(
-        ok.contributes.ai_tools[0].input_schema["when"],
+        ok.contributes().ai_tools[0].input_schema["when"],
         "1979-05-27T07:32:00Z"
     );
 }
@@ -445,7 +445,7 @@ fn changing_capabilities_changes_the_grant_key() {
         a.grant_key(None).unwrap(),
         b.grant_key(Some(&digest)).unwrap()
     );
-    let d = b.capabilities.diff(&a.capabilities);
+    let d = b.capabilities().diff(a.capabilities());
     assert_eq!(d.added, vec![Capability::UiPanel]);
     assert!(d.removed.is_empty());
 }

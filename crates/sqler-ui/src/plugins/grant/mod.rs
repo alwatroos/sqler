@@ -15,7 +15,9 @@ pub(crate) mod view;
 use crate::command::{Command, CommandError, CommandId, CommandRegistry};
 
 pub use book::{GrantBook, GrantBookError, GrantStatus};
-#[cfg(any(test, feature = "screenshots"))]
+#[cfg(test)]
+pub(crate) use prompt::fixture_manifest;
+#[cfg(test)]
 pub(crate) use prompt::sample_prompt;
 pub use prompt::{CapabilityLine, GrantPrompt};
 
@@ -60,13 +62,20 @@ pub fn action_for(id: &CommandId) -> Option<GrantCommand> {
         .find(|c| c.command_id() == *id)
 }
 
-/// Registers the grant commands.
+/// Registers the grant commands that may be listed and rebound: Deny only.
+///
+/// `plugins:approve-grant` stays an ID (the dialog's pointer Approve and the tests use it) but is deliberately not
+/// registered, so the palette never lists it and a key override for it is rejected as an unknown command. The
+/// keyboard route to Approve is the typed plugin id ([`GrantPrompt::confirms`]).
 ///
 /// # Errors
 ///
 /// Returns [`CommandError::Duplicate`] if one of the IDs is already registered.
 pub fn register_commands(registry: &mut CommandRegistry) -> Result<(), CommandError> {
     for (id, title) in COMMANDS {
+        if *id == COMMANDS[0].0 {
+            continue;
+        }
         registry.register(Command::new(id, *title)?)?;
     }
     Ok(())
@@ -87,9 +96,11 @@ mod tests {
     fn every_command_is_registered_and_maps_back() {
         let mut r = CommandRegistry::new();
         register_commands(&mut r).unwrap();
-        assert_eq!(r.len(), COMMANDS.len());
+        assert_eq!(r.len(), COMMANDS.len() - 1);
+        assert!(r.get(&GrantCommand::Deny.command_id()).is_some());
+        // Approve is never registered: not in the palette, not rebindable.
+        assert!(r.get(&GrantCommand::Approve.command_id()).is_none());
         for c in [GrantCommand::Approve, GrantCommand::Deny] {
-            assert!(r.get(&c.command_id()).is_some(), "{c:?}");
             assert_eq!(action_for(&c.command_id()), Some(c));
         }
         assert_eq!(

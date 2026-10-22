@@ -21,12 +21,17 @@ use crate::workspace::WorkspaceView;
 const WIDTH: f32 = 44.;
 /// Height of one item in pixels.
 const ITEM_HEIGHT: f32 = 40.;
+/// Diameter of the attention dot, in pixels.
+const DOT: f32 = 8.;
+/// Distance of the attention dot from the top and right edge of an item, in pixels.
+const DOT_INSET: f32 = 8.;
 
 fn icon_of(item: ActivityItem) -> AppIcon {
     match item {
         ActivityItem::Connections => AppIcon::Database,
         ActivityItem::SavedQueries => AppIcon::Bookmark,
         ActivityItem::History => AppIcon::Clock,
+        ActivityItem::Plugins => AppIcon::Plug,
         ActivityItem::Ai => AppIcon::Sparkles,
         ActivityItem::Settings => AppIcon::Settings,
     }
@@ -60,10 +65,17 @@ fn item_element(
         item.is_active(ws.layout())
     };
     let command = item.click_command(ws.layout());
+    let needs_attention = item == ActivityItem::Plugins && ws.plugins().needs_attention();
     let title = item.title();
+    let label = if needs_attention {
+        SharedString::from(format!("{title}, needs attention"))
+    } else {
+        SharedString::from(title)
+    };
     let tip = tooltip_text(title, hints.get(item.command()).as_deref());
     let theme = cx.theme();
     let (ring, hover, fg) = (theme.ring, theme.list_hover, theme.sidebar_foreground);
+    let attention = theme.warning;
     let idle = rgb(activity_foreground(appearance(cx)).0);
 
     let mut el = div()
@@ -82,7 +94,7 @@ fn item_element(
         .track_focus(handle)
         .focus_visible(move |s| s.border_color(ring))
         .role(Role::Button)
-        .aria_label(title)
+        .aria_label(label)
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
             run_command_id(view, command, window, cx);
@@ -92,6 +104,18 @@ fn item_element(
                 .size(px(20.))
                 .text_color(if active { fg } else { idle.into() }),
         );
+    if needs_attention {
+        // A plugin waits for a decision or has failed: the dot is the only sign outside the view.
+        el = el.child(
+            div()
+                .absolute()
+                .top(px(DOT_INSET))
+                .right(px(DOT_INSET))
+                .size(px(DOT))
+                .rounded_full()
+                .bg(attention),
+        );
+    }
     if active {
         el = el.child(
             div()

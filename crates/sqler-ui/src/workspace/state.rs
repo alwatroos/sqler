@@ -39,6 +39,7 @@ use crate::grid::{
     GridCancel, GridTab, InsertTarget, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS,
 };
 use crate::history::HistorySearch;
+use crate::plugins::manager::{PluginEffect, PluginsState};
 use crate::query::{Phase, QueryJob, QueryTab, RunEvent, StatementStatus};
 use crate::settings::SettingsModel;
 use crate::sidebar::SidebarModel;
@@ -291,6 +292,10 @@ pub enum Effect {
     RunAssist(Box<AssistJob>),
     /// Send the cancel signal of this assist request.
     CancelAssist(u64),
+    /// Run this work of the plugin manager on the background executor and report the result with
+    /// [`Workspace::plugin_finished`] (`SessionBridge::blocking` with `PluginEffect::run_blocking`; a
+    /// `Start` runs the backend future on tokio).
+    Plugins(PluginEffect),
 }
 
 impl std::fmt::Debug for Effect {
@@ -458,6 +463,8 @@ impl std::fmt::Debug for Effect {
                 .field("kind", &job.request.kind())
                 .finish(),
             Self::CancelAssist(id) => f.debug_tuple("CancelAssist").field(id).finish(),
+            // Ids and keys only: the effect's own Debug never shows a setting value.
+            Self::Plugins(effect) => f.debug_tuple("Plugins").field(effect).finish(),
         }
     }
 }
@@ -551,6 +558,8 @@ pub struct Workspace {
     pub(super) agents: AgentTabs,
     /// The editor assistant of every query tab (ADR-0052).
     pub(super) assist: EditorAssist,
+    /// The plugin manager: the rows, the open permission dialog and the work it asks for (ADR-0060).
+    pub(super) plugins: PluginsState,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -615,6 +624,7 @@ impl Workspace {
             ai_sessions: AiSessions::default(),
             agents: AgentTabs::default(),
             assist: EditorAssist::default(),
+            plugins: PluginsState::default(),
         }
     }
 

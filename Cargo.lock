@@ -7937,6 +7937,8 @@ dependencies = [
  "sqler-driver-postgres",
  "sqler-driver-sqlite",
  "sqler-export",
+ "sqler-plugin-api",
+ "sqler-plugin-host",
  "sqler-tunnel",
  "sqler-ui",
  "tokio",

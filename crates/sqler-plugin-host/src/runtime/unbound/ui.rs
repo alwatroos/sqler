@@ -8,14 +8,14 @@ use crate::runtime::state::HostState;
 
 impl wit::Host for HostState {
     async fn refresh_panel(&mut self, panel: String) {
-        tracing::debug!(plugin = %self.plugin.manifest.id, %panel, "ui.refresh-panel dropped: no UI sink");
+        tracing::debug!(plugin = %self.plugin.manifest.id(), %panel, "ui.refresh-panel dropped: no UI sink");
     }
 
     async fn set_status(&mut self, item: String, _text: String) {
-        tracing::debug!(plugin = %self.plugin.manifest.id, %item, "ui.set-status dropped: no UI sink");
+        tracing::debug!(plugin = %self.plugin.manifest.id(), %item, "ui.set-status dropped: no UI sink");
     }
 
     async fn notify(&mut self, _message: String) {
-        tracing::debug!(plugin = %self.plugin.manifest.id, "ui.notify dropped: no UI sink");
+        tracing::debug!(plugin = %self.plugin.manifest.id(), "ui.notify dropped: no UI sink");
     }
 }

@@ -10,6 +10,8 @@ mod ai;
 mod args;
 mod connect;
 mod open_sessions;
+#[cfg(feature = "plugins")]
+mod plugins;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -38,7 +40,8 @@ fn main() -> ExitCode {
         Ok(Command::Run {
             exit_after_first_frame,
             open_sessions,
-        }) => start(exit_after_first_frame, open_sessions),
+            plugin_dirs,
+        }) => start(exit_after_first_frame, open_sessions, plugin_dirs),
         Err(UsageError(msg)) => {
             eprintln!("error: {msg}\n\n{USAGE}");
             ExitCode::from(2)
@@ -46,7 +49,11 @@ fn main() -> ExitCode {
     }
 }
 
-fn start(exit_after_first_frame: bool, open_sessions: bool) -> ExitCode {
+fn start(
+    exit_after_first_frame: bool,
+    open_sessions: bool,
+    plugin_dirs: Vec<std::path::PathBuf>,
+) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .thread_name("sqler-db")
@@ -101,6 +108,15 @@ fn start(exit_after_first_frame: bool, open_sessions: bool) -> ExitCode {
         dir.as_ref().ok().cloned(),
         Arc::new(ai::Providers::new(Arc::clone(&secrets))),
     );
+    // Builds the grant book and a backend that does nothing until the first refresh, which the window requests after
+    // the first frame: no plugin is discovered, compiled or instantiated here.
+    #[cfg(feature = "plugins")]
+    let plugins = plugins::startup(dir.as_ref().ok(), plugin_dirs);
+    #[cfg(not(feature = "plugins"))]
+    let plugins = {
+        drop(plugin_dirs);
+        sqler_ui::plugins::PluginsStartup::unavailable()
+    };
     run(Startup {
         connections,
         config_dir,
@@ -113,6 +129,7 @@ fn start(exit_after_first_frame: bool, open_sessions: bool) -> ExitCode {
         history_dir,
         workbench,
         ai,
+        plugins,
     });
     ExitCode::SUCCESS
 }

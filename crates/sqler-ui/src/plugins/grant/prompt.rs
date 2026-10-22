@@ -108,36 +108,49 @@ impl GrantPrompt {
         status: &GrantStatus,
     ) -> Result<Self, GrantKeyBuildError> {
         let key = manifest.grant_key(component)?;
+        Ok(Self::from_parts(
+            key,
+            manifest.name(),
+            manifest.description(),
+            manifest.capabilities(),
+            contributions(manifest),
+            status,
+        ))
+    }
+
+    /// The shared tail of [`GrantPrompt::new`]: sanitises the display text and builds the capability rows.
+    fn from_parts(
+        key: GrantKey,
+        name: &str,
+        description: Option<&str>,
+        capabilities: &CapabilitySet,
+        contributions: Vec<String>,
+        status: &GrantStatus,
+    ) -> Self {
         let (previous, problem) = match status {
             GrantStatus::NeedsPrompt { previous } => (previous.as_ref(), None),
             GrantStatus::Unavailable { problem } => (None, Some(sanitize(problem))),
             _ => (None, None),
         };
-        let name = clip_chars(&sanitize(&manifest.name), NAME_MAX_CHARS);
-        let mut lines: Vec<CapabilityLine> = manifest
-            .capabilities
-            .iter()
-            .map(|c| line(c, previous))
-            .collect();
+        let name = clip_chars(&sanitize(name), NAME_MAX_CHARS);
+        let mut lines: Vec<CapabilityLine> =
+            capabilities.iter().map(|c| line(c, previous)).collect();
         // Stable: prominent rows first, set order inside each group.
         lines.sort_by_key(|l| !l.prominent);
-        Ok(Self {
+        Self {
             plugin_id: sanitize(key.id().as_str()),
             version: sanitize(&key.version().to_string()),
             key,
             title: format!("Allow plugin {name}?"),
             name,
-            description: manifest
-                .description
-                .as_deref()
-                .map(|d| clip_bytes(&sanitize(d), DESCRIPTION_MAX_BYTES)),
-            capabilities: manifest.capabilities.clone(),
+            description: description.map(|d| clip_bytes(&sanitize(d), DESCRIPTION_MAX_BYTES)),
+            capabilities: capabilities.clone(),
             lines,
-            contributions: contributions(manifest),
+            contributions,
             reprompt: previous.is_some(),
             problem,
             basis: status.clone(),
-        })
+        }
     }
 
     /// The grant key Approve and Deny are stored under.
@@ -223,6 +236,13 @@ impl GrantPrompt {
     #[must_use]
     pub fn can_approve(&self) -> bool {
         self.problem.is_none()
+    }
+
+    /// Whether `typed` confirms Approve from the keyboard: Approve can be offered and the text is exactly the plugin id
+    /// (no trimming, no case folding). This is the only keyboard route to Approve.
+    #[must_use]
+    pub fn confirms(&self, typed: &str) -> bool {
+        self.can_approve() && typed == self.plugin_id
     }
 
     /// How many lines are drawn with a warning.
@@ -321,7 +341,7 @@ fn count(n: usize, one: &str, many: &str) -> Option<String> {
 }
 
 fn contributions(m: &Manifest) -> Vec<String> {
-    let c = &m.contributes;
+    let c = m.contributes();
     [
         count(c.commands.len(), "command", "commands"),
         count(c.panels.len(), "panel", "panels"),
@@ -483,7 +503,7 @@ fn unknown(capability: &Capability) -> CapabilityLine {
 }
 
 /// A manifest for tests: `caps` are capability strings; `entry` adds a component and a command.
-#[cfg(any(test, feature = "screenshots"))]
+#[cfg(test)]
 #[allow(clippy::expect_used)] // fixed fixture text
 pub(crate) fn fixture_manifest(id: &str, version: &str, caps: &[&str], entry: bool) -> Manifest {
     let caps = caps
@@ -516,22 +536,22 @@ pub(crate) fn fixture_key(m: &Manifest) -> GrantKey {
 }
 
 /// The component digest of a fixture manifest (`None` without an `[entry]`).
-#[cfg(any(test, feature = "screenshots"))]
+#[cfg(test)]
 pub(crate) fn fixture_digest(m: &Manifest) -> Option<sqler_plugin_api::ComponentDigest> {
-    m.entry
+    m.entry()
         .is_some()
         .then(|| sqler_plugin_api::ComponentDigest::of(b"wasm"))
 }
 
 /// The prompt of a fixture manifest for `status`.
-#[cfg(any(test, feature = "screenshots"))]
+#[cfg(test)]
 #[allow(clippy::expect_used)] // fixed fixture text
 pub(crate) fn fixture_prompt(m: &Manifest, status: &GrantStatus) -> GrantPrompt {
     GrantPrompt::new(m, fixture_digest(m).as_ref(), status).expect("fixture prompt")
 }
 
 /// The prompt of the `plugins-grant` scene: a re-prompt with a new, prominent set.
-#[cfg(any(test, feature = "screenshots"))]
+#[cfg(test)]
 #[allow(clippy::expect_used)] // fixed fixture text
 pub(crate) fn sample_prompt() -> GrantPrompt {
     let m = fixture_manifest(
@@ -560,6 +580,19 @@ pub(crate) fn sample_prompt() -> GrantPrompt {
 mod tests {
     use super::*;
     use sqler_config::Platform;
+
+    /// A prompt whose name and description bypass manifest validation (which refuses control and bidi text), so
+    /// the prompt's own sanitising is exercised.
+    fn hostile_prompt(m: &Manifest, name: &str, description: &str) -> GrantPrompt {
+        GrantPrompt::from_parts(
+            fixture_key(m),
+            name,
+            Some(description),
+            m.capabilities(),
+            contributions(m),
+            &GrantStatus::NeedsPrompt { previous: None },
+        )
+    }
 
     fn prompt_for(caps: &[&str]) -> GrantPrompt {
         let m = fixture_manifest("acme-sync", "1.0.0", caps, true);
@@ -751,10 +784,12 @@ mod tests {
 
     #[test]
     fn names_and_descriptions_are_sanitised() {
-        let mut m = fixture_manifest("acme-sync", "1.0.0", &["db.read"], false);
-        m.name = format!("Evil\u{202E}Name\u{7}{}", "x".repeat(200));
-        m.description = Some(format!("a\u{2066}b\n{}", "é".repeat(2000)));
-        let p = fixture_prompt(&m, &GrantStatus::NeedsPrompt { previous: None });
+        let m = fixture_manifest("acme-sync", "1.0.0", &["db.read"], false);
+        let p = hostile_prompt(
+            &m,
+            &format!("Evil\u{202E}Name\u{7}{}", "x".repeat(200)),
+            &format!("a\u{2066}b\n{}", "é".repeat(2000)),
+        );
         assert!(p.name().starts_with("Evil\u{FFFD}Name\u{FFFD}"));
         assert_eq!(p.name().chars().count(), 80);
         assert_eq!(p.title(), format!("Allow plugin {}?", p.name()));
@@ -783,11 +818,9 @@ mod tests {
             '\u{0085}',
             '\u{1D173}',
         ];
-        let mut m = fixture_manifest("acme-sync", "1.0.0", &["db.read"], false);
+        let m = fixture_manifest("acme-sync", "1.0.0", &["db.read"], false);
         let text: String = evil.iter().flat_map(|&c| ['a', c]).collect();
-        m.name = text.clone();
-        m.description = Some(text);
-        let p = fixture_prompt(&m, &GrantStatus::NeedsPrompt { previous: None });
+        let p = hostile_prompt(&m, &text, &text);
         let want = "a\u{FFFD}".repeat(evil.len());
         assert_eq!(p.name(), want);
         assert_eq!(p.description(), Some(want.as_str()));
@@ -804,7 +837,7 @@ mod tests {
         assert!(GrantPrompt::new(&declarative, Some(&digest), &s).is_err());
         let p = GrantPrompt::new(&wasm, Some(&digest), &s).unwrap();
         assert_eq!(*p.key(), wasm.grant_key(Some(&digest)).unwrap());
-        assert_eq!(p.capabilities(), &wasm.capabilities);
+        assert_eq!(p.capabilities(), wasm.capabilities());
     }
 
     #[test]
@@ -835,6 +868,30 @@ mod tests {
         assert!(!p.can_approve());
         assert_eq!(p.problem(), Some("damaged"));
         assert!(prompt_for(&["db.read"]).can_approve());
+    }
+
+    #[test]
+    fn confirms_needs_the_exact_id_and_no_problem() {
+        let p = prompt_for(&["db.read"]);
+        assert!(p.confirms("acme-sync"));
+        for typed in [
+            "",
+            "acme",
+            "Acme-Sync",
+            " acme-sync",
+            "acme-sync ",
+            "acme-sync\n",
+        ] {
+            assert!(!p.confirms(typed), "{typed:?}");
+        }
+        let m = fixture_manifest("acme-sync", "1.0.0", &["db.read"], false);
+        let broken = fixture_prompt(
+            &m,
+            &GrantStatus::Unavailable {
+                problem: "damaged".into(),
+            },
+        );
+        assert!(!broken.confirms("acme-sync"));
     }
 
     #[test]

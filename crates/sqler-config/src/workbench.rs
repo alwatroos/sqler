@@ -36,7 +36,7 @@ pub const MAX_RECENT_COMMANDS: usize = 10;
 pub const MAX_RECENT_CONNECTIONS: usize = 5;
 
 /// The known views of the side panel.
-pub const SIDE_VIEWS: [&str; 3] = ["connections", "saved-queries", "ai"];
+pub const SIDE_VIEWS: [&str; 4] = ["connections", "saved-queries", "ai", "plugins"];
 
 /// The known views of the bottom panel.
 pub const BOTTOM_VIEWS: [&str; 5] = ["results", "messages", "history", "ai-audit", "assistant"];
@@ -467,6 +467,22 @@ mod tests {
         let old = loaded("[side_panel]\nview = \"saved-queries\"\nsize = 300");
         assert_eq!(old.side_panel.view, "saved-queries");
         assert_eq!(old.side_panel.size, 300.0);
+    }
+
+    #[test]
+    fn the_plugins_side_view_loads_and_an_unknown_one_falls_back() {
+        assert_eq!(SIDE_VIEWS[3], "plugins");
+        assert_eq!(
+            loaded("[side_panel]\nview = \"plugins\"").side_panel.view,
+            "plugins"
+        );
+        // A build that does not know a view falls back to the first one (lenient read).
+        assert_eq!(
+            loaded("[side_panel]\nview = \"extensions\"")
+                .side_panel
+                .view,
+            "connections"
+        );
     }
 
     #[test]

@@ -63,7 +63,7 @@ mod tests {
                 let path = row_dir(r.dir).join("sqler.toml");
                 let bytes = std::fs::read(&path).unwrap_or_default();
                 match Manifest::parse_bytes(&bytes) {
-                    Ok(m) => m.id.as_str().to_owned(),
+                    Ok(m) => m.id().as_str().to_owned(),
                     Err(e) => panic!("{}: {e}", r.name),
                 }
             })
@@ -79,7 +79,7 @@ mod tests {
             let manifest =
                 Manifest::parse_bytes(&bytes).unwrap_or_else(|e| panic!("{}: {e}", row.name));
             assert_eq!(
-                manifest.entry.is_some(),
+                manifest.entry().is_some(),
                 row.package.is_some(),
                 "{}",
                 row.name
