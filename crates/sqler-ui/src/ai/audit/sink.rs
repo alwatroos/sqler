@@ -132,9 +132,11 @@ mod tests {
     /// Nobody builds a sink for a tool set or the MCP server outside the helper.
     #[test]
     fn only_the_helper_attaches_a_sink() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // The UI builds the in-app tool sets; the CLI builds the MCP server over stdio.
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut files = Vec::new();
-        sources(&root, &mut files);
+        sources(&manifest.join("src"), &mut files);
+        sources(&manifest.join("../sqler-cli/src"), &mut files);
         let norm = |p: &Path| p.to_string_lossy().replace('\\', "/");
         // Built from pieces so this file does not match itself.
         let with_audit = [".with_", "audit("].concat();
@@ -149,11 +151,12 @@ mod tests {
             let text = std::fs::read_to_string(&file)
                 .expect("read")
                 .replace("\r\n", "\n");
-            let prod = text.split("#[cfg(test)]").next().unwrap_or("");
+            // Cut at the test module declaration, so an earlier cfg-gated item hides nothing.
+            let prod = text.split("\nmod tests").next().unwrap_or("");
             if !name.ends_with("ai/audit/sink.rs") {
                 assert!(!prod.contains(&with_audit), "{name} attaches a sink itself");
             }
-            if !name.ends_with("ai/agent/endpoint.rs") {
+            if !name.ends_with("ai/agent/endpoint.rs") && !name.ends_with("sqler-cli/src/mcp.rs") {
                 assert!(!prod.contains(&server_new), "{name} builds an MCP server");
             }
             assert!(!prod.contains(&null), "{name} has a null audit");

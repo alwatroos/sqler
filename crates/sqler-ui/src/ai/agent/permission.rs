@@ -79,7 +79,7 @@ pub struct PermissionQueue {
 
 impl PermissionQueue {
     /// Adds an ask and returns its id. Its texts are cut to [`MAX_ENTRY_BYTES`]. When
-    /// [`MAX_WAITING`] asks wait already, the ask is answered `Cancelled` and `None` is returned.
+    /// `MAX_WAITING` asks wait already, the ask is answered `Cancelled` and `None` is returned.
     pub fn push(&mut self, ask: PermissionAsk) -> Option<u64> {
         if self.waiting.len() >= MAX_WAITING {
             // A dropped receiver means the agent is gone; nothing waits for the answer.
