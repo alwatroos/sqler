@@ -104,6 +104,7 @@ Source commands:
 | `actions/checkout` | GitHub release | `v7` (v7.0.1) | 2026-07-20 | Repository checkout; re-checked 2026-10-20, still the latest major |
 | `Swatinem/rust-cache` | GitHub release | `v2` (v2.9.2) | 2026-08-06 | Cargo cache; re-checked 2026-10-20, still the latest major |
 | `taiki-e/install-action` | GitHub release | `v2` (v2.87.29) | 2026-10-16 | Prebuilt tool binaries |
+| `dorny/paths-filter` | GitHub release | `v4` (v4.0.3) | 2026-08-05 | Path gating in the `changes` job of `ci.yml` (ADR-0068); read-only API access to the changed files, not archived (checked 2026-10-22) |
 | `actions/upload-artifact` | GitHub release | `v7` (v7.0.2) | 2026-10-07 | Spike results artifacts (`spike.yml`) |
 | `hyperfine` | crates.io, GitHub release | 2.0.0 | 2026-10-07 | Cold-start measurement in `spike.yml`, installed through `taiki-e/install-action`. 2.0 JSON: mean at `results[0].summary.time_wall_clock.mean` |
 | `actions/configure-pages` | GitHub release | `v6` (v6.0.0) | 2026-03-25 | Pages setup |
@@ -221,3 +222,4 @@ Per-dependency rationale is added by the PR that introduces it.
 - `cargo-deny`: enforces the Apache-2.0-compatible license allow-list in `deny.toml`, plus bans, sources and advisories.
 - `mdbook`: builds the documentation book in CI and for GitHub Pages.
 - `taiki-e/install-action`: installs the pinned tools as prebuilt binaries instead of compiling them in every run.
+- `dorny/paths-filter`: tells `ci.yml` which areas a pull request touches (Rust, UI, plugins) so docs-only changes skip the heavy jobs (ADR-0068). It needs `pull-requests: read` on the `changes` job only.
