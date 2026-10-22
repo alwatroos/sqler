@@ -74,6 +74,8 @@ impl AiProviderFactory for Providers {
         kinds.push(ProviderKind::Anthropic);
         #[cfg(feature = "ai-openai")]
         kinds.push(ProviderKind::OpenAi);
+        #[cfg(feature = "ai-mistral")]
+        kinds.push(ProviderKind::Mistral);
         kinds
     }
 
@@ -116,6 +118,16 @@ impl AiProviderFactory for Providers {
                 )?;
                 Ok(Arc::new(built))
             }
+            #[cfg(feature = "ai-mistral")]
+            ProviderKind::Mistral => {
+                let key = key.ok_or_else(|| AiError::Auth("an API key is needed".to_owned()))?;
+                let built = sqler_ai_mistral::MistralProvider::new(
+                    key.expose(),
+                    provider.endpoint.as_deref(),
+                )?;
+                Ok(Arc::new(built))
+            }
+            #[allow(unreachable_patterns)]
             _ => Err(AiError::Unsupported(format!(
                 "{} is not available in this build",
                 kind_label(provider.kind)
@@ -152,7 +164,10 @@ mod tests {
             kinds.contains(&ProviderKind::OpenAi),
             cfg!(feature = "ai-openai")
         );
-        assert!(!kinds.contains(&ProviderKind::Mistral));
+        assert_eq!(
+            kinds.contains(&ProviderKind::Mistral),
+            cfg!(feature = "ai-mistral")
+        );
     }
 
     #[cfg(feature = "ai-ollama")]
@@ -186,7 +201,11 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "ai-anthropic", feature = "ai-openai"))]
+    #[cfg(any(
+        feature = "ai-anthropic",
+        feature = "ai-openai",
+        feature = "ai-mistral"
+    ))]
     #[allow(clippy::vec_init_then_push)]
     fn keyed_kinds() -> Vec<ProviderKind> {
         let mut kinds = Vec::new();
@@ -194,10 +213,16 @@ mod tests {
         kinds.push(ProviderKind::Anthropic);
         #[cfg(feature = "ai-openai")]
         kinds.push(ProviderKind::OpenAi);
+        #[cfg(feature = "ai-mistral")]
+        kinds.push(ProviderKind::Mistral);
         kinds
     }
 
-    #[cfg(any(feature = "ai-anthropic", feature = "ai-openai"))]
+    #[cfg(any(
+        feature = "ai-anthropic",
+        feature = "ai-openai",
+        feature = "ai-mistral"
+    ))]
     #[test]
     fn keyed_providers_build_without_network_and_a_bad_endpoint_is_invalid() {
         let r = registry(MemoryStore::new());
@@ -212,7 +237,11 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "ai-anthropic", feature = "ai-openai"))]
+    #[cfg(any(
+        feature = "ai-anthropic",
+        feature = "ai-openai",
+        feature = "ai-mistral"
+    ))]
     #[test]
     fn keyed_providers_without_a_key_are_an_auth_error() {
         let r = registry(MemoryStore::new());
