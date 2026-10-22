@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Guest workspace (P3, ADR-0054): plugin components built for wasm32-wasip2. It is excluded from the root workspace;
+# build it through `cargo run -p xtask -- plugins build` (see plugins/README.md).
+[workspace]
+resolver = "3"
+members = ["fixtures/smoke"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+authors = ["The SQLer Authors"]
+publish = false
+
+[workspace.dependencies]
+wit-bindgen = "0.63.0"
+
+# `deny`, not `forbid`: the wit-bindgen glue needs a local `allow` (AGENTS.md section 4).
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
+
+[profile.release]
+strip = "symbols"
+codegen-units = 1
+opt-level = "s"
+lto = true

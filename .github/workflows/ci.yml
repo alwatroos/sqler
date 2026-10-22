@@ -162,6 +162,52 @@ jobs:
           if cargo tree --workspace -i gpui 2>/dev/null; then echo "upstream gpui is in the tree"; exit 1; fi
           if cargo tree --workspace -i gpui-ce 2>/dev/null; then echo "gpui-ce is in the tree"; exit 1; fi
 
+  plugins:
+    name: plugins (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            plugins -> target/plugins/cargo
+      - name: Build the plugins (debug)
+        shell: bash
+        run: cargo run -p xtask --locked -- plugins build
+      - name: Build the plugins (release)
+        shell: bash
+        run: cargo run -p xtask --locked -- plugins build --release
+      - name: Staged files exist
+        shell: bash
+        run: test -f target/plugins/release/smoke/smoke.wasm && test -f target/plugins/release/smoke/sqler.toml
+      - name: Format and clippy (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: cargo run -p xtask --locked -- plugins check
+      - uses: taiki-e/install-action@v2
+        if: runner.os == 'Linux'
+        with:
+          tool: cargo-deny@0.20.2
+      - name: cargo deny (guest workspace, Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo deny --manifest-path plugins/Cargo.toml --config deny.toml fetch
+          cargo deny --manifest-path plugins/Cargo.toml --config deny.toml check
+      - name: Clean (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo run -p xtask --locked -- plugins clean
+          test ! -e target/plugins
+
   docs:
     name: docs
     runs-on: ubuntu-latest

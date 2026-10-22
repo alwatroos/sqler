@@ -1,0 +1,9 @@
+[plugin]
+id = "smoke"
+name = "Smoke"
+version = "0.1.0"
+api = "0.1.0"
+capabilities = []
+
+[entry]
+component = "smoke.wasm"
