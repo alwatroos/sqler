@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# DuckDB guest attempt for wasm32-wasip2 (its own workspace; a NO-GO here must not break anything else).
+[workspace]
+
+[package]
+name = "duckdb-guest"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+authors = ["The SQLer Authors"]
+publish = false
+
+[dependencies]
+libduckdb-sys = { version = "1.10506.1", default-features = false, features = ["bundled"] }
+
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
+
+[profile.release]
+strip = "symbols"
+codegen-units = 1
+opt-level = "s"

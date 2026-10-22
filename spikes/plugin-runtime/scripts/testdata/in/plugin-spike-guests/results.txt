@@ -1,0 +1,5 @@
+SPIKE toolchain_rustc=1.99.1
+SPIKE toolchain_wit_bindgen=0.63.0
+SPIKE hello_wasm_bytes=1000
+SPIKE hello_cc_build=ok
+SPIKE guest_mssql_build=fail

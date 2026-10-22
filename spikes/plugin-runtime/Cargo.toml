@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Throwaway plugin-runtime spike (P1, ADR-0054). Its own workspace, outside the root one.
+# Only the host is a member; the guests are separate workspaces (built for wasm32-wasip2)
+# so a guest that does not build can never break the host build.
+[workspace]
+resolver = "3"
+members = ["host"]
+exclude = ["guests"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+authors = ["The SQLer Authors"]
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
+
+# Same as the root [profile.release], so the size deltas match the shipped binary.
+[profile.release]
+strip = "symbols"
+codegen-units = 1

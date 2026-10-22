@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Experiment only (RESULT.md, configuration 3): stands in for `rustls-native-certs`, which has no
+# wasm32-wasip2 backend. Wired in with `cargo --config patch...`, never in the default build.
+[workspace]
+
+[package]
+name = "rustls-native-certs"
+version = "0.8.5"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+rustls-pki-types = "1"

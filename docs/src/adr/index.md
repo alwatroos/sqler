@@ -60,5 +60,6 @@ consequences. SQLer uses the MADR format.
 | [0051](0051-app-hosted-mcp-endpoint-and-agent-hosting.md) | App-hosted MCP endpoint and agent hosting: Agent tab, endpoint and token per tab, approvals and permissions, audit surface `agent`, teardown order, cancel/close/quit bounds, agents.toml | accepted |
 | [0052](0052-ai-editor-actions.md) | Editor AI actions: generate, explain and fix in the SQL editor, catalog-only source, never run, exact-match fix, Assistant panel view | accepted |
 | [0053](0053-ai-session-tab-and-approvals.md) | AI session tab and approvals: pinned tab kind, lend/return turn, host channel, exact-SQL approval card, production gate reuse, UI-only tools, cancel semantics | accepted |
+| [0054](0054-plugin-runtime-and-driver-feasibility.md) | Plugin runtime and driver feasibility (P1 spike): wasmtime variants and sizes, epoch interruption, DuckDB NO-GO, SQL Server NO-GO as shipped, host-provided engines as the fallback | accepted |
 
 ADR number 0039 is reserved for M5.

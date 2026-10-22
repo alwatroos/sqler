@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# SQL Server (tiberius) guest attempt for wasm32-wasip2 (its own workspace; a NO-GO must not break anything else).
+[workspace]
+
+[package]
+name = "mssql-guest"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+authors = ["The SQLer Authors"]
+publish = false
+
+[dependencies]
+tiberius = { version = "0.13.0", default-features = false, features = ["tds73"] }
+futures = { version = "0.3.34", default-features = false, features = ["std", "executor"] }
+
+# Direct dependency only to select the ring provider (tiberius defaults to aws-lc-rs otherwise).
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+
+[features]
+# Default: TLS required (rustls). `--no-default-features` is the transport-only experiment (RESULT.md).
+default = ["tls"]
+tls = ["tiberius/rustls", "dep:rustls"]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
+
+[profile.release]
+strip = "symbols"
+codegen-units = 1
+opt-level = "s"

@@ -1,0 +1,255 @@
+name: Plugin runtime spike
+
+# P1 spike: wasmtime host variants x 3 OSes (binary size, latency, memory, fuel vs epoch)
+# and the DuckDB / SQL Server guest feasibility. Everything lives in spikes/plugin-runtime
+# (its own workspace); results are `SPIKE key=value` lines merged by scripts/collect.sh.
+# No rust-cache save: the 18 host jobs would evict the ci.yml caches.
+
+on:
+  workflow_dispatch:
+    inputs:
+      linux_bytes:
+        description: "Newest size.yml Linux binary size in bytes (headroom columns)"
+        required: false
+        default: ""
+  push:
+    paths:
+      - "spikes/plugin-runtime/**"
+      - ".github/workflows/plugin-spike.yml"
+  pull_request:
+    paths:
+      - "spikes/plugin-runtime/**"
+      - ".github/workflows/plugin-spike.yml"
+
+concurrency:
+  group: plugin-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            spikes/plugin-runtime
+            spikes/plugin-runtime/guests/hello
+          save-if: false
+      - name: Format
+        run: |
+          cargo fmt --check --manifest-path spikes/plugin-runtime/Cargo.toml
+          cargo fmt --check --manifest-path spikes/plugin-runtime/guests/hello/Cargo.toml
+      - name: Clippy (host base)
+        run: cargo clippy --manifest-path spikes/plugin-runtime/Cargo.toml --all-targets --no-default-features -- -D warnings
+      - name: Clippy (host cl)
+        run: cargo clippy --manifest-path spikes/plugin-runtime/Cargo.toml --all-targets --no-default-features --features cl -- -D warnings
+      - name: Clippy (hello guest)
+        run: cargo clippy --manifest-path spikes/plugin-runtime/guests/hello/Cargo.toml --target wasm32-wasip2 -- -D warnings
+      - name: Test
+        run: cargo test --manifest-path spikes/plugin-runtime/Cargo.toml --no-default-features --features cl
+      - name: Collector against the test data
+        run: |
+          SQLER_LINUX_BYTES=50000000 sh spikes/plugin-runtime/scripts/collect.sh \
+            spikes/plugin-runtime/scripts/testdata/in "$RUNNER_TEMP/collect-out"
+          diff -u spikes/plugin-runtime/scripts/testdata/expected-summary.md "$RUNNER_TEMP/collect-out/summary.md"
+
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - name: cargo deny (host workspace and guests)
+        run: |
+          for m in spikes/plugin-runtime spikes/plugin-runtime/guests/hello spikes/plugin-runtime/guests/hello-cc \
+            spikes/plugin-runtime/guests/duckdb spikes/plugin-runtime/guests/mssql; do
+            [ -f "$m/Cargo.toml" ] || { echo "skip $m (absent)"; continue; }
+            echo "::group::cargo deny $m"
+            cargo deny --manifest-path "$m/Cargo.toml" --config deny.toml fetch
+            # guests/duckdb is a NO-GO spike guest that never ships. Its only failure is the licence
+            # CDLA-Permissive-2.0 of webpki-roots (build-dependency of libduckdb-sys via ureq), which the
+            # root deny.toml does not allow and this spike must not edit. Advisories, bans and sources
+            # are still checked; the licences check is skipped for this one workspace only.
+            case "$m" in
+              */guests/duckdb) cargo deny --manifest-path "$m/Cargo.toml" --config deny.toml check advisories bans sources ;;
+              *) cargo deny --manifest-path "$m/Cargo.toml" --config deny.toml check ;;
+            esac
+            echo "::endgroup::"
+          done
+
+  guests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      OUT: ${{ github.workspace }}/spikes/plugin-runtime/results/guests
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spikes/plugin-runtime/guests/hello
+          save-if: false
+      - name: Build the hello fixture (required)
+        run: sh spikes/plugin-runtime/guests/hello/build.sh "$OUT"
+      - name: Build the hello fixture with cargo-component (reports through its keys)
+        run: sh spikes/plugin-runtime/guests/hello-cc/build.sh "$OUT"
+      - name: Build the DuckDB and SQL Server guests (report through their keys)
+        run: |
+          for g in duckdb mssql; do
+            if [ -f "spikes/plugin-runtime/guests/$g/build.sh" ]; then
+              sh "spikes/plugin-runtime/guests/$g/build.sh" "$OUT" || true
+            else
+              echo "SPIKE guest_${g}_build=skipped" >>"$OUT/guests.txt"
+            fi
+          done
+      - name: Collect the keys
+        if: always()
+        run: |
+          mkdir -p "$OUT"
+          { cat "$OUT"/toolchain.txt "$OUT"/guests.txt 2>/dev/null || true; } | tr -d '\r' | grep '^SPIKE ' >"$OUT/results.txt" || true
+          cat "$OUT/results.txt"
+          { echo '```'; cat "$OUT/results.txt"; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: plugin-spike-guests
+          path: |
+            spikes/plugin-runtime/results/guests
+            !spikes/plugin-runtime/results/guests/.tools
+          retention-days: 30
+          if-no-files-found: warn
+
+  host:
+    name: host (${{ matrix.os }}, ${{ matrix.variant }})
+    needs: guests
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        variant: [base, cl, cl-default, pulley, pulley-rt, winch]
+    env:
+      RESULTS: ${{ github.workspace }}/spikes/plugin-runtime/results/host
+      GUESTS: ${{ github.workspace }}/spikes/plugin-runtime/results/guests
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spikes/plugin-runtime
+          shared-key: plugin-spike-${{ matrix.os }}
+          save-if: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: plugin-spike-guests
+          path: ${{ env.GUESTS }}
+      - name: Build and measure
+        run: sh spikes/plugin-runtime/scripts/measure.sh "${{ matrix.variant }}" "$GUESTS" "$RESULTS"
+      - name: DuckDB guest run (cl only)
+        if: matrix.variant == 'cl' && hashFiles('spikes/plugin-runtime/guests/duckdb/run.sh') != ''
+        run: |
+          exe=; [ "$RUNNER_OS" = Windows ] && exe=.exe
+          sh spikes/plugin-runtime/guests/duckdb/run.sh "$RESULTS/plugin-spike-host-cl$exe" "$GUESTS" "$RESULTS"
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f "$RESULTS/results.txt" ]; then
+            { echo '```'; tr -d '\r' <"$RESULTS/results.txt"; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: plugin-spike-${{ matrix.os == 'ubuntu-latest' && 'linux' || matrix.os == 'macos-latest' && 'macos' || 'windows' }}-${{ matrix.variant }}
+          path: |
+            spikes/plugin-runtime/results/host/results.txt
+            spikes/plugin-runtime/results/host/build-*.log
+          retention-days: 30
+          if-no-files-found: warn
+
+  mssql:
+    needs: guests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RESULTS: ${{ github.workspace }}/spikes/plugin-runtime/results/mssql
+      GUESTS: ${{ github.workspace }}/spikes/plugin-runtime/results/guests
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spikes/plugin-runtime
+          shared-key: plugin-spike-ubuntu-latest
+          save-if: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: plugin-spike-guests
+          path: ${{ env.GUESTS }}
+      - name: Build the cl host
+        if: hashFiles('spikes/plugin-runtime/guests/mssql/run.sh') != ''
+        run: sh spikes/plugin-runtime/scripts/measure.sh cl "$GUESTS" "$RESULTS/host"
+      - name: SQL Server guest run
+        if: hashFiles('spikes/plugin-runtime/guests/mssql/run.sh') != ''
+        run: sh spikes/plugin-runtime/guests/mssql/run.sh "$RESULTS/host/plugin-spike-host-cl" "$GUESTS" "$RESULTS"
+      - name: Remove the container
+        if: always()
+        run: docker rm -f sqler-spike-mssql || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: plugin-spike-mssql
+          path: |
+            spikes/plugin-runtime/results/mssql/results.txt
+            spikes/plugin-runtime/results/mssql/*.log
+          retention-days: 30
+          if-no-files-found: warn
+
+  summary:
+    needs: [lint, deny, guests, host, mssql]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: plugin-spike-*
+          path: ${{ runner.temp }}/artifacts
+      - name: Merge
+        env:
+          SQLER_LINUX_BYTES: ${{ inputs.linux_bytes }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/artifacts" "$RUNNER_TEMP/summary"
+          sh spikes/plugin-runtime/scripts/collect.sh "$RUNNER_TEMP/artifacts" "$RUNNER_TEMP/summary"
+          cat "$RUNNER_TEMP/summary/summary.md" >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: plugin-spike-summary
+          path: |
+            ${{ runner.temp }}/summary/summary.md
+            ${{ runner.temp }}/summary/summary.txt
+          retention-days: 30

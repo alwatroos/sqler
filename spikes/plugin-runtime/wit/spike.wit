@@ -1,0 +1,6 @@
+package sqler-spike:fixture@0.1.0;
+
+world fixture {
+  export add: func(a: u32, b: u32) -> u32;
+  export spin: func(iterations: u64) -> u64;   // CPU loop for the fuel/epoch cost
+}

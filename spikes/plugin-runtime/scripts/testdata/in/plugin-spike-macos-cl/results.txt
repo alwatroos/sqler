@@ -1,0 +1,12 @@
+SPIKE variant=cl
+SPIKE os=macos
+SPIKE arch=aarch64
+SPIKE wasmtime_version=50.0.0
+SPIKE features=runtime,cranelift
+SPIKE binary_bytes=10798496
+SPIKE fixture_add=5
+SPIKE compile_ms=8.76
+SPIKE instantiate_p50_us=8
+SPIKE instantiate_p95_us=12
+SPIKE call_p50_ns=42
+SPIKE call_p95_ns=83

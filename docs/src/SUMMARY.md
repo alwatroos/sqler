@@ -82,6 +82,7 @@
   - [ADR-0051: App-hosted MCP endpoint and agent hosting](adr/0051-app-hosted-mcp-endpoint-and-agent-hosting.md)
   - [ADR-0052: Editor AI actions](adr/0052-ai-editor-actions.md)
   - [ADR-0053: AI session tab and approvals](adr/0053-ai-session-tab-and-approvals.md)
+  - [ADR-0054: Plugin runtime and driver feasibility](adr/0054-plugin-runtime-and-driver-feasibility.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
   - [Providers](ai/providers.md)

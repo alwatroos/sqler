@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixture guest built with wit-bindgen for wasm32-wasip2 (its own workspace).
+[workspace]
+
+[package]
+name = "hello"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+authors = ["The SQLer Authors"]
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.63.0"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
+
+[profile.release]
+strip = "symbols"
+codegen-units = 1
+opt-level = "s"
+lto = true
