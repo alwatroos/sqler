@@ -29,7 +29,7 @@ Reads run without asking. Every other statement waits for you: the session shows
 | Time per turn | 5 minutes |
 | Identical calls per turn | 2 |
 
-When a limit is reached the turn ends with a notice and the session stays usable (except the token budget, which covers the whole session). A model that repeats the same call is stopped (loop detected). Calls that were not run are listed as "not run". Rate-limit and network errors are retried up to twice with a short delay; other provider errors end the turn.
+When a limit is reached the turn ends with a notice and the session stays usable (except the token budget, which covers the whole session). A model that repeats the same call is stopped (loop detected). Calls that were not run are listed as "not run". Rate-limit, provider-overloaded and network errors are retried up to twice with a short delay; other provider errors end the turn.
 
 ## Cancel
 

@@ -184,10 +184,20 @@ pub enum TranscriptEntry {
     Notice(Notice),
 }
 
+/// The most entries a [`Transcript`] keeps before a new user turn drops the oldest ones.
+///
+/// A single turn can add more than this; entries are never dropped inside a turn.
+pub const MAX_TRANSCRIPT_ENTRIES: usize = 500;
+
 /// Everything said and done in a session, in order.
+///
+/// When a new user turn starts and the transcript holds [`MAX_TRANSCRIPT_ENTRIES`] or more
+/// entries, the oldest ones are dropped until there is room for the new one. The stable number
+/// of `entries()[i]` is `dropped() + i`: it does not change when older entries are dropped.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Transcript {
     entries: Vec<TranscriptEntry>,
+    dropped: usize,
 }
 
 impl Transcript {
@@ -195,6 +205,12 @@ impl Transcript {
     #[must_use]
     pub fn entries(&self) -> &[TranscriptEntry] {
         &self.entries
+    }
+
+    /// How many of the oldest entries were dropped to stay within the cap.
+    #[must_use]
+    pub fn dropped(&self) -> usize {
+        self.dropped
     }
 
     /// The statements that ran, oldest first.
@@ -206,6 +222,13 @@ impl Transcript {
     }
 
     pub(crate) fn push(&mut self, entry: TranscriptEntry) {
+        if matches!(entry, TranscriptEntry::User { .. })
+            && self.entries.len() >= MAX_TRANSCRIPT_ENTRIES
+        {
+            let excess = self.entries.len() + 1 - MAX_TRANSCRIPT_ENTRIES;
+            self.entries.drain(..excess);
+            self.dropped += excess;
+        }
         self.entries.push(entry);
     }
 
@@ -394,6 +417,29 @@ mod tests {
             entry.display_sql
         );
         assert_eq!(entry.rerun().sql, secret);
+    }
+
+    #[test]
+    fn a_user_entry_drops_the_oldest_beyond_the_cap() {
+        let mut t = Transcript::default();
+        for i in 0..MAX_TRANSCRIPT_ENTRIES {
+            t.push(TranscriptEntry::Assistant {
+                text: i.to_string(),
+            });
+        }
+        assert_eq!(t.dropped(), 0);
+        // Not a user entry: no trimming, even above the cap.
+        t.push(TranscriptEntry::Assistant { text: "x".into() });
+        assert_eq!(t.entries().len(), MAX_TRANSCRIPT_ENTRIES + 1);
+        assert_eq!(t.dropped(), 0);
+        t.push(TranscriptEntry::User { text: "u".into() });
+        assert_eq!(t.entries().len(), MAX_TRANSCRIPT_ENTRIES);
+        assert_eq!(t.dropped(), 2);
+        // Stable number 2 is the first entry kept.
+        assert_eq!(
+            t.entries()[0],
+            TranscriptEntry::Assistant { text: "2".into() }
+        );
     }
 
     #[test]

@@ -29,9 +29,9 @@ pub use approval::{
     ApprovalAsk, ApprovalQueue, ChannelApprover, PendingApproval, card_title, open_prod_gate,
 };
 pub use audit::{
-    AUDIT_DECISIONS, AUDIT_PAGE, AUDIT_SURFACES, AUDIT_TOOLS, AuditBatch, AuditFilterChange,
-    AuditFilters, AuditLoad, AuditPanel, AuditRead, AuditRow, AuditTone, audit_row, decision_label,
-    entry_sql, surface_label, wire_label,
+    AUDIT_DECISIONS, AUDIT_PAGE, AUDIT_SURFACES, AUDIT_TOOLS, AiAudit, AuditBatch,
+    AuditFilterChange, AuditFilters, AuditLoad, AuditPanel, AuditRead, AuditRow, AuditTone,
+    NO_AUDIT, audit_row, decision_label, entry_sql, surface_label, wire_label,
 };
 pub use editor::{
     AssistJob, AssistKind, AssistOutcome, AssistRequest, AssistState, EditorAssist, EditorSource,

@@ -76,6 +76,7 @@ impl Workspace {
         if self.ai.load_error().is_some() {
             return Err(SESSION_CONFIG_BROKEN);
         }
+        self.ai_audit()?;
         Ok(())
     }
 
@@ -233,6 +234,10 @@ impl Workspace {
         let Some(info) = self.agent_info(&conn) else {
             return self.agent_notice(SESSION_NO_CONNECTION);
         };
+        let audit = match self.ai_audit() {
+            Ok(audit) => audit.clone(),
+            Err(message) => return self.agent_notice(message),
+        };
         let config = self.ai.config().clone();
         let Some(t) = self.agents.tabs.get_mut(&tab) else {
             return Effect::None;
@@ -255,7 +260,7 @@ impl Workspace {
             info,
             request,
             config,
-            audit: None,
+            audit,
             cwd: std::path::PathBuf::new(),
             launch: app_launch_options(),
             tx,

@@ -12,7 +12,9 @@ use std::sync::Arc;
 use assist_support::{all_requests, answer, assert_inside_envelopes, render, scripted};
 use common::SqliteSource;
 use sqler_ai_api::mock::ScriptedProvider;
-use sqler_ai_tools::{Assist, AssistError, Conversation, Limits, PROMPT_VERSION, ToolSet};
+use sqler_ai_tools::{
+    Assist, AssistError, AssistOptions, Conversation, Limits, PROMPT_VERSION, ToolSet,
+};
 
 fn engine(source: &Arc<SqliteSource>, provider: &Arc<ScriptedProvider>) -> Assist {
     Assist::new(
@@ -193,4 +195,37 @@ async fn fix_rejects_empty_input() {
     }
     assert!(provider.requests().is_empty());
     assert!(render(&sqler_ai_api::ChatRequest::new("m", vec![])).contains("model: m"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_5_kib_statement_in_an_8_kib_window_stays_inside_it() {
+    let source = SqliteSource::new("explain-window", None).await;
+    let provider = scripted(false, false, vec![answer("A long scan.")]);
+    // 8 KiB of input room: (256 + 2731 - 256) tokens * 3 bytes.
+    let assist = engine(&source, &provider).with_options(
+        AssistOptions::default()
+            .with_context_tokens(256 + 2731)
+            .with_max_output_tokens(256),
+    );
+    let sql = format!("select '{}' from users", "x".repeat(5 * 1024));
+    let mut conv = Conversation::new();
+    match assist.explain("db", &sql, false, &mut conv).await {
+        Err(AssistError::TooLarge(_)) => {}
+        Ok(_) => {
+            let requests = provider.requests();
+            assert_eq!(requests.len(), 1);
+            let r = &requests[0];
+            let bytes: usize = r.system.as_deref().map_or(0, str::len)
+                + r.messages
+                    .iter()
+                    .flat_map(sqler_ai_api::Message::parts)
+                    .map(|p| match p {
+                        sqler_ai_api::Part::Text(t) => t.len(),
+                        _ => 0,
+                    })
+                    .sum::<usize>();
+            assert!(bytes <= 8 * 1024, "{bytes}");
+        }
+        Err(other) => panic!("{other:?}"),
+    }
 }

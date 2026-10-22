@@ -10,7 +10,7 @@
 //! running generated SQL stays on the existing run path and its production gate.
 
 use sqler_ai_tools::ConnectionInfo;
-use sqler_config::{ProviderConfig, contains_redaction};
+use sqler_config::ProviderConfig;
 use sqler_sql::Dialect;
 
 use super::state::{Effect, Workspace};
@@ -103,6 +103,7 @@ impl Workspace {
         if self.ai.load_error().is_some() {
             return Err(AI_CONFIG_BROKEN);
         }
+        self.ai_audit()?;
         let config = self.ai.config();
         let choice = config
             .models
@@ -175,6 +176,10 @@ impl Workspace {
             spec.environment,
         )
         .with_send_rows(profile.ai_sends_rows());
+        let audit = match self.ai_audit() {
+            Ok(audit) => audit.clone(),
+            Err(message) => return self.assist_notice(message),
+        };
         let kind = request.kind();
         let id = self.assist.next_id();
         let job = AssistJob {
@@ -186,7 +191,7 @@ impl Workspace {
             info,
             catalog: self.editor_catalog(tab).map(|(_, catalog)| catalog),
             config: self.ai.config().clone(),
-            audit: None,
+            audit,
         };
         self.assist.entry(tab).state = AssistState::Running { id, kind };
         Effect::RunAssist(Box::new(job))
@@ -403,10 +408,11 @@ impl Workspace {
                 sql,
                 rationale,
                 tables,
+                applicable,
                 ..
             }) => {
                 let edit = match &buffer {
-                    Some(buffer) if !contains_redaction(&sql) => Some(insert_edit(buffer, &sql)),
+                    Some(buffer) if applicable => Some(insert_edit(buffer, &sql)),
                     _ => None,
                 };
                 let inserted = edit.is_some();
@@ -414,6 +420,7 @@ impl Workspace {
                     sql,
                     rationale,
                     tables,
+                    applicable,
                     inserted,
                 });
                 match edit {
@@ -468,7 +475,9 @@ mod tests {
                 None,
             )
             .unwrap();
-        Workspace::new(sidebar).with_ai(AiState::new(config, kinds, None))
+        Workspace::new(sidebar)
+            .with_ai(AiState::new(config, kinds, None))
+            .with_ai_audit(Some(crate::ai::AiAudit::in_memory()))
     }
 
     fn open(w: &mut Workspace) -> TabId {
@@ -676,6 +685,7 @@ mod tests {
             sql: "select '<redacted>'".into(),
             rationale: String::new(),
             tables: Vec::new(),
+            applicable: false,
             inserted: false,
         };
         let Effect::RunAssist(job) = effect else {
@@ -705,6 +715,7 @@ mod tests {
             sql: "select 1".into(),
             rationale: String::new(),
             tables: Vec::new(),
+            applicable: true,
             inserted: false,
         };
         assert!(matches!(
@@ -718,6 +729,68 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    fn effects(effect: Effect) -> Vec<Effect> {
+        match effect {
+            Effect::Batch(list) => list.into_iter().flat_map(effects).collect(),
+            other => vec![other],
+        }
+    }
+
+    #[test]
+    fn without_an_audit_sink_every_ai_surface_is_off_with_one_reason() {
+        use crate::ai::NO_AUDIT;
+        let (mut w, tab) = ready();
+        // A prompt is typed while the sink still exists; it is gone when the user submits.
+        w.dispatch_assist(AiAction::GenerateSql, None);
+        w.dispatch_assist(AiAction::SetPrompt("q".into()), None);
+        w.ai_audit = None;
+        let toolbar = w.ai_toolbar(tab);
+        assert_eq!(toolbar.generate, Some(NO_AUDIT));
+        assert_eq!(toolbar.explain, Some(NO_AUDIT));
+        assert_eq!(toolbar.fix, Some(NO_AUDIT));
+        let hub = w.hub_model();
+        assert_eq!(hub.new_session_blocked, Some(NO_AUDIT));
+        assert_eq!(hub.new_agent_blocked, Some(NO_AUDIT));
+        let run = effects(w.dispatch_assist(AiAction::SubmitPrompt, None));
+        assert!(run.iter().all(|e| !matches!(e, Effect::RunAssist(_))));
+        assert_eq!(w.take_notice().as_deref(), Some(NO_AUDIT));
+        let open = effects(w.dispatch_ai(AiAction::OpenSession));
+        assert!(
+            open.iter()
+                .all(|e| !matches!(e, Effect::StartAiSession { .. }))
+        );
+        assert_eq!(w.take_notice().as_deref(), Some(NO_AUDIT));
+        assert!(matches!(w.dispatch_ai(AiAction::OpenAgent), Effect::None));
+        assert_eq!(w.take_notice().as_deref(), Some(NO_AUDIT));
+    }
+
+    #[test]
+    fn with_an_audit_sink_the_session_and_the_assist_job_carry_it() {
+        let (mut w, _tab) = ready();
+        let mine = crate::ai::AiAudit::in_memory();
+        w.ai_audit = Some(mine.clone());
+        w.dispatch_assist(AiAction::GenerateSql, None);
+        w.dispatch_assist(AiAction::SetPrompt("q".into()), None);
+        let run = effects(w.dispatch_assist(AiAction::SubmitPrompt, None));
+        let job = run
+            .iter()
+            .find_map(|e| match e {
+                Effect::RunAssist(job) => Some(job),
+                _ => None,
+            })
+            .expect("a RunAssist");
+        assert!(job.audit.same(&mine));
+        let open = effects(w.dispatch_ai(AiAction::OpenSession));
+        let start = open
+            .iter()
+            .find_map(|e| match e {
+                Effect::StartAiSession { start, .. } => Some(start),
+                _ => None,
+            })
+            .expect("a StartAiSession");
+        assert!(start.audit.same(&mine));
     }
 
     #[test]
@@ -739,6 +812,7 @@ mod tests {
             sql: "select 1".into(),
             rationale: String::new(),
             tables: Vec::new(),
+            applicable: true,
             inserted: false,
         };
         assert!(matches!(

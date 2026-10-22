@@ -15,7 +15,6 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Escape as InputEscape, Input};
 use gpui_component::spinner::Spinner;
 use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
-use sqler_config::contains_redaction;
 
 use super::{
     AssistKind, AssistOutcome, AssistState, DiffTone, NOT_APPLICABLE_REDACTED, NOT_APPLICABLE_SAME,
@@ -80,10 +79,10 @@ fn running_row(
 
 /// A one-line note in the muted or the danger colour.
 /// The note under a Generate answer, and whether it is a warning.
-fn sql_note(sql: &str, inserted: bool) -> (SharedString, bool) {
+fn sql_note(applicable: bool, inserted: bool) -> (SharedString, bool) {
     if inserted {
         (SharedString::from(INSERTED), false)
-    } else if contains_redaction(sql) {
+    } else if !applicable {
         (SharedString::from(REDACTED_SQL), true)
     } else {
         (SharedString::from(NOT_INSERTED), false)
@@ -183,8 +182,12 @@ pub(crate) fn prompt_bar(
                 );
             }
             let row = match state {
-                AssistState::Done(AssistOutcome::Sql { sql, inserted, .. }) => {
-                    let (text, danger) = sql_note(sql, *inserted);
+                AssistState::Done(AssistOutcome::Sql {
+                    applicable,
+                    inserted,
+                    ..
+                }) => {
+                    let (text, danger) = sql_note(*applicable, *inserted);
                     row.child(note_line(text, danger, cx).flex_none())
                 }
                 AssistState::Failed {
@@ -418,10 +421,11 @@ pub(crate) fn assistant_body(
         AssistState::Done(AssistOutcome::Sql {
             sql,
             rationale,
+            applicable,
             inserted,
             ..
         }) => {
-            let (note, danger) = sql_note(sql, *inserted);
+            let (note, danger) = sql_note(*applicable, *inserted);
             column("assistant-sql")
                 .child(header("assistant-copy", sql, sql.clone(), cx))
                 .child(code_block(sql, cx))

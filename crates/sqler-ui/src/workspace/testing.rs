@@ -1546,7 +1546,7 @@ mod ai_session_flow {
         SESSION_NOT_BUILT, SESSION_STARTING, STALE_ANSWER, SessionPhase, TAB_CLOSED, TurnDone,
         UiCall, UiRequest, WRONG_CONNECTION, build_session, sql_footer,
     };
-    use crate::ai::{AiAction, AiProviderFactory, AiStartup, AiState, NoProviders};
+    use crate::ai::{AiAction, AiAudit, AiProviderFactory, AiStartup, AiState, NoProviders};
     use crate::query::{Phase, QueryTab, RunMode};
     use crate::sidebar::SidebarModel;
     use crate::tabs::{TabId, TabKind};
@@ -1859,7 +1859,9 @@ mod ai_session_flow {
             Self {
                 rt,
                 bridge,
-                w: Workspace::new(sidebar).with_ai(ai),
+                w: Workspace::new(sidebar)
+                    .with_ai(ai)
+                    .with_ai_audit(Some(AiAudit::in_memory())),
                 db,
                 factory: Arc::new(Fixed(provider)),
                 host: None,
@@ -2419,7 +2421,7 @@ mod ai_session_flow {
             .tabs
             .get_mut(&tab)
             .unwrap()
-            .set_entries(&many);
+            .set_entries(&many, 0);
         let t = chat.session();
         assert_eq!(t.entries().len(), MAX_ENTRIES);
         assert_eq!(t.dropped(), 10);
@@ -2529,6 +2531,47 @@ mod ai_session_flow {
         chat.until_ready();
         assert_eq!(chat.country(4), "US");
         assert!(chat.tool_statuses().iter().any(denied));
+    }
+
+    #[test]
+    fn a_session_read_is_audited_as_the_session() {
+        let p = scripted();
+        p.push_script(run_query("c1", "select count(*) from customers"));
+        p.push_script(text("eight"));
+        let mut chat = Chat::new(None, p);
+        let mem = Arc::new(sqler_ai_tools::MemoryAudit::new());
+        chat.w.ai_audit = Some(AiAudit::new(mem.clone()));
+        chat.open_session();
+        chat.ask("count");
+        let entries = mem.entries();
+        assert_eq!(entries.len(), 1, "one run_query call");
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.surface == sqler_ai_tools::Surface::Session)
+        );
+    }
+
+    #[test]
+    fn the_engine_drop_count_keeps_the_stable_numbers() {
+        let mut chat = Chat::new(None, scripted());
+        let tab = chat.open_session();
+        let all: Vec<TranscriptEntry> = (0..20)
+            .map(|i| TranscriptEntry::User {
+                text: format!("m{i}"),
+            })
+            .collect();
+        chat.w
+            .ai_sessions
+            .tabs
+            .get_mut(&tab)
+            .unwrap()
+            .set_entries(&all, 700);
+        let t = chat.session();
+        assert_eq!(t.dropped(), 700);
+        assert_eq!(t.entry(700), Some(&all[0]));
+        assert_eq!(t.entry(719), Some(&all[19]));
+        assert!(t.entry(699).is_none());
     }
 
     #[test]
@@ -2708,7 +2751,7 @@ mod ai_session_flow {
                 info: chat.session().info().clone(),
                 request: chat.w.request_for(chat.session().conn()).unwrap(),
                 config: config(),
-                audit: None,
+                audit: chat.w.ai_audit().unwrap().clone(),
                 tx,
             };
             build_session(start, chat.factory.clone(), chat.bridge.connector())
@@ -3232,6 +3275,8 @@ mod agent_flow {
         SessionUpdate, ToolCallInfo, ToolCallStatus as AcpStatus,
     };
     use sqler_ai_tools::{ApprovalOutcome, ApprovalStage, MemoryAudit, Surface, unwrap_untrusted};
+
+    use crate::ai::AiAudit;
     use sqler_config::{AiConfig, ConnectionAi, ConnectionSpec, MemoryStore};
     use sqler_driver_api::sqler_core::{ConnectionConfig, Environment, Value as Cell};
     use sqler_driver_api::{DriverRegistry, collect};
@@ -3591,11 +3636,14 @@ mod agent_flow {
             let mut sidebar = SidebarModel::default();
             sidebar.add_connection(spec, None).unwrap();
             let ai = ai.unwrap_or_else(|| AiState::new(AiConfig::default(), Vec::new(), None));
+            let audit = Arc::new(MemoryAudit::new());
             Self {
-                w: Workspace::new(sidebar).with_ai(ai),
+                w: Workspace::new(sidebar)
+                    .with_ai(ai)
+                    .with_ai_audit(Some(AiAudit::new(audit.clone()))),
                 bridge,
                 scratch,
-                audit: Arc::new(MemoryAudit::new()),
+                audit,
                 hosts: HashMap::new(),
                 runs: Vec::new(),
                 workers: Vec::new(),
@@ -3658,7 +3706,6 @@ mod agent_flow {
                 Effect::StartAgent { mut start, host } => {
                     self.note(&start);
                     start.cwd = self.scratch.0.join("agent-cwd");
-                    start.audit = Some(self.audit.clone());
                     start.launch.cancel_grace = Duration::from_millis(200);
                     let tab = start.tab;
                     let done = self
@@ -3980,6 +4027,32 @@ mod agent_flow {
     }
 
     // ---- the gates and the profiles ----
+
+    #[test]
+    fn an_agent_needs_the_audit_sink_and_carries_it() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_picker();
+        let mine = AiAudit::in_memory();
+        // No sink: the pick is refused with the one reason and nothing starts.
+        desk.w.ai_audit = None;
+        assert_eq!(
+            desk.w.hub_model().new_agent_blocked,
+            Some(crate::ai::NO_AUDIT)
+        );
+        let effect = desk.w.dispatch_ai(AiAction::PickAgent(tab, "mock".into()));
+        assert!(matches!(effect, Effect::None));
+        assert_eq!(desk.notice().as_deref(), Some(crate::ai::NO_AUDIT));
+        assert_eq!(desk.agent(tab).phase(), &AgentPhase::Picking);
+        // With a sink the start carries that very sink.
+        desk.w.ai_audit = Some(mine.clone());
+        let effect = desk.w.dispatch_ai(AiAction::PickAgent(tab, "mock".into()));
+        let Effect::StartAgent { start, host } = effect else {
+            panic!("expected StartAgent");
+        };
+        assert!(start.audit.same(&mine));
+        drop((start, host));
+        desk.finish();
+    }
 
     #[test]
     fn the_gates_block_an_agent_and_the_hub_says_why() {
@@ -4636,7 +4709,7 @@ mod agent_flow {
     #[cfg(unix)]
     fn marked(marker: &str) -> Vec<u32> {
         let out = std::process::Command::new("pgrep")
-            .args(["-f", marker])
+            .args(["-f", "--", marker])
             .output()
             .expect("pgrep");
         String::from_utf8_lossy(&out.stdout)

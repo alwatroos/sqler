@@ -288,7 +288,13 @@ impl WorkspaceView {
         if startup.exit_after_first_frame {
             window.on_next_frame(|_, _| std::process::exit(0));
         }
+        // The audit log opens before the workspace is built: the AI surfaces need its sink.
+        let audit_log = startup
+            .history_dir
+            .as_ref()
+            .map(|dir| Arc::new(sqler_ai_tools::AuditLog::open(dir)));
         let mut ws = Workspace::new(sidebar)
+            .with_ai_audit(audit_log.clone().map(|log| crate::ai::AiAudit::new(log)))
             .with_settings(startup.settings)
             .with_drivers(startup.connector.driver_ids())
             .with_workbench(&startup.workbench.load)
@@ -414,10 +420,6 @@ impl WorkspaceView {
                 let _ = agents.await;
             }
         });
-        let audit_log = startup
-            .history_dir
-            .as_ref()
-            .map(|dir| Arc::new(sqler_ai_tools::AuditLog::open(dir)));
         let history = HistoryService::new(startup.history_dir, HistoryOptions::default());
         let bounds =
             cx.observe_window_bounds(window, |view, window, cx| {

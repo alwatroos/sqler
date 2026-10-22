@@ -8,15 +8,15 @@
 use std::sync::Arc;
 
 use sqler_ai_tools::session::{ExplorationSession, SessionConfig, SessionError, TurnOutcome};
-use sqler_ai_tools::{AuditSink, ConnectionInfo, Surface, ToolSet};
+use sqler_ai_tools::{ConnectionInfo, Surface, ToolSet};
 use sqler_config::{AiConfig, ProviderConfig};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::NO_TOOLS;
 use super::host::{ChannelEvents, ChannelUiHost, HostMsg};
 use super::source::TabSource;
-use crate::ai::AiProviderFactory;
 use crate::ai::approval::ChannelApprover;
+use crate::ai::{AiAudit, AiProviderFactory};
 use crate::connections::{ConnectRequest, Connector};
 use crate::tabs::TabId;
 
@@ -34,8 +34,8 @@ pub struct AiSessionStart {
     pub request: ConnectRequest,
     /// Limits and the redaction list.
     pub config: AiConfig,
-    /// Where the tool calls are audited, if anywhere.
-    pub audit: Option<Arc<dyn AuditSink>>,
+    /// Where the tool calls are audited (required).
+    pub audit: AiAudit,
     /// The host channel of the tab.
     pub tx: UnboundedSender<HostMsg>,
 }
@@ -88,11 +88,9 @@ pub async fn build_session(
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())?;
     let source = Arc::new(TabSource::new(info.clone(), request, connector));
-    let mut tools = ToolSet::configured(source.clone(), &config)
+    let tools = ToolSet::configured(source.clone(), &config)
         .with_ui_host(Arc::new(ChannelUiHost(tx.clone())));
-    if let Some(sink) = audit {
-        tools = tools.with_audit(sink, Surface::Session);
-    }
+    let tools = audit.attach(tools, Surface::Session);
     let approver = Arc::new(ChannelApprover::new(tx.clone(), HostMsg::Ask));
     let session = ExplorationSession::new(
         built,

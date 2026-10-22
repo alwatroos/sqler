@@ -465,9 +465,10 @@ impl ExplorationSession {
                 && calls.is_empty()
                 && attempt < self.config.limits.retry.max_retries;
             let delay = match (&error, retry) {
-                (AiError::RateLimited { retry_after }, true) => {
-                    self.config.limits.retry.delay(attempt + 1, *retry_after)
-                }
+                (
+                    AiError::RateLimited { retry_after } | AiError::Overloaded { retry_after },
+                    true,
+                ) => self.config.limits.retry.delay(attempt + 1, *retry_after),
                 (AiError::Network(_), true) => self.config.limits.retry.delay(attempt + 1, None),
                 _ => None,
             };

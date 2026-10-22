@@ -200,6 +200,28 @@ async fn rate_limits_are_retried_then_succeed() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn overloaded_is_retried_then_succeeds() {
+    let source = SqliteSource::new("overloaded", None).await;
+    let p = provider();
+    p.push_script(vec![Err(AiError::Overloaded {
+        retry_after: Some(Duration::from_millis(1)),
+    })]);
+    p.push_script(text("ok"));
+    let mut limits = SessionLimits::default();
+    fast_retry(&mut limits);
+    let mut s = session(&source, p.clone(), None, limits);
+    assert_eq!(s.send("go").await, TurnOutcome::Completed);
+    assert_eq!(p.requests().len(), 2);
+    assert_eq!(
+        notices(s.transcript()),
+        [Notice::Retrying {
+            attempt: 1,
+            delay: Duration::from_millis(1)
+        }]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn auth_errors_are_not_retried() {
     let source = SqliteSource::new("auth", None).await;
     let p = provider();

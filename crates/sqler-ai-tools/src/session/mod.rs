@@ -24,7 +24,7 @@
 //!
 //! [`SessionLimits`]: model steps and tool calls per user turn, a token budget for the whole
 //! session, a wall-clock limit per turn (approval waits do not count), a repeat limit for
-//! identical calls, and a [`RetryPolicy`] for `RateLimited` and `Network` errors that arrive
+//! identical calls, and a [`RetryPolicy`] for `RateLimited`, `Overloaded` and `Network` errors that arrive
 //! before the model produced anything.
 //!
 //! # Cancellation
@@ -52,6 +52,6 @@ pub use engine::{ExplorationSession, LimitKind, SessionError, TurnOutcome};
 pub use events::{MemoryEvents, SessionEvent, SessionEvents, SessionState};
 pub use prompt::{SESSION_PROMPT_VERSION, system_prompt};
 pub use transcript::{
-    NotRunReason, Notice, RerunRequest, SqlEntry, ToolCallEntry, ToolCallStatus, Transcript,
-    TranscriptEntry,
+    MAX_TRANSCRIPT_ENTRIES, NotRunReason, Notice, RerunRequest, SqlEntry, ToolCallEntry,
+    ToolCallStatus, Transcript, TranscriptEntry,
 };

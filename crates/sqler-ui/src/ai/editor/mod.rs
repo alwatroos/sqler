@@ -143,6 +143,8 @@ pub enum AssistOutcome {
         rationale: String,
         /// The tables the answer was grounded in.
         tables: Vec<String>,
+        /// Whether the statement may be inserted: it holds no redacted value.
+        applicable: bool,
         /// Whether it was put into the editor.
         inserted: bool,
     },

@@ -25,8 +25,8 @@ use super::history::HistoryWorkspace;
 use super::query::ActiveRun;
 use crate::ai::agent::{AgentMsg, AgentStart, AgentTabs};
 use crate::ai::session::{AiSessionStart, AiTurnJob};
+use crate::ai::{AiAudit, AuditPanel, AuditRead, NO_AUDIT};
 use crate::ai::{AiSessions, AiState, AiStatus, AssistJob, EditorAssist, HostMsg, ai_status};
-use crate::ai::{AuditPanel, AuditRead};
 use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
 use crate::connections::{
     ConnectFailure, ConnectRequest, ConnectionAction, ConnectionForm, Dialog, FieldError, FormMode,
@@ -531,6 +531,8 @@ pub struct Workspace {
     pub(super) history: HistoryWorkspace,
     /// The AI audit log viewer.
     pub(super) audit: AuditPanel,
+    /// The sink every AI tool call is audited into; `None` turns the AI surfaces off.
+    pub(super) ai_audit: Option<AiAudit>,
     /// Inline editing: pending changes, the transaction flags, the apply flow.
     pub(super) edit: EditFlow,
     /// The export dialog and the exports in progress.
@@ -603,6 +605,7 @@ impl Workspace {
             next_run: 0,
             history: HistoryWorkspace::new(),
             audit: AuditPanel::default(),
+            ai_audit: None,
             edit: EditFlow::default(),
             exports: ExportCenter::default(),
             layout: WorkbenchLayout::default(),
@@ -950,6 +953,21 @@ impl Workspace {
     pub fn with_settings(mut self, settings: SettingsModel) -> Self {
         self.settings = settings;
         self
+    }
+
+    /// Sets the audit sink of the AI surfaces. Without one they are off ([`NO_AUDIT`]).
+    #[must_use]
+    pub fn with_ai_audit(mut self, audit: Option<AiAudit>) -> Self {
+        self.ai_audit = audit;
+        self
+    }
+
+    /// The audit sink of the AI surfaces.
+    ///
+    /// # Errors
+    /// [`NO_AUDIT`] when the host has none.
+    pub(crate) fn ai_audit(&self) -> Result<&AiAudit, &'static str> {
+        self.ai_audit.as_ref().ok_or(NO_AUDIT)
     }
 
     /// The settings.

@@ -21,6 +21,13 @@ pub enum AiError {
         /// How long the provider asked the caller to wait, if it said.
         retry_after: Option<Duration>,
     },
+    /// The provider is overloaded (HTTP 529 or an overload error in a stream).
+    /// Retried like a rate limit; carries no server text.
+    #[error("provider overloaded")]
+    Overloaded {
+        /// How long the provider asked the caller to wait, if it said.
+        retry_after: Option<Duration>,
+    },
     /// The network failed or the provider was unreachable.
     #[error("network error: {0}")]
     Network(String),
@@ -50,6 +57,10 @@ mod tests {
         let cases = [
             (AiError::Auth("x".into()), "authentication failed: x"),
             (AiError::RateLimited { retry_after: None }, "rate limited"),
+            (
+                AiError::Overloaded { retry_after: None },
+                "provider overloaded",
+            ),
             (AiError::Network("x".into()), "network error: x"),
             (AiError::Provider("x".into()), "provider error: x"),
             (AiError::Cancelled, "request cancelled"),

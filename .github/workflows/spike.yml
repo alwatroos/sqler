@@ -9,11 +9,11 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "spikes/**"
+      - "spikes/ui-framework/**"
       - ".github/workflows/spike.yml"
   push:
     paths:
-      - "spikes/**"
+      - "spikes/ui-framework/**"
       - ".github/workflows/spike.yml"
 
 concurrency:

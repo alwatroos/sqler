@@ -259,6 +259,13 @@ async fn status_errors_are_the_first_item() {
             },
         ),
         (
+            429,
+            Some(("Retry-After", "99999")),
+            AiError::RateLimited {
+                retry_after: Some(Duration::from_secs(3600)),
+            },
+        ),
+        (
             400,
             None,
             AiError::Unsupported(
@@ -450,4 +457,20 @@ async fn repolling_after_a_cancelled_error_body_read_ends_the_stream() {
         .await
         .expect("a re-poll must not hang or panic");
     assert!(second.is_none());
+}
+
+#[tokio::test]
+async fn silent_stream_times_out() {
+    let server = MockServer::start(chat_route(Reply::ndjson("", 64, Finish::Hold))).await;
+    let p = provider(&server)
+        .with_read_timeout(Duration::from_millis(50))
+        .unwrap();
+    let mut s = p.stream(request());
+    let first = tokio::time::timeout(Duration::from_secs(5), s.next_event())
+        .await
+        .expect("the read timeout must end the wait");
+    assert_eq!(
+        first.unwrap().unwrap_err(),
+        AiError::Network("timed out".into())
+    );
 }

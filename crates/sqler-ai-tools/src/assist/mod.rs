@@ -247,6 +247,8 @@ pub struct SqlAnswer {
     pub rationale: String,
     /// The tables the answer was grounded in.
     pub tables: Vec<GroundedTable>,
+    /// Whether the statement may be applied: it holds no credential placeholder.
+    pub applicable: bool,
     /// The version of the prompt templates used.
     pub prompt_version: u32,
 }
@@ -289,6 +291,23 @@ struct Budgets {
     total: usize,
     grounding: usize,
     history: usize,
+}
+
+/// Splits `total` bytes into the grounding and history budgets of a request whose parts that
+/// cannot be cut take `fixed` bytes.
+///
+/// What is left after the headroom and `fixed` is the room. Grounding takes half of it, within
+/// its bounds and never more than the room; history takes the rest, up to a fifth of `total`.
+/// While `fixed + HEADROOM <= total`, `fixed + grounding + history + HEADROOM <= total`.
+fn split(total: usize, fixed: usize) -> Budgets {
+    let room = total.saturating_sub(HEADROOM).saturating_sub(fixed);
+    let grounding = (room / 2).clamp(MIN_GROUNDING.min(room), MAX_GROUNDING);
+    let history = (room - grounding).min(total / 5);
+    Budgets {
+        total,
+        grounding,
+        history,
+    }
 }
 
 /// The assist engine over a tool set, a provider and a model id.
@@ -360,18 +379,37 @@ impl Assist {
         self
     }
 
-    fn budgets(&self) -> Budgets {
+    /// The bytes the model has for input and output together, less its output cap.
+    fn total_bytes(&self) -> usize {
         let context = self
             .options
             .context_tokens
             .or(self.provider.capabilities().max_context_tokens)
             .unwrap_or(DEFAULT_CONTEXT_TOKENS);
-        let total = tokens_to_bytes(context.saturating_sub(self.options.max_output_tokens));
-        Budgets {
-            total,
-            grounding: (total / 2).clamp(MIN_GROUNDING, MAX_GROUNDING),
-            history: total / 5,
+        tokens_to_bytes(context.saturating_sub(self.options.max_output_tokens))
+    }
+
+    /// The budgets for a request whose parts that cannot be cut take `fixed` bytes.
+    fn budgets_with(&self, fixed: usize) -> Budgets {
+        split(self.total_bytes(), fixed)
+    }
+
+    /// The budgets of a request, or `TooLarge` if the parts that cannot be cut (the system
+    /// prompt and `live`) do not fit.
+    fn budgets_for(
+        &self,
+        info: &ConnectionInfo,
+        task: Task,
+        live: &str,
+    ) -> Result<Budgets, AssistError> {
+        let fixed = Self::system_for(info, task, true).len() + live.len();
+        let room = self.total_bytes().saturating_sub(HEADROOM);
+        if fixed > room {
+            return Err(AssistError::TooLarge(format!(
+                "the request needs {fixed} bytes and the model has room for {room}"
+            )));
         }
+        Ok(self.budgets_with(fixed))
     }
 
     fn info(&self, connection: &str) -> Result<ConnectionInfo, AssistError> {
@@ -398,7 +436,7 @@ impl Assist {
         if text.trim().is_empty() {
             return Err(AssistError::InvalidInput("the text is empty".to_owned()));
         }
-        let budgets = self.budgets();
+        let budgets = self.budgets_with(text.len());
         self.timed(grounding::ground(
             &self.tools,
             &info,
@@ -438,9 +476,8 @@ impl Assist {
         }
         let question = redact_credentials(question.trim()).into_owned();
         conv.bind(&info.id);
-        let budgets = self.budgets();
         let live = history_user(TurnKind::NlToSql, &question);
-        Self::check_fits(&info, task, &live, &budgets)?;
+        let budgets = self.budgets_for(&info, task, &live)?;
         let (grounding, text) = self
             .timed(async {
                 let grounding = grounding::ground(
@@ -459,10 +496,12 @@ impl Assist {
             .await?;
         let parsed = parse_sql_answer(&text)?;
         self.remember(conv, TurnKind::NlToSql, question, &text);
+        let applicable = !contains_redaction(&parsed.sql);
         Ok(SqlAnswer {
             sql: parsed.sql,
             rationale: parsed.rationale,
             tables: grounding.tables,
+            applicable,
             prompt_version: PROMPT_VERSION,
         })
     }
@@ -485,9 +524,8 @@ impl Assist {
         }
         let sql = redact_credentials(sql.trim()).into_owned();
         conv.bind(&info.id);
-        let budgets = self.budgets();
         let base = history_user(TurnKind::Explain, &sql);
-        Self::check_fits(&info, Task::Explain, &base, &budgets)?;
+        let budgets = self.budgets_for(&info, Task::Explain, &base)?;
         let (plan_included, text) = self
             .timed(async {
                 let grounding = grounding::ground(
@@ -573,10 +611,9 @@ impl Assist {
             .apply(&mut body, RedactScope::new(info.send_rows, dialect));
         let envelope = wrap_untrusted(&body);
         conv.bind(&info.id);
-        let budgets = self.budgets();
         let base = history_user(TurnKind::Fix, &shown_sql);
         let live = format!("{base}\n\nError (tool result):\n{envelope}");
-        Self::check_fits(&info, Task::Fix, &live, &budgets)?;
+        let budgets = self.budgets_for(&info, Task::Fix, &live)?;
         let text = self
             .timed(async {
                 let ground_on = format!("{shown_sql} {message}");
@@ -618,23 +655,6 @@ impl Assist {
     fn system_for(info: &ConnectionInfo, task: Task, json: bool) -> String {
         let dialect = Dialect::from_driver_id(info.driver.as_str()).map(Dialect::as_str);
         prompts::system(task, dialect, info.driver.as_str(), json)
-    }
-
-    /// `TooLarge` if the parts that cannot be cut do not fit the budget.
-    fn check_fits(
-        info: &ConnectionInfo,
-        task: Task,
-        live: &str,
-        budgets: &Budgets,
-    ) -> Result<(), AssistError> {
-        let fixed = Self::system_for(info, task, true).len() + live.len();
-        let room = budgets.total.saturating_sub(HEADROOM);
-        if fixed > room {
-            return Err(AssistError::TooLarge(format!(
-                "the request needs {fixed} bytes and the model has room for {room}"
-            )));
-        }
-        Ok(())
     }
 
     /// The history as messages: the newest turns that fit.
@@ -739,5 +759,43 @@ impl Assist {
             }
             rounds += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KIB: usize = 1024;
+
+    #[test]
+    fn split_keeps_the_invariant() {
+        for total in [3, 8, 21, 200].map(|k| k * KIB) {
+            for fixed in [0, KIB, 5 * KIB] {
+                if fixed + HEADROOM > total {
+                    continue;
+                }
+                let b = split(total, fixed);
+                assert!(
+                    fixed + b.grounding + b.history + HEADROOM <= total,
+                    "total {total} fixed {fixed}: {b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn split_8_kib_with_a_5_kib_statement() {
+        let b = split(8 * KIB, 5 * KIB);
+        assert_eq!(b.grounding, KIB);
+        assert_eq!(b.history, 0);
+        assert!(5 * KIB + b.grounding + b.history + HEADROOM <= 8 * KIB);
+    }
+
+    #[test]
+    fn split_keeps_the_old_shape_when_there_is_plenty_of_room() {
+        let b = split(200 * KIB, 0);
+        assert_eq!(b.grounding, MAX_GROUNDING);
+        assert_eq!(b.history, 200 * KIB / 5);
     }
 }

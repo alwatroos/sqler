@@ -5,39 +5,22 @@
 //! MCP transport of `sqler-mcp`, behind a bearer token that exists only in [`McpToken`] and the
 //! server's `AuthToken`.
 //!
-//! Every call is audited as surface `agent`: `McpServer::new` forces `mcp`, so an
-//! [`AgentSurface`] sink in front of the real one rewrites the surface of each entry.
+//! Every call is audited as surface `agent`: `McpServer::new` forces `mcp`, so the sink of
+//! [`AiAudit::mcp_sink`] rewrites the surface of each entry.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
 use std::time::Duration;
 
 use sqler_acp::McpToken;
-use sqler_ai_tools::{AuditEntry, AuditSink, Surface, ToolSet};
+use sqler_ai_tools::{Surface, ToolSet};
 use sqler_mcp::{AuthToken, McpError, McpServer, ServerOptions};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+use crate::ai::AiAudit;
+
 /// How long [`Endpoint::stop`] waits for the server to end before it is aborted.
 pub const ENDPOINT_STOP_LIMIT: Duration = Duration::from_millis(250);
-
-/// Records every entry as surface `agent` into the sink behind it.
-struct AgentSurface(Arc<dyn AuditSink>);
-
-impl AuditSink for AgentSurface {
-    fn record(&self, entry: &AuditEntry) {
-        let mut entry = entry.clone();
-        entry.surface = Surface::Agent;
-        self.0.record(&entry);
-    }
-}
-
-/// Takes the entries of a host that has no audit log (no config directory).
-struct NullAudit;
-
-impl AuditSink for NullAudit {
-    fn record(&self, _entry: &AuditEntry) {}
-}
 
 /// A running endpoint. Stop it with [`Endpoint::stop`]; dropping it aborts the server.
 pub struct Endpoint {
@@ -95,12 +78,11 @@ impl Drop for Endpoint {
 /// A text for the user when the token cannot be made or the port cannot be bound.
 pub async fn bind_endpoint(
     tools: ToolSet,
-    audit: Option<Arc<dyn AuditSink>>,
+    audit: &AiAudit,
 ) -> Result<(Endpoint, McpToken), String> {
-    let sink = audit.unwrap_or_else(|| Arc::new(NullAudit));
     let server = McpServer::new(
         tools,
-        Arc::new(AgentSurface(sink)),
+        audit.mcp_sink(Surface::Agent),
         ServerOptions::default(),
     );
     let auth = AuthToken::generate().map_err(|err| failed(&err))?;
