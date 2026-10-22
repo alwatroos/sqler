@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use wasmtime::component::{Component, Instance, InstancePre, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::p2::bindings::sync::Command;
+use wasmtime_wasi::sockets::SocketAddrUse;
 use wasmtime_wasi::{FsPerms, I32Exit, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::cli::RunCommand;
@@ -427,8 +428,14 @@ pub fn run_command(rc: &RunCommand) -> Result<u8, String> {
     }
     // Without --allow-tcp the list is empty and every connect is refused; name lookup stays off.
     let allowed = rc.allow_tcp.clone();
-    b.socket_addr_check(move |addr, _use| {
-        let ok = allowed.contains(&addr);
+    b.allow_tcp(true);
+    // Rust std on wasip2 binds implicitly before connect: allow that bind to the wildcard address only.
+    // TcpConnect stays limited to --allow-tcp.
+    b.socket_addr_check(move |addr, use_| {
+        let implicit_bind = matches!(use_, SocketAddrUse::TcpBind)
+            && addr.ip().is_unspecified()
+            && addr.port() == 0;
+        let ok = allowed.contains(&addr) || implicit_bind;
         Box::pin(async move { ok })
     });
     let mut store = Store::new(

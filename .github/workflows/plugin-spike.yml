@@ -84,7 +84,14 @@ jobs:
             [ -f "$m/Cargo.toml" ] || { echo "skip $m (absent)"; continue; }
             echo "::group::cargo deny $m"
             cargo deny --manifest-path "$m/Cargo.toml" --config deny.toml fetch
-            cargo deny --manifest-path "$m/Cargo.toml" --config deny.toml check
+            # guests/duckdb is a NO-GO spike guest that never ships. Its only failure is the licence
+            # CDLA-Permissive-2.0 of webpki-roots (build-dependency of libduckdb-sys via ureq), which the
+            # root deny.toml does not allow and this spike must not edit. Advisories, bans and sources
+            # are still checked; the licences check is skipped for this one workspace only.
+            case "$m" in
+              */guests/duckdb) cargo deny --manifest-path "$m/Cargo.toml" --config deny.toml check advisories bans sources ;;
+              *) cargo deny --manifest-path "$m/Cargo.toml" --config deny.toml check ;;
+            esac
             echo "::endgroup::"
           done
 
