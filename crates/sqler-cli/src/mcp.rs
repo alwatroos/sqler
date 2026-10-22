@@ -159,7 +159,8 @@ fn resolve_token(file: Option<&Path>) -> Result<(AuthToken, bool)> {
     }
 }
 
-/// Reads the token file, or creates it (mode 0600 on Unix) with a generated token.
+/// Reads the token file, or creates it (mode 0600 on Unix) with a generated token. The mode and the
+/// "readable by others" refusal are Unix only; on Windows the file inherits the directory ACL.
 fn token_from_file(path: &Path) -> Result<AuthToken> {
     if path.exists() {
         #[cfg(unix)]

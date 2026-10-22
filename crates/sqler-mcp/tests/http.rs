@@ -566,6 +566,21 @@ async fn the_number_of_sessions_is_capped() {
 }
 
 #[tokio::test]
+async fn a_bad_initialize_does_not_take_a_session_slot() {
+    let run = start("badinit", ServerOptions::default()).await;
+    for _ in 0..100 {
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
+        let reply = Req::post(&run, &body).send().await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.headers.get("mcp-session-id").is_none());
+        assert_eq!(response_to(&reply, 1)["error"]["code"], -32602);
+    }
+    let session = open_session(&run).await;
+    assert!(!session.is_empty(), "the slots are all still free");
+    run.stop().await;
+}
+
+#[tokio::test]
 async fn concurrent_calls_over_http() {
     let run = Arc::new(start("conc", ServerOptions::default()).await);
     let session = open_session(&run).await;
@@ -636,11 +651,19 @@ async fn a_cancelled_http_call_ends_without_a_result_and_frees_the_permit() {
     .expect("the permit was freed");
     assert_eq!(tool_json(&next)["statements"][0]["rows"], json!([[7]]));
 
+    let mut outcomes: Vec<&str> = run
+        .audit
+        .entries()
+        .iter()
+        .map(|e| e.outcome.as_str())
+        .collect();
+    outcomes.sort_unstable();
     assert_eq!(
-        run.audit.entries().len(),
+        outcomes.iter().filter(|o| **o == "cancelled").count(),
         1,
-        "the cancelled call wrote no audit entry (ADR-0040)"
+        "the cancelled call is audited as cancelled: {outcomes:?}"
     );
+    assert_eq!(outcomes.len(), 2, "plus the finished call: {outcomes:?}");
     let reply = tokio::time::timeout(Duration::from_secs(20), slow)
         .await
         .unwrap()
