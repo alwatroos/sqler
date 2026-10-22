@@ -116,6 +116,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.rust == 'true'
         with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
           # check, screenshots, db and docs build the same debug tree; only this job saves it.
           shared-key: debug
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci-speedup' }}
@@ -176,6 +180,10 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
           # Clippy builds the check profile, not the test tree `check` caches, so it keeps its own key.
           shared-key: clippy
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci-speedup' }}
@@ -194,6 +202,10 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
           shared-key: debug
           save-if: false
       # The build set of `check`, plus a software Vulkan driver (lavapipe, shows up as llvmpipe)
@@ -228,6 +240,10 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
           shared-key: debug
           save-if: false
       # macOS images may ship Xcode without the separately downloaded Metal toolchain.
@@ -256,6 +272,10 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
           shared-key: debug
           save-if: false
       - uses: taiki-e/install-action@v2
@@ -332,6 +352,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.plugins == 'true'
         with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
           # The guest workspace builds into target/plugins/cargo, which the root target dir already caches.
           workspaces: . -> target
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci-speedup' }}
@@ -390,6 +414,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.rust == 'true'
         with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
           shared-key: debug
           save-if: false
       - name: Linux system packages (GPUI build)

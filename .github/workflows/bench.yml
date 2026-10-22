@@ -74,6 +74,10 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
           # Saved on main only; PRs restore (they would otherwise evict main's caches).
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check out the base commit

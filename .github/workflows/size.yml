@@ -51,7 +51,8 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release
+          key: release-tc-${{ hashFiles('rust-toolchain.toml') }}
+          add-rust-environment-hash-key: false
           # Saved on main only; PRs restore (they would otherwise evict main's caches).
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Linux system packages (GPUI build)
