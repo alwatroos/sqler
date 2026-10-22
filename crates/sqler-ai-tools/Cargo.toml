@@ -28,3 +28,5 @@ tokio = { workspace = true, features = ["time"] }
 sqler-driver-sqlite.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 proptest.workspace = true
+insta.workspace = true
+sqler-ai-api = { workspace = true, features = ["test-support"] }

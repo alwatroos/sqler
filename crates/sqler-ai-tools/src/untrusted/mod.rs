@@ -21,7 +21,7 @@ pub const UNTRUSTED_CLOSE: &str = "</untrusted-data>";
 #[must_use]
 pub fn wrap_untrusted(value: &Value) -> String {
     // Serialising a `Value` cannot fail; an empty object is the fallback.
-    let json = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_owned());
+    let json = serde_json::to_string(&sorted_keys(value)).unwrap_or_else(|_| "{}".to_owned());
     let mut out = String::with_capacity(json.len() + 256);
     out.push_str(UNTRUSTED_NOTICE);
     out.push('\n');
@@ -37,6 +37,26 @@ pub fn wrap_untrusted(value: &Value) -> String {
     out.push('\n');
     out.push_str(UNTRUSTED_CLOSE);
     out
+}
+
+/// A copy of `value` with every object's keys in sorted order. Another crate in the workspace
+/// can switch on `serde_json/preserve_order`, which would make the key order, and so the prompt
+/// text, depend on which crates are built together.
+fn sorted_keys(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (k.clone(), sorted_keys(v)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.iter().map(sorted_keys).collect()),
+        other => other.clone(),
+    }
 }
 
 /// Wraps plain text as a JSON string.
