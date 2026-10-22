@@ -288,6 +288,36 @@ fn a_root_without_a_name_is_refused() {
 }
 
 #[test]
+fn a_root_with_dotdot_anywhere_is_refused() {
+    let s = Scratch::new("dotdot-mid");
+    let mut r = roots(&s);
+    for spelling in ["data/../data", "data/.", "plugin/../data/cache/.."] {
+        r.data_dir = s.0.join(spelling);
+        let (ok, issues) = resolve_preopens(&caps(&["data"]), &r);
+        assert_eq!(ok, [], "{spelling}");
+        assert_eq!(issues, [escapes("data")], "{spelling}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_only_spellings_of_a_root_are_refused() {
+    let s = Scratch::new("win-spellings");
+    let mut r = roots(&s);
+    for spelling in ["data.", "data ", "data:stream", "data::$DATA", "NUL"] {
+        r.data_dir = s.0.join(spelling);
+        let (ok, _) = resolve_preopens(&caps(&["data"]), &r);
+        assert_eq!(ok, [], "{spelling}");
+    }
+    // A device-namespace spelling of an existing directory.
+    let text = s.0.join("data").to_string_lossy().replace(r"\\?\", r"\\.\");
+    r.data_dir = PathBuf::from(text);
+    let (ok, issues) = resolve_preopens(&caps(&["data"]), &r);
+    assert_eq!(ok, []);
+    assert_eq!(issues, [escapes("data")]);
+}
+
+#[test]
 fn a_home_root_may_be_a_link() {
     // `home` is a place the user chose; only plugin and data are the package's or the host's own.
     let s = Scratch::new("homelink");

@@ -176,8 +176,16 @@ the call deadline (the probe's one-hour `sleep` command ends in `Timeout`). Read
 channel; the project accepts it. Scopes that cannot be resolved (`Missing`, `Escapes`, `NoHome`) get no preopen, a
 warning in the log and an entry in `PluginStatus::scope_issues` (with a `Display` reason the app can show); the plugin
 still loads. The `plugin` and `data` roots are owned by the package author and the host respectively, so they are not
-followed through links: the root must not itself be a symlink (or junction on Windows) and its canonical path must be
-`<canonical parent>/<name>`. Otherwise a package could ship `data -> ~/.ssh` and `fs.read:data` would expose it. Only
+followed through links: the root must not itself be a symlink or, on Windows, any reparse point (junction, mount
+point; checked with `FILE_ATTRIBUTE_REPARSE_POINT`), and its canonical path must be `<canonical parent>/<name>`. Before
+any file system call the root text is checked lexically, the same on every OS: it is split at `/` and `\` (a
+`\\?\` verbatim path does not treat `/` as a separator, so `<root>/..` once looked like a named directory on Windows),
+may contain no `..` segment, and must end in a real name (not `.`, `/`, a bare drive). Verbatim `\\?\C:` and
+`\\?\UNC` prefixes are stripped on both sides of every comparison; other namespaces (`\\.\`, `\\?\GLOBALROOT`,
+`\\?\Volume{..}`) are refused. On Windows a name with `:` (alternate data stream), a trailing dot or space, or a DOS
+device name (`NUL`, `COM1`, ...) is refused too. Canonical forms are compared exactly, not case-insensitively: both
+sides come from `canonicalize`, which yields the on-disk case and long names (8.3 short names are expanded), and a
+case-insensitive match could equate two directories of a case-sensitive Windows directory. Otherwise a package could ship `data -> ~/.ssh` and `fs.read:data` would expose it. Only
 the `home` root (a place the user chose) may be a link. The `data` directory is created by the host, never taken from the
 package; a root that is a file is `Missing`.
 
@@ -312,8 +320,9 @@ ADR-0054 Linux figure (+14.5 MB for `cl` over the 59.9 MB app); P7 measures the 
 - A spinning or sleeping guest costs at most its deadline of one executor slot per tick; three consecutive faults turn a
   plugin off until the user enables it.
 - `.cwasm` loading, streaming HTTP bodies and a guest shutdown hook are later, additive changes.
-- Windows: canonical paths are `\\?\` on both sides of the scope comparison; symlink tests skip when the privilege is
-  missing.
+- Windows: canonical paths are compared with the `\\?\` prefix stripped on both sides; symlink tests skip when the
+  privilege is missing. The lexical root rules are unit-tested on every OS; the reparse-point check, junction and
+  stream/device-name behaviour of real Windows file systems are only exercised by the Windows CI job.
 
 ## References
 
