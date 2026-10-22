@@ -37,7 +37,7 @@ confirmation, and the statement is refused when there is no approver. `db.write`
 Lowercase ASCII `[*.]label(.label)+[:port]`, or exactly `localhost[:port]`. A label is
 `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?`; the total length is at most 253. A wildcard is only a
 leading `*.` with at least two labels after it. A port is 1 to 65535 without a leading zero;
-without a port, 80 and 443 match. `*.a.b` matches `x.a.b` and `y.x.a.b`, not `a.b`.
+without a port, 80 and 443 match. `*.a.b` matches `x.a.b` and `y.x.a.b`, not `a.b`. The host being checked must itself be a bare host name (no port, userinfo, path or trailing dot); anything else never matches.
 
 | Accepted | Rejected | Why |
 | -------- | -------- | --- |
@@ -65,7 +65,8 @@ the pattern.
 | `home/Documents/sql` | `/etc` | absolute |
 | | `C:`, `data\x` | unknown root |
 | | `data/.ssh`, `data/x.` | segment starts or ends with `.` |
-| | `data/con`, `data/nul.txt`, `data/com1` | Windows device names |
+| | `data/con`, `data/nul.txt`, `data/com0`, `data/lpt9` | Windows device names (`com0` to `com9`, `lpt0` to `lpt9`) |
+| | `data/com¹`, `data/conin$` | outside the segment alphabet (superscript digits, `CONIN$`, `CONOUT$`) |
 | | `data/%2e%2e` | `%` |
 
 ## Ids
@@ -91,4 +92,4 @@ last approved set (added and removed capabilities). Approvals are stored per key
 | Memory | 64 MiB per plugin; 256 MiB for guest drivers |
 | Deadlines | `init` 5 s, render and status 1 s, completion 250 ms, command 30 s, export batch 5 s, AI tool 30 s, driver call 300 s |
 | Plugin queries | default 1000 rows (cap 10 000); default timeout 30 s (cap 300 s) |
-| Widget trees | 2000 nodes, depth 32, 16 KiB per string, tables of 1000 rows by 50 columns, 64 select options |
+| Widget trees | 2000 nodes, depth 32, 16 KiB per string, 1 MiB of text over the whole tree, tables of 1000 rows by 50 columns, 64 select options |

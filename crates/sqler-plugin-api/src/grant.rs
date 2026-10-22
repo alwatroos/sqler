@@ -16,6 +16,18 @@ use crate::id::PluginId;
 #[error("not a grant key (expected <id>@<version>#<64 hex characters>[+<64 hex characters>])")]
 pub struct GrantKeyError;
 
+/// The component digest does not fit the manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum GrantKeyBuildError {
+    /// The manifest has an `[entry]`, so the key needs the digest of its `.wasm`.
+    #[error("the plugin has an [entry]; a grant key needs the digest of its component")]
+    ComponentRequired,
+    /// The manifest has no `[entry]`, so there is no component to bind.
+    #[error("the plugin has no [entry]; a grant key has no component digest")]
+    NoComponent,
+}
+
 /// Plugin id, version, manifest hash and component digest. Any manifest change gives a new key, so any capability change
 /// re-prompts; so does a swapped `.wasm` under an unchanged manifest.
 ///

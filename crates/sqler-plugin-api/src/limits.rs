@@ -69,6 +69,8 @@ pub struct WidgetLimits {
     pub max_depth: usize,
     /// Maximum bytes per string.
     pub max_string_bytes: usize,
+    /// Maximum bytes of text over the whole tree (every string, table cell and select option counted).
+    pub max_total_text_bytes: usize,
     /// Maximum table rows.
     pub max_table_rows: usize,
     /// Maximum table columns.
@@ -132,6 +134,7 @@ impl Limits {
             max_nodes: 2000,
             max_depth: 32,
             max_string_bytes: 16 * 1024,
+            max_total_text_bytes: 1024 * 1024,
             max_table_rows: 1000,
             max_table_columns: 50,
             max_select_options: 64,

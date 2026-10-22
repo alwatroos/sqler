@@ -88,6 +88,9 @@ pub struct FsScope {
     segments: Vec<String>,
 }
 
+// Microsoft's naming rules reserve CON, PRN, AUX, NUL, COM0-COM9 and LPT0-LPT9 (also the superscript digits and
+// CONIN$/CONOUT$); those last three are outside the segment alphabet (ASCII alphanumerics, `.`, `_`, `-`) and rejected as
+// `BadCharacter` before this check.
 const RESERVED: [&str; 4] = ["con", "nul", "aux", "prn"];
 
 fn is_reserved(segment: &str) -> bool {
@@ -96,9 +99,7 @@ fn is_reserved(segment: &str) -> bool {
         return true;
     }
     let b = stem.as_bytes();
-    b.len() == 4
-        && (stem.starts_with("com") || stem.starts_with("lpt"))
-        && (b'1'..=b'9').contains(&b[3])
+    b.len() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && b[3].is_ascii_digit()
 }
 
 fn check_segment(seg: &str) -> Result<(), ScopeError> {
@@ -264,6 +265,14 @@ mod tests {
             ("data/COM1", E::Reserved),
             ("data/lpt9.x.y", E::Reserved),
             ("data/Nul", E::Reserved),
+            ("data/com0", E::Reserved),
+            ("data/LPT0.txt", E::Reserved),
+            // superscript digits and the console devices are outside the segment alphabet
+            ("data/com\u{b9}", E::BadCharacter),
+            ("data/LPT\u{b2}.txt", E::BadCharacter),
+            ("data/com\u{b3}", E::BadCharacter),
+            ("data/conin$", E::BadCharacter),
+            ("data/CONOUT$", E::BadCharacter),
             ("data//x", E::EmptySegment),
             ("data/", E::EmptySegment),
             ("data/x.", E::BadCharacter),

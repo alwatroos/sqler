@@ -50,7 +50,7 @@ at least two labels after it. The port is 1..=65535 without a leading zero; an a
 | | `https://example.com`, `user@example.com`, `example.com/x`, `example.com?x`, `example.com#x`, `a%2eb.com` | scheme, userinfo, path, query, fragment, percent |
 | | `example.com.`, `exämple.com`, `a b.com` | trailing dot, non-ASCII, whitespace |
 
-`*.a.b` matches `x.a.b` and `y.x.a.b`, not `a.b`. Matching compares the host in lowercase. There is no public-suffix
+`*.a.b` matches `x.a.b` and `y.x.a.b`, not `a.b`. Matching compares the host in lowercase and fails closed: the host must itself be a bare host name (the label rules of a pattern, at most 253 bytes, no port, userinfo, path, NUL, whitespace or trailing dot), so `evil.com/x.example.com` never matches `*.example.com`. There is no public-suffix
 list, so `*.co.uk` is accepted; the prompt shows the pattern. Resolving a declared host to a private address (DNS
 rebinding, `nip.io`-style names) is checked by the host on the resolved address at connect time (P4).
 
@@ -60,10 +60,10 @@ dot from the URL host before matching; a broad `home/...` scope is gated only by
 **Fs scope.** `<root>/<rel>`, or a bare `plugin` or `data`. Roots: `plugin` (the install directory), `data`
 (`<config>/plugins/<id>/data`), `home` (needs at least one segment). Segments are `[A-Za-z0-9._-]{1,64}`; at most 16
 segments and 255 bytes. Rejected: `.`, `..`, an empty segment, a segment starting with `.`, `\`, `:`, a leading `/`, NUL,
-`%`, and Windows device names (`con`, `nul`, `aux`, `prn`, `com1` to `com9`, `lpt1` to `lpt9`, any case, with or without an
+`%`, and Windows device names (`con`, `nul`, `aux`, `prn`, `com0` to `com9`, `lpt0` to `lpt9`, any case, with or without an
 extension). Examples: accepted `plugin`, `data`, `data/cache`, `home/Documents/sql`; rejected `home`, `data/../x`, `/etc`,
 `data/.ssh`, `C:/x`, `data\x`, `data/%2e%2e`, `data/con.txt`, `data//x`. A scope resolves by joining segments with
-`Path::join`. The host canonicalizes and refuses a symlink that leaves the scope when it preopens (P4).
+`Path::join`. The console devices `CONIN$` and `CONOUT$` and the superscript forms `COM¹`, `COM²`, `COM³`, `LPT¹`, `LPT²`, `LPT³` of Microsoft's naming rules are outside the segment alphabet and rejected as a bad character. The host canonicalizes and refuses a symlink that leaves the scope when it preopens (P4).
 
 **Ids.** `PluginId`, `EngineId` and `ContributionId`: `[a-z][a-z0-9]*(-[a-z0-9]+)*`, length 1..=64 (2..=64 for
 `PluginId`). Tool names: `[a-z][a-z0-9_]{0,47}`. Setting keys: `[a-z][a-z0-9_.-]{0,63}`.
@@ -105,8 +105,9 @@ re-prompt, the safe side). It prints as 64 lowercase hex characters.
 instantiate, and puts it in the key. `GrantKey` is `{ id, version, hash, component: Option<ComponentDigest> }` and
 prints as `<id>@<version>#<hash-hex>+<component-hex>`; a declarative plugin (no `[entry]`) has `component: None` and
 prints as `<id>@<version>#<hash-hex>`. A component swapped under an unchanged manifest therefore gives a new key and
-asks again. `Manifest::grant_key_with_component` builds the key of a plugin with an `[entry]` (and returns `None`
-without one). The user's approval is stored under that key. Any manifest change, so any
+asks again. `Manifest::grant_key(Option<&ComponentDigest>)` is the only way to build a key, and it checks the pair: an
+`[entry]` with no digest gives `GrantKeyBuildError::ComponentRequired` and a declarative plugin with a digest gives
+`GrantKeyBuildError::NoComponent`, so a key without a digest cannot be made for a wasm plugin. The user's approval is stored under that key. Any manifest change, so any
 capability change, gives a new key and asks again; `CapabilitySet::diff` shows what was added and removed. The prompt
 appears at first load of a plugin (and again after a change), listing the capabilities and the declared
 contributions. Persistence is P6.
@@ -121,7 +122,7 @@ Policy values (`Limits::DEFAULT`), read by the host:
 | memory | 64 MiB per instance (256 MiB for a guest driver) |
 | time | epoch tick 10 ms; deadlines: `init` 5 s, `render` and `status` 1 s, `completion` 250 ms, command 30 s, export batch 5 s, AI tool 30 s, driver call 300 s |
 | query | `max-rows` default 1000, cap 10 000; timeout default 30 s, cap 300 s |
-| widgets | 2000 nodes; depth 32; 16 KiB per string; tables up to 1000 rows by 50 columns; 64 select options |
+| widgets | 2000 nodes; depth 32; 16 KiB per string and 1 MiB of text over the whole tree; tables up to 1000 rows by 50 columns; 64 select options |
 
 ### Consequences
 

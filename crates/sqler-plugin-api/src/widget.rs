@@ -198,7 +198,7 @@ pub enum WidgetError {
     /// An element id is not a valid id.
     #[error("bad element id")]
     BadElementId,
-    /// A string is longer than the limit.
+    /// A string is longer than the limit, or the text of the whole tree is over the total budget.
     #[error("text is too long")]
     TextTooLong,
     /// A table has too many rows or columns, a row has the wrong width, or a select has too many options.
@@ -228,6 +228,7 @@ impl WidgetTree {
         let n = nodes.len();
         let mut parents = vec![0u8; n];
         let mut ids: HashSet<&str> = HashSet::new();
+        let mut budget = limits.max_total_text_bytes;
         for node in &nodes {
             if !node.children.is_empty() && !matches!(node.widget, Widget::Stack(_)) {
                 return Err(WidgetError::ChildrenOnLeaf);
@@ -242,7 +243,7 @@ impl WidgetTree {
                 }
                 parents[child] += 1;
             }
-            check_widget(&node.widget, &limits, &mut ids)?;
+            check_widget(&node.widget, &limits, &mut ids, &mut budget)?;
         }
         // Depth-first from the root; each node has at most one parent, so this terminates.
         let mut seen = 0usize;
@@ -275,12 +276,13 @@ impl WidgetTree {
     }
 }
 
-fn check_str(s: &str, max: usize) -> Result<(), WidgetError> {
-    if s.len() > max {
-        Err(WidgetError::TextTooLong)
-    } else {
-        Ok(())
+/// Checks one string against the per-string limit and takes it off the remaining whole-tree text budget.
+fn check_str(s: &str, max: usize, budget: &mut usize) -> Result<(), WidgetError> {
+    if s.len() > max || s.len() > *budget {
+        return Err(WidgetError::TextTooLong);
     }
+    *budget -= s.len();
+    Ok(())
 }
 
 fn check_id<'a>(id: &'a str, ids: &mut HashSet<&'a str>) -> Result<(), WidgetError> {
@@ -297,25 +299,26 @@ fn check_widget<'a>(
     widget: &'a Widget,
     limits: &crate::limits::WidgetLimits,
     ids: &mut HashSet<&'a str>,
+    budget: &mut usize,
 ) -> Result<(), WidgetError> {
     let max = limits.max_string_bytes;
     match widget {
         Widget::Stack(_) | Widget::Divider => {}
-        Widget::Text(t) => check_str(&t.content, max)?,
+        Widget::Text(t) => check_str(&t.content, max, budget)?,
         Widget::Button(b) => {
             check_id(&b.id, ids)?;
-            check_str(&b.label, max)?;
+            check_str(&b.label, max, budget)?;
         }
         Widget::TextInput(t) => {
             check_id(&t.id, ids)?;
-            check_str(&t.value, max)?;
+            check_str(&t.value, max, budget)?;
             if let Some(p) = &t.placeholder {
-                check_str(p, max)?;
+                check_str(p, max, budget)?;
             }
         }
         Widget::Checkbox(c) => {
             check_id(&c.id, ids)?;
-            check_str(&c.label, max)?;
+            check_str(&c.label, max, budget)?;
         }
         Widget::Select(s) => {
             check_id(&s.id, ids)?;
@@ -323,7 +326,7 @@ fn check_widget<'a>(
                 return Err(WidgetError::TableTooLarge);
             }
             for o in &s.options {
-                check_str(o, max)?;
+                check_str(o, max, budget)?;
             }
             if let Some(i) = s.selected
                 && i as usize >= s.options.len()
@@ -336,14 +339,14 @@ fn check_widget<'a>(
                 return Err(WidgetError::TableTooLarge);
             }
             for c in &t.columns {
-                check_str(c, max)?;
+                check_str(c, max, budget)?;
             }
             for row in &t.rows {
                 if row.len() != t.columns.len() {
                     return Err(WidgetError::TableTooLarge);
                 }
                 for cell in row {
-                    check_str(cell, max)?;
+                    check_str(cell, max, budget)?;
                 }
             }
         }
@@ -557,6 +560,25 @@ mod tests {
             children: vec![],
         };
         assert!(WidgetTree::new(vec![table(50, 1000)]).is_ok());
+        // the total text of the tree is capped as well: 64 texts of 16 KiB fill the 1 MiB budget exactly
+        let total = |n: usize| {
+            let mut nodes = vec![stack(
+                &(1..=u32::try_from(n).unwrap()).collect::<Vec<u32>>(),
+            )];
+            nodes.extend((0..n).map(|_| text(16 * 1024)));
+            WidgetTree::new(nodes)
+        };
+        assert!(total(64).is_ok());
+        assert_eq!(total(65), Err(E::TextTooLong));
+        // many small cells add up too
+        let big_table = WidgetNode {
+            widget: Widget::Table(Table {
+                columns: vec!["c".into(); 50],
+                rows: vec![vec!["x".repeat(1024); 50]; 1000],
+            }),
+            children: vec![],
+        };
+        assert_eq!(WidgetTree::new(vec![big_table]), Err(E::TextTooLong));
         assert_eq!(WidgetTree::new(vec![table(51, 1)]), Err(E::TableTooLarge));
         assert_eq!(WidgetTree::new(vec![table(1, 1001)]), Err(E::TableTooLarge));
         let ragged = |cols: usize, row: usize| WidgetNode {

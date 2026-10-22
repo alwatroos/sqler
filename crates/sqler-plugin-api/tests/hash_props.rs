@@ -74,7 +74,7 @@ proptest! {
         }
         let m = Manifest::parse(&text).map_err(|e| TestCaseError::fail(format!("{e}: {text:?}")))?;
         prop_assert_eq!(m.hash(), reference.hash());
-        prop_assert_eq!(m.grant_key(), reference.grant_key());
+        prop_assert_eq!(m.grant_key(None).unwrap(), reference.grant_key(None).unwrap());
     }
 
     #[test]
@@ -88,7 +88,7 @@ proptest! {
             prop_assert_eq!(ma.hash(), mb.hash());
         } else {
             prop_assert_ne!(ma.hash(), mb.hash());
-            prop_assert_ne!(ma.grant_key(), mb.grant_key());
+            prop_assert_ne!(ma.grant_key(None).unwrap(), mb.grant_key(None).unwrap());
             prop_assert!(!mb.capabilities.diff(&ma.capabilities).is_empty());
         }
     }
@@ -96,7 +96,7 @@ proptest! {
     #[test]
     fn grant_key_round_trips(a in proptest::collection::btree_set(0usize..POOL.len(), 0..6)) {
         let m = Manifest::parse(&manifest_with(&a)).map_err(|e| TestCaseError::fail(e.to_string()))?;
-        let key = m.grant_key();
+        let key = m.grant_key(None).unwrap();
         let parsed: GrantKey = key.to_string().parse().map_err(|e| TestCaseError::fail(format!("{e}")))?;
         prop_assert_eq!(parsed, key);
     }

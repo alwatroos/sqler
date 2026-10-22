@@ -84,6 +84,11 @@ impl HostPattern {
     }
 
     /// Whether `host:port` is covered by this pattern. The host is compared in lowercase.
+    ///
+    /// Fails closed: `host` must be a bare host name, with the same label rules as a pattern (letters, digits and `-`
+    /// in labels of 1 to 63 bytes, at most 253 bytes, no empty label, no trailing dot). Anything else (a port,
+    /// userinfo, a path, a NUL, whitespace, a non-ASCII character, an IP literal) never matches, whatever its suffix.
+    /// The caller passes the host and the port of the parsed URL separately.
     #[must_use]
     pub fn matches(&self, host: &str, port: u16) -> bool {
         let port_ok = match self.port {
@@ -94,6 +99,9 @@ impl HostPattern {
             return false;
         }
         let host = host.to_ascii_lowercase();
+        if host.len() > 253 || host.split('.').any(|l| check_label(l).is_err()) {
+            return false;
+        }
         if self.wildcard {
             host.len() > self.host.len() + 1
                 && host.ends_with(self.host.as_str())
@@ -309,5 +317,41 @@ mod tests {
         assert!(!e.matches("example.com", 443));
         assert!(!e.matches("www.example.com", 8443));
         assert!(p("localhost").unwrap().matches("localhost", 80));
+    }
+
+    #[test]
+    fn matching_fails_closed_on_unvalidated_hosts() {
+        let w = p("*.example.com").unwrap();
+        let e = p("example.com").unwrap();
+        assert!(w.matches("a.example.com", 443));
+        for bad in [
+            "evil.com/x.example.com",
+            "evil.com\\x.example.com",
+            "evil.com\0.example.com",
+            "evil.com?.example.com",
+            "evil.com#.example.com",
+            "user@evil.com.example.com",
+            "evil.com:80.example.com",
+            "a.example.com:443",
+            "a.example.com.",
+            ".example.com",
+            "a..example.com",
+            "a b.example.com",
+            "a\t.example.com",
+            "a%2e.example.com",
+            "a_b.example.com",
+            "-a.example.com",
+            "[::1].example.com",
+            "\u{e4}.example.com",
+            "",
+            ".",
+        ] {
+            assert!(!w.matches(bad, 443), "{bad:?}");
+            assert!(!e.matches(bad, 443), "{bad:?}");
+        }
+        assert!(!e.matches("example.com.", 443));
+        assert!(!e.matches("example.com:443", 443));
+        let long = format!("{}.example.com", "a.".repeat(130));
+        assert!(!w.matches(&long, 443));
     }
 }

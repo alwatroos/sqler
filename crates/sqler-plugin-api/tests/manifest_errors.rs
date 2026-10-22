@@ -67,7 +67,13 @@ fn full_fixture_round_trips_all_fields() {
     assert_eq!(c.settings[0].default, SettingValue::Integer(10));
     assert_eq!(c.settings[1].default, SettingValue::Boolean(false));
     m.check_api(API_VERSION).expect("compatible");
-    assert!(m.grant_key().to_string().starts_with("demo-plugin@1.2.3#"));
+    let digest = sqler_plugin_api::ComponentDigest::of(b"wasm");
+    assert!(
+        m.grant_key(Some(&digest))
+            .unwrap()
+            .to_string()
+            .starts_with("demo-plugin@1.2.3#")
+    );
 }
 
 #[test]
@@ -388,33 +394,39 @@ fn entry_and_schema_errors() {
 
 #[test]
 fn component_digest_binds_the_grant_key() {
-    use sqler_plugin_api::ComponentDigest;
+    use sqler_plugin_api::{ComponentDigest, GrantKeyBuildError};
     let with_entry = Manifest::parse(
         "[plugin]\nid = \"demo-plugin\"\nname = \"D\"\nversion = \"1.0.0\"\napi = \"0.1\"\ncapabilities = []\n[entry]\ncomponent = \"d.wasm\"\n",
     )
     .unwrap();
-    let a = with_entry
-        .grant_key_with_component(ComponentDigest::of(b"one"))
-        .unwrap();
-    let b = with_entry
-        .grant_key_with_component(ComponentDigest::of(b"two"))
-        .unwrap();
-    assert_ne!(a, b);
-    assert_ne!(a, with_entry.grant_key());
-    assert_eq!(
-        a.to_string().parse::<sqler_plugin_api::GrantKey>().unwrap(),
-        a
-    );
-    // declarative: valid with no component hash, and nothing to bind
     let decl = Manifest::parse(
         "[plugin]\nid = \"demo-plugin\"\nname = \"D\"\nversion = \"1.0.0\"\napi = \"0.1\"\ncapabilities = []\n",
     )
     .unwrap();
-    assert!(decl.grant_key().component.is_none());
-    assert!(!decl.grant_key().to_string().contains('+'));
-    assert!(
-        decl.grant_key_with_component(ComponentDigest::of(b"x"))
-            .is_none()
+    let (one, two) = (ComponentDigest::of(b"one"), ComponentDigest::of(b"two"));
+
+    // [entry] + digest: a key bound to the component
+    let a = with_entry.grant_key(Some(&one)).unwrap();
+    let b = with_entry.grant_key(Some(&two)).unwrap();
+    assert_ne!(a, b);
+    assert_eq!(a.component, Some(one));
+    assert_eq!(
+        a.to_string().parse::<sqler_plugin_api::GrantKey>().unwrap(),
+        a
+    );
+    // [entry] without a digest: refused, never a key that a swapped .wasm would reuse
+    assert_eq!(
+        with_entry.grant_key(None),
+        Err(GrantKeyBuildError::ComponentRequired)
+    );
+    // declarative without a digest: a key with nothing to bind
+    let key = decl.grant_key(None).unwrap();
+    assert!(key.component.is_none());
+    assert!(!key.to_string().contains('+'));
+    // declarative with a digest: refused
+    assert_eq!(
+        decl.grant_key(Some(&one)),
+        Err(GrantKeyBuildError::NoComponent)
     );
 }
 
@@ -426,7 +438,11 @@ fn changing_capabilities_changes_the_grant_key() {
         "[entry]\ncomponent = \"a.wasm\"\n",
     ))
     .unwrap();
-    assert_ne!(a.grant_key(), b.grant_key());
+    let digest = sqler_plugin_api::ComponentDigest::of(b"w");
+    assert_ne!(
+        a.grant_key(None).unwrap(),
+        b.grant_key(Some(&digest)).unwrap()
+    );
     let d = b.capabilities.diff(&a.capabilities);
     assert_eq!(d.added, vec![Capability::UiPanel]);
     assert!(d.removed.is_empty());

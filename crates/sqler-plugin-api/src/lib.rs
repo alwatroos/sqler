@@ -38,7 +38,7 @@ pub use contribution::{
     command_id,
 };
 pub use fs_scope::{FsRoot, FsRoots, FsScope, ScopeError};
-pub use grant::{GrantKey, GrantKeyError};
+pub use grant::{GrantKey, GrantKeyBuildError, GrantKeyError};
 pub use hash::{ComponentDigest, HashParseError, ManifestHash};
 pub use host_pattern::{HostPattern, HostPatternError};
 pub use id::{ContributionId, EngineId, IdError, PluginId, SettingKey, ToolName};

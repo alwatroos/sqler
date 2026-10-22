@@ -11,7 +11,7 @@ pub use error::ManifestError;
 use crate::api::{ApiVersion, CompatError};
 use crate::capability::CapabilitySet;
 use crate::contribution::Contributions;
-use crate::grant::GrantKey;
+use crate::grant::{GrantKey, GrantKeyBuildError};
 use crate::hash::{ComponentDigest, ManifestHash, hash_table};
 use crate::id::PluginId;
 use crate::limits::Limits;
@@ -169,28 +169,29 @@ impl Manifest {
         &self.hash
     }
 
-    /// The key under which an approval of a declarative plugin (no `[entry]`) is stored; it has no component digest.
+    /// The key under which the approval of this plugin is stored.
     ///
-    /// For a plugin with an `[entry]` use [`Manifest::grant_key_with_component`].
-    #[must_use]
-    pub fn grant_key(&self) -> GrantKey {
-        GrantKey {
-            id: self.id.clone(),
-            version: self.version.clone(),
-            hash: self.hash,
-            component: None,
+    /// A plugin with an `[entry]` needs the SHA-256 of its `.wasm` (computed by the host at load time, from the bytes
+    /// it is about to instantiate), so a component swapped under an unchanged manifest gives a new key. A declarative
+    /// plugin has no component. The combination is checked, so a key without a digest cannot be built for a wasm plugin:
+    ///
+    /// - `[entry]` and `Some(digest)`, or no `[entry]` and `None`: the key.
+    /// - `[entry]` and `None`: [`GrantKeyBuildError::ComponentRequired`].
+    /// - no `[entry]` and `Some(digest)`: [`GrantKeyBuildError::NoComponent`].
+    pub fn grant_key(
+        &self,
+        component: Option<&ComponentDigest>,
+    ) -> Result<GrantKey, GrantKeyBuildError> {
+        match (self.entry.is_some(), component) {
+            (true, None) => Err(GrantKeyBuildError::ComponentRequired),
+            (false, Some(_)) => Err(GrantKeyBuildError::NoComponent),
+            (_, component) => Ok(GrantKey {
+                id: self.id.clone(),
+                version: self.version.clone(),
+                hash: self.hash,
+                component: component.copied(),
+            }),
         }
-    }
-
-    /// The approval key of a plugin with an `[entry]`, bound to the SHA-256 of its `.wasm` (computed by the host at
-    /// load time). Returns `None` when the manifest has no `[entry]`, because then there is no component to bind.
-    #[must_use]
-    pub fn grant_key_with_component(&self, component: ComponentDigest) -> Option<GrantKey> {
-        self.entry.as_ref()?;
-        Some(GrantKey {
-            component: Some(component),
-            ..self.grant_key()
-        })
     }
 
     /// Whether a host that provides `host` can run this plugin.
