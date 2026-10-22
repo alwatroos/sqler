@@ -23,6 +23,7 @@ use sqler_config::{
 use sqler_driver_api::sqler_core::{DriverId, Environment, ObjectKind};
 
 use super::{Startup, WorkspaceView};
+use crate::ai::agent::{AgentMsg, PermissionAsk};
 use crate::ai::{AiAction, AiProviderFactory, AiStartup};
 use crate::browser::{BrowserAction, LoadState, TreeNodeId};
 use crate::command::CommandId;
@@ -155,6 +156,14 @@ pub const SCENES: &[Scene] = &[
         pending: None,
     },
     Scene {
+        name: "agent-tab",
+        pending: None,
+    },
+    Scene {
+        name: "agent-permission",
+        pending: None,
+    },
+    Scene {
         name: "ai-generate",
         pending: None,
     },
@@ -271,8 +280,19 @@ enum Step {
     AiSend(&'static str),
     /// Approves the statement the active AI session tab waits on.
     AiApprove,
+    /// Opens an agent tab on `dev` with a canned conversation (no process runs).
+    AgentFixture(AgentScene),
     /// Waits.
     Wait(Wait),
+}
+
+/// The canned conversation of an agent scene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentScene {
+    /// A finished turn: message, thought, tool call, plan.
+    Conversation,
+    /// The agent waits for a permission.
+    Permission,
 }
 
 fn open_step(conn: &'static str, seed: &str) -> Step {
@@ -405,6 +425,14 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Command("workbench:toggle-side-panel"),
         ],
         "connection-dialog" => vec![Step::Command("connection:new")],
+        "agent-tab" => vec![
+            Step::Select("dev"),
+            Step::AgentFixture(AgentScene::Conversation),
+        ],
+        "agent-permission" => vec![
+            Step::Select("dev"),
+            Step::AgentFixture(AgentScene::Permission),
+        ],
         "ai-side-view" => vec![
             open_step("dev", "select * from customers;"),
             Step::Wait(Wait::Editors(1)),
@@ -440,6 +468,88 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
     }
 }
 
+/// What the agent of an `agent-*` scene said and asked.
+fn agent_messages(scene: AgentScene) -> Vec<AgentMsg> {
+    use sqler_acp::{
+        AgentEvent, PermissionOption, PermissionOptionKind, PermissionRequest, PlanEntry,
+        SessionId, SessionUpdate, ToolCallInfo, ToolCallStatus as ToolStatus,
+    };
+    let session_id = SessionId::new("scene");
+    let update = |update: SessionUpdate| {
+        AgentMsg::Event(AgentEvent::Update {
+            session_id: session_id.clone(),
+            update,
+        })
+    };
+    let plan = |done: &[&str], doing: &str, todo: &str| {
+        let entry = |text: &str, status: &str| PlanEntry {
+            content: text.to_owned(),
+            priority: "medium".to_owned(),
+            status: status.to_owned(),
+        };
+        let mut steps: Vec<PlanEntry> = done.iter().map(|t| entry(t, "completed")).collect();
+        steps.push(entry(doing, "in_progress"));
+        steps.push(entry(todo, "pending"));
+        steps
+    };
+    let mut messages = vec![
+        update(SessionUpdate::AgentThought(
+            "The user wants the best customers; I need the order totals first.".to_owned(),
+        )),
+        update(SessionUpdate::Plan(plan(
+            &["Read the schema of customers and orders"],
+            "Add up the order totals per customer",
+            "Summarise the top customers",
+        ))),
+        update(SessionUpdate::ToolCall(ToolCallInfo {
+            id: "call-1".to_owned(),
+            title: Some("sqler: list_tables".to_owned()),
+            kind: Some("read".to_owned()),
+            status: Some(ToolStatus::Completed),
+            text: vec!["customers\norders\nbig_orders".to_owned()],
+        })),
+        update(SessionUpdate::AgentMessage(
+            "Two tables matter here: customers and orders. I joined them and summed the totals; "
+                .to_owned(),
+        )),
+        update(SessionUpdate::AgentMessage(
+            "the top three customers account for most of the revenue.".to_owned(),
+        )),
+    ];
+    if scene == AgentScene::Permission {
+        let (reply, _wait) = tokio::sync::oneshot::channel();
+        messages.push(AgentMsg::Permission(PermissionAsk {
+            request: PermissionRequest {
+                session_id: session_id.clone(),
+                tool_call: ToolCallInfo {
+                    id: "call-2".to_owned(),
+                    title: Some("Write notes/top-customers.md".to_owned()),
+                    kind: Some("edit".to_owned()),
+                    status: Some(ToolStatus::Pending),
+                    text: vec![
+                        "# Top customers\n\nWrite the summary to a file in the agent folder."
+                            .to_owned(),
+                    ],
+                },
+                options: vec![
+                    PermissionOption {
+                        id: "allow-once".to_owned(),
+                        name: "Allow once".to_owned(),
+                        kind: PermissionOptionKind::AllowOnce,
+                    },
+                    PermissionOption {
+                        id: "reject-once".to_owned(),
+                        name: "Reject".to_owned(),
+                        kind: PermissionOptionKind::RejectOnce,
+                    },
+                ],
+            },
+            reply,
+        }));
+    }
+    messages
+}
+
 /// The saved connections of a scene: one in-memory `SQLite` database per environment.
 fn store(scene: &Scene) -> Result<ConnectionStore, String> {
     let mut store = ConnectionStore::new();
@@ -456,7 +566,13 @@ fn store(scene: &Scene) -> Result<ConnectionStore, String> {
     };
     let dev_ai = ai_on(matches!(
         scene.name,
-        "ai-side-view" | "ai-session" | "ai-generate" | "ai-explain" | "ai-fix-diff"
+        "ai-side-view"
+            | "ai-session"
+            | "ai-generate"
+            | "ai-explain"
+            | "ai-fix-diff"
+            | "agent-tab"
+            | "agent-permission"
     ));
     let prod_ai = ai_on(scene.name == "ai-session-prod-confirm");
     let specs = [
@@ -605,6 +721,8 @@ fn ai_startup(scene: &Scene) -> AiStartup {
         if matches!(
             scene.name,
             "ai-side-view"
+                | "agent-tab"
+                | "agent-permission"
                 | "ai-settings"
                 | "ai-provider-editor"
                 | "connection-dialog-ai"
@@ -829,9 +947,29 @@ impl WorkspaceView {
                     .ok_or("no approval card is shown")?;
                 self.dispatch_ai(AiAction::ApproveStatement(tab, id), cx);
             }
+            Step::AgentFixture(scene) => self.open_agent_fixture(*scene, cx)?,
             Step::Pause(_) | Step::Wait(_) => {}
         }
         cx.notify();
+        Ok(())
+    }
+
+    /// Opens the agent tab of an `agent-*` scene on `dev` and brings it forward.
+    fn open_agent_fixture(
+        &mut self,
+        scene: AgentScene,
+        cx: &mut gpui::Context<Self>,
+    ) -> Result<(), String> {
+        let conn = self.scene_conn("dev").ok_or("no connection called dev")?;
+        let profile = sqler_acp::builtin_profiles()
+            .into_iter()
+            .next()
+            .ok_or("no built-in agent")?;
+        let tab = self
+            .ws
+            .agent_fixture(&conn, profile, agent_messages(scene))
+            .ok_or("the agent tab did not open")?;
+        self.dispatch(WorkspaceAction::ActivateTab(tab), cx);
         Ok(())
     }
 

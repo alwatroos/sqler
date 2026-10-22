@@ -58,6 +58,7 @@ fn kind_icon(kind: TabKind) -> AppIcon {
         TabKind::Properties => AppIcon::SlidersHorizontal,
         TabKind::History => AppIcon::Clock,
         TabKind::AiSession => AppIcon::Sparkles,
+        TabKind::Agent => AppIcon::Bot,
         _ => AppIcon::FileCode,
     }
 }

@@ -57,6 +57,21 @@ pub struct SessionRow {
     pub label: &'static str,
 }
 
+/// One agent tab in the hub.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRow {
+    /// The tab (a click activates it).
+    pub tab: TabId,
+    /// The tab title.
+    pub title: String,
+    /// The connection name.
+    pub connection: String,
+    /// The agent's name, once it is picked.
+    pub agent: Option<String>,
+    /// `Choose an agent`, `Starting…`, `Ready`, what the agent does, `Stopped` or `Failed`.
+    pub label: &'static str,
+}
+
 /// Everything the AI side view shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HubModel {
@@ -72,6 +87,10 @@ pub struct HubModel {
     pub sessions: Vec<SessionRow>,
     /// Why "New session" is blocked, if it is.
     pub new_session_blocked: Option<&'static str>,
+    /// The open agent tabs.
+    pub agents: Vec<AgentRow>,
+    /// Why "New agent" is blocked, if it is.
+    pub new_agent_blocked: Option<&'static str>,
 }
 
 /// What "Set up a provider" does: add the first provider kind this build has, else open the
@@ -120,6 +139,8 @@ pub fn hub_model(ai: &AiState, profile: Option<&ConnectionProfile>) -> HubModel 
         models,
         sessions: Vec::new(),
         new_session_blocked: None,
+        agents: Vec::new(),
+        new_agent_blocked: None,
     }
 }
 

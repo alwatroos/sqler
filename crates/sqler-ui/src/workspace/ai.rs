@@ -138,6 +138,9 @@ impl Workspace {
         if action.is_session() {
             return self.dispatch_session(action);
         }
+        if action.is_agent() {
+            return self.dispatch_agent(action);
+        }
         if action.is_assist() {
             return self.dispatch_assist(action, None);
         }
@@ -229,6 +232,14 @@ impl Workspace {
             | AiAction::DenyStatement(..)
             | AiAction::RerunSql(..)
             | AiAction::OpenSqlInEditor(..)) => self.dispatch_session(session),
+            agent @ (AiAction::OpenAgent
+            | AiAction::PickAgent(..)
+            | AiAction::SetAgentDraft(..)
+            | AiAction::SendAgentPrompt(_)
+            | AiAction::CancelAgent(_)
+            | AiAction::RestartAgent(_)
+            | AiAction::AllowAgentRequest(..)
+            | AiAction::RejectAgentRequest(..)) => self.dispatch_agent(agent),
             // Routed above; kept so a new assist action cannot fall through unhandled.
             assist => self.dispatch_assist(assist, None),
         }
@@ -291,8 +302,10 @@ impl Workspace {
         let stopped = if turned_on {
             Effect::None
         } else {
-            // Turning AI off stops the running turns of this connection's sessions.
-            self.stop_ai_sessions_of(&id)
+            // Turning AI off stops the running turns of this connection's sessions and the
+            // agents (their tool endpoints and processes) of its agent tabs.
+            let sessions = self.stop_ai_sessions_of(&id);
+            super::ai_session::join(sessions, self.stop_agents_of(&id))
         };
         let save = Effect::SaveConnections {
             secrets: Vec::new(),

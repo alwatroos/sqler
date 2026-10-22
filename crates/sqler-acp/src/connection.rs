@@ -279,10 +279,19 @@ async fn client_main(
         shared,
         kill,
         mut commands,
-        ready,
+        mut ready,
     } = ctx;
 
-    let info = match initialize(&cx, profile_name, opts.init_timeout).await {
+    // A launch that is dropped while the agent initializes (the app quits, the tab closes)
+    // kills the process now instead of after the init timeout.
+    let init = tokio::select! {
+        init = initialize(&cx, profile_name, opts.init_timeout) => init,
+        () = ready.closed() => {
+            kill.notify_one();
+            return std::future::pending().await;
+        }
+    };
+    let info = match init {
         Ok(info) => info,
         Err(error) => {
             if let Some(error) = error {

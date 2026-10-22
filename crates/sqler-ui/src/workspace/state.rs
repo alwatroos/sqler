@@ -23,6 +23,7 @@ use super::edit::EditFlow;
 use super::export::ExportCenter;
 use super::history::HistoryWorkspace;
 use super::query::ActiveRun;
+use crate::ai::agent::{AgentMsg, AgentStart, AgentTabs};
 use crate::ai::session::{AiSessionStart, AiTurnJob};
 use crate::ai::{AiSessions, AiState, AiStatus, AssistJob, EditorAssist, HostMsg, ai_status};
 use crate::ai::{AuditPanel, AuditRead};
@@ -272,6 +273,18 @@ pub enum Effect {
     /// session comes back in `HostMsg::TurnDone`; a lost job is reported with
     /// [`Workspace::ai_turn_lost`].
     RunAiTurn(Box<AiTurnJob>),
+    /// Read the agent profiles (`load_agent_profiles` on the blocking pool, from the config
+    /// directory) and report with [`Workspace::agent_profiles_loaded`].
+    LoadAgentProfiles,
+    /// Start an agent (`SessionBridge::spawn` with `start_agent`; the view fills `audit` and
+    /// `cwd` first), report with [`Workspace::agent_ready`], follow the host channel with
+    /// [`Workspace::agent_message`] and keep `finished` to wait for the process at quit.
+    StartAgent {
+        /// What to start the agent from.
+        start: Box<AgentStart>,
+        /// Everything the agent tells the tab, in order.
+        host: tokio::sync::mpsc::UnboundedReceiver<AgentMsg>,
+    },
     /// Run an editor assist request on tokio (`run_assist` through `SessionBridge::spawn`), then
     /// report with [`Workspace::assist_finished`]. Its answer never runs: generated SQL goes into
     /// the editor through `EditorEdit` only.
@@ -430,6 +443,13 @@ impl std::fmt::Debug for Effect {
                 .field("tab", &job.tab)
                 .field("turn", &job.turn)
                 .finish_non_exhaustive(),
+            Self::LoadAgentProfiles => f.write_str("LoadAgentProfiles"),
+            // Ids only: never the profile's `env`.
+            Self::StartAgent { start, .. } => f
+                .debug_struct("StartAgent")
+                .field("tab", &start.tab)
+                .field("profile", &start.profile.id)
+                .finish_non_exhaustive(),
             // Never the question or the SQL: the job's own Debug has the id, tab and kind only.
             Self::RunAssist(job) => f
                 .debug_struct("RunAssist")
@@ -525,6 +545,8 @@ pub struct Workspace {
     pub(super) ai: AiState,
     /// The AI session tabs.
     pub(super) ai_sessions: AiSessions,
+    /// The agent tabs and the profiles they pick from (ADR-0051).
+    pub(super) agents: AgentTabs,
     /// The editor assistant of every query tab (ADR-0052).
     pub(super) assist: EditorAssist,
 }
@@ -588,6 +610,7 @@ impl Workspace {
             recent_connections: RecentConnections::default(),
             ai: AiState::default(),
             ai_sessions: AiSessions::default(),
+            agents: AgentTabs::default(),
             assist: EditorAssist::default(),
         }
     }
@@ -713,6 +736,13 @@ impl Workspace {
             items.extend(self.tab_database(id));
         } else if tab.kind() == TabKind::AiSession {
             items.push("AI session".to_owned());
+        } else if tab.kind() == TabKind::Agent {
+            items.push(
+                self.agents
+                    .get(id)
+                    .and_then(|a| a.profile().map(|p| p.name.clone()))
+                    .unwrap_or_else(|| "Agent".to_owned()),
+            );
         } else if let Some(crumbs) = self.object_crumbs.get(&id) {
             items.extend(crumbs.iter().cloned());
         } else {
@@ -760,6 +790,7 @@ impl Workspace {
             rows: rows.map(format_rows),
             timing,
             ai: self.tab_ai_status(id),
+            agent_endpoints: self.agent_endpoints(),
         }
     }
 
@@ -1097,13 +1128,16 @@ impl Workspace {
         let mut cancels = self.cancel_all_queries();
         cancels.extend(self.edit.stop_all_applies());
         cancels.extend(self.cancel_ai_sessions());
+        // Closes every agent: each tears down its endpoint and process; the view waits for them.
+        let (agents_ran, agent_cancels) = self.stop_all_agents();
+        cancels.extend(agent_cancels);
         // Ends every grid ingestion, waking one that is paused on a full page.
         for (_, grid) in self.grid_cancels.drain() {
             grid.cancel();
         }
         let sessions = self.take_all_sessions();
         let browsers = self.shutdown_browsers();
-        if sessions.is_empty() && !browsers && cancels.is_empty() {
+        if sessions.is_empty() && !browsers && cancels.is_empty() && !agents_ran {
             Effect::Quit
         } else if cancels.is_empty() {
             Effect::CloseSessions(sessions)
@@ -1255,7 +1289,8 @@ impl Workspace {
             (None, Some(handle)) => Effect::CancelQuery(handle),
             (None, None) => Effect::None,
         };
-        match (closing, self.close_ai_session(id)) {
+        let ai = super::ai_session::join(self.close_ai_session(id), self.close_agent(id));
+        match (closing, ai) {
             (Effect::None, ai) => ai,
             (closing, Effect::None) => closing,
             (closing, ai) => Effect::Batch(vec![closing, ai]),
@@ -1467,6 +1502,7 @@ impl Workspace {
         let mut sessions: Vec<Box<dyn Session>> =
             self.sessions.drain().map(|(_, session)| session).collect();
         sessions.extend(self.shut_ai_sources());
+        sessions.extend(self.shut_agent_sources());
         sessions
     }
 

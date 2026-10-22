@@ -21,11 +21,13 @@ screenshots = ["gui", "gpui/test-support", "gpui_platform/test-support", "sqler-
 [dependencies]
 sqler-ai-api.workspace = true
 sqler-ai-tools.workspace = true
+sqler-acp.workspace = true
 sqler-catalog.workspace = true
 sqler-completion.workspace = true
 sqler-config.workspace = true
 sqler-driver-api.workspace = true
 sqler-export.workspace = true
+sqler-mcp.workspace = true
 sqler-sql.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
@@ -36,6 +38,7 @@ gpui_platform = { workspace = true, optional = true }
 lsp-types = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 sqler-ai-api = { workspace = true, features = ["test-support"] }
@@ -47,8 +50,14 @@ sqler-export = { workspace = true, features = ["parquet", "xlsx"] }
 serde_json.workspace = true
 insta.workspace = true
 proptest.workspace = true
-tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net"] }
 image.workspace = true
+# The agent tests and the guard suite talk to the loopback MCP endpoint with a plain HTTP client.
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util.workspace = true
+http-body-util.workspace = true
+http.workspace = true
+bytes.workspace = true
 
 [[bench]]
 name = "grid_viewport"

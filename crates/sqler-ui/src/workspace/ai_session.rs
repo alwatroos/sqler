@@ -41,7 +41,7 @@ use sqler_ai_tools::session::SessionEvent;
 const DEFAULT_RESULTS_TITLE: &str = "AI query";
 
 /// The effect that does `first`, then `then`.
-fn join(first: Effect, then: Effect) -> Effect {
+pub(super) fn join(first: Effect, then: Effect) -> Effect {
     match (first, then) {
         (Effect::None, then) => then,
         (first, Effect::None) => first,
@@ -63,12 +63,22 @@ impl Workspace {
         self.ai_sessions.get(id).map(|tab| (id, tab))
     }
 
-    /// The approval queue of an AI session tab. T17 extends this seam with its agent tabs.
+    /// The approval queue of the tab, when it is an AI session tab or an agent tab: the one seam
+    /// every statement approval and the production gate go through (ADR-0053, ADR-0051).
     pub(crate) fn approvals_mut(&mut self, tab: TabId) -> Option<&mut ApprovalQueue> {
+        if let Some(t) = self.ai_sessions.tabs.get_mut(&tab) {
+            return Some(&mut t.approvals);
+        }
+        self.agents.tabs.get_mut(&tab).map(|t| &mut t.approvals)
+    }
+
+    /// The approval queue of the tab, read only.
+    pub(crate) fn approvals(&self, tab: TabId) -> Option<&ApprovalQueue> {
         self.ai_sessions
             .tabs
-            .get_mut(&tab)
-            .map(|t| &mut t.approvals)
+            .get(&tab)
+            .map(|t| &t.approvals)
+            .or_else(|| self.agents.tabs.get(&tab).map(|t| &t.approvals))
     }
 
     /// Whether a session can start on `conn`: the provider and model of the Exploration use case,
@@ -120,7 +130,7 @@ impl Workspace {
             Some(conn) => self.session_gate(&conn).err(),
             None => Some(SESSION_NO_CONNECTION),
         };
-        model
+        self.with_agents(model)
     }
 
     fn session_notice(&mut self, message: impl Into<String>) -> Effect {
@@ -302,11 +312,11 @@ impl Workspace {
     ///
     /// The answer names the ask it is for. When that ask is not the one that waits any more, it
     /// does nothing but tell the user; it never answers another ask.
-    fn answer_card(&mut self, tab: TabId, id: u64, decision: Decision) -> Effect {
-        let Some(t) = self.ai_sessions.tabs.get_mut(&tab) else {
+    pub(super) fn answer_card(&mut self, tab: TabId, id: u64, decision: Decision) -> Effect {
+        let Some(approvals) = self.approvals_mut(tab) else {
             return Effect::None;
         };
-        if t.approvals.answer_id(id, ApprovalStage::Confirm, decision) {
+        if approvals.answer_id(id, ApprovalStage::Confirm, decision) {
             return Effect::None;
         }
         self.session_notice(STALE_ANSWER)
@@ -315,10 +325,7 @@ impl Workspace {
     /// The user answered the production confirmation of an AI tab: confirm or dismiss the gate,
     /// then answer the ask. Does nothing unless the gate is open for a waiting second stage.
     pub(super) fn answer_prod_gate(&mut self, tab: TabId, decision: Decision) {
-        let waiting = self
-            .ai_sessions
-            .get(tab)
-            .and_then(|t| t.approvals.gated_current());
+        let waiting = self.approvals(tab).and_then(ApprovalQueue::gated_current);
         let Some(gate) = self.queries.get_mut(&tab) else {
             return;
         };
@@ -334,9 +341,8 @@ impl Workspace {
             }
             _ => gate.dismiss(),
         }
-        if let Some(t) = self.ai_sessions.tabs.get_mut(&tab) {
-            t.approvals
-                .answer_id(id, ApprovalStage::ProdSecond, decision);
+        if let Some(approvals) = self.approvals_mut(tab) {
+            approvals.answer_id(id, ApprovalStage::ProdSecond, decision);
         }
     }
 
@@ -440,13 +446,18 @@ impl Workspace {
         }
     }
 
-    fn ai_ask(&mut self, tab: TabId, ask: crate::ai::ApprovalAsk) {
-        if ask.request.stage == ApprovalStage::ProdSecond {
-            let busy = self
-                .ai_sessions
-                .get(tab)
-                .is_some_and(|t| t.approvals.is_waiting());
-            if busy {
+    /// Queues an ask of the tool set for the tab that owns it (an AI session tab or an agent
+    /// tab). A tab that does not exist, a second production confirmation and a statement the
+    /// gate cannot show are denied.
+    pub(super) fn ai_ask(&mut self, tab: TabId, ask: crate::ai::ApprovalAsk) {
+        let Some(waiting) = self.approvals(tab).map(ApprovalQueue::is_waiting) else {
+            // No tab owns this ask any more.
+            let _ = ask.reply.send(Decision::Deny);
+            return;
+        };
+        let prod = ask.request.stage == ApprovalStage::ProdSecond;
+        if prod {
+            if waiting {
                 // The gate holds one statement; a second one cannot be shown beside it.
                 let _ = ask.reply.send(Decision::Deny);
                 self.notice = Some(STALE_ANSWER.to_owned());
@@ -464,11 +475,10 @@ impl Workspace {
                 return;
             }
         }
-        if let Some(t) = self.ai_sessions.tabs.get_mut(&tab) {
-            let prod = ask.request.stage == ApprovalStage::ProdSecond;
-            let id = t.approvals.push(ask);
+        if let Some(approvals) = self.approvals_mut(tab) {
+            let id = approvals.push(ask);
             if prod {
-                t.approvals.bind_gate(id);
+                approvals.bind_gate(id);
             }
         }
     }
