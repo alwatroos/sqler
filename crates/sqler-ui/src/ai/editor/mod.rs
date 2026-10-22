@@ -301,16 +301,34 @@ pub fn insert_edit(buf: &EditorBuffer, sql: &str) -> TextEdit {
     }
 }
 
+/// Whether the match at `at..at + len` is a whole statement: it starts at the
+/// text start or after whitespace/`;`, and (unless it ends with `;` itself) only
+/// whitespace and then the end of the text or a `;` follow it.
+fn on_statement_boundary(text: &str, at: usize, len: usize) -> bool {
+    let starts = text[..at]
+        .chars()
+        .next_back()
+        .is_none_or(|c| c.is_whitespace() || c == ';');
+    let end = at + len;
+    let ends = text[..end].ends_with(';') || {
+        let rest = text[end..].trim_start();
+        rest.is_empty() || rest.starts_with(';')
+    };
+    starts && ends
+}
+
 /// The edit that replaces the failed statement `original` with `fixed`.
 ///
 /// # Errors
-/// [`FIX_STALE`] unless the trimmed `original` is in `text` exactly once.
+/// [`FIX_STALE`] unless the trimmed `original` is in `text` exactly once as a whole statement.
 pub fn fix_edit(text: &str, original: &str, fixed: &str) -> Result<TextEdit, &'static str> {
     let needle = original.trim();
     if needle.is_empty() {
         return Err(FIX_STALE);
     }
-    let mut found = text.match_indices(needle);
+    let mut found = text
+        .match_indices(needle)
+        .filter(|&(at, m)| on_statement_boundary(text, at, m.len()));
     let (start, _) = found.next().ok_or(FIX_STALE)?;
     if found.next().is_some() {
         return Err(FIX_STALE);
@@ -359,18 +377,23 @@ pub enum DiffTone {
 /// The lines of a unified diff with their tone.
 #[must_use]
 pub fn diff_lines(diff: &str) -> Vec<(DiffTone, &str)> {
+    // The file headers (`---`/`+++`) come only before the first `@@` hunk header;
+    // after it every `-`/`+` line is content, even one such as `--- note`.
+    let mut in_hunk = false;
     diff.lines()
         .map(|line| {
-            let tone =
-                if line.starts_with("@@") || line.starts_with("---") || line.starts_with("+++") {
-                    DiffTone::Header
-                } else if line.starts_with('+') {
-                    DiffTone::Added
-                } else if line.starts_with('-') {
-                    DiffTone::Removed
-                } else {
-                    DiffTone::Context
-                };
+            let tone = if line.starts_with("@@") {
+                in_hunk = true;
+                DiffTone::Header
+            } else if !in_hunk && (line.starts_with("---") || line.starts_with("+++")) {
+                DiffTone::Header
+            } else if line.starts_with('+') {
+                DiffTone::Added
+            } else if line.starts_with('-') {
+                DiffTone::Removed
+            } else {
+                DiffTone::Context
+            };
             (tone, line)
         })
         .collect()
@@ -466,6 +489,44 @@ mod tests {
     }
 
     #[test]
+    fn fix_requires_statement_boundaries() {
+        // A prefix of a longer statement is not a match.
+        assert_eq!(
+            fix_edit("delete from t where id = 1", "delete from t", "x"),
+            Err(FIX_STALE)
+        );
+        assert_eq!(
+            fix_edit("delete from t where id = 1;", "delete from t;", "x"),
+            Err(FIX_STALE)
+        );
+        // Suffix of a longer token run.
+        assert_eq!(fix_edit("xselect 1", "select 1", "y"), Err(FIX_STALE));
+        // Two identical statements.
+        assert_eq!(
+            fix_edit("select 1; select 1;", "select 1;", "x"),
+            Err(FIX_STALE)
+        );
+        // Exactly once between other statements, with and without semicolons.
+        let text = "select 0;\nselect nme from t;\nselect 2;";
+        let e = fix_edit(text, "select nme from t", "select name from t").unwrap();
+        assert_eq!(apply(text, &e), "select 0;\nselect name from t;\nselect 2;");
+        let e = fix_edit(text, "select nme from t;", "select name from t;").unwrap();
+        assert_eq!(apply(text, &e), "select 0;\nselect name from t;\nselect 2;");
+        // A short statement that is also a prefix elsewhere counts once.
+        let text = "delete from t where id = 1;\ndelete from t;";
+        let e = fix_edit(text, "delete from t", "delete from t limit 1").unwrap();
+        assert_eq!(
+            apply(text, &e),
+            "delete from t where id = 1;\ndelete from t limit 1;"
+        );
+        // The editor text changed since the request.
+        assert_eq!(
+            fix_edit("select nme from t where a = 1;", "select nme from t", "x"),
+            Err(FIX_STALE)
+        );
+    }
+
+    #[test]
     fn explain_target_prefers_the_selection() {
         let text = "select 1;\nselect 2;";
         let sel = BufferSnapshot::with_selection(text, 10..18);
@@ -502,6 +563,23 @@ mod tests {
             ]
         );
         assert_eq!(lines[3].1, "-old");
+    }
+
+    #[test]
+    fn removed_comment_line_is_not_a_header() {
+        let lines = diff_lines("--- a\n+++ b\n@@ -1,2 +1,1 @@\n--- note\n+++ x\n-old");
+        let tones: Vec<DiffTone> = lines.iter().map(|(t, _)| *t).collect();
+        assert_eq!(
+            tones,
+            [
+                DiffTone::Header,
+                DiffTone::Header,
+                DiffTone::Header,
+                DiffTone::Removed,
+                DiffTone::Added,
+                DiffTone::Removed
+            ]
+        );
     }
 
     #[test]
