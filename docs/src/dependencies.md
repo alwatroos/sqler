@@ -36,7 +36,7 @@ Source commands (all rows):
 | tree-sitter | `tree-sitter` | 0.27.1 | 2026-10-08 | Rust bindings. `gpui-component` 0.8.0 requires `^0.26.13`, so the root `Cargo.lock` resolves 0.26.13 (through `sqler-ui/gui`). Source: API; `Cargo.lock` |
 | tree-sitter-sequel | `tree-sitter-sequel` | 0.3.11 | 2025-10-01 | SQL grammar pulled in by the `gpui-component` feature `tree-sitter-sql`; now in the root `Cargo.lock` (0.3.11) through `sqler-ui/gui`. Verified 2026-10-20. Source: API; `Cargo.lock` |
 | memory-stats | `memory-stats` | 1.2.0 | 2024-06-26 | Reads process RSS: the `SPIKE rss_mb` value (spike, outside the root workspace) and, since T3 (ADR-0029), a dev-dependency of `sqler-export` for the 1M-row streaming memory test. `MIT OR Apache-2.0`. Re-verified 2026-10-21 (still the latest stable). Source: API |
-| rmcp | `rmcp` | 3.6.0 | 2026-10-20 | Official MCP Rust SDK. Source: API |
+| rmcp | `rmcp` | 3.6.0 | 2026-10-20 | Official MCP Rust SDK; MCP revision 2026-07-28 (`ProtocolVersion::LATEST`). T15 measured it and did not adopt it: its server features add 2.39 MiB to `sqler-cli` (limit 1.5 MiB), see the T15 rationale below. Checked 2026-10-21. Source: API |
 | agent-client-protocol | `agent-client-protocol` | 3.4.0 | 2026-10-16 | Repository `agentclientprotocol/rust-sdk`. Source: API |
 | wasmtime | `wasmtime` | 49.0.4 | 2026-10-19 | `max_version` is the pre-release 50.0.0-rc.1, not used. Source: API (`max_stable_version`) |
 | cargo-component | `cargo-component` | 0.21.1 | 2025-03-18 | No release for over a year; check the project status before relying on it. Source: API |
@@ -71,6 +71,12 @@ Source commands (all rows):
 | bytes | `bytes` | 1.12.1 | 2026-07-08 | T3. `Bytes` as a `ChunkReader` for reading the written `Parquet` file back in tests. `MIT`; `rust-version` 1.57. Already in `Cargo.lock`; also a dependency of `parquet`. Dev-dependency of `sqler-export`. Checked 2026-10-21. Source: API |
 | reqwest | `reqwest` | 0.12.28 | 2025-12-22 | T3 (`sqler-ai-ollama`; also the HTTP client for T4 to T6). `MIT OR Apache-2.0`. Workspace line `default-features = false`, `rustls-tls-native-roots`: it resolves to `hyper-rustls` 0.27.10, `rustls` 0.23.46 on `ring` 0.17.14 and `rustls-native-certs` 0.8.5, the stack `sqlx` and `gpui-pre-reqwest` already use. No `default-tls` (OpenSSL), no `webpki-roots`, no `aws-lc` provider, no `charset`, `http2`, `json` or `stream`. Newest stable is 0.13.5; 0.13 was not chosen because its default `rustls` feature adds `aws-lc-rs` and `rustls-platform-verifier` (a second crypto provider and a second verifier), and its `rustls-no-provider` route needs a hand-built `ring` `ClientConfig`. Checked 2026-10-21: 0.12.28 is the newest 0.12.x, not yanked, no advisory in `cargo deny`. New crates in `Cargo.lock`: `reqwest`, `tower-http` 0.6.11 (`MIT`) and a second `base64` (0.23.1, see below). Source: API (`/api/v1/crates/reqwest/versions`); `cargo info reqwest@0.12` |
 | base64 | `base64` | 0.22.1 | 2024-04-30 | T3. Encodes image bytes for Ollama chat messages. `MIT OR Apache-2.0`. Kept on 0.22.1, the line `reqwest` 0.12.28 and the rest of the tree use; the newest stable is 0.23.1 (2026-08-04), which `hyper-util` 0.1.21 already pulls in once `reqwest` enables its proxy support, so `Cargo.lock` holds both. Not yanked. Checked 2026-10-21. Source: API; `cargo info base64` |
+| hyper | `hyper` | 1.12.0 | 2026-10-06 | T15 (`sqler-mcp`). HTTP/1 server of the MCP endpoint. `MIT`. Workspace line `default-features = false`, `server` + `http1`. Already in `Cargo.lock` through `reqwest` and GPUI (the one `hyper` 1.x); the `server` feature adds `httpdate` 1.0.3 (`MIT OR Apache-2.0`, 2023-08-13) as the only new package. Dev-dependency feature `client` for the loopback tests. Checked 2026-10-21. Source: API |
+| hyper-util | `hyper-util` | 0.1.21 | 2026-09-24 | T15. `TokioIo` and `TokioTimer` adapters for the hyper server. `MIT`. `default-features = false`, `tokio`. Already in `Cargo.lock`. Checked 2026-10-21. Source: API |
+| http-body-util | `http-body-util` | 0.1.5 | 2026-08-12 | T15. `Full`, `Limited` and `BoxBody` for the HTTP front service. `MIT`. Already in `Cargo.lock`. Checked 2026-10-21. Source: API |
+| http | `http` | 1.5.0 | 2026-07-29 | T15. Request, response, header and status types of the HTTP front service. `MIT OR Apache-2.0`. Already in `Cargo.lock`. Checked 2026-10-21. Source: API |
+| subtle | `subtle` | 2.6.1 | 2024-06-24 | T15. `ConstantTimeEq` for the bearer-token compare. `BSD-3-Clause`. Already in `Cargo.lock` (RustCrypto). Checked 2026-10-21. Source: API |
+| tokio-util | `tokio-util` | 0.7.20 | 2026-10-09 | T15. `CancellationToken` for per-request cancellation and server shutdown. `MIT`. `default-features = false`. Already in `Cargo.lock`. Checked 2026-10-21. Source: API |
 
 ## CI tools and actions
 
@@ -130,6 +136,7 @@ Per-dependency rationale is added by the PR that introduces it.
   `rustls`, `ring` and `tokio` are already in the app tree through `gpui-pre-reqwest` and `sqlx`;
   the new code is `reqwest`, `tower-http` and this crate.
 - `sqler-ai-openai` (T5) adds no crate: it reuses the T3 `reqwest` 0.12.28 and `base64` 0.22.1 rows above (same workspace line, same rustls/ring stack). Checked 2026-10-21: `cargo tree -p sqler-ai-openai -i rsa`, `-i webpki-roots`, `-i openssl-sys`, `-i native-tls` and `-i aws-lc-rs` find no package, one `rustls`, `cargo deny check` clean with no new ignore.
+- `sqler-ai-mistral` (T6) adds no crate: it reuses the T3 `reqwest` 0.12.28 and `base64` 0.22.1 rows above (same workspace line, same rustls/ring stack) and, as dev-dependencies, `log` 0.4.34 and `tracing` 0.1.44 (workspace lines shared with `sqler-ai-anthropic`, both already in `Cargo.lock`). Checked 2026-10-21: `cargo tree -p sqler-ai-mistral -i rsa`, `-i webpki-roots`, `-i openssl-sys`, `-i native-tls` and `-i aws-lc-rs` find no package, one `rustls`, one `hyper`, one `hyper-rustls`, `cargo deny check` clean with no new ignore. Not linked into `sqler-app` yet, so `size.yml` does not change; T11 (the `ai-mistral` feature) measures the delta.
 - `log` 0.4.34 and `tracing` 0.1.44 (T4, dev-dependencies of `sqler-ai-anthropic` only): `tests/secrets.rs`
   installs a capturing `log::Log` and `tracing::Subscriber` to prove the API key reaches no log or trace
   output. Both are already in `Cargo.lock` (`reqwest` uses `log`, `hyper` uses `tracing`), so no new
@@ -140,6 +147,23 @@ Per-dependency rationale is added by the PR that introduces it.
   `cargo deny check` is clean with no new ignore. `sqler-ai-anthropic` reuses `reqwest` and `base64`
   from T3 and is not linked into `sqler-app` yet, so `size.yml` does not change; T11 (the `ai-anthropic`
   feature) measures the delta.
+- `sqler-mcp` (T15, ADR-0040): `rmcp` 3.6.0 was evaluated on 2026-10-21 and rejected on size. What was measured
+  (macOS arm64, release build, `strip = "symbols"`, `codegen-units = 1`): `sqler-cli` with the tool-set stack and
+  `tokio` `rt-multi-thread` is 7,969,808 bytes; adding `rmcp` (features `server`, `transport-async-rw`,
+  `transport-streamable-http-server`, no `macros`) and an `rmcp`-based `sqler-mcp` gave 10,480,000 bytes, a delta of
+  2,510,192 bytes (2.39 MiB) against a limit of 1.5 MiB (criterion C3). C1, C2 and C4 passed: `cargo deny check`
+  was clean with no new ignore; no `rsa`, `openssl-sys`, `native-tls`, `webpki-roots`, `aws-lc-rs` or `axum`, no
+  second `rustls`, `hyper`, `http`, `tower`, `schemars` or `reqwest` (its server features pulled in `schemars` 1.2.3,
+  `chrono`, `rand` 0.10, `uuid`, `base64` 0.23, `sse-stream` and `pastey` 0.2); the API supported a manual
+  `ServerHandler`, a per-request cancellation token, stdio over any reader and writer, and a mountable tower
+  service. Its HTTP client features need `reqwest` 0.13 (a second `reqwest`, the `aws-lc` provider), so they were not
+  an option either. The protocol layer (`initialize`, `ping`, `tools/list`, `tools/call`, `notifications/cancelled`)
+  is therefore in `sqler-mcp` itself, on `serde_json`, with the `hyper` 1 server for HTTP. The same probe with this
+  crate is 8,462,784 bytes, a delta of 492,976 bytes (0.47 MiB). The only package new to `Cargo.lock` is `httpdate`
+  1.0.3 (a `hyper` `server` dependency); `hyper`, `hyper-util`, `http`, `http-body-util`, `subtle`, `tokio-util`,
+  `bytes`, `ring`, `base64` 0.22.1 and `zeroize` were already locked. `cargo deny check` is clean with no new
+  ignore, exception or licence; `cargo tree -d` adds no duplicate. `sqler-mcp` is not linked into `sqler-app`
+  before T17, so `size.yml` does not change in this change.
 - `sqlx` 0.9.0: database backend of `sqler-driver-sqlite`, `sqler-driver-postgres` and `sqler-driver-mysql` (AGENTS.md §6).
   The workspace line carries only `sqlite-bundled` (compiles SQLite from source, so Windows and macOS
   CI need no system library) and `runtime-tokio`; no `macros`, `migrate`, `json`, `any` or TLS. The

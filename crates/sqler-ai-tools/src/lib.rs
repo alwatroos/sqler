@@ -49,10 +49,17 @@
 //! `ai-audit.jsonl`). Entries hold SQL and arguments passed through credential redaction and
 //! size caps, and the SQL of a statement that mentions a listed word has its literals masked;
 //! never cell values or statement error texts.
+//!
+//! # Exploration sessions
+//!
+//! The [`session`] module holds the headless engine of the in-app exploration chat (ADR-0039):
+//! a tool loop over one connection with step, call, token and time limits, loop detection,
+//! retries, cancellation, approvals through the tool set and a memory-only transcript.
 
 #![forbid(unsafe_code)]
 
 mod approve;
+mod assist;
 mod audit;
 mod catalog_tools;
 mod error;
@@ -63,12 +70,18 @@ mod limits;
 mod query_tools;
 mod redact;
 mod schema;
+pub mod session;
 mod source;
 mod toolset;
 mod ui;
 mod untrusted;
 
 pub use approve::{ApprovalReason, ApprovalRequest, ApprovalStage, Approver, Decision};
+pub use assist::{
+    Assist, AssistError, AssistOptions, AssistSearch, Conversation, DataSearch, Explanation,
+    FixProposal, GeneratedSql, GroundedTable, Grounding, PROMPT_VERSION, ParsedAnswer, SqlAnswer,
+    Turn, TurnKind, extract_sql, parse_sql_answer, unified_diff,
+};
 pub use audit::{
     AUDIT_FILE_NAME, AUDIT_FORMAT_VERSION, ApprovalOutcome, AuditConnection, AuditCursor,
     AuditEntry, AuditError, AuditFailure, AuditLog, AuditOptions, AuditPage, AuditQuery, AuditSink,

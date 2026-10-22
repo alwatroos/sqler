@@ -15,12 +15,14 @@ Usage:
   sqler-cli run [--driver <ID>] <TARGET> <SQL>
   sqler-cli export [--driver <ID>] --format <FMT> --output <PATH|-> [--table <NAME>]
                    [--schema <NAME>] [--allow-write] <TARGET> <SQL>
+  sqler-cli mcp [--stdio | --http[=PORT]] [--token-file <PATH>] ([--driver <ID>] <TARGET>)...
   sqler-cli --help | -h
   sqler-cli --version | -V
 
 Commands:
   run         Run one SQL statement and print the result as TSV
   export      Stream the result of one read statement into a file
+  mcp         Serve the databases to an AI agent over MCP (stdio, or HTTP on 127.0.0.1)
 
 Options:
   --driver <ID>   Driver id: sqlite, postgres, mysql (default: sqlite)
@@ -29,6 +31,11 @@ Options:
   --table <NAME>  export: the table name of the sql format (required for it)
   --schema <NAME> export: the schema of the sql format
   --allow-write   export: also run a statement that is not a plain read
+  --stdio         mcp: serve on stdin/stdout (default)
+  --http[=PORT]   mcp: serve on 127.0.0.1:PORT (default: a free port); needs a bearer token
+  --token-file <PATH>  mcp: read the HTTP token from PATH, or create it there (mode 0600; Unix only,
+                  a file readable by others is refused; Windows uses the directory ACL)
+                  Without it, SQLER_MCP_TOKEN is used, else a token is generated and printed once
   --              End of options: what follows is <TARGET> and <SQL> (for SQL that starts with -)
   -h, --help      Print this help
   -V, --version   Print the version
@@ -38,6 +45,8 @@ Examples:
   sqler-cli run ./data.db \"select * from users\"
   sqler-cli run --driver postgres postgres://user@localhost/db \"select 1\"
   sqler-cli export --format csv --output users.csv ./data.db \"select * from users\"
+  sqler-cli mcp ./data.db
+  sqler-cli mcp --http 0 --driver postgres postgres://user@localhost/db
 ";
 
 /// A parsed command line.
@@ -54,6 +63,8 @@ pub(crate) enum Command {
     },
     /// Export one statement's result to a file or stdout.
     Export(ExportArgs),
+    /// Serve the databases over MCP.
+    Mcp(McpArgs),
     /// Print the usage.
     Help,
     /// Print the version.
@@ -91,6 +102,39 @@ pub(crate) struct ExportArgs {
     pub(crate) allow_write: bool,
 }
 
+/// How `mcp` talks to its client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum McpTransport {
+    /// Newline-delimited JSON-RPC on stdin/stdout.
+    Stdio,
+    /// Streamable HTTP on `127.0.0.1:port` (`0` picks a free port).
+    Http {
+        /// The port.
+        port: u16,
+    },
+}
+
+/// The arguments of `mcp`. `Debug` hides the targets, which can hold a password.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct McpArgs {
+    /// The transport.
+    pub(crate) transport: McpTransport,
+    /// Where the HTTP token is read from or created.
+    pub(crate) token_file: Option<PathBuf>,
+    /// `(driver id, target)` per database, in order; they become `db1..dbN`.
+    pub(crate) targets: Vec<(String, String)>,
+}
+
+impl fmt::Debug for McpArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("McpArgs")
+            .field("transport", &self.transport)
+            .field("token_file", &self.token_file)
+            .field("targets", &self.targets.len())
+            .finish()
+    }
+}
+
 /// A malformed command line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UsageError(pub(crate) String);
@@ -112,6 +156,7 @@ pub(crate) fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, U
         "--version" | "-V" => Ok(Command::Version),
         "run" => parse_run(args),
         "export" => parse_export(args),
+        "mcp" => parse_mcp(args),
         other if other.starts_with('-') => Err(UsageError("unknown option; see --help".to_owned())),
         _ => Err(UsageError("unknown command; see --help".to_owned())),
     }
@@ -220,6 +265,67 @@ fn parse_export(mut args: impl Iterator<Item = String>) -> Result<Command, Usage
         (Some(_), None, _) => Err(UsageError("missing <SQL>".to_owned())),
         (Some(_), Some(_), Some(_)) => Err(UsageError("too many arguments".to_owned())),
     }
+}
+
+fn parse_mcp(args: impl Iterator<Item = String>) -> Result<Command, UsageError> {
+    let mut args = args.peekable();
+    let mut driver = DEFAULT_DRIVER.to_owned();
+    let mut transport = None;
+    let mut token_file = None;
+    let mut targets: Vec<(String, String)> = Vec::new();
+    while let Some(arg) = args.next() {
+        let new = if arg == "--" {
+            for target in args.by_ref() {
+                targets.push((driver.clone(), target));
+            }
+            continue;
+        } else if arg == "--stdio" {
+            McpTransport::Stdio
+        } else if arg == "--http" {
+            let port = args.next_if(|next| next.parse::<u16>().is_ok());
+            McpTransport::Http {
+                port: port.and_then(|p| p.parse().ok()).unwrap_or(0),
+            }
+        } else if let Some(port) = arg.strip_prefix("--http=") {
+            let port = port
+                .parse()
+                .map_err(|_| UsageError("--http needs a port from 0 to 65535".to_owned()))?;
+            McpTransport::Http { port }
+        } else if let Some(v) = flag_value(&arg, "--driver", &mut args)? {
+            driver = v;
+            continue;
+        } else if let Some(v) = flag_value(&arg, "--token-file", &mut args)? {
+            if v.is_empty() {
+                return Err(UsageError("--token-file needs a path".to_owned()));
+            }
+            if token_file.replace(PathBuf::from(v)).is_some() {
+                return Err(UsageError("--token-file given twice".to_owned()));
+            }
+            continue;
+        } else if arg.starts_with('-') && arg.len() > 1 {
+            return Err(UsageError("unknown option; see --help".to_owned()));
+        } else {
+            targets.push((driver.clone(), arg));
+            continue;
+        };
+        if transport.replace(new).is_some() {
+            return Err(UsageError(
+                "give --stdio or --http once, not both".to_owned(),
+            ));
+        }
+    }
+    let transport = transport.unwrap_or(McpTransport::Stdio);
+    if targets.is_empty() {
+        return Err(UsageError("missing <TARGET>".to_owned()));
+    }
+    if token_file.is_some() && transport == McpTransport::Stdio {
+        return Err(UsageError("--token-file needs --http".to_owned()));
+    }
+    Ok(Command::Mcp(McpArgs {
+        transport,
+        token_file,
+        targets,
+    }))
 }
 
 #[cfg(test)]
@@ -409,5 +515,90 @@ mod tests {
     fn usage_names_export() {
         assert!(USAGE.contains("sqler-cli export"));
         assert!(USAGE.contains("--allow-write"));
+    }
+
+    fn mcp(args: &[&str]) -> McpArgs {
+        let mut v = vec!["mcp"];
+        v.extend_from_slice(args);
+        match p(&v) {
+            Ok(Command::Mcp(a)) => a,
+            other => panic!("not mcp: {other:?}"),
+        }
+    }
+
+    fn t(driver: &str, target: &str) -> (String, String) {
+        (driver.to_owned(), target.to_owned())
+    }
+
+    #[test]
+    fn mcp_defaults_to_stdio_and_sqlite() {
+        let a = mcp(&["./a.db"]);
+        assert_eq!(a.transport, McpTransport::Stdio);
+        assert_eq!(a.targets, vec![t("sqlite", "./a.db")]);
+        assert_eq!(a.token_file, None);
+    }
+
+    #[test]
+    fn mcp_http_port_forms() {
+        assert_eq!(
+            mcp(&["--http", "x.db"]).transport,
+            McpTransport::Http { port: 0 }
+        );
+        assert_eq!(
+            mcp(&["--http", "8080", "x.db"]).transport,
+            McpTransport::Http { port: 8080 }
+        );
+        assert_eq!(
+            mcp(&["--http=9", "x.db"]).transport,
+            McpTransport::Http { port: 9 }
+        );
+        assert!(p(&["mcp", "--http=99999", "x.db"]).is_err());
+        assert!(p(&["mcp", "--http=", "x.db"]).is_err());
+    }
+
+    #[test]
+    fn mcp_driver_applies_to_later_targets() {
+        let a = mcp(&[
+            "a.db",
+            "--driver",
+            "postgres",
+            "u1",
+            "u2",
+            "--driver=sqlite",
+            "b.db",
+        ]);
+        assert_eq!(
+            a.targets,
+            vec![
+                t("sqlite", "a.db"),
+                t("postgres", "u1"),
+                t("postgres", "u2"),
+                t("sqlite", "b.db"),
+            ]
+        );
+    }
+
+    #[test]
+    fn mcp_token_file() {
+        let a = mcp(&["--http", "--token-file", "tok", "x.db"]);
+        assert_eq!(a.token_file, Some(PathBuf::from("tok")));
+        assert!(p(&["mcp", "--token-file", "tok", "x.db"]).is_err());
+        assert!(p(&["mcp", "--http", "--token-file", "a", "--token-file=b", "x"]).is_err());
+    }
+
+    #[test]
+    fn mcp_errors() {
+        assert!(p(&["mcp"]).is_err());
+        assert!(p(&["mcp", "--http"]).is_err());
+        assert!(p(&["mcp", "--stdio", "--http", "x.db"]).is_err());
+        assert!(p(&["mcp", "--stdio", "--stdio", "x.db"]).is_err());
+        assert!(p(&["mcp", "--bogus", "x.db"]).is_err());
+        assert!(p(&["mcp", "--driver"]).is_err());
+    }
+
+    #[test]
+    fn mcp_debug_hides_targets() {
+        let a = mcp(&["--driver", "postgres", "postgres://u:s3cret@h/db"]);
+        assert!(!format!("{a:?}").contains("s3cret"));
     }
 }

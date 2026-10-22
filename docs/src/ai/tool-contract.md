@@ -17,7 +17,7 @@ SQLer gives a model a fixed set of tools to read a database schema and run SQL. 
 | `explain_query` | `EXPLAIN` of one statement | `analyze` needs approval |
 | `open_in_editor` | Opens SQL in an editor tab (UI hosts only) | no |
 | `open_results_tab` | Opens and runs a read statement in a results tab (UI hosts only) | refused unless every statement is `Read` with no approval reason (so never `EXPLAIN ANALYZE`) |
-| `search_data` | Natural-language question to SQL and rows (planned, T9) | like `run_query` |
+| `search_data` | Natural-language question to SQL and rows. Listed only when the host attaches a `DataSearch` (`ToolSet::with_data_search`); the generated SQL must be a plain read, is shown through `DataSearch::shown` before it runs, and the result is the `run_query` body plus `sql` and `rationale` (ADR-0038) | like `run_query` (anything but a plain read is refused) |
 
 Catalog tools answer from the schema cache and do not open a session. Only the definition text of `describe_function` reads the database; it is cached.
 
