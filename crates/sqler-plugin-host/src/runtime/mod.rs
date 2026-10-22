@@ -31,6 +31,11 @@ pub use call::PendingCall;
 pub use host::{HostOptions, PluginHost};
 pub use services::Services;
 
+// The generated bindings and the error constructor, for the host interfaces that live outside this module (query,
+// catalog, ...).
+pub(crate) use bindings::sqler::plugin as wit;
+pub(crate) use convert::plugin_error;
+
 // The contract of the extension protocol: later items (P5, P8-P12) name these from their own modules, so they are
 // re-exported before anything uses them.
 #[allow(unused_imports)]

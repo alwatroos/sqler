@@ -41,6 +41,14 @@ permission is highlighted) and, as a chip, every highlighted permission with its
 previous approval are marked as new. Names and descriptions come from the plugin; control and direction-changing
 characters, invisible format characters and line separators are replaced and long text is cut.
 
+### Data leaving your machine
+
+`db.read` is shown quietly, but a plugin that has `db.read` can read what your connections hold. If it also has
+`net.http`, it can send what it read to the hosts you approved. Grant the two together only to a plugin you trust with
+that data. A database error text that reaches a plugin has account names, hosts, addresses and file paths removed (a permission failure is reduced to "the database denied the request"), so it can name only tables, columns and constraints, which a plugin with `db.read` can read anyway. Plugin output is not filtered the way data sent to an AI model is. A plugin never learns the host, user or
+password of a connection, and it cannot run a statement that changes data (`db.write`, or any statement SQLer does not
+recognise as a plain read) without your explicit confirmation, and on a `prod` connection a second one.
+
 ### Answering
 
 - **Approve** allows exactly the permissions listed. There is no partial approval. It answers only to a mouse (or

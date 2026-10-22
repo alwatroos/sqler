@@ -170,10 +170,13 @@ fn prepare(
     } else {
         limits.memory_bytes
     };
+    // The host's own limits win over anything the embedder put under the same type.
+    let mut services = inner.opts.services.clone();
+    services.insert(Arc::new(limits.query));
     let state = HostState::new(
         plugin,
         effective,
-        inner.opts.services.clone(),
+        services,
         Arc::clone(&inner.opts.settings),
         PluginLimiter::new(cap),
         log,

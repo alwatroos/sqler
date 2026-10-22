@@ -8,8 +8,6 @@
 //! capability gives `capability-denied`; a granted one gives `failed` ("not available in this host"). The item that
 //! implements an interface deletes its file here and its `mod` line.
 
-mod catalog;
-mod query;
 mod ui;
 
 use sqler_plugin_api::{CapabilityKind, CapabilitySet, Gate, HostInterface, gate};
@@ -18,11 +16,12 @@ use super::bindings::sqler::plugin::types::PluginError;
 use super::convert::plugin_error;
 use crate::error::ErrorCode;
 
-/// The message of a granted call into an interface the host does not serve yet.
-const NOT_AVAILABLE: &str = "not available in this host";
+use crate::query::NOT_AVAILABLE;
 
 /// The error for a call into `interface`: the API gate decides first (a missing capability is `capability-denied`);
-/// a call that passes it is `failed`. An unknown gate kind fails closed.
+/// a call that passes it is `failed`. An unknown gate kind fails closed. No interface is gated this way since `query`
+/// and `catalog` became real (P5), so only the tests call it today.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn gated(effective: &CapabilitySet, interface: HostInterface) -> PluginError {
     let allowed = match gate(interface) {
         Gate::None => true,

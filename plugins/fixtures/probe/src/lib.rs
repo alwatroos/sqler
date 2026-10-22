@@ -20,9 +20,12 @@ mod bindings {
     use self::exports::sqler::plugin::ui_handler::{
         CommandContext, Guest, PluginError, WidgetEvent, WidgetTree,
     };
+    use self::sqler::plugin::catalog;
     use self::sqler::plugin::log::{Level, write};
+    use self::sqler::plugin::query::{QueryRequest, run};
     use self::sqler::plugin::settings::{self, SettingValue};
     use self::sqler::plugin::types::ErrorCode;
+    use self::sqler::plugin::types::{ObjectPath, Value};
 
     struct Probe;
 
@@ -97,9 +100,106 @@ mod bindings {
                 "setting" => url(),
                 "http" => fetch(&url()),
                 "http-other" => fetch(&other()),
+                "query" => query(None),
+                "query-one" => query(Some(1)),
+                "catalog" => catalog_listing(),
+                "columns" => columns(),
                 _ => return None,
             };
             Some(text)
+        }
+    }
+
+    fn text_setting(key: &str) -> String {
+        match settings::get(key) {
+            Some(SettingValue::Text(t)) => t,
+            _ => String::new(),
+        }
+    }
+
+    fn code(code: ErrorCode) -> &'static str {
+        match code {
+            ErrorCode::CapabilityDenied => "capability-denied",
+            ErrorCode::Declined => "declined",
+            ErrorCode::InvalidArgument => "invalid-argument",
+            ErrorCode::NotFound => "not-found",
+            ErrorCode::LimitExceeded => "limit-exceeded",
+            ErrorCode::Timeout => "timeout",
+            ErrorCode::Failed => "failed",
+        }
+    }
+
+    fn failure(e: &PluginError) -> String {
+        format!("err:{}:{}", code(e.code), e.message)
+    }
+
+    /// Runs the `sql` setting on the `connection` setting.
+    fn query(max_rows: Option<u32>) -> String {
+        let request = QueryRequest {
+            connection: text_setting("connection"),
+            sql: text_setting("sql"),
+            params: Vec::<Value>::new(),
+            max_rows,
+            timeout_ms: None,
+        };
+        match run(&request) {
+            Ok(result) => {
+                let cols: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
+                let affected = result
+                    .rows_affected
+                    .map_or_else(|| "none".to_owned(), |n| n.to_string());
+                format!(
+                    "ok cols={} rows={} truncated={} affected={affected}",
+                    cols.join(","),
+                    result.rows.len(),
+                    result.truncated
+                )
+            }
+            Err(e) => failure(&e),
+        }
+    }
+
+    /// The connections, and the objects of schema `main` of the `connection` setting.
+    fn catalog_listing() -> String {
+        let conns = match catalog::connections() {
+            Ok(list) => list
+                .iter()
+                .map(|c| c.id.clone())
+                .collect::<Vec<_>>()
+                .join(","),
+            Err(e) => return failure(&e),
+        };
+        let parent = ObjectPath {
+            database: String::new(),
+            schema: "main".to_owned(),
+            table: None,
+        };
+        match catalog::children(&text_setting("connection"), &parent) {
+            Ok(list) => {
+                let objs: Vec<String> = list
+                    .iter()
+                    .map(|o| format!("{:?}:{}", o.kind, o.name).to_lowercase())
+                    .collect();
+                format!("conns={conns} objs={}", objs.join(","))
+            }
+            Err(e) => failure(&e),
+        }
+    }
+
+    /// The columns of the `table` setting in schema `main`.
+    fn columns() -> String {
+        let path = ObjectPath {
+            database: String::new(),
+            schema: "main".to_owned(),
+            table: None,
+        };
+        match catalog::columns(&text_setting("connection"), &path, &text_setting("table")) {
+            Ok(list) => list
+                .iter()
+                .map(|c| format!("{}:{}:{}", c.name, c.type_name, c.nullable))
+                .collect::<Vec<_>>()
+                .join(","),
+            Err(e) => failure(&e),
         }
     }
 
