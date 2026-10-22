@@ -79,6 +79,7 @@
   - [ADR-0046: Keyboard-first model and accessibility](adr/0046-keyboard-first-model-and-accessibility.md)
   - [ADR-0047: Screenshot harness](adr/0047-screenshot-harness.md)
   - [ADR-0050: AI surfaces in the workbench](adr/0050-ai-surfaces-in-the-workbench.md)
+  - [ADR-0053: AI session tab and approvals](adr/0053-ai-session-tab-and-approvals.md)
 - [Plugin development](plugin-development/index.md)
 - [AI](ai/index.md)
   - [Providers](ai/providers.md)

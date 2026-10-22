@@ -104,7 +104,7 @@ impl Workspace {
     /// What the AI side view shows.
     #[must_use]
     pub fn hub_model(&self) -> HubModel {
-        hub_model(&self.ai, self.ai_target_profile())
+        self.with_sessions(hub_model(&self.ai, self.ai_target_profile()))
     }
 
     fn ai_notice(&mut self, message: impl Into<String>) -> Effect {
@@ -135,6 +135,9 @@ impl Workspace {
     /// Runs an AI action. The returned effect is carried out by the view.
     #[allow(clippy::too_many_lines)] // one arm per action
     pub fn dispatch_ai(&mut self, action: AiAction) -> Effect {
+        if action.is_session() {
+            return self.dispatch_session(action);
+        }
         let changes_config = !matches!(
             action,
             AiAction::OpenSettings
@@ -214,6 +217,15 @@ impl Workspace {
             | AiAction::CopyAuditSql
             | AiAction::SetAuditFilter(_)
             | AiAction::SelectAuditEntry(_)) => self.dispatch_audit(audit),
+            // Handled at the top; named here so a new action is a compile error.
+            session @ (AiAction::OpenSession
+            | AiAction::SetSessionDraft(..)
+            | AiAction::SendMessage(_)
+            | AiAction::CancelSession(_)
+            | AiAction::ApproveStatement(_)
+            | AiAction::DenyStatement(_)
+            | AiAction::RerunSql(..)
+            | AiAction::OpenSqlInEditor(..)) => self.dispatch_session(session),
         }
     }
 
@@ -242,7 +254,7 @@ impl Workspace {
     }
 
     /// Explains how to set a provider up and shows the AI view.
-    fn no_provider(&mut self) -> Effect {
+    pub(super) fn no_provider(&mut self) -> Effect {
         self.layout
             .apply(WorkbenchAction::ShowSideView(SideView::Ai));
         self.ai_notice(NO_PROVIDER)
@@ -271,8 +283,18 @@ impl Workspace {
         if turned_on && crate::ai::main_choice(self.ai.config()).is_none() {
             self.notice = Some(NO_PROVIDER.to_owned());
         }
-        Effect::SaveConnections {
+        let stopped = if turned_on {
+            Effect::None
+        } else {
+            // Turning AI off stops the running turns of this connection's sessions.
+            self.stop_ai_sessions_of(&id)
+        };
+        let save = Effect::SaveConnections {
             secrets: Vec::new(),
+        };
+        match stopped {
+            Effect::None => save,
+            stopped => Effect::Batch(vec![stopped, save]),
         }
     }
 

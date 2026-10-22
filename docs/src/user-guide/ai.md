@@ -148,6 +148,28 @@ provider it explains how to set one up.
 
 ![The AI view before a provider is set up](../screenshots/after/ai-side-view-empty-dark.png)
 
+### AI session tabs
+
+An AI session tab is a conversation with the model about one connection. Open it with **AI: Open Session** (`ai:open-session`) or the **Sessions** section of the AI view; it opens on the connection of the active tab. The connection must have AI turned on and a provider with a model set, otherwise the command explains what is missing. You can open several session tabs on one connection; each has its own database session and its own transcript. The tab is pinned and titled `AI: {connection}`.
+
+Type in the composer and press **Send** (`ai:send-message`). The transcript shows your messages, the streamed answer, each tool call, and each SQL statement that ran with its row count. Schema questions use the catalog tools and fetch no rows.
+
+![An AI session tab with an approval card](../screenshots/after/ai-session-dark.png)
+
+**Approvals.** Reads run without asking. Every other statement stops at an approval card that shows the exact SQL that will run and its class. **Deny** has the focus, so a stray Enter refuses. **Approve** (`ai:approve-statement`) lets the statement run; **Deny** (`ai:deny-statement`) runs nothing and the model is told not to retry.
+
+**Production connections ask twice.** After **Approve** the same confirmation dialog as for a manual run on production appears (ADR-0024); only its confirmation runs the statement. Cancelling it denies the statement.
+
+![The second confirmation on a production connection](../screenshots/after/ai-session-prod-confirm-dark.png)
+
+**Re-run and open in editor.** A statement in the transcript can be re-run (`ai:rerun-sql`) through the normal run flow, with its usual confirmation, or opened in an editor tab (`ai:open-sql-in-editor`). Neither calls the model.
+
+**UI tools.** The model can ask to show a statement in an editor tab (`open_in_editor`) or its result in a results tab (`open_results_tab`). These tools exist only in the app; they change what you see, never the database.
+
+**Cancel and close.** **Cancel** (`ai:cancel-session`) stops the answer, the running call or the wait for approval; you can send the next message at once. A call cancelled while it waited for approval is listed as "not run". A call cancelled while it was running is listed as **Cancelled**: the statement may already have run, and the audit log has a `cancelled` entry. Closing the tab, quitting, or turning AI off for the connection ends the turn the same way and denies a waiting approval.
+
+**Nothing is persisted.** The transcript lives in memory for the life of the tab and is never written to disk; the audit log records statements and outcomes, never cell values. The engine is described in [Exploration sessions](../ai/sessions.md); the decisions in [ADR-0053](../adr/0053-ai-session-tab-and-approvals.md).
+
 ### The status bar
 
 The status bar shows the state for the active connection: "AI off", "AI not set up" (on, but no
@@ -181,8 +203,15 @@ keeps these settings.
 | `ai:load-more-audit` | AI: Load More Audit Entries |
 | `ai:copy-audit-sql` | AI: Copy SQL of Audit Entry |
 | `workbench:show-audit` | View: Show Audit Log |
+| `ai:open-session` | AI: Open Session |
+| `ai:send-message` | AI: Send Message |
+| `ai:cancel-session` | AI: Cancel Session Turn |
+| `ai:approve-statement` | AI: Approve Statement |
+| `ai:deny-statement` | AI: Deny Statement |
+| `ai:rerun-sql` | AI: Re-run SQL |
+| `ai:open-sql-in-editor` | AI: Open SQL in Editor |
 
-Only `workbench:show-ai` has a default shortcut. See the [placement decisions](../adr/0050-ai-surfaces-in-the-workbench.md).
+Only `workbench:show-ai` has a default shortcut. The session commands apply while an AI session tab is active, except `ai:open-session`. See the [placement decisions](../adr/0050-ai-surfaces-in-the-workbench.md).
 
 ## Audit log and redaction
 

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use gpui::{App, AppContext as _, Entity, Window};
 use gpui_component::Root;
 use sqler_ai_api::mock::ScriptedProvider;
-use sqler_ai_api::{AiError, AiProvider, ModelInfo};
+use sqler_ai_api::{AiError, AiProvider, Capabilities, ChatEvent, ModelInfo, StopReason, ToolCall};
 use sqler_config::{
     AiConfig, ConnectionAi, ConnectionId, ConnectionSpec, ConnectionStore, KeybindingOverrides,
     MemoryStore, ModelChoice, ProviderConfig, ProviderId, ProviderKind, Secret, ThemePreference,
@@ -146,6 +146,14 @@ pub const SCENES: &[Scene] = &[
         name: "connection-dialog-ai",
         pending: None,
     },
+    Scene {
+        name: "ai-session",
+        pending: None,
+    },
+    Scene {
+        name: "ai-session-prod-confirm",
+        pending: None,
+    },
 ];
 
 /// The window size of every scene, in logical pixels.
@@ -192,6 +200,12 @@ enum Wait {
     },
     /// The active tab shows a generated script.
     Ddl,
+    /// The active AI session tab is idle and ready for a message.
+    AiReady,
+    /// The active AI session tab shows an approval card.
+    AiApproval,
+    /// The production confirmation of the active AI session tab is open.
+    AiGate,
 }
 
 impl Wait {
@@ -201,6 +215,9 @@ impl Wait {
             Self::RunDone => "the run to end".to_owned(),
             Self::Table { name, .. } => format!("table {name} in the object browser"),
             Self::Ddl => "the DDL tab".to_owned(),
+            Self::AiReady => "the AI session to be ready".to_owned(),
+            Self::AiApproval => "the approval card".to_owned(),
+            Self::AiGate => "the production confirmation".to_owned(),
         }
     }
 }
@@ -228,6 +245,10 @@ enum Step {
     MarkDirty(usize),
     /// Fills the audit view with the sample entries.
     AuditFixture,
+    /// Types a message into the composer of the active AI session tab and sends it.
+    AiSend(&'static str),
+    /// Approves the statement the active AI session tab waits on.
+    AiApprove,
     /// Waits.
     Wait(Wait),
 }
@@ -252,6 +273,18 @@ fn editors(conn: &'static str, count: usize, first: usize) -> Vec<Step> {
     steps
 }
 
+/// Selects `conn`, opens an AI session on it, asks the question and waits for the approval card.
+fn ai_session_steps(conn: &'static str) -> Vec<Step> {
+    vec![
+        Step::Select(conn),
+        Step::Command("ai:open-session"),
+        Step::Wait(Wait::AiReady),
+        Step::AiSend("Which customers spend the most?"),
+        Step::Wait(Wait::AiApproval),
+    ]
+}
+
+#[allow(clippy::too_many_lines)] // one declarative table of scenes
 fn steps_of(scene: &Scene) -> Vec<Step> {
     match scene.name {
         "editor-results" => vec![
@@ -341,6 +374,12 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Command("connection:new"),
             Step::Connection(ConnectionAction::SetAiEnabled(true)),
         ],
+        "ai-session" => ai_session_steps("dev"),
+        "ai-session-prod-confirm" => {
+            let mut steps = ai_session_steps("prod");
+            steps.extend([Step::AiApprove, Step::Wait(Wait::AiGate)]);
+            steps
+        }
         "welcome-recent" => {
             let mut steps = editors("dev", 1, 0);
             steps.extend(editors("staging", 1, 1));
@@ -360,11 +399,15 @@ fn store(scene: &Scene) -> Result<ConnectionStore, String> {
         return Ok(store);
     }
     let driver = DriverId::new("sqlite").map_err(|err| err.to_string())?;
-    let dev_ai = if scene.name == "ai-side-view" {
-        ConnectionAi::new(true)
-    } else {
-        ConnectionAi::default()
+    let ai_on = |on: bool| {
+        if on {
+            ConnectionAi::new(true)
+        } else {
+            ConnectionAi::default()
+        }
     };
+    let dev_ai = ai_on(matches!(scene.name, "ai-side-view" | "ai-session"));
+    let prod_ai = ai_on(scene.name == "ai-session-prod-confirm");
     let specs = [
         ConnectionSpec::new("dev", driver.clone(), ":memory:")
             .with_environment(Environment::Dev)
@@ -373,7 +416,8 @@ fn store(scene: &Scene) -> Result<ConnectionStore, String> {
             .with_environment(Environment::Staging),
         ConnectionSpec::new("prod", driver, ":memory:")
             .with_environment(Environment::Prod)
-            .with_color("#d14b4b"),
+            .with_color("#d14b4b")
+            .with_ai(prod_ai),
     ];
     for spec in specs {
         store
@@ -409,8 +453,34 @@ fn startup(
 /// The model the scenes' mock provider lists.
 const SCENE_MODEL: &str = "qwen2.5-coder:7b";
 
-/// A factory whose providers answer from a script: no network, no keychain, no key text.
-struct SceneProviders;
+/// A factory whose providers answer from a script: no network, no keychain, no key text. The AI
+/// session scenes get a provider that can call tools and follows the session script.
+struct SceneProviders {
+    scene: &'static str,
+}
+
+/// The question's first statement: a read.
+const SESSION_READ_SQL: &str = "select c.name, round(sum(o.total), 2) as spent from customers c join orders o on o.customer_id = c.id group by c.name order by spent desc limit 3";
+/// The second statement: a write, which waits for the user.
+const SESSION_WRITE_SQL: &str = "update customers set country = 'GB (key account)' where id = 2";
+
+impl SceneProviders {
+    /// One script step of the session scenes: some text, then a `run_query` call.
+    fn script(text: &str, id: &str, conn: &str, sql: &str) -> Vec<Result<ChatEvent, AiError>> {
+        let arguments = serde_json::json!({"connection": conn, "sql": sql}).to_string();
+        vec![
+            Ok(ChatEvent::TextDelta(text.to_owned())),
+            Ok(ChatEvent::ToolCall(ToolCall::new(
+                id,
+                "run_query",
+                arguments,
+            ))),
+            Ok(ChatEvent::Done {
+                stop: StopReason::ToolUse,
+            }),
+        ]
+    }
+}
 
 impl AiProviderFactory for SceneProviders {
     fn kinds(&self) -> Vec<ProviderKind> {
@@ -422,9 +492,29 @@ impl AiProviderFactory for SceneProviders {
         _provider: &ProviderConfig,
         _key: Option<&Secret>,
     ) -> Result<Arc<dyn AiProvider>, AiError> {
-        Ok(Arc::new(
-            ScriptedProvider::new("mock").with_models(vec![ModelInfo::new(SCENE_MODEL)]),
-        ))
+        let provider = ScriptedProvider::new("mock").with_models(vec![ModelInfo::new(SCENE_MODEL)]);
+        if !matches!(self.scene, "ai-session" | "ai-session-prod-confirm") {
+            return Ok(Arc::new(provider));
+        }
+        let conn = if self.scene == "ai-session" {
+            "dev"
+        } else {
+            "prod"
+        };
+        let provider = provider.with_capabilities(Capabilities::new(true, false, false, None));
+        provider.push_script(Self::script(
+            "I'll total the orders per customer first.",
+            "call-1",
+            conn,
+            SESSION_READ_SQL,
+        ));
+        provider.push_script(Self::script(
+            "Contoso Ltd spends the most. I can mark it as a key account.",
+            "call-2",
+            conn,
+            SESSION_WRITE_SQL,
+        ));
+        Ok(Arc::new(provider))
     }
 }
 
@@ -434,7 +524,12 @@ fn ai_startup(scene: &Scene) -> AiStartup {
     if let Ok(ollama) = ProviderId::new("ollama") {
         if matches!(
             scene.name,
-            "ai-side-view" | "ai-settings" | "ai-provider-editor" | "connection-dialog-ai"
+            "ai-side-view"
+                | "ai-settings"
+                | "ai-provider-editor"
+                | "connection-dialog-ai"
+                | "ai-session"
+                | "ai-session-prod-confirm"
         ) {
             config.providers.push(
                 ProviderConfig::new(ollama.clone(), ProviderKind::Ollama)
@@ -456,7 +551,7 @@ fn ai_startup(scene: &Scene) -> AiStartup {
     AiStartup {
         config: Ok(config),
         dir: None,
-        factory: Arc::new(SceneProviders),
+        factory: Arc::new(SceneProviders { scene: scene.name }),
     }
 }
 
@@ -615,6 +710,20 @@ impl WorkspaceView {
                     .audit_fixture(crate::ai::audit::fixture::entries(now_ms));
                 cx.notify();
             }
+            Step::AiSend(text) => {
+                let (tab, _) = self
+                    .ws
+                    .active_ai_session()
+                    .ok_or("no AI session tab is active")?;
+                self.ai_type_and_send(tab, text, window, cx);
+            }
+            Step::AiApprove => {
+                let (tab, _) = self
+                    .ws
+                    .active_ai_session()
+                    .ok_or("no AI session tab is active")?;
+                self.dispatch_ai(AiAction::ApproveStatement(tab), cx);
+            }
             Step::Wait(_) => {}
         }
         cx.notify();
@@ -646,6 +755,19 @@ impl WorkspaceView {
                     .is_some_and(|q| !q.is_running() && !q.results().is_empty())
             }
             Wait::Table { conn, name } => self.table_found(conn, name, cx),
+            Wait::AiReady => self
+                .ws
+                .active_ai_session()
+                .is_some_and(|(_, s)| matches!(s.phase(), crate::ai::SessionPhase::Ready)),
+            Wait::AiApproval => self
+                .ws
+                .active_ai_session()
+                .is_some_and(|(_, s)| s.approvals().current().is_some()),
+            Wait::AiGate => self.ws.active_ai_session().is_some_and(|(tab, _)| {
+                self.ws
+                    .query_tab(tab)
+                    .is_some_and(|q| matches!(q.phase(), crate::query::Phase::Confirming(_)))
+            }),
             Wait::Ddl => self.ws.tabs().active().is_some_and(|tab| {
                 self.ws.object_tab(tab.id()).is_some_and(|object| {
                     matches!(object.content, crate::browser::ObjectTabContent::Script(_))

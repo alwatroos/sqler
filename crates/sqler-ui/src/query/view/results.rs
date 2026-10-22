@@ -22,7 +22,7 @@ use crate::grid::edit::view::edit_row;
 use crate::grid::view::{Table, grid_table, new_table};
 use crate::grid::{GridTab, IngestState};
 use crate::query::{Phase, QueryTab, StatementStatus, StatusTone, status_tone, status_word};
-use crate::tabs::{TabId, TabKind, TabStrip};
+use crate::tabs::{TabId, TabStrip};
 use crate::theme::SPACE;
 use crate::theme::icons::AppIcon;
 use crate::workspace::chrome::{ICON_MD, ICON_SM, TOOLBAR_HEIGHT, ui_scale};
@@ -222,7 +222,7 @@ impl QueryViews {
         let active = ws
             .tabs()
             .active()
-            .filter(|t| t.kind() == TabKind::Query)
+            .filter(|t| t.kind().uses_run_gate())
             .map(crate::tabs::Tab::id);
         let phase = active.and_then(|id| ws.query_tab(id)).map(QueryTab::phase);
         match (active, phase) {

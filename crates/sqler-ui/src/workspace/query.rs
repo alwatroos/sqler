@@ -193,6 +193,9 @@ impl Workspace {
 
     /// Closes the parameter prompt or the confirmation of a query tab; nothing runs.
     pub fn dismiss_query_prompt(&mut self, tab: TabId) {
+        if self.approvals_mut(tab).is_some() {
+            return self.answer_prod_gate(tab, sqler_ai_tools::Decision::Deny);
+        }
         if let Some(query) = self.queries.get_mut(&tab) {
             query.dismiss();
         }
@@ -200,6 +203,10 @@ impl Workspace {
 
     /// Accepts the production confirmation of a query tab and starts the run.
     pub fn confirm_query(&mut self, tab: TabId) -> Effect {
+        if self.approvals_mut(tab).is_some() {
+            self.answer_prod_gate(tab, sqler_ai_tools::Decision::Approve);
+            return Effect::None;
+        }
         let Some(query) = self.queries.get_mut(&tab) else {
             return Effect::None;
         };
