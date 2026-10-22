@@ -8,16 +8,21 @@
 //! implements per cargo feature. Keys live in the OS keychain only.
 
 mod action;
+pub mod approval;
 pub mod audit;
 pub mod editor;
 pub mod hub;
 pub mod indicator;
 mod models;
 mod provider;
+pub mod session;
 pub mod settings;
 pub(crate) mod state;
 
 pub use action::{AiAction, COMMANDS, action_for, register_commands};
+pub use approval::{
+    ApprovalAsk, ApprovalQueue, ChannelApprover, PendingApproval, card_title, open_prod_gate,
+};
 pub use audit::{
     AUDIT_DECISIONS, AUDIT_PAGE, AUDIT_SURFACES, AUDIT_TOOLS, AuditBatch, AuditFilterChange,
     AuditFilters, AuditLoad, AuditPanel, AuditRead, AuditRow, AuditTone, audit_row, decision_label,
@@ -27,10 +32,11 @@ pub use editor::{
     AssistJob, AssistKind, AssistOutcome, AssistRequest, AssistState, EditorAssist, EditorSource,
     PromptBar, TabAssist, run_assist,
 };
-pub use hub::{HubConnection, HubModel, ProviderRow, hub_model};
+pub use hub::{HubConnection, HubModel, ProviderRow, SessionRow, hub_model};
 pub use indicator::{AiStatus, ai_status, is_local, main_choice};
 pub use models::{ModelRow, model_choices, model_rows, use_case_title};
 pub use provider::{AiProviderFactory, AiStartup, NoProviders};
+pub use session::{AiSessionTab, AiSessions, HostMsg, SessionPhase};
 pub use settings::{
     AiField, AiTestStatus, DraftError, KeyPlan, LimitsDraft, ProviderDraft, needs_key,
 };

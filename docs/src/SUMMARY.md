@@ -80,6 +80,7 @@
   - [ADR-0047: Screenshot harness](adr/0047-screenshot-harness.md)
   - [ADR-0050: AI surfaces in the workbench](adr/0050-ai-surfaces-in-the-workbench.md)
   - [ADR-0052: Editor AI actions](adr/0052-ai-editor-actions.md)
+  - [ADR-0053: AI session tab and approvals](adr/0053-ai-session-tab-and-approvals.md)
   - [ADR-0054: Plugin runtime and driver feasibility](adr/0054-plugin-runtime-and-driver-feasibility.md)
   - [ADR-0055: Plugin ABI](adr/0055-plugin-abi-wit.md)
   - [ADR-0056: Plugin sandbox and capabilities](adr/0056-plugin-sandbox-and-capabilities.md)

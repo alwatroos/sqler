@@ -48,7 +48,7 @@ The product questions are taken with the recommended defaults and implemented un
 │c │ header 30      │ breadcrumbs ⋯ toolbar  32║                       │
 │t │ CONNECTIONS +  │ editor body              ║ editor body           │
 │i │ tree / saved   ├──────────────────────────╨───────────────────────┤
-│v │ queries        │ BOTTOM PANEL header 30: Results | Messages | History  ✕│
+│v │ queries        │ BOTTOM PANEL header 30: Results|Messages|History|Audit|Assistant ✕│
 │44│ 180..600 (260) │ result strip / grid / list            120..70% (380) │
 ├──┴────────────────┴──────────────────────────────────────────────────┤
 │ STATUS 24: [PROD] ● conn  ⛁ db            Running… 1.2 s · 1,234 rows · 38 ms  ▣ ▤ │

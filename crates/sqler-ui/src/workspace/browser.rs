@@ -597,7 +597,7 @@ impl Workspace {
         ConnectRequest::from_profile(profile).map_err(|err| err.to_string())
     }
 
-    fn ready_catalog(&self, conn: &ConnectionId) -> Option<Catalog> {
+    pub(super) fn ready_catalog(&self, conn: &ConnectionId) -> Option<Catalog> {
         match &self.browsers.get(conn)?.status {
             BrowserStatus::Ready(catalog) => Some(catalog.clone()),
             _ => None,

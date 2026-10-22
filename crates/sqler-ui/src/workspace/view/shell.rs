@@ -286,6 +286,9 @@ impl WorkspaceView {
             return self.fallback_body(group, cx);
         };
         let kind = self.ws.tabs().get(tab).map(tabs::Tab::kind);
+        if kind == Some(TabKind::AiSession) {
+            return crate::ai::session::view::session_tab_body(self, tab, cx);
+        }
         if kind == Some(TabKind::Query)
             && let Some(editor) = self.editors.body(tab)
         {
