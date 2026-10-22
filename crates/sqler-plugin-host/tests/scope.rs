@@ -281,7 +281,12 @@ fn a_data_root_that_is_a_file_is_missing() {
 fn a_root_without_a_name_is_refused() {
     let s = Scratch::new("dotdot");
     let mut r = roots(&s);
-    r.data_dir = s.0.join("data/..");
+    // Text, not `join` (which normalises `..` on verbatim bases); see the next test.
+    r.data_dir = PathBuf::from(format!(
+        "{}{}data/..",
+        s.0.display(),
+        std::path::MAIN_SEPARATOR
+    ));
     let (ok, issues) = resolve_preopens(&caps(&["data"]), &r);
     assert_eq!(ok, []);
     assert_eq!(issues, [escapes("data")]);
@@ -292,8 +297,19 @@ fn a_root_with_dotdot_anywhere_is_refused() {
     let s = Scratch::new("dotdot-mid");
     let mut r = roots(&s);
     for spelling in ["data/../data", "data/.", "plugin/../data/cache/.."] {
-        r.data_dir = s.0.join(spelling);
+        // Built as text, NOT with `Path::join`: on a verbatim base (`\\?\C:\..`, which `canonicalize` returns on
+        // Windows) std normalises `..` away while pushing, so the root would never contain the `..` under test.
+        let raw = format!("{}{}{spelling}", s.0.display(), std::path::MAIN_SEPARATOR);
+        r.data_dir = PathBuf::from(&raw);
         let (ok, issues) = resolve_preopens(&caps(&["data"]), &r);
+        if !ok.is_empty() || issues != [escapes("data")] {
+            eprintln!(
+                "diagnostic: raw root text = {raw:?}, data_dir = {:?}, to_str = {:?}, canonical = {:?}",
+                r.data_dir,
+                r.data_dir.to_str(),
+                r.data_dir.canonicalize()
+            );
+        }
         assert_eq!(ok, [], "{spelling}");
         assert_eq!(issues, [escapes("data")], "{spelling}");
     }
