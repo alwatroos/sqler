@@ -29,6 +29,9 @@ pub enum DriverError {
     /// A driver with this id is already registered.
     #[error("driver already registered: {0}")]
     DuplicateDriver(String),
+    /// The driver exists but cannot be used right now. The text is shown to the user as is.
+    #[error("driver unavailable: {0}")]
+    Unavailable(String),
     /// An error from the database library, passed through.
     #[error("database error: {0}")]
     Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
@@ -68,6 +71,10 @@ mod tests {
         assert_eq!(
             DriverError::DuplicateDriver("x".into()).to_string(),
             "driver already registered: x"
+        );
+        assert_eq!(
+            DriverError::Unavailable("x".into()).to_string(),
+            "driver unavailable: x"
         );
     }
 

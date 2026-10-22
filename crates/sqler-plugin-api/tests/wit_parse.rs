@@ -9,7 +9,7 @@ use std::path::Path;
 
 use wit_parser::Resolve;
 
-const WORLDS: [&str; 8] = [
+const WORLDS: [&str; 9] = [
     "imports",
     "base",
     "ui-plugin",
@@ -17,10 +17,11 @@ const WORLDS: [&str; 8] = [
     "exporter-plugin",
     "completion-plugin",
     "driver-plugin",
+    "driver-catalog-plugin",
     "full",
 ];
 
-const INTERFACES: [&str; 13] = [
+const INTERFACES: [&str; 14] = [
     "types",
     "log",
     "settings",
@@ -34,6 +35,7 @@ const INTERFACES: [&str; 13] = [
     "exporter",
     "completion",
     "driver",
+    "driver-catalog",
 ];
 
 fn parse() -> Resolve {
@@ -45,14 +47,14 @@ fn parse() -> Resolve {
 }
 
 #[test]
-fn package_is_sqler_plugin_0_1_0() {
+fn package_is_sqler_plugin_0_1_1() {
     let resolve = parse();
     assert_eq!(resolve.packages.len(), 1, "no other package is referenced");
     let (_, package) = resolve.packages.iter().next().expect("one package");
     assert_eq!(package.name.namespace, "sqler");
     assert_eq!(package.name.name, "plugin");
     let version = package.name.version.as_ref().expect("a version");
-    assert_eq!(version.to_string(), "0.1.0");
+    assert_eq!(version.to_string(), "0.1.1");
 }
 
 #[test]

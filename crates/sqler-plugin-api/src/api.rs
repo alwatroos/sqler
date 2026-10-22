@@ -8,14 +8,14 @@ use std::str::FromStr;
 
 use thiserror::Error;
 
-/// The WIT package name; the package line is `package sqler:plugin@0.1.0;`.
+/// The WIT package name; the package line is `package sqler:plugin@0.1.1;`.
 pub const WIT_PACKAGE: &str = "sqler:plugin";
 
 /// The version of the WIT package this crate ships.
 pub const API_VERSION: ApiVersion = ApiVersion {
     major: 0,
     minor: 1,
-    patch: 0,
+    patch: 1,
 };
 
 /// A plugin ABI version.
@@ -135,7 +135,7 @@ mod tests {
             assert!(bad.parse::<ApiVersion>().is_err(), "{bad}");
         }
         assert_eq!(v("0.1.0").to_string(), "0.1.0");
-        assert_eq!(API_VERSION, v("0.1.0"));
+        assert_eq!(API_VERSION, v("0.1.1"));
     }
 
     #[test]

@@ -66,5 +66,6 @@ consequences. SQLer uses the MADR format.
 | [0057](0057-plugin-host-runtime.md) | Plugin host runtime: two layers and features, wasmtime 50 engine configuration, epoch deadlines, limits and the three-fault rule, WASI scope (clocks and random stay linked), egress rules, extension protocol | accepted |
 | [0058](0058-plugin-query-and-catalog.md) | Plugin query and catalog: `DataService`/`QueryApprover` traits, order of checks, write approval (twice on prod), limits, session lease, catalog behaviour, threat model | accepted |
 | [0059](0059-plugin-capability-grants.md) | Plugin capability grants: `plugin-grants.toml`, all-or-nothing approval, re-prompt rules, damaged-file lock | accepted |
+| [0061](0061-plugin-drivers.md) | Plugin drivers: `DriverSource` overlay on the registry, host-engine vs guest drivers, what a guest sees, `driver.guest` wording, unavailable texts, WIT 0.1.1, guard parity, DuckDB licence stop | accepted |
 
 ADR number 0039 is reserved for M5.
