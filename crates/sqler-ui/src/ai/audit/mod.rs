@@ -283,7 +283,16 @@ impl AuditPanel {
                 self.newer = batch.newer_lines;
                 self.load = AuditLoad::Ready;
             }
-            Err(text) => self.load = AuditLoad::Failed(text),
+            Err(text) => {
+                if !self.pending_more {
+                    // A failed first page must not leave the old rows (and a
+                    // copyable selection) under the new filters.
+                    self.entries.clear();
+                    self.selected = None;
+                    self.next = None;
+                }
+                self.load = AuditLoad::Failed(text);
+            }
         }
         true
     }

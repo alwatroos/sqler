@@ -146,7 +146,7 @@ fn a_torn_last_line_shows_in_the_notes() {
 }
 
 #[test]
-fn stale_answers_are_dropped_and_errors_keep_the_list() {
+fn stale_answers_are_dropped_and_errors_keep_only_a_load_more_list() {
     let mut p = AuditPanel::default();
     let first = p.begin(false);
     let second = p.begin(false);
@@ -154,14 +154,39 @@ fn stale_answers_are_dropped_and_errors_keep_the_list() {
     assert_eq!(*p.load(), AuditLoad::Loading);
     let batch = AuditBatch {
         entries: fixture::entries(NOW),
+        next: Some(sqler_ai_tools::AuditCursor::new(NOW, "fixture-0008")),
         ..AuditBatch::default()
     };
     assert!(p.finish(second.request, Ok(batch)));
+    let more = p.begin(true);
+    assert!(p.finish(more.request, Err("net".into())));
+    assert_eq!(*p.load(), AuditLoad::Failed("net".into()));
+    assert_eq!(p.entries().len(), 8, "a failed load-more keeps the list");
     let third = p.begin(false);
     assert!(p.finish(third.request, Err("disk".into())));
     assert_eq!(*p.load(), AuditLoad::Failed("disk".into()));
-    assert_eq!(p.entries().len(), 8);
+    assert!(
+        p.entries().is_empty(),
+        "a failed first page clears the list"
+    );
     assert_eq!(format!("{first:?}"), "AuditRead { request: 1, .. }");
+}
+
+#[test]
+fn copy_sql_is_disabled_after_a_failed_first_page() {
+    let mut p = AuditPanel::default();
+    let r = p.begin(false);
+    let batch = AuditBatch {
+        entries: fixture::entries(NOW),
+        ..AuditBatch::default()
+    };
+    assert!(p.finish(r.request, Ok(batch)));
+    p.select(0);
+    assert!(p.selected_sql().is_some());
+    let r = p.begin(false);
+    assert!(p.finish(r.request, Err("disk".into())));
+    assert_eq!(p.selected(), None);
+    assert_eq!(p.selected_sql(), None);
 }
 
 #[test]
