@@ -184,7 +184,6 @@ jobs:
 
   mssql:
     needs: guests
-    if: ${{ hashFiles('spikes/plugin-runtime/guests/mssql/run.sh') != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -204,8 +203,10 @@ jobs:
           name: plugin-spike-guests
           path: ${{ env.GUESTS }}
       - name: Build the cl host
+        if: hashFiles('spikes/plugin-runtime/guests/mssql/run.sh') != ''
         run: sh spikes/plugin-runtime/scripts/measure.sh cl "$GUESTS" "$RESULTS/host"
       - name: SQL Server guest run
+        if: hashFiles('spikes/plugin-runtime/guests/mssql/run.sh') != ''
         run: sh spikes/plugin-runtime/guests/mssql/run.sh "$RESULTS/host/plugin-spike-host-cl" "$GUESTS" "$RESULTS"
       - name: Remove the container
         if: always()
