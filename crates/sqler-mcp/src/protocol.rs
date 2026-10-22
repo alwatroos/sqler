@@ -198,6 +198,18 @@ impl Engine {
         // `notifications/initialized` and unknown notifications need no action.
     }
 
+    /// The `protocolVersion` an `initialize` asks for, or the error answer when it is missing.
+    /// The HTTP transport calls this before it takes a session slot.
+    pub(crate) fn initialize_version<'a>(
+        id: &Value,
+        params: Option<&'a Value>,
+    ) -> Result<&'a str, Value> {
+        params
+            .and_then(|p| p.get("protocolVersion"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| error_response(id, INVALID_PARAMS, "protocolVersion is required"))
+    }
+
     /// Answers every request except `tools/call` (which can run long; see [`Engine::call_tool`]).
     pub(crate) fn quick(
         &self,
@@ -208,11 +220,9 @@ impl Engine {
     ) -> Value {
         match method {
             "initialize" => {
-                let asked = params
-                    .and_then(|p| p.get("protocolVersion"))
-                    .and_then(Value::as_str);
-                let Some(asked) = asked else {
-                    return error_response(id, INVALID_PARAMS, "protocolVersion is required");
+                let asked = match Self::initialize_version(id, params) {
+                    Ok(asked) => asked,
+                    Err(error) => return error,
                 };
                 let version = SUPPORTED_VERSIONS
                     .iter()
