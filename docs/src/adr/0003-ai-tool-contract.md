@@ -24,7 +24,7 @@ must be identical on every surface.
 
 ## Decision Outcome
 
-One tool set in `sqler-ai-tools`, shared by the in-app chat, the MCP server (`sqler-mcp`, rmcp) and
+One tool set in `sqler-ai-tools`, shared by the in-app chat, the MCP server (`sqler-mcp`; rmcp was planned here, ADR-0040 measured it and uses an in-crate protocol layer) and
 ACP-hosted agents (`sqler-acp`).
 
 | Tool | Purpose | Guard |

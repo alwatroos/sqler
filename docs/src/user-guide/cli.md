@@ -153,6 +153,15 @@ replaced too (only the directory must be writable; on Windows a rename over a re
 fail with access denied, not verified); the new file has the default permissions of the
 process, not those of the file it replaces.
 
+## MCP server
+
+```sh
+sqler-cli mcp [--stdio | --http[=PORT]] [--token-file PATH] ([--driver <ID>] <TARGET>)...
+```
+
+Serves the AI tools to Model Context Protocol clients over stdio (default) or loopback HTTP with a bearer
+token. Only read statements run. See [MCP server](../ai/mcp.md).
+
 ## Exit codes
 
 | Code | Meaning |

@@ -10,6 +10,10 @@
 //! The file format follows the query history (ADR-0021): one versioned JSON object per line,
 //! appended only, a torn last line is skipped on read, and old files are rotated by rename.
 //! A write failure never fails a tool call; it is counted ([`AuditLog::failed_writes`]).
+//!
+//! A call whose future is dropped before it finishes leaves a best-effort entry with outcome
+//! `cancelled`. The format stays version 1: a reader that does not know the value treats the
+//! line as malformed and skips it, as it does any other unknown name.
 
 mod draft;
 mod entry;
@@ -19,7 +23,7 @@ mod wire;
 
 use std::sync::{Mutex, PoisonError};
 
-pub(crate) use draft::{AuditDraft, DraftError, DraftRun, DraftStatement};
+pub(crate) use draft::{AuditDraft, CancelPoint, DraftError, DraftRun, DraftStatement};
 pub use entry::{
     ApprovalOutcome, AuditConnection, AuditEntry, AuditFailure, AuditStatement, CallOutcome,
     Surface,
