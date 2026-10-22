@@ -329,11 +329,14 @@ async fn a_cancelled_call_yields_no_result_and_frees_its_permit() {
         )
         .await;
     assert_eq!(rows(&next), json!([[7]]));
+    let mut outcomes: Vec<&str> = audit.entries().iter().map(|e| e.outcome.as_str()).collect();
+    outcomes.sort_unstable();
     assert_eq!(
-        audit.entries().len(),
+        outcomes.iter().filter(|o| **o == "cancelled").count(),
         1,
-        "the cancelled call wrote no audit entry (ADR-0040)"
+        "the cancelled call is audited as cancelled: {outcomes:?}"
     );
+    assert_eq!(outcomes.len(), 2, "plus the finished call: {outcomes:?}");
     // And nothing was ever sent for the cancelled request.
     let extra = tokio::time::timeout(Duration::from_millis(300), wire.rx.next_line()).await;
     assert!(extra.is_err(), "unexpected output: {extra:?}");

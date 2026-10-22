@@ -108,7 +108,8 @@ from `ring`'s `SystemRandom`, base64url without padding (43 characters). A suppl
 its `Debug` prints `AuthToken(***)`; no error variant holds it. The token never appears in a log or error.
 
 The CLI takes the token from `SQLER_MCP_TOKEN` or `--token-file` (read if present; created with mode 0600
-and filled with a generated token if missing; both together is a usage error). With neither, a token is
+on Unix and filled with a generated token if missing (on Windows the file inherits the directory ACL and
+the permission check is skipped); both together is a usage error). With neither, a token is
 generated and printed once on stdout in the start block. That is the hand-off: stderr and logs never carry
 it, and a token file's content is never printed.
 
@@ -135,8 +136,8 @@ server descriptor points at `url()` with the `Authorization` header.
 - Good: +0.47 MiB for the server; no new supply-chain surface beyond `httpdate`; one code path
   (`call_detailed`) for guards; the token and loopback rules are tested.
 - Bad: the protocol layer is ours to maintain, and 2026-07-28 is unsupported.
-- **Risk, follow-up: cancelled calls are not audited.** Cancelling drops the future before `finish`, so
-  no audit entry is written. The fix belongs in `sqler-ai-tools`: T19 (PR #73) adds a cancelled outcome,
-  and the MCP path should use it once it lands. T17 must settle this before approved writes run over MCP.
+- Cancelled calls are audited: cancelling drops the `call_detailed` future, and the drop guard in
+  `ToolSet` (T19, PR #73) writes an entry with outcome `cancelled`. This covers `notifications/cancelled`
+  on stdio and HTTP, a dropped HTTP connection and shutdown.
 - A client with the token can hold up to 64 sessions; the cap and idle expiry bound that.
 - The token printed on stdout is visible to whoever reads the terminal or the parent process's pipe.
