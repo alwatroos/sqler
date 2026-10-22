@@ -201,8 +201,12 @@ fn owned_root(root: &Path, scope: &FsScope) -> Result<PathBuf, ScopeIssue> {
         scope: scope.clone(),
     };
     // A path without a name, with `..`, or in a foreign namespace is not a directory the host or the package put there.
+    // The check runs on the text exactly as the caller supplied it, before anything touches it as a `Path`. (The first
+    // Windows CI run showed why: a test built `<verbatim scratch>.join("data/../data")`, and std normalises `..` away
+    // when it pushes onto a verbatim path, so the `..` never reached this function. Whatever the caller does to build
+    // the root, only the final text counts here.)
     let text = root.to_str().ok_or_else(escapes)?;
-    let simple = PathBuf::from(lexical_root(text, cfg!(windows)).ok_or_else(escapes)?);
+    let simple = PathBuf::from(raw_root_text(text, cfg!(windows)).ok_or_else(escapes)?);
     // `symlink_metadata` does not follow the last component; std reports junctions as links on Windows too.
     let meta = std::fs::symlink_metadata(&simple).map_err(|_| missing())?;
     if meta.file_type().is_symlink() || is_reparse_point(&meta) {
@@ -214,7 +218,38 @@ fn owned_root(root: &Path, scope: &FsScope) -> Result<PathBuf, ScopeIssue> {
     if canonical.parent() != Some(parent.as_path()) {
         return Err(escapes());
     }
+    // The canonical name must be the name that was asked for: the canonical result may differ from the lexical path in
+    // the prefix (and, on Windows, in case) but in nothing else.
+    let asked = simple.file_name().and_then(|n| n.to_str());
+    let found = canonical.file_name().and_then(|n| n.to_str());
+    if !names_match(asked, found, cfg!(windows)) {
+        return Err(escapes());
+    }
     Ok(canonical)
+}
+
+/// Whether the requested last name and the canonical last name are the same directory name: exact, except that Windows
+/// reports the on-disk case.
+fn names_match(asked: Option<&str>, found: Option<&str>, windows: bool) -> bool {
+    match (asked, found) {
+        (Some(a), Some(f)) => a == f || (windows && a.eq_ignore_ascii_case(f)),
+        _ => false,
+    }
+}
+
+/// True if any segment of the raw text is `..` or `.` (splitting at `/` and `\` alike, a verbatim path treats `/` as a
+/// name character but we refuse it either way), ignoring empty segments.
+fn has_dot_segment(text: &str) -> bool {
+    text.split(['/', '\\']).any(|s| s == ".." || s == ".")
+}
+
+/// The first operation on a root the caller supplied: refuse a `.` or `..` segment in the raw text, then apply
+/// [`lexical_root`]. Pure text on `&str`, so every spelling is testable on every OS.
+fn raw_root_text(text: &str, windows: bool) -> Option<String> {
+    if has_dot_segment(text) {
+        return None;
+    }
+    lexical_root(text, windows)
 }
 
 /// Windows: any reparse point (symlink, junction, mount point, cloud placeholder) is a link as far as the sandbox cares.
@@ -298,6 +333,42 @@ mod tests {
             lexical_root(r"\\?\C:\x\data", true).as_deref(),
             Some(r"C:\x\data")
         );
+    }
+
+    #[test]
+    fn raw_text_with_dot_segments_is_refused_in_every_spelling() {
+        for bad in [
+            r"C:\x\data/../data",
+            r"\\?\C:\x\data/../data",
+            "data/./../data",
+            r"data\..\data",
+            r"C:\x/data\../data",
+            "/tmp/x/data/..",
+            r"C:\x\data\..",
+            "/tmp/./x/data",
+            r"C:\x\.\data",
+            "/tmp/x/data/.",
+        ] {
+            assert!(has_dot_segment(bad), "{bad}");
+            assert_eq!(raw_root_text(bad, false), None, "{bad}");
+            assert_eq!(raw_root_text(bad, true), None, "{bad} (windows rules)");
+        }
+        for ok in ["/tmp/x/data", r"C:\x\data", r"\\?\C:\x\data", "/a/b..c/d"] {
+            assert!(!has_dot_segment(ok), "{ok}");
+        }
+        assert_eq!(
+            raw_root_text(r"\\?\C:\x\data", true).as_deref(),
+            Some(r"C:\x\data")
+        );
+    }
+
+    #[test]
+    fn canonical_names_must_match_the_requested_name() {
+        assert!(names_match(Some("data"), Some("data"), false));
+        assert!(!names_match(Some("data"), Some("Data"), false));
+        assert!(names_match(Some("data"), Some("Data"), true));
+        assert!(!names_match(Some("data"), Some("other"), true));
+        assert!(!names_match(None, Some("data"), true));
     }
 
     #[test]
