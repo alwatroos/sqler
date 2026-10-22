@@ -235,6 +235,7 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("app:quit", &["mod+q"]),
     ("workbench:toggle-side-panel", &["mod+b"]),
     ("workbench:show-ai", &["mod+shift+a"]),
+    ("ai:generate-sql", &["mod+i"]),
     ("workbench:show-connections", &["mod+shift+e"]),
     ("workbench:toggle-bottom-panel", &["mod+j"]),
     ("workbench:focus-next-region", &["f6"]),

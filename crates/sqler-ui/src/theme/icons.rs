@@ -4,7 +4,7 @@
 //! The Lucide icons the shell draws and the asset source that serves them.
 //!
 //! `gpui_kit_assets::Assets` ships the icons `gpui-component` needs itself, which fixes the blank
-//! component icons. The 23 icons it lacks are embedded here with `icon_assets!` (selected set
+//! component icons. The 24 icons it lacks are embedded here with `icon_assets!` (selected set
 //! only, about +20 KiB). [`AppAssets`] tries those first and falls back to `Assets`. Register it
 //! with `Application::with_assets`. The icons are ISC licensed, see `licenses/LUCIDE-ISC.txt`.
 
@@ -40,6 +40,7 @@ gpui_kit_assets::icon_assets!(
         Plug,
         Unplug,
         Command,
+        Wrench,
     ]
 );
 
@@ -130,13 +131,15 @@ pub enum AppIcon {
     Ellipsis,
     /// The Lucide `loader circle` icon.
     LoaderCircle,
+    /// The Lucide `wrench` icon.
+    Wrench,
     /// The Lucide `command` icon.
     Command,
 }
 
 impl AppIcon {
     /// Every icon of the set.
-    pub const ALL: [AppIcon; 43] = [
+    pub const ALL: [AppIcon; 44] = [
         Self::Database,
         Self::Server,
         Self::Table,
@@ -180,6 +183,7 @@ impl AppIcon {
         Self::Ellipsis,
         Self::LoaderCircle,
         Self::Command,
+        Self::Wrench,
     ];
 
     /// The `gpui-kit-assets` name of this icon.
@@ -229,6 +233,7 @@ impl AppIcon {
             Self::Ellipsis => IconName::Ellipsis,
             Self::LoaderCircle => IconName::LoaderCircle,
             Self::Command => IconName::Command,
+            Self::Wrench => IconName::Wrench,
         }
     }
 }
@@ -277,9 +282,9 @@ mod tests {
     fn all_is_unique() {
         let mut v = AppIcon::ALL.to_vec();
         v.dedup();
-        assert_eq!(v.len(), 43);
+        assert_eq!(v.len(), 44);
         let set: std::collections::HashSet<_> = AppIcon::ALL.into_iter().collect();
-        assert_eq!(set.len(), 43);
+        assert_eq!(set.len(), 44);
     }
 
     #[test]

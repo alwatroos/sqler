@@ -164,6 +164,7 @@ impl Workspace {
                 connection.driver.as_str(),
                 Dialect::from_driver_id(connection.driver.as_str()),
             ),
+            ai: self.ai_toolbar(tab),
         })
     }
 

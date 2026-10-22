@@ -441,6 +441,13 @@ pub(super) fn results_area(
         );
     }
 
+    if matches!(entry.status, StatementStatus::Failed { .. }) {
+        controls.push(
+            crate::ai::editor::view::fix_button("query-ai-fix-result", view, tab, index, cx)
+                .into_any_element(),
+        );
+    }
+
     // The shown table stopped at its page limit: say so, and offer the next page.
     let paused_text = view
         .queries

@@ -24,7 +24,7 @@ use super::export::ExportCenter;
 use super::history::HistoryWorkspace;
 use super::query::ActiveRun;
 use crate::ai::session::{AiSessionStart, AiTurnJob};
-use crate::ai::{AiSessions, AiState, AiStatus, HostMsg, ai_status};
+use crate::ai::{AiSessions, AiState, AiStatus, AssistJob, EditorAssist, HostMsg, ai_status};
 use crate::ai::{AuditPanel, AuditRead};
 use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
 use crate::connections::{
@@ -272,6 +272,12 @@ pub enum Effect {
     /// session comes back in `HostMsg::TurnDone`; a lost job is reported with
     /// [`Workspace::ai_turn_lost`].
     RunAiTurn(Box<AiTurnJob>),
+    /// Run an editor assist request on tokio (`run_assist` through `SessionBridge::spawn`), then
+    /// report with [`Workspace::assist_finished`]. Its answer never runs: generated SQL goes into
+    /// the editor through `EditorEdit` only.
+    RunAssist(Box<AssistJob>),
+    /// Send the cancel signal of this assist request.
+    CancelAssist(u64),
 }
 
 impl std::fmt::Debug for Effect {
@@ -424,6 +430,14 @@ impl std::fmt::Debug for Effect {
                 .field("tab", &job.tab)
                 .field("turn", &job.turn)
                 .finish_non_exhaustive(),
+            // Never the question or the SQL: the job's own Debug has the id, tab and kind only.
+            Self::RunAssist(job) => f
+                .debug_struct("RunAssist")
+                .field("id", &job.id)
+                .field("tab", &job.tab)
+                .field("kind", &job.request.kind())
+                .finish(),
+            Self::CancelAssist(id) => f.debug_tuple("CancelAssist").field(id).finish(),
         }
     }
 }
@@ -511,6 +525,8 @@ pub struct Workspace {
     pub(super) ai: AiState,
     /// The AI session tabs.
     pub(super) ai_sessions: AiSessions,
+    /// The editor assistant of every query tab (ADR-0052).
+    pub(super) assist: EditorAssist,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -572,6 +588,7 @@ impl Workspace {
             recent_connections: RecentConnections::default(),
             ai: AiState::default(),
             ai_sessions: AiSessions::default(),
+            assist: EditorAssist::default(),
         }
     }
 

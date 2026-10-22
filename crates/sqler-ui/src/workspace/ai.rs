@@ -138,6 +138,9 @@ impl Workspace {
         if action.is_session() {
             return self.dispatch_session(action);
         }
+        if action.is_assist() {
+            return self.dispatch_assist(action, None);
+        }
         let changes_config = !matches!(
             action,
             AiAction::OpenSettings
@@ -226,6 +229,8 @@ impl Workspace {
             | AiAction::DenyStatement(_)
             | AiAction::RerunSql(..)
             | AiAction::OpenSqlInEditor(..)) => self.dispatch_session(session),
+            // Routed above; kept so a new assist action cannot fall through unhandled.
+            assist => self.dispatch_assist(assist, None),
         }
     }
 

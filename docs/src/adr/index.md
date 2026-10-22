@@ -57,6 +57,7 @@ consequences. SQLer uses the MADR format.
 | [0046](0046-keyboard-first-model-and-accessibility.md) | Keyboard-first model and accessibility: command IDs, F6 regions, labels, `query:explain` through the prod gate | accepted |
 | [0047](0047-screenshot-harness.md) | Screenshot harness: headless GPUI renderer, scenes in both themes, Linux CI artifact | accepted |
 | [0050](0050-ai-surfaces-in-the-workbench.md) | AI surfaces in the workbench: activity item, side view, status item, command ids, additive `side_view` value, provider factory | accepted |
+| [0052](0052-ai-editor-actions.md) | Editor AI actions: generate, explain and fix in the SQL editor, catalog-only source, never run, exact-match fix, Assistant panel view | accepted |
 | [0053](0053-ai-session-tab-and-approvals.md) | AI session tab and approvals: pinned tab kind, lend/return turn, host channel, exact-SQL approval card, production gate reuse, UI-only tools, cancel semantics | accepted |
 
 ADR number 0039 is reserved for M5.

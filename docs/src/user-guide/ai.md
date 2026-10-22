@@ -102,7 +102,7 @@ the model on every connection not marked `prod` (including unlabelled ones) and 
 ## In the app
 
 AI is off until you turn it on for a connection. Nothing is sent to a provider by setting one up.
-Setting up, checking and turning AI on all happen in four places.
+Setting up, checking and turning AI on all happen in four places; the [editor actions](#in-the-sql-editor) use them.
 
 ### Settings > AI
 
@@ -147,6 +147,26 @@ provider it explains how to set one up.
 ![The AI view](../screenshots/after/ai-side-view-dark.png)
 
 ![The AI view before a provider is set up](../screenshots/after/ai-side-view-empty-dark.png)
+
+### In the SQL editor
+
+With AI on for the connection, a query tab has three AI actions. They are buttons after a divider in the toolbar, palette commands and, for generate, a shortcut. They never run SQL: the result is inserted into the editor or shown in the Assistant view, and you run it yourself with the normal Run (so a `prod` connection still asks for confirmation).
+
+- **Generate SQL** (`ai:generate-sql`, `Cmd/Ctrl+I`). A prompt bar opens under the toolbar. Type what you need ("total order value per customer") and press Enter or **Generate**; Escape closes the bar. The generated SQL is inserted at the cursor as one undo step; a selection is not replaced. If the answer contains a redacted value, it is not inserted and the prompt bar says to fill the value in yourself.
+- **Explain** (`ai:explain-query`). Explains the selection, or the statement at the cursor, in the Assistant view. It reads the schema only: it gives no query plan and runs nothing. For a plan use [Explain](running-queries.md#explain).
+- **Fix** (`ai:fix-query`, or **AI fix** on a failed statement in the Results toolbar or on a failed row of the Messages view). Takes the failed statement and its error and shows the proposed fix as a diff (removed lines in red, added lines in green) with **Accept fix** and **Reject**. Accept replaces the statement in the editor, again as one undo step, and only if exactly one statement in the editor is still the failed statement (text in comments or strings, or the start or end of a longer statement, does not count). If the text changed since it failed, nothing is applied and a notice says so. A fix that is the same as the statement, or that contains a redacted value, cannot be accepted.
+
+![Generate SQL: the prompt bar and the inserted query](../screenshots/after/ai-generate-dark.png)
+
+![Explain in the Assistant view](../screenshots/after/ai-explain-dark.png)
+
+![A proposed fix as a diff](../screenshots/after/ai-fix-diff-dark.png)
+
+While a request runs the prompt bar or the Assistant view shows its progress and a **Cancel** button (`ai:cancel-assist`); cancelling stops the request at the provider. Each tab runs one request at a time, and an answer that arrives after a cancel is dropped.
+
+An action is disabled, with the reason as its tooltip, when the tab is not a SQL editor ("Open a SQL editor first."), AI is off ("AI is off for this connection. Turn it on in the AI view."), `ai.toml` is broken ("ai.toml could not be read; fix it to use AI."), no provider is set for the use case ("No AI provider is set up. Add one in Settings > AI."), the provider is not in this build ("This AI provider is not available in this build."), a request is running ("An AI request is already running in this tab.") or, for Fix, nothing failed ("No failed statement to fix in this tab.").
+
+The model sees the schema through the same tools as the rest of AI (table and column names, under the limits and redaction of `ai.toml`) and never a connection: the editor assistant reads the catalog only, no rows. Every tool call is written to the [audit log](#audit-log-and-redaction), and database text reaches the model only inside marked untrusted blocks. See [Safety](../ai/safety.md).
 
 ### AI session tabs
 
@@ -199,6 +219,13 @@ keeps these settings.
 | `ai:cancel-provider` | AI: Close Provider Editor |
 | `ai:edit-settings` | AI: Edit Settings |
 | `ai:toggle-connection` | AI: Turn On or Off for This Connection |
+| `ai:generate-sql` | AI: Generate SQL |
+| `ai:explain-query` | AI: Explain Query |
+| `ai:fix-query` | AI: Fix Failed Query |
+| `ai:cancel-assist` | AI: Cancel Request |
+| `ai:accept-fix` | AI: Accept Fix |
+| `ai:reject-fix` | AI: Reject Fix |
+| `workbench:show-assistant` | View: Show Assistant |
 | `ai:open-audit-log` | AI: Open Audit Log |
 | `ai:load-more-audit` | AI: Load More Audit Entries |
 | `ai:copy-audit-sql` | AI: Copy SQL of Audit Entry |
@@ -211,7 +238,7 @@ keeps these settings.
 | `ai:rerun-sql` | AI: Re-run SQL |
 | `ai:open-sql-in-editor` | AI: Open SQL in Editor |
 
-Only `workbench:show-ai` has a default shortcut. The session commands apply while an AI session tab is active, except `ai:open-session`. See the [placement decisions](../adr/0050-ai-surfaces-in-the-workbench.md).
+Only `workbench:show-ai` and `ai:generate-sql` (`Cmd/Ctrl+I`) have a default shortcut. The session commands apply while an AI session tab is active, except `ai:open-session`. See the [placement decisions](../adr/0050-ai-surfaces-in-the-workbench.md).
 
 ## Audit log and redaction
 
@@ -219,7 +246,7 @@ Every AI tool call is recorded in `ai-audit.jsonl` in the config directory (cell
 
 ### The audit log
 
-The Audit panel lists the tool calls recorded in `ai-audit.jsonl`, newest first. It is a tab of the bottom panel, next to Results, Messages and History. Open it with the **Audit** tab, the **Audit log** button of the AI view, or the commands `ai:open-audit-log` ("AI: Open Audit Log") and `workbench:show-audit` ("View: Show Audit Log"). The log is read when you open the panel, never at startup; if SQLer restores the panel from the last session, it shows a **Load audit log** button first.
+The Audit panel lists the tool calls recorded in `ai-audit.jsonl`, newest first. It is a tab of the bottom panel, next to Results, Messages, History and Assistant. Open it with the **Audit** tab, the **Audit log** button of the AI view, or the commands `ai:open-audit-log` ("AI: Open Audit Log") and `workbench:show-audit` ("View: Show Audit Log"). The log is read when you open the panel, never at startup; if SQLer restores the panel from the last session, it shows a **Load audit log** button first.
 
 ![The Audit panel](../screenshots/after/ai-audit-dark.png)
 

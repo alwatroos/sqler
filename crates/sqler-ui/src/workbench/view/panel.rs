@@ -22,11 +22,16 @@ use crate::workspace::WorkspaceView;
 const HEADER_HEIGHT: f32 = 30.;
 
 /// The tabs of the header: view, label and the command that shows it.
-const TABS: [(PanelView, &str, &str); 4] = [
+const TABS: [(PanelView, &str, &str); 5] = [
     (PanelView::Results, "Results", "workbench:show-results"),
     (PanelView::Messages, "Messages", "workbench:show-messages"),
     (PanelView::History, "History", "history:open"),
     (PanelView::Audit, "Audit", "workbench:show-audit"),
+    (
+        PanelView::Assistant,
+        "Assistant",
+        "workbench:show-assistant",
+    ),
 ];
 
 /// The panel: a header with the view tabs and a close button above `body`. `focus` marks the
@@ -187,6 +192,17 @@ pub(crate) fn messages_body(
             .child(div().flex_1().child(line.status.clone()));
         if let Some(duration) = line.duration {
             row = row.child(div().text_color(muted).child(duration));
+        }
+        if line.failed
+            && let Some(tab) = tab
+        {
+            row = row.child(crate::ai::editor::view::fix_button(
+                ("message-ai-fix", i),
+                view,
+                tab,
+                i,
+                cx,
+            ));
         }
         list = list.child(row);
     }

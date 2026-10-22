@@ -107,7 +107,16 @@ impl AiInputs {
 impl WorkspaceView {
     /// Runs an AI action through the workspace and carries out the effect.
     pub(crate) fn dispatch_ai(&mut self, action: AiAction, cx: &mut Context<Self>) {
-        let effect = self.ws.dispatch_ai(action);
+        let effect = if action.needs_buffer() {
+            let buffer = self
+                .ws
+                .tabs()
+                .active()
+                .and_then(|tab| self.editors.buffer(tab.id(), cx));
+            self.ws.dispatch_assist(action, buffer)
+        } else {
+            self.ws.dispatch_ai(action)
+        };
         self.apply(effect, cx);
         self.settle(cx);
     }
