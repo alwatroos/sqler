@@ -5,7 +5,7 @@
 //! the platform configuration directory.
 //!
 //! The query history (`history.jsonl`), saved queries (`queries.toml`) and the AI settings
-//! (`ai.toml`) live next to them.
+//! (`ai.toml`) and the plugin permission grants (`plugin-grants.toml`) live next to them.
 //!
 //! Secrets (passwords, passphrases, AI provider API keys) live in the OS keychain through [`SecretStore`]; never in these files.
 
@@ -18,6 +18,7 @@ mod fs;
 mod history;
 mod keymap;
 mod paths;
+mod plugins;
 mod saved_queries;
 mod secrets;
 mod settings;
@@ -42,6 +43,10 @@ pub use history::{
 };
 pub use keymap::{CommandId, Conflict, KeyChord, KeybindingOverrides, Keymap, Modifiers, Platform};
 pub use paths::ConfigDir;
+pub use plugins::{
+    GrantDecision, GrantRecord, GrantRecordError, GrantsLoad, MAX_GRANT_CAPABILITIES,
+    MAX_PLUGIN_GRANTS, PLUGIN_GRANTS_FORMAT_VERSION, PluginGrants,
+};
 pub use saved_queries::{
     SAVED_QUERIES_FORMAT_VERSION, SavedQueries, SavedQuery, SavedQueryDraft, SavedQueryError,
     SavedQueryId,

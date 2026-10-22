@@ -185,12 +185,12 @@ impl Manifest {
         match (self.entry.is_some(), component) {
             (true, None) => Err(GrantKeyBuildError::ComponentRequired),
             (false, Some(_)) => Err(GrantKeyBuildError::NoComponent),
-            (_, component) => Ok(GrantKey {
-                id: self.id.clone(),
-                version: self.version.clone(),
-                hash: self.hash,
-                component: component.copied(),
-            }),
+            (_, component) => Ok(GrantKey::new(
+                self.id.clone(),
+                self.version.clone(),
+                self.hash,
+                component.copied(),
+            )),
         }
     }
 

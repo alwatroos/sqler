@@ -12,7 +12,7 @@ problem; it is never silently ignored.
 | macOS | `~/Library/Application Support/SQLer` |
 | Windows | `%APPDATA%\SQLer` |
 
-Files in that directory: `settings.toml`, `keybindings.toml`, `connections.toml`, `history.jsonl`, `queries.toml`.
+Files in that directory: `settings.toml`, `keybindings.toml`, `connections.toml`, `history.jsonl`, `queries.toml`, `plugin-grants.toml` (plugin permissions, see [Plugins](plugins.md)).
 
 ## settings.toml
 

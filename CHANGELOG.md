@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Plugin capability grants (ADR-0059): approvals are stored in `plugin-grants.toml` (mode 0600 on Unix), keyed by plugin id, version, manifest hash and component hash; Approve is all-or-nothing, Deny and Escape (pressed anywhere in the dialog) are remembered, only a pointer click on the Approve button approves (no key, not a tab stop; keyboard-only users can Deny but not Approve, a known limitation), the dialog shows a summary and, as a chip, every permission that needs attention (every web host, folder, `db.write`, AI tool and driver; only `db.read` and `ui.panel` are quiet) outside the scroll area, the prompt cannot be forged (private fields, key and capabilities derived from the manifest) and a decision is refused when another instance changed the plugin's record meanwhile, plugin names are stripped of invisible format characters, writes use a unique temporary file name, a change reloads the file so another instance's denial is kept, and a damaged, newer or other-writable file denies everything without being rewritten. User guide: `user-guide/plugins.md`.
+
 ### Changed
 
 - M5 metrics and iteration-006 report: `docs/reports/iteration-006.md` lists the M5 (AI) items with PR numbers, ADR-0034 to ADR-0041 and ADR-0050 to ADR-0053, the screenshots of the `ai-*` and `agent-*` scenes (re-captured at `6ed581c`, byte-identical), the Definition of Done checks, the risks and the M6 plan. `docs/src/benchmarks.md` has the M5 measurements: Linux release binary 62,512,360 bytes (59.6 MiB, 402,200 bytes under the 60 MB budget), macOS 37,798,480, Windows 49,543,680; 3385 tests; cold start about 137 to 144 ms and idle RSS about 104 MiB with three sessions open on macOS. AGENTS.md section 9 marks M5 done and M6 next and lists the consolidated pending maintainer checks.

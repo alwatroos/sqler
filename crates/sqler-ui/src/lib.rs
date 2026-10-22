@@ -18,6 +18,7 @@ pub mod grid;
 pub mod history;
 pub mod keymap;
 pub mod palette;
+pub mod plugins;
 pub mod query;
 pub mod settings;
 pub mod sidebar;

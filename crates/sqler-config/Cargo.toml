@@ -24,3 +24,6 @@ thiserror.workspace = true
 # No keyutils, no vendored libdbus, no mock store (ADR-0012).
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux", target_os = "freebsd"))'.dependencies]
 keyring = { workspace = true, features = ["v1"] }
+
+[dev-dependencies]
+proptest.workspace = true
