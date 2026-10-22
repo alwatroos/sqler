@@ -252,6 +252,13 @@ fn unknown_values_render_gracefully() {
 }
 
 #[test]
+fn a_cancelled_call_has_its_own_label() {
+    let mut e = AuditEntry::default();
+    e.outcome = CallOutcome::Cancelled;
+    assert_eq!(audit_row(&e, NOW).result, "Cancelled");
+}
+
+#[test]
 fn a_sql_argument_is_the_fallback() {
     let mut e = AuditEntry::default();
     e.arguments = serde_json::json!({ "sql": "select 1;  ", "other": CANARY });

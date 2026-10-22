@@ -461,6 +461,7 @@ pub fn audit_row(e: &AuditEntry, now_ms: u64) -> AuditRow {
             "Error: {}",
             e.error.as_ref().map_or("", |f| f.code.as_str())
         ),
+        CallOutcome::Cancelled => "Cancelled".to_owned(),
         other => wire_label(other.as_str()),
     };
     AuditRow {

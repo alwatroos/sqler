@@ -202,7 +202,7 @@ Each row shows:
 - **Tool**: the tool that was called.
 - **SQL**: the first line of the statement, cut at 200 characters, with `+N` when the call had more statements. SQL is shown as stored: values that were masked stay masked (`update acct set ssn = ?`).
 - **Decision**: `Not needed`, `Approved`, `Denied`, `Refused` or `Not asked`. Denied and Refused are shown in the danger colour, Approved in the success colour.
-- **Result**: `N rows · size` for a successful call, `Error: <code>` for a failed one, and the outcome name (for example `Cancelled`) otherwise.
+- **Result**: `N rows · size` for a successful call, `Error: <code>` for a failed one, and `Cancelled` for a call that was dropped before it finished, and the outcome name otherwise.
 
 The toolbar has four filters: connection (**All connections** or a saved connection), surface, tool and decision. Opening the panel sets the connection filter to the connection of the active tab, or of the selected sidebar connection; choose **All connections** to see every call. Changing a filter reads the log again from the newest entry. The status line shows the number of entries, `Loading…` while a read runs, an error if the read failed, and a note when lines of the file were skipped (damaged lines) or are newer than this version understands.
 
