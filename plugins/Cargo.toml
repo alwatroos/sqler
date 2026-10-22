@@ -3,7 +3,7 @@
 # build it through `cargo run -p xtask -- plugins build` (see plugins/README.md).
 [workspace]
 resolver = "3"
-members = ["fixtures/smoke"]
+members = ["fixtures/smoke", "fixtures/probe"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,8 @@ publish = false
 
 [workspace.dependencies]
 wit-bindgen = "0.63.0"
+# wasi:http client types for the probe (the std library has no HTTP).
+wasip2 = "2.0.1"
 
 # `deny`, not `forbid`: the wit-bindgen glue needs a local `allow` (AGENTS.md section 4).
 [workspace.lints.rust]
