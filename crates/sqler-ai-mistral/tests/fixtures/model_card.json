@@ -1,0 +1,17 @@
+{
+ "id": "mistral-small-latest",
+ "object": "model",
+ "created": 1760000000,
+ "owned_by": "mistralai",
+ "capabilities": {
+  "completion_chat": true,
+  "completion_fim": false,
+  "function_calling": true,
+  "fine_tuning": true,
+  "vision": true,
+  "classification": false
+ },
+ "name": "mistral-small-2506",
+ "max_context_length": 131072,
+ "type": "base"
+}

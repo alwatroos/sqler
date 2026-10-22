@@ -259,6 +259,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0036](docs/src/adr/0036-ai-tool-schemas-guards-and-host-traits.md) | AI tool schemas, guards and host traits: one `ToolSet`, approval per statement, prod twice, no approver refuses, row and time caps | accepted |
 | [0037](docs/src/adr/0037-ai-redaction-untrusted-data-and-audit-log.md) | AI redaction, untrusted-data envelope and audit log: redact by result shape, wrap every result, JSON Lines audit with rotation | accepted |
 | [0039](docs/src/adr/0039-ai-exploration-session-engine.md) | AI exploration session engine: tool loop, approvals via the tool set, limits, memory-only transcript | accepted |
+| [0038](docs/src/adr/0038-ai-assist-engine-prompts-and-grounding.md) | AI assist engine: versioned prompt templates, schema grounding through `search_schema` under a byte budget, `search_data` as a read-only `DataSearch` | accepted |
 | [0040](docs/src/adr/0040-mcp-server.md) | MCP server: in-crate JSON-RPC layer (rmcp measured, not adopted), stdio and loopback HTTP with a bearer token | accepted |
 | [0042](docs/src/adr/0042-workbench-layout.md) | Workbench layout and editor groups: headless layout, groups, preview tabs, bottom panel, status bar | accepted |
 | [0043](docs/src/adr/0043-visual-system-and-themes.md) | Visual system and themes: scales, embedded SQLer Dark/Light themes, env accents, contrast test | accepted |

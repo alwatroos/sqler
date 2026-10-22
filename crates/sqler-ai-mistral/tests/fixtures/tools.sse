@@ -1,0 +1,10 @@
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]}
+
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"content": "", "tool_calls": [{"id": "D681PevKs", "function": {"name": "get_weather", "arguments": "{\"city\": \"Tokyo\"}"}, "index": 0}]}, "finish_reason": null}]}
+
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"tool_calls": [{"id": "yZ3kQp0wB", "function": {"name": "get_time", "arguments": {"tz": "JST"}}, "index": 0}]}, "finish_reason": null}]}
+
+data: {"id": "cmpl-7e5a1c", "object": "chat.completion.chunk", "created": 1760000000, "model": "mistral-small-latest", "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 80, "total_tokens": 111, "completion_tokens": 31}}
+
+data: [DONE]
+
