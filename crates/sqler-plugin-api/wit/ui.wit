@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// Host UI requests. `refresh-panel` needs `ui.panel`.
+interface ui {
+    /// Asks the host to render a panel again.
+    refresh-panel: func(panel: string);
+
+    /// Sets the text of a status item.
+    set-status: func(item: string, text: string);
+
+    /// Shows a short notification.
+    notify: func(message: string);
+}

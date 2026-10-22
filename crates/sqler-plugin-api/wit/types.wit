@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// Shared data types.
+interface types {
+    /// A cell value. Temporal values are ISO-8601 text.
+    variant value {
+        null,
+        boolean(bool),
+        integer(s64),
+        float(f64),
+        text(string),
+        bytes(list<u8>),
+        decimal(string),
+        date(string),
+        time(string),
+        timestamp(string),
+        timestamp-tz(string),
+        json(string),
+    }
+
+    /// The portable column type (mirrors `sqler_core::DataType`).
+    enum data-type {
+        boolean,
+        integer,
+        float,
+        decimal,
+        text,
+        binary,
+        date,
+        time,
+        timestamp,
+        timestamp-tz,
+        json,
+        other,
+    }
+
+    /// The kind of a catalog object (mirrors `sqler_core::ObjectKind::as_str`).
+    enum object-kind {
+        database,
+        schema,
+        table,
+        view,
+        materialized-view,
+        function,
+        procedure,
+        trigger,
+        sequence,
+        %type,
+        index,
+        extension,
+        role,
+    }
+
+    /// The environment tag of a connection.
+    enum environment {
+        dev,
+        staging,
+        prod,
+    }
+
+    /// A result column.
+    record column {
+        name: string,
+        data-type: data-type,
+        type-name: string,
+    }
+
+    /// A path in the catalog.
+    record object-path {
+        database: string,
+        schema: string,
+        table: option<string>,
+    }
+
+    /// A catalog object.
+    record db-object {
+        kind: object-kind,
+        parent: object-path,
+        name: string,
+    }
+
+    /// A column of a table.
+    record column-info {
+        name: string,
+        type-name: string,
+        nullable: bool,
+    }
+
+    /// A saved connection, without any secret.
+    record connection-info {
+        id: string,
+        name: string,
+        driver: string,
+        environment: environment,
+    }
+
+    /// Why a host call failed.
+    enum error-code {
+        capability-denied,
+        declined,
+        invalid-argument,
+        not-found,
+        limit-exceeded,
+        timeout,
+        failed,
+    }
+
+    /// The error of every fallible call.
+    record plugin-error {
+        code: error-code,
+        message: string,
+    }
+}

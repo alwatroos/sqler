@@ -59,5 +59,7 @@ consequences. SQLer uses the MADR format.
 | [0050](0050-ai-surfaces-in-the-workbench.md) | AI surfaces in the workbench: activity item, side view, status item, command ids, additive `side_view` value, provider factory | accepted |
 | [0052](0052-ai-editor-actions.md) | Editor AI actions: generate, explain and fix in the SQL editor, catalog-only source, never run, exact-match fix, Assistant panel view | accepted |
 | [0054](0054-plugin-runtime-and-driver-feasibility.md) | Plugin runtime and driver feasibility (P1 spike): wasmtime variants and sizes, epoch interruption, DuckDB NO-GO, SQL Server NO-GO as shipped, host-provided engines as the fallback | accepted |
+| [0055](0055-plugin-abi-wit.md) | Plugin ABI: the `sqler:plugin` WIT package, version rule, worlds, interfaces, WASI set | accepted |
+| [0056](0056-plugin-sandbox-and-capabilities.md) | Plugin sandbox and capabilities: grammar, gates, default deny, grant key, query rule, limits | accepted |
 
 ADR number 0039 is reserved for M5.

@@ -1,6 +1,6 @@
 [package]
 name = "sqler-plugin-api"
-description = "WIT definitions and host bindings for the plugin system (wasmtime component model)."
+description = "WIT package, manifest and capability model (wasmtime-free)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,3 +11,15 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-core.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+serde_json.workspace = true
+semver.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+wit-parser.workspace = true

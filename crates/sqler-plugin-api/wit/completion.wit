@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// SQL completion items.
+interface completion {
+    /// What kind of item.
+    enum completion-kind {
+        keyword,
+        table,
+        column,
+        function,
+        snippet,
+        other,
+    }
+
+    /// Where completion is asked.
+    record completion-request {
+        connection: option<string>,
+        driver: option<string>,
+        text: string,
+        /// A UTF-8 byte offset into `text`.
+        cursor: u32,
+    }
+
+    /// One proposal.
+    record completion-item {
+        label: string,
+        insert-text: string,
+        kind: completion-kind,
+        detail: option<string>,
+    }
+
+    /// Proposes items.
+    complete: func(request: completion-request) -> list<completion-item>;
+}

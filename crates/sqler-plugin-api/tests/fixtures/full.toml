@@ -1,0 +1,80 @@
+# A complete manifest: every table and key.
+[plugin]
+id = "demo-plugin"
+name = "Demo plugin"
+version = "1.2.3"
+api = "0.1"
+description = "Exercises every key."
+authors = ["Ada", "Grace"]
+license = "Apache-2.0"
+capabilities = [
+  "db.read",
+  "db.write",
+  "ui.panel",
+  "ai.tool",
+  "driver.guest",
+  "net.http:*.example.com:8443",
+  "fs.read:data/cache",
+  "driver.host:duckdb",
+]
+
+[entry]
+component = "bin/plugin.wasm"
+
+[[commands]]
+id = "run"
+title = "Run it"
+
+[[panels]]
+id = "main"
+title = "Main"
+
+[[status-items]]
+id = "state"
+tooltip = "Plugin state"
+alignment = "left"
+
+[[menus]]
+command = "run"
+location = "object-browser"
+object-kinds = ["table", "materialized-view"]
+
+[[exporters]]
+id = "tsv"
+label = "TSV"
+extension = "tsv"
+
+[completion]
+drivers = ["duckdb"]
+
+[[ai-tools]]
+name = "find_things"
+description = "Finds things."
+[ai-tools.input-schema]
+type = "object"
+required = ["q"]
+[ai-tools.input-schema.properties.q]
+type = "string"
+
+[[drivers]]
+id = "duck"
+name = "DuckDB"
+kind = "host"
+engine = "duckdb"
+dialect = "duckdb"
+
+[[drivers]]
+id = "guest-db"
+name = "Guest DB"
+kind = "guest"
+
+[[settings]]
+key = "limit"
+label = "Limit"
+default = 10
+
+[[settings]]
+key = "verbose"
+label = "Verbose"
+description = "Be chatty."
+default = false

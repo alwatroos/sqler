@@ -1,0 +1,44 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// A database driver implemented as a guest. Needs `driver.guest`.
+interface driver {
+    use types.{value, column, plugin-error};
+
+    /// Connection parameters.
+    record connect-params {
+        host: string,
+        database: string,
+        user: string,
+        password: option<string>,
+        port: option<u16>,
+        options: list<tuple<string, string>>,
+    }
+
+    /// A statement outcome.
+    variant execution {
+        rows(row-stream),
+        affected(u64),
+    }
+
+    /// A stream of rows.
+    resource row-stream {
+        /// The result columns.
+        columns: func() -> list<column>;
+
+        /// The next batch; `none` at the end.
+        next-batch: func(max-rows: u32) -> result<option<list<list<value>>>, plugin-error>;
+    }
+
+    /// An open connection.
+    resource session {
+        /// Executes a statement.
+        execute: func(sql: string, params: list<value>) -> result<execution, plugin-error>;
+
+        /// Closes the connection.
+        close: func();
+    }
+
+    /// Connects with the named driver.
+    connect: func(driver: string, params: connect-params) -> result<session, plugin-error>;
+}
