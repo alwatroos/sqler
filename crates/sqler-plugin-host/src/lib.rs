@@ -27,8 +27,12 @@ mod scope;
 mod settings;
 mod status;
 
+#[cfg(feature = "runtime")]
+mod catalog;
 #[cfg(feature = "net")]
 pub mod net;
+#[cfg(feature = "runtime")]
+mod query;
 #[cfg(feature = "runtime")]
 mod runtime;
 
@@ -49,5 +53,11 @@ pub use scope::{Preopen, ScopeIssue, resolve_preopens};
 pub use settings::{MemorySettings, SettingsStore, read_setting, write_setting};
 pub use status::{CallKind, DisableReason, PluginState, PluginStatus};
 
+#[cfg(feature = "runtime")]
+pub use query::{
+    ApprovalStage, DataError, DataService, Decision, MAX_CATALOG_ITEMS, MAX_PARAMS,
+    MAX_RESULT_BYTES, MAX_SQL_BYTES, PluginConnection, PluginData, QueryApprover, WriteReason,
+    WriteRequest,
+};
 #[cfg(feature = "runtime")]
 pub use runtime::{HostOptions, PendingCall, PluginHost, Services};

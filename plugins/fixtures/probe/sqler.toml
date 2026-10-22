@@ -5,7 +5,7 @@ name = "Probe"
 version = "0.1.0"
 api = "0.1.0"
 description = "Test fixture: misbehaves on command and reports what the sandbox exposes."
-capabilities = ["fs.read:data", "fs.read:plugin"]
+capabilities = ["db.read", "db.write", "fs.read:data", "fs.read:plugin"]
 
 [entry]
 component = "probe.wasm"
@@ -62,7 +62,34 @@ id = "http"
 [[status-items]]
 id = "http-other"
 
+[[status-items]]
+id = "query"
+
+[[status-items]]
+id = "query-one"
+
+[[status-items]]
+id = "catalog"
+
+[[status-items]]
+id = "columns"
+
 [[settings]]
 key = "url"
 label = "URL the http status items fetch"
+default = ""
+
+[[settings]]
+key = "connection"
+label = "Connection id the query and catalog status items use"
+default = ""
+
+[[settings]]
+key = "sql"
+label = "SQL text the query status items run"
+default = ""
+
+[[settings]]
+key = "table"
+label = "Table the columns status item describes"
 default = ""
