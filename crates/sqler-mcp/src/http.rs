@@ -315,6 +315,10 @@ impl Front {
         match classify(value) {
             Message::Invalid(error) => json_reply(StatusCode::BAD_REQUEST, &error, None),
             Message::Request { id, method, params } if method == "initialize" => {
+                // Validate first: a bad `initialize` must not take one of the session slots.
+                if let Err(error) = Engine::initialize_version(&id, params.as_ref()) {
+                    return json_reply(StatusCode::OK, &error, None);
+                }
                 let Some((new_id, session)) = self.sessions.create() else {
                     return reply(StatusCode::SERVICE_UNAVAILABLE, "too many sessions");
                 };

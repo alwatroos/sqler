@@ -33,7 +33,8 @@ Options:
   --allow-write   export: also run a statement that is not a plain read
   --stdio         mcp: serve on stdin/stdout (default)
   --http[=PORT]   mcp: serve on 127.0.0.1:PORT (default: a free port); needs a bearer token
-  --token-file <PATH>  mcp: read the HTTP token from PATH, or create it there (mode 0600)
+  --token-file <PATH>  mcp: read the HTTP token from PATH, or create it there (mode 0600; Unix only,
+                  a file readable by others is refused; Windows uses the directory ACL)
                   Without it, SQLER_MCP_TOKEN is used, else a token is generated and printed once
   --              End of options: what follows is <TARGET> and <SQL> (for SQL that starts with -)
   -h, --help      Print this help
