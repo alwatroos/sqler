@@ -81,7 +81,7 @@ A write failure never fails the call: `AuditLog` counts it (`failed_writes`) and
 - Cells are data and are never scanned: JSON text in a cell with a flagged key (`{"password":"x"}`) is sent as it is. By design.
 - Driver error texts are covered only by R4's word match.
 - The taint rule hides values of harmless statements that merely mention a listed word (`token_count`). This is fail-safe, and the statement carries the `redaction` note.
-- The entry is written after the call; a crash during a call loses its entry.
+- The entry is written after the call; a crash (a killed process) during a call loses its entry. A call whose future is dropped is not lost; see the addendum.
 - `redact_credentials` does not hide unquoted secrets (ADR-0021).
 - The log is persisted only when the host sets `with_audit`; hosts must wire `AuditLog::open(&ConfigDir)`.
 - Two processes (the app and `sqler-cli mcp`) appending to one file take an advisory file lock (`ai-audit.jsonl.lock`, `std::fs::File::lock`) around the size check, the rotation and the write, so they do not rotate twice. The lock is best effort: if the lock file cannot be opened or locked, the append goes ahead without it, and a race then can shift a nearly empty file into `.1` and push real history out of retention early. `read` takes no cross-process lock; it can see a file between two renames.
@@ -95,6 +95,16 @@ A write failure never fails the call: `AuditLog` counts it (`failed_writes`) and
 - Bad: the content of every tool result is now an envelope; consumers that need JSON call `unwrap_untrusted` (MCP may pass the text through).
 - Bad: models see `<redacted>` in place of some harmless values.
 - Neutral: audit write failures are fail-open; guards are never fail-open.
+
+## Addendum: cancelled calls
+
+A tool call can be dropped after statements were approved or sent (the client cancels, MCP or agent cancellation, the UI closes). `finish` never runs then, so without more there would be no entry for an approved write.
+
+- `call_detailed` creates a drop guard before it runs the tool, and disarms it just before `finish`. The state the guard needs (planned statements, whether the approvals were granted, the statements recorded as run, the connection) lives in a struct shared with the call, behind a mutex that is never held across an await.
+- If the guard drops armed, it builds an entry in `Drop` through the same `AuditEntry::from_draft` and `scrub_text` path (so redaction, masking and caps are the same) and gives it to `AuditSink::record`, a synchronous append. It does not await, and a panic while building or recording is caught, so it cannot panic out of a drop.
+- The entry has outcome `cancelled`, no `error`, `result_bytes` 0 and an empty redaction summary (no result was built). Each statement keeps its class and approval: `approved` when every needed approval was granted before the drop, `not_asked` when the drop came earlier (approval may have been shown but was not granted); the call-level approval follows. A statement is marked `ran` when it was sent or may have been: once execution has started, a statement without a recorded result counts as run, because the audit should over-report an approved write rather than hide it. `rows` and `failed` of such a statement are unknown and written as 0 and false.
+- Format: still version 1. `cancelled` is a new value of `outcome`. A reader that does not know it treats the line like any unknown name: it skips it as unreadable. Readers of this version return it as `CallOutcome::Cancelled` (the enum is `non_exhaustive`); filter with `AuditQuery::with_outcome`.
+- A future that is never polled has done nothing and leaves no entry. A killed process still loses its entry.
 
 ## Pros and cons of the options
 
