@@ -29,6 +29,7 @@ use sqler_config::{
 };
 use tokio::sync::oneshot;
 
+mod agent;
 mod ai;
 mod ai_session;
 mod assist;
@@ -205,6 +206,8 @@ pub(crate) struct WorkspaceView {
     ai_inputs: Option<ai::AiInputs>,
     /// The composer and the Deny focus of each AI session tab.
     ai_session_inputs: ai_session::AiSessionInputs,
+    /// The inputs, host-channel tasks and runs of the agent tabs (ADR-0051).
+    agent_views: agent::AgentViews,
     /// The `ai.toml` saves: one in flight, the latest waiting.
     ai_saves: crate::workspace::ai::SaveQueue,
     /// The scroll position of the settings page.
@@ -393,13 +396,22 @@ impl WorkspaceView {
                     let _ = handle.cancel().await;
                 }));
             }
+            // Every agent closes: its endpoint, its connection and its process.
+            let (_, in_flight) = view.ws.stop_all_agents();
+            for handle in in_flight {
+                drop(view.bridge.spawn(async move {
+                    let _ = handle.cancel().await;
+                }));
+            }
             let sessions = view.ws.take_all_sessions();
             view.ws.shutdown_browsers();
             let closed = view.bridge.close_all(sessions, QUIT_HOOK_LIMIT);
             let runs = view.take_catalog_runs(QUIT_HOOK_LIMIT);
+            let agents = view.take_agent_runs(QUIT_HOOK_LIMIT);
             async move {
                 let _ = closed.await;
                 let _ = runs.await;
+                let _ = agents.await;
             }
         });
         let audit_log = startup
@@ -436,6 +448,7 @@ impl WorkspaceView {
             inputs: None,
             ai_inputs: None,
             ai_session_inputs: ai_session::AiSessionInputs::default(),
+            agent_views: agent::AgentViews::default(),
             ai_saves: crate::workspace::ai::SaveQueue::default(),
             settings_scroll: ScrollHandle::new(),
             ai_factory: startup.ai.factory,
@@ -1105,6 +1118,7 @@ impl WorkspaceView {
         self.editors.retain(&self.ws);
         self.queries.retain(self.ws.tabs());
         self.history_views.retain(&self.ws);
+        self.prune_agents();
         self.sync_sidebar();
         self.schedule_save(cx);
         cx.notify();
@@ -1172,14 +1186,29 @@ impl WorkspaceView {
             Effect::CloseSessions(sessions) => {
                 let closed = self.bridge.close_all(sessions, CLOSE_LIMIT);
                 let runs = self.take_catalog_runs(CLOSE_LIMIT);
+                let agents = self.take_agent_runs(CLOSE_LIMIT);
                 cx.spawn(async move |_, cx| {
                     let _ = closed.await;
                     let _ = runs.await;
+                    let _ = agents.await;
                     cx.update(|cx| cx.quit());
                 })
                 .detach();
             }
-            Effect::Quit => cx.quit(),
+            Effect::Quit => {
+                // An agent that is still being torn down (AI was turned off a moment ago) is
+                // waited for too.
+                if self.agents_running() {
+                    let agents = self.take_agent_runs(CLOSE_LIMIT);
+                    cx.spawn(async move |_, cx| {
+                        let _ = agents.await;
+                        cx.update(|cx| cx.quit());
+                    })
+                    .detach();
+                } else {
+                    cx.quit();
+                }
+            }
             Effect::ApplySettings => {
                 self.ws.save_settings();
                 apply(
@@ -1202,6 +1231,7 @@ impl WorkspaceView {
             Effect::StartAiSession { .. } | Effect::RunAiTurn(_) => {
                 self.apply_ai_session(effect, cx);
             }
+            Effect::LoadAgentProfiles | Effect::StartAgent { .. } => self.apply_agent(effect, cx),
             edit @ Effect::EditorEdit { .. } => self.assist_edits.push(edit),
             Effect::RunAssist(job) => self.run_assist_effect(job, cx),
             Effect::CancelAssist(id) => self.cancel_assist_effect(id),
@@ -1643,6 +1673,7 @@ impl Render for WorkspaceView {
         self.sync_dialog_inputs(window, cx);
         self.sync_ai_inputs(window, cx);
         self.sync_ai_session_inputs(window, cx);
+        self.sync_agent_inputs(window, cx);
         self.sync_assist_inputs(window, cx);
         self.flush_assist_edits(window, cx);
         self.sync_export_inputs(window, cx);

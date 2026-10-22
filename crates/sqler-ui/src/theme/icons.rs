@@ -135,11 +135,13 @@ pub enum AppIcon {
     Wrench,
     /// The Lucide `command` icon.
     Command,
+    /// The Lucide `bot` icon (served by `gpui-component`'s own assets).
+    Bot,
 }
 
 impl AppIcon {
     /// Every icon of the set.
-    pub const ALL: [AppIcon; 44] = [
+    pub const ALL: [AppIcon; 45] = [
         Self::Database,
         Self::Server,
         Self::Table,
@@ -184,6 +186,7 @@ impl AppIcon {
         Self::LoaderCircle,
         Self::Command,
         Self::Wrench,
+        Self::Bot,
     ];
 
     /// The `gpui-kit-assets` name of this icon.
@@ -234,6 +237,7 @@ impl AppIcon {
             Self::LoaderCircle => IconName::LoaderCircle,
             Self::Command => IconName::Command,
             Self::Wrench => IconName::Wrench,
+            Self::Bot => IconName::Bot,
         }
     }
 }
@@ -282,9 +286,9 @@ mod tests {
     fn all_is_unique() {
         let mut v = AppIcon::ALL.to_vec();
         v.dedup();
-        assert_eq!(v.len(), 44);
+        assert_eq!(v.len(), 45);
         let set: std::collections::HashSet<_> = AppIcon::ALL.into_iter().collect();
-        assert_eq!(set.len(), 44);
+        assert_eq!(set.len(), 45);
     }
 
     #[test]

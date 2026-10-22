@@ -190,13 +190,67 @@ Type in the composer and press **Send** (`ai:send-message`). The transcript show
 
 **Nothing is persisted.** The transcript lives in memory for the life of the tab and is never written to disk; the audit log records statements and outcomes, never cell values. The engine is described in [Exploration sessions](../ai/sessions.md); the decisions in [ADR-0053](../adr/0053-ai-session-tab-and-approvals.md).
 
+### Agent tabs
+
+An Agent tab lets an external coding agent (for example Claude Code or Codex over ACP) use one connection through SQLer's tools. Open it with **AI: Open Agent** (`ai:open-agent`) or **New agent** in the **Agents** section of the AI view. It opens on the connection of the active tab, which must have AI turned on and a readable `ai.toml`; no provider is needed. Pick a profile in the tab; the agent starts, and you type in the composer and press **Send** (`ai:send-agent-prompt`). The tab is pinned and titled `Agent: {connection}`.
+
+![An Agent tab](../screenshots/after/agent-tab-dark.png)
+
+**One endpoint per tab.** Starting an agent opens a tool endpoint for that tab on `127.0.0.1` with its own random token, and gives the agent its address and token. The endpoint is open to agents on this computer only and stops with the tab. The status bar shows `MCP · {n}` while `n` endpoints are open. The token is never shown, logged or audited. The agent uses the same tools, limits, redaction and audit log as an AI session (entries have the surface `agent`); the transcript shows its messages, thoughts, tool calls and plan, in memory only.
+
+**Approvals.** Two kinds of request can stop the agent:
+
+- A SQL write asks at an approval card with the exact SQL, as in an [AI session](#ai-session-tabs): **Approve** (`ai:approve-statement`) or **Deny** (`ai:deny-statement`). On a production connection the usual second confirmation follows.
+- The agent's own permission requests (for example to run a command) show a card with the options the agent offers, in its order. **Allow once** (`ai:allow-agent-request`) or **Reject** (`ai:reject-agent-request`); Reject has the focus.
+
+Both kinds are bound to the request they show: a button or command answers only the request that is on screen, and a stale one does nothing.
+
+![An agent permission request](../screenshots/after/agent-permission-dark.png)
+
+**Cancel, close and quit.** **Cancel** (`ai:cancel-agent`) ends the turn and denies waiting requests; the agent keeps running. If it ignores the cancel for 5 s it is stopped. Closing the tab, quitting, turning AI off for the connection, or a crash stops the agent and the endpoint: `app:quit` waits up to 2 s, and the agent gets 500 ms to exit before it is killed.
+
+**Crash or missing agent.** The tab shows what happened, an `Install:` hint for the agent and the last lines of its error output. **Restart** (`ai:restart-agent`) starts it again.
+
+**Profiles: `agents.toml`.** The built-in profiles can be extended or replaced in `agents.toml` in the config directory. SQLer reads it when you first open an agent and never writes it; a profile with a built-in `id` replaces it. If the file is invalid the picker says so and shows the built-ins.
+
+```toml
+[[agent]]
+id = "my-agent"
+name = "My agent"
+command = "/usr/local/bin/my-agent"
+args = ["--acp"]
+# Literal variables for the agent. They win over everything else; keep secrets out of
+# files you share.
+env = [["MY_AGENT_MODE", "sql"]]
+# Variables copied from SQLer's own environment when they are set. An agent gets only a short
+# base list (PATH, HOME, ...), these names and `env`; nothing else of SQLer's environment.
+inherit_env = ["MY_AGENT_API_KEY"]
+# Shown when the program is not found.
+install_hint = "npm install -g my-agent"
+```
+
+On Windows write a path as a TOML literal string (single quotes), so the backslashes stay as they are:
+
+```toml
+[[agent]]
+id = "my-agent"
+name = "My agent"
+command = 'C:\Tools\my-agent\my-agent.exe'
+```
+
+In a double-quoted string every backslash must be doubled (`"C:\\Tools\\my-agent.exe"`).
+
+The agent runs in `agent-workspace` in the config directory.
+
+**Known limits.** With SQLite, a statement that hit the time limit without returning rows keeps the tab's connection busy, so the next call on that tab hits the limit too (the driver cancels only between rows). Programs the agent starts itself are not stopped with it, and on Windows an agent installed as an npm `.cmd` shim can leave `node` running. A quit from the operating system's menu waits only about 150 ms, so an agent that ignores the closing of its input can outlive SQLer. On macOS an app started from the Dock or Finder has no `PATH` for npm's global tools: if the agent is reported as not found, set an absolute `command` in `agents.toml`. An agent can repeat its own settings, token included, in its messages; SQLer shows them but never logs them. The decisions are in [ADR-0051](../adr/0051-app-hosted-mcp-endpoint-and-agent-hosting.md).
+
 ### The status bar
 
 The status bar shows the state for the active connection: "AI off", "AI not set up" (on, but no
 provider), "{provider} · local", "{provider} · remote" or "{provider} · local +remote" (a model that
 uses a local provider and another that uses a remote one). The tooltip names the provider, its kind and
 model, and says whether the schema and result rows go to this computer or to a remote service. A click
-shows the AI view. A provider counts as local when its endpoint host is `localhost` or a loopback
+shows the AI view. While agent endpoints are open, a second item shows `MCP · {n}`. A provider counts as local when its endpoint host is `localhost` or a loopback
 address, or when it is Ollama without an endpoint.
 
 ### The connection dialog
@@ -237,6 +291,12 @@ keeps these settings.
 | `ai:deny-statement` | AI: Deny Statement |
 | `ai:rerun-sql` | AI: Re-run SQL |
 | `ai:open-sql-in-editor` | AI: Open SQL in Editor |
+| `ai:open-agent` | AI: Open Agent |
+| `ai:send-agent-prompt` | AI: Send to Agent |
+| `ai:cancel-agent` | AI: Cancel Agent Turn |
+| `ai:restart-agent` | AI: Restart Agent |
+| `ai:allow-agent-request` | AI: Allow Agent Request Once |
+| `ai:reject-agent-request` | AI: Reject Agent Request |
 
 Only `workbench:show-ai` and `ai:generate-sql` (`Cmd/Ctrl+I`) have a default shortcut. The session commands apply while an AI session tab is active, except `ai:open-session`. See the [placement decisions](../adr/0050-ai-surfaces-in-the-workbench.md).
 
