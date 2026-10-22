@@ -47,6 +47,10 @@ tokio = { version = "1.54.1", default-features = false }
 anyhow = "1.0.104"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
+# Plugin manifest hash (P2, ADR-0056): the newest line, 0.11, already in Cargo.lock; no default features (no std needed).
+sha2 = { version = "0.11.1", default-features = false }
+# Plugin manifest version (P2): the line already in Cargo.lock.
+semver = "1.0.28"
 serde_json = "1.0.154"
 keyring = { version = "4.2.0", default-features = false }
 russh = { version = "0.64.1", default-features = false, features = ["ring"] }
@@ -89,6 +93,9 @@ gpui = { version = "=0.3.9", package = "gpui-pre" }
 # Dev only: PNG encode and downscale in the screenshot harness (already in the lockfile through gpui-pre).
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 gpui_platform = { version = "=0.3.9", package = "gpui-pre-platform", features = ["font-kit", "x11", "wayland"] }
+# Dev only (P2, ADR-0055): parses the plugin WIT package in a test (`decoding` is what enables `Resolve::push_dir`). Latest release, not yanked, Apache-2.0 WITH
+# LLVM-exception OR Apache-2.0 OR MIT (verified live on crates.io 2026-10-22).
+wit-parser = { version = "0.262.0", default-features = false, features = ["decoding"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

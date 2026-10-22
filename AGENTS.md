@@ -33,7 +33,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-driver-api` | L1 | `Driver` trait, streaming result protocol, cancellation, introspection trait |
 | `sqler-ai-api` | L1 | `AiProvider` trait, message and tool types, streaming, token accounting |
 | `sqler-sql` | L1 | SQL text services on an own lexer (statement splitting, cursor lookup, placeholders, fail-safe classification, formatting), dialect handling, DDL generation; `sqlparser` only for later AST needs (ADR-0020) |
-| `sqler-plugin-api` | L1 | WIT definitions and host bindings (wasmtime component model) |
+| `sqler-plugin-api` | L1 | WIT package, manifest and capability model; wasmtime-free (host bindings live in `sqler-plugin-host`) |
 | `sqler-config` | L1 | Settings, keybindings, connection store, keychain |
 | `sqler-tunnel` | L1 | SSH session and local port forward (russh); drivers connect to a local address |
 | `sqler-driver-postgres` | L2 | `PostgreSQL` driver (sqlx / tokio-postgres) |
@@ -273,6 +273,8 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0052](docs/src/adr/0052-ai-editor-actions.md) | Editor AI actions: generate, explain and fix in the SQL editor, catalog-only source, never run, exact-match fix, Assistant panel view | accepted |
 | [0053](docs/src/adr/0053-ai-session-tab-and-approvals.md) | AI session tab and approvals: pinned tab kind, lend/return turn, host channel, exact-SQL approval card, production gate reuse, UI-only tools, cancel semantics | accepted |
 | [0054](docs/src/adr/0054-plugin-runtime-and-driver-feasibility.md) | Plugin runtime and driver feasibility (P1 spike): wasmtime variants and sizes, epoch interruption, DuckDB NO-GO, SQL Server NO-GO as shipped, host-provided engines as the fallback | accepted |
+| [0055](docs/src/adr/0055-plugin-abi-wit.md) | Plugin ABI: the `sqler:plugin` WIT package, version rule, worlds, interfaces, WASI set | accepted |
+| [0056](docs/src/adr/0056-plugin-sandbox-and-capabilities.md) | Plugin sandbox and capabilities: grammar, gates, default deny, grant key, query rule, limits | accepted |
 
 ## 9. Roadmap status
 

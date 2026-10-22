@@ -1,10 +1,34 @@
 # Plugin development
 
 Plugins are WebAssembly components with WIT interfaces. The decision is recorded in
-[ADR-0002](../adr/0002-plugin-abi-wasm-component-model.md).
+[ADR-0002](../adr/0002-plugin-abi-wasm-component-model.md). The ABI is the WIT package
+`sqler:plugin@0.1.0` ([ADR-0055](../adr/0055-plugin-abi-wit.md)); the sandbox and the
+capability model are in [ADR-0056](../adr/0056-plugin-sandbox-and-capabilities.md).
+
+A plugin is a directory with a `sqler.toml` manifest and, unless it is declarative only, one
+`.wasm` component. The manifest declares what the plugin contributes (commands, panels,
+status items, menus, exporters, completion, AI tools, drivers, settings) and which
+capabilities it asks for. The user approves the capabilities; the default is deny.
+
+## Pages
+
+- [Manifest](manifest.md): every key of `sqler.toml`, an example and the error list.
+- [Capabilities](capabilities.md): the grammar, what each capability gates, grant keys,
+  re-prompts and limits.
+
+## Choosing a world
+
+A plugin picks the feature worlds it needs (they use `include`), so a panel plugin does not
+stub exporter functions. Worlds: `base` (lifecycle only), `ui-plugin`, `ai-tool-plugin`,
+`exporter-plugin`, `completion-plugin`, `driver-plugin` and `full`. Every world imports the
+five host interfaces `log`, `settings`, `catalog`, `query` and `ui`. The host always links
+them; an ungranted call returns `error-code::capability-denied` at runtime, so a denied
+plugin still loads.
+
+A manifest without `[entry]` is declarative only. Drivers of kind `host` and settings need no
+component and load without the WebAssembly runtime.
 
 Planned topics:
 
-- WIT API reference: planned (M6)
 - Tutorial: planned (M6)
 - Publishing: planned (M6)
