@@ -140,10 +140,11 @@ pub(crate) async fn search_data(
     }
     let generated = search.generate(info, &args.question).await?;
     let plan = guard::plan(info, &generated.sql, None)?;
-    ran.planned = plan
-        .iter()
-        .map(|p| (p.sql.clone(), p.class, p.requires_approval()))
-        .collect();
+    ran.set_planned(
+        plan.iter()
+            .map(|p| (p.sql.clone(), p.class, p.requires_approval()))
+            .collect(),
+    );
     guard::require_unapproved_free(names::SEARCH_DATA, &plan)?;
     search.shown(info, &generated.sql).await;
     let mut body = run_sql(
