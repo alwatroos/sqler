@@ -3289,7 +3289,24 @@ mod agent_flow {
             .is_ok_and(|s| s.success())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    fn alive(pid: u32) -> bool {
+        // `tasklist` lists the process only while it exists; matching the image name too keeps a
+        // reused pid of another program from counting.
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .is_ok_and(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .to_ascii_lowercase()
+                    .lines()
+                    .any(|l| {
+                        l.contains("sqler-acp-mock-agent") && l.contains(&format!("\"{pid}\""))
+                    })
+            })
+    }
+
+    #[cfg(not(any(unix, windows)))]
     fn alive(_pid: u32) -> bool {
         false
     }
