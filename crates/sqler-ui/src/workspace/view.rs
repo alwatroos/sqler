@@ -30,6 +30,7 @@ use sqler_config::{
 use tokio::sync::oneshot;
 
 mod ai;
+mod assist;
 mod edit_ui;
 mod shell;
 
@@ -205,6 +206,14 @@ pub(crate) struct WorkspaceView {
     pub(crate) settings_scroll: ScrollHandle,
     /// Builds the AI providers compiled in (the binary supplies it).
     ai_factory: Arc<dyn crate::ai::AiProviderFactory>,
+    /// The prompt-bar inputs of the query tabs (ADR-0052).
+    assist_inputs: assist::AssistInputs,
+    /// The cancel signals of the running assist requests, by request id.
+    assist_cancels: HashMap<u64, oneshot::Sender<()>>,
+    /// Editor edits from the AI actions, applied at the next frame (they need the window).
+    assist_edits: Vec<Effect>,
+    /// Where the assist tool calls are audited; `None` without a config directory.
+    audit: Option<Arc<dyn sqler_ai_tools::AuditSink>>,
     /// Takes the keys while the sidebar has the focus.
     sidebar_focus: FocusHandle,
     /// The virtualized sidebar list and the lines it shows.
@@ -387,6 +396,9 @@ impl WorkspaceView {
                 let _ = runs.await;
             }
         });
+        let audit = startup.history_dir.as_ref().map(|dir| {
+            Arc::new(sqler_ai_tools::AuditLog::open(dir)) as Arc<dyn sqler_ai_tools::AuditSink>
+        });
         let history = HistoryService::new(startup.history_dir, HistoryOptions::default());
         let bounds =
             cx.observe_window_bounds(window, |view, window, cx| {
@@ -419,6 +431,10 @@ impl WorkspaceView {
             ai_saves: crate::workspace::ai::SaveQueue::default(),
             settings_scroll: ScrollHandle::new(),
             ai_factory: startup.ai.factory,
+            assist_inputs: assist::AssistInputs::default(),
+            assist_cancels: HashMap::new(),
+            assist_edits: Vec::new(),
+            audit,
             sidebar_focus: cx.focus_handle(),
             sidebar_list: new_list_state(),
             list_entries: Vec::new(),
@@ -1174,6 +1190,9 @@ impl WorkspaceView {
             Effect::SaveAiConfig { .. } | Effect::TestAiProvider { .. } => {
                 self.apply_ai(effect, cx);
             }
+            edit @ Effect::EditorEdit { .. } => self.assist_edits.push(edit),
+            Effect::RunAssist(job) => self.run_assist_effect(job, cx),
+            Effect::CancelAssist(id) => self.cancel_assist_effect(id),
             Effect::CancelQuery(handle) => {
                 // The answer does not matter: the job reports how the statement ended.
                 drop(self.bridge.spawn(async move {
@@ -1599,6 +1618,8 @@ impl Render for WorkspaceView {
         self.sync_edit(window, cx);
         self.sync_dialog_inputs(window, cx);
         self.sync_ai_inputs(window, cx);
+        self.sync_assist_inputs(window, cx);
+        self.flush_assist_edits(window, cx);
         self.sync_export_inputs(window, cx);
         if self.history_views.materialize(&self.ws, window, cx) {
             // A history dialog or the picker closed: the root takes the focus back.

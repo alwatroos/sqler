@@ -8,6 +8,7 @@
 
 mod action;
 mod ai;
+mod assist;
 mod bridge;
 mod browser;
 #[cfg(feature = "gui")]

@@ -53,6 +53,26 @@ pub enum AiAction {
     SaveLimits,
     /// Turn AI on or off for the connection the user works on.
     ToggleConnection,
+    /// Open the prompt bar of the active SQL editor (or keep it open).
+    GenerateSql,
+    /// Store the question typed into the prompt bar.
+    SetPrompt(String),
+    /// Send the question of the prompt bar.
+    SubmitPrompt,
+    /// Close the prompt bar; a request that runs is cancelled.
+    ClosePrompt,
+    /// Explain the selection, else the statement at the cursor.
+    ExplainQuery,
+    /// Fix the first failed statement of the tab.
+    FixQuery,
+    /// Fix this statement of the last run (its position in the results).
+    FixStatement(usize),
+    /// Cancel the request that runs in the tab.
+    CancelAssist,
+    /// Replace the failed statement in the editor with the proposed fix.
+    AcceptFix,
+    /// Dismiss the proposed fix.
+    RejectFix,
 }
 
 // A typed API key travels in `SetText`; its `Debug` must not show it.
@@ -86,6 +106,20 @@ impl std::fmt::Debug for AiAction {
             Self::SetUnlimited(on) => f.debug_tuple("SetUnlimited").field(on).finish(),
             Self::SaveLimits => f.write_str("SaveLimits"),
             Self::ToggleConnection => f.write_str("ToggleConnection"),
+            Self::GenerateSql => f.write_str("GenerateSql"),
+            // The question is the user's text: its length only.
+            Self::SetPrompt(text) => f
+                .debug_struct("SetPrompt")
+                .field("len", &text.len())
+                .finish(),
+            Self::SubmitPrompt => f.write_str("SubmitPrompt"),
+            Self::ClosePrompt => f.write_str("ClosePrompt"),
+            Self::ExplainQuery => f.write_str("ExplainQuery"),
+            Self::FixQuery => f.write_str("FixQuery"),
+            Self::FixStatement(i) => f.debug_tuple("FixStatement").field(i).finish(),
+            Self::CancelAssist => f.write_str("CancelAssist"),
+            Self::AcceptFix => f.write_str("AcceptFix"),
+            Self::RejectFix => f.write_str("RejectFix"),
         }
     }
 }
@@ -102,6 +136,12 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "ai:toggle-connection",
         "AI: Turn On or Off for This Connection",
     ),
+    ("ai:generate-sql", "AI: Generate SQL"),
+    ("ai:explain-query", "AI: Explain Query"),
+    ("ai:fix-query", "AI: Fix Failed Query"),
+    ("ai:cancel-assist", "AI: Cancel Request"),
+    ("ai:accept-fix", "AI: Accept Fix"),
+    ("ai:reject-fix", "AI: Reject Fix"),
 ];
 
 impl AiAction {
@@ -129,8 +169,40 @@ impl AiAction {
             | Self::SetUnlimited(_)
             | Self::SaveLimits => "ai:edit-settings",
             Self::ToggleConnection => "ai:toggle-connection",
+            Self::GenerateSql | Self::SetPrompt(_) | Self::SubmitPrompt | Self::ClosePrompt => {
+                "ai:generate-sql"
+            }
+            Self::ExplainQuery => "ai:explain-query",
+            Self::FixQuery | Self::FixStatement(_) => "ai:fix-query",
+            Self::CancelAssist => "ai:cancel-assist",
+            Self::AcceptFix => "ai:accept-fix",
+            Self::RejectFix => "ai:reject-fix",
         };
         CommandId::new(id).expect("constant command ID is valid")
+    }
+
+    /// Whether the editor assistant handles the action (`Workspace::dispatch_assist`).
+    #[must_use]
+    pub fn is_assist(&self) -> bool {
+        matches!(
+            self,
+            Self::GenerateSql
+                | Self::SetPrompt(_)
+                | Self::SubmitPrompt
+                | Self::ClosePrompt
+                | Self::ExplainQuery
+                | Self::FixQuery
+                | Self::FixStatement(_)
+                | Self::CancelAssist
+                | Self::AcceptFix
+                | Self::RejectFix
+        )
+    }
+
+    /// Whether the action needs the editor text (the view passes the buffer of the active tab).
+    #[must_use]
+    pub fn needs_buffer(&self) -> bool {
+        matches!(self, Self::ExplainQuery | Self::AcceptFix)
     }
 }
 
@@ -158,6 +230,21 @@ pub fn action_for(id: &CommandId, ws: &Workspace) -> Option<AiAction> {
         "ai:save-provider" => editor_open.then_some(AiAction::SaveProvider),
         "ai:cancel-provider" => editor_open.then_some(AiAction::CancelProvider),
         "ai:toggle-connection" => Some(AiAction::ToggleConnection),
+        "ai:generate-sql" => ws.assist_tab().map(|_| AiAction::GenerateSql),
+        "ai:explain-query" => ws.assist_tab().map(|_| AiAction::ExplainQuery),
+        "ai:fix-query" => ws.assist_tab().map(|_| AiAction::FixQuery),
+        "ai:cancel-assist" => ws
+            .assist_tab()
+            .filter(|tab| ws.assist_running(*tab))
+            .map(|_| AiAction::CancelAssist),
+        "ai:accept-fix" => ws
+            .assist_tab()
+            .filter(|tab| ws.assist_has_fix(*tab))
+            .map(|_| AiAction::AcceptFix),
+        "ai:reject-fix" => ws
+            .assist_tab()
+            .filter(|tab| ws.assist_has_fix(*tab))
+            .map(|_| AiAction::RejectFix),
         _ => None,
     }
 }
@@ -196,6 +283,16 @@ mod tests {
             AiAction::SetUnlimited(true),
             AiAction::SaveLimits,
             AiAction::ToggleConnection,
+            AiAction::GenerateSql,
+            AiAction::SetPrompt("q".into()),
+            AiAction::SubmitPrompt,
+            AiAction::ClosePrompt,
+            AiAction::ExplainQuery,
+            AiAction::FixQuery,
+            AiAction::FixStatement(0),
+            AiAction::CancelAssist,
+            AiAction::AcceptFix,
+            AiAction::RejectFix,
         ]
     }
 
@@ -267,6 +364,49 @@ mod tests {
             act("ai:cancel-provider", &w),
             Some(AiAction::CancelProvider)
         );
+    }
+
+    #[test]
+    fn assist_commands_need_a_query_tab() {
+        let w = Workspace::new(SidebarModel::default());
+        for id in [
+            "ai:generate-sql",
+            "ai:explain-query",
+            "ai:fix-query",
+            "ai:cancel-assist",
+            "ai:accept-fix",
+            "ai:reject-fix",
+        ] {
+            assert_eq!(act(id, &w), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn assist_actions_are_marked() {
+        for a in all() {
+            let assist = a.command_id().as_str().starts_with("ai:")
+                && !matches!(
+                    a.command_id().as_str(),
+                    "ai:open-settings"
+                        | "ai:add-provider"
+                        | "ai:test-provider"
+                        | "ai:save-provider"
+                        | "ai:cancel-provider"
+                        | "ai:edit-settings"
+                        | "ai:toggle-connection"
+                );
+            assert_eq!(a.is_assist(), assist, "{a:?}");
+        }
+        assert!(AiAction::ExplainQuery.needs_buffer());
+        assert!(AiAction::AcceptFix.needs_buffer());
+        assert!(!AiAction::GenerateSql.needs_buffer());
+        assert!(!AiAction::FixQuery.needs_buffer());
+    }
+
+    #[test]
+    fn a_typed_question_is_not_in_debug_output() {
+        let text = format!("{:?}", AiAction::SetPrompt("CANARY-QUESTION".into()));
+        assert!(!text.contains("CANARY"), "{text}");
     }
 
     #[test]

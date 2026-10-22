@@ -65,6 +65,8 @@ pub enum PanelView {
     Messages,
     /// The query history.
     History,
+    /// The answers of the AI assistant for the active editor tab.
+    Assistant,
 }
 
 impl PanelView {
@@ -75,6 +77,7 @@ impl PanelView {
             Self::Results => BOTTOM_VIEWS[0],
             Self::Messages => BOTTOM_VIEWS[1],
             Self::History => BOTTOM_VIEWS[2],
+            Self::Assistant => BOTTOM_VIEWS[3],
         }
     }
 
@@ -85,6 +88,7 @@ impl PanelView {
             "results" => Some(Self::Results),
             "messages" => Some(Self::Messages),
             "history" => Some(Self::History),
+            "assistant" => Some(Self::Assistant),
             _ => None,
         }
     }
@@ -333,6 +337,7 @@ mod tests {
             (PanelView::Results, "results"),
             (PanelView::Messages, "messages"),
             (PanelView::History, "history"),
+            (PanelView::Assistant, "assistant"),
         ] {
             assert_eq!(v.as_str(), s);
             assert_eq!(PanelView::parse(s), Some(v));

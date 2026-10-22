@@ -20,6 +20,7 @@ screenshots = ["gui", "gpui/test-support", "gpui_platform/test-support", "sqler-
 
 [dependencies]
 sqler-ai-api.workspace = true
+sqler-ai-tools.workspace = true
 sqler-catalog.workspace = true
 sqler-completion.workspace = true
 sqler-config.workspace = true

@@ -318,6 +318,7 @@ impl WorkspaceView {
             }
             PanelView::Messages => messages_body(self, active, cx),
             PanelView::History => history_panel_body(self, cx),
+            PanelView::Assistant => crate::ai::editor::view::assistant_body(self, active, cx),
         }
     }
 

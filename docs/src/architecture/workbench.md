@@ -62,9 +62,10 @@ The product questions are taken with the recommended defaults and implemented un
   Overflow: the strip scrolls horizontally (`overflow_x_scroll` + `ScrollHandle::scroll_to_item(active)`), and a trailing `ChevronDown` dropdown lists all tabs of the group. The settings tab stays special and renders at the end of the first group's strip.
 - **Open/close rules**: `open`/`open_object` append to the focused group as pinned (unchanged). Browser object opens use preview: they replace the group's preview tab in place, closing it through the normal close path. Closing the active tab → right, else left neighbour in its group. An emptied group is removed (unless it is the last), and focus goes to the left neighbour group. `tab:next/previous` cycle inside the focused group.
 - **Split**: `pane:split-right` moves the active tab into a new group right of the focused one. It is refused with a notice when the group has one tab or 4 groups exist. Move semantics are used because an `InputState`/table entity can render in one place only.
-- **Bottom panel** (`v_resizable` under the editor area; clamp 120..70 % of window, default 380, `mod+j`). It has three views and follows the focused group's active tab:
+- **Bottom panel** (`v_resizable` under the editor area; clamp 120..70 % of window, default 380, `mod+j`). It has four views (Assistant was added by [ADR-0052](../adr/0052-ai-editor-actions.md)) and follows the focused group's active tab:
   - Results: today's statement chips restyled as segmented tabs with a status icon, the paused/fetch-more line, and the grid.
   - Messages: one line per statement: title, status text, duration, error in `danger`.
+  - Assistant: the explanation or the fix diff of the AI actions of the active query tab (`workbench:show-assistant`; explain and fix reveal it).
   - History: the single panel-hosted History tab, bound to the active connection.
   A run always reveals Results. A non-query active tab shows the empty state "No results for this tab". Escape in the panel returns focus to the editor.
 - **Query editor tab body**: a toolbar row (32 px), then the editor at full height. The toolbar holds breadcrumbs `conn › database` + env chip on the left. On the right: Run (`Play`, primary small, `query:run-statement`), Run All (`SquarePlay`), Cancel (`CircleStop`, only enabled while running), Explain (`ListTree`, `query:explain`), Format (`WandSparkles`), Save (`Save`, `query:save`). The DDL/Properties tab toolbar has breadcrumbs `conn › schema › object` + Open in Editor + Copy. The data tab toolbar has breadcrumbs + the existing edit bar.
@@ -149,7 +150,7 @@ The product questions are taken with the recommended defaults and implemented un
 | `workbench:show-connections` | View: Show Connections | `mod+shift+e` |
 | `workbench:show-saved-queries` | View: Show Saved Queries | — |
 | `workbench:toggle-bottom-panel` | View: Toggle Panel | `mod+j` |
-| `workbench:show-results` / `workbench:show-messages` | View: Show Results / Show Messages | — |
+| `workbench:show-results` / `workbench:show-messages` / `workbench:show-assistant` | View: Show Results / Show Messages / Show Assistant | — |
 | `workbench:focus-next-region` / `-previous-region` | View: Focus Next / Previous Region | `f6` / `shift+f6` |
 | `workbench:reset-layout` | View: Reset Layout | — |
 | `workbench:set-side-width` / `workbench:set-panel-height` *arg* | (drag) | — |
@@ -170,7 +171,7 @@ The product questions are taken with the recommended defaults and implemented un
 
 ## 5. Persistence, compatibility and budgets
 - **`workbench.toml`** (config dir, `sqler-config`):
-  - Contents: `version = 1`; `[side_panel]` visible/size/view (`connections|saved-queries`); `[bottom_panel]` visible/size/view (`results|messages|history`); optional `[window]` width/height; `recent_commands` (≤10 IDs); `recent_connections` (≤5 connection IDs).
+  - Contents: `version = 1`; `[side_panel]` visible/size/view (`connections|saved-queries`); `[bottom_panel]` visible/size/view (`results|messages|history|assistant`); optional `[window]` width/height; `recent_commands` (≤10 IDs); `recent_connections` (≤5 connection IDs).
   - Reading is lenient: unknown keys are ignored, and out-of-range or unknown values fall back per field to the default/clamp.
   - A missing file gives defaults.
   - `version > 1` gives defaults, and the file is **never written** (read-only, same rule as settings).
@@ -217,7 +218,7 @@ impl ConfigDir { pub fn workbench_path(&self) -> PathBuf; pub fn load_workbench_
 ```
 ```rust
 // sqler-ui/src/workbench/ (U2, headless)
-pub enum SideView { Connections, SavedQueries }   pub enum PanelView { Results, Messages, History }
+pub enum SideView { Connections, SavedQueries }   pub enum PanelView { Results, Messages, History, Assistant }
 pub enum Region { ActivityBar, SidePanel, Editor, Panel, StatusBar }
 pub enum WorkbenchAction { ToggleSidePanel, ShowSideView(SideView), ToggleBottomPanel, ShowPanelView(PanelView),
     SetSideWidth(u16), SetPanelHeight(u16), FocusNextRegion, FocusPreviousRegion, ResetLayout }

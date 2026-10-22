@@ -17,7 +17,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::DropdownMenu as _;
 use gpui_component::{Disableable as _, Sizable as _};
 
-use crate::query::{RunState, ToolbarContext, ToolbarItem, toolbar_tooltip};
+use crate::query::{AiToolbar, RunState, ToolbarContext, ToolbarItem, toolbar_tooltip};
 use crate::tabs::TabId;
 use crate::tabs::view::editor_toolbar;
 use crate::theme::SPACE;
@@ -39,6 +39,9 @@ fn item_icon(item: ToolbarItem) -> AppIcon {
         ToolbarItem::Explain => AppIcon::ListTree,
         ToolbarItem::Format => AppIcon::WandSparkles,
         ToolbarItem::Save => AppIcon::Save,
+        ToolbarItem::AiGenerate => AppIcon::Sparkles,
+        ToolbarItem::AiExplain => AppIcon::MessageSquare,
+        ToolbarItem::AiFix => AppIcon::Wrench,
     }
 }
 
@@ -51,6 +54,9 @@ fn item_key(item: ToolbarItem) -> &'static str {
         ToolbarItem::Explain => "query-explain",
         ToolbarItem::Format => "query-format",
         ToolbarItem::Save => "query-save",
+        ToolbarItem::AiGenerate => "query-ai-generate",
+        ToolbarItem::AiExplain => "query-ai-explain",
+        ToolbarItem::AiFix => "query-ai-fix",
     }
 }
 
@@ -171,8 +177,9 @@ pub(super) fn query_toolbar(
             run: RunState::Idle,
             connected: false,
             explain: false,
+            ai: AiToolbar::unavailable(),
         });
-    let actions = vec![
+    let mut actions = vec![
         item_button(view, tab, ToolbarItem::Run, ctx, cx).into_any_element(),
         run_menu(tab, ctx.disabled_reason(ToolbarItem::Run), cx),
         item_button(view, tab, ToolbarItem::RunAll, ctx, cx).into_any_element(),
@@ -181,7 +188,11 @@ pub(super) fn query_toolbar(
         item_button(view, tab, ToolbarItem::Explain, ctx, cx).into_any_element(),
         item_button(view, tab, ToolbarItem::Format, ctx, cx).into_any_element(),
         item_button(view, tab, ToolbarItem::Save, ctx, cx).into_any_element(),
+        divider(cx).into_any_element(),
     ];
+    for item in ToolbarItem::AI {
+        actions.push(item_button(view, tab, item, ctx, cx).into_any_element());
+    }
     editor_toolbar("query-toolbar", crumbs.as_ref(), actions, cx).into_any_element()
 }
 

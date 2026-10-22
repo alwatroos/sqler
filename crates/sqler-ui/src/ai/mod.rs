@@ -8,6 +8,7 @@
 //! implements per cargo feature. Keys live in the OS keychain only.
 
 mod action;
+pub mod editor;
 pub mod hub;
 pub mod indicator;
 mod models;
@@ -16,6 +17,10 @@ pub mod settings;
 pub(crate) mod state;
 
 pub use action::{AiAction, COMMANDS, action_for, register_commands};
+pub use editor::{
+    AssistJob, AssistKind, AssistOutcome, AssistRequest, AssistState, EditorAssist, EditorSource,
+    PromptBar, TabAssist, run_assist,
+};
 pub use hub::{HubConnection, HubModel, ProviderRow, hub_model};
 pub use indicator::{AiStatus, ai_status, is_local, main_choice};
 pub use models::{ModelRow, model_choices, model_rows, use_case_title};
