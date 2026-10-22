@@ -333,7 +333,7 @@ pub fn fix_edit(
     fn bare(sql: &str) -> &str {
         sql.trim().trim_end_matches(';').trim_end()
     }
-    let needle = bare(original);
+    let needle = bare(&original[skip_leading_trivia(original)..]).replace("\r\n", "\n");
     if needle.is_empty() {
         return Err(FIX_STALE);
     }
@@ -343,7 +343,7 @@ pub fn fix_edit(
         .statements;
     let mut found = statements
         .iter()
-        .filter(|s| bare(&s.sql[skip_leading_trivia(&s.sql)..]) == needle);
+        .filter(|s| bare(&s.sql[skip_leading_trivia(&s.sql)..]).replace("\r\n", "\n") == needle);
     let first = found.next().ok_or(FIX_STALE)?;
     if found.next().is_some() {
         return Err(FIX_STALE);
@@ -694,5 +694,56 @@ mod tests {
         };
         let text = format!("{r:?}{o:?}{p:?}");
         assert!(!text.contains("CANARY"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod fix_leading_trivia_tests {
+    use super::*;
+
+    const D: Option<Dialect> = None;
+
+    fn applied(text: &str, original: &str) -> String {
+        let e = fix_edit(D, text, original, "select name from t;").unwrap();
+        let mut out = text.to_owned();
+        out.replace_range(e.range, &e.text);
+        out
+    }
+
+    #[test]
+    fn leading_line_comment_is_accepted_and_kept() {
+        let out = applied("-- c\nselect nme from t;", "-- c\nselect nme from t");
+        assert_eq!(out, "-- c\nselect name from t;");
+    }
+
+    #[test]
+    fn leading_block_comment_is_accepted_and_kept() {
+        let out = applied("/* c */ select nme from t;", "/* c */ select nme from t;");
+        assert_eq!(out, "/* c */ select name from t;");
+    }
+
+    #[test]
+    fn leading_blank_lines_are_accepted() {
+        let out = applied("\n\nselect nme from t;", "\n\nselect nme from t");
+        assert_eq!(out, "\n\nselect name from t;");
+    }
+
+    #[test]
+    fn comment_only_original_and_stale_still_refused() {
+        assert_eq!(fix_edit(D, "select 1", "-- c\n", "x"), Err(FIX_STALE));
+        assert_eq!(
+            fix_edit(D, "-- c\nselect 2;", "-- c\nselect 1", "x"),
+            Err(FIX_STALE)
+        );
+        assert_eq!(
+            fix_edit(D, "-- c\nselect 1;\nselect 1;", "-- c\nselect 1", "x"),
+            Err(FIX_STALE)
+        );
+    }
+
+    #[test]
+    fn crlf_buffer_matches_lf_original() {
+        let out = applied("select a,\r\n b from t;", "select a,\n b from t");
+        assert_eq!(out, "select name from t;");
     }
 }
