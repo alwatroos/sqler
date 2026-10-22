@@ -55,7 +55,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-ui` | L6 | GPUI app: workspace, tabs, panels, grid, editor, palette, themes |
 | `sqler-cli` | L6 | Headless CLI (run query, export, start MCP server); proves the core is UI-independent |
 | `sqler-app` | L7 | Desktop binary `sqler`: tokio runtime, driver registry, opens the `sqler-ui` window (ADR-0007) |
-| `xtask` | tooling | Repository automation (generate WIT bindings, release, bench) |
+| `xtask` | tooling | Repository automation (generate WIT bindings, release, bench, plugin build) |
 
 Layering: a crate may depend only on crates in lower layers.
 
@@ -102,7 +102,10 @@ cargo run -p sqler-app
 cargo build --release -p sqler-app --locked
 target/release/sqler --open-sessions
 cargo tree --workspace -i gpui-pre
-cargo run -p xtask
+cargo run -p xtask -- plugins build [--release] [<name>...]
+cargo run -p xtask -- plugins check
+cargo run -p xtask -- plugins list
+cargo run -p xtask -- plugins clean
 cargo bench -p sqler-ui --bench grid_viewport
 cargo bench -p sqler-ui --bench grid_sort
 cargo bench -p sqler-catalog --bench catalog_tree
@@ -114,7 +117,8 @@ cargo bench -p sqler-ui --bench editor_intellisense
 cargo bench -p sqler-export --bench export_throughput
 ```
 
-- CI (`.github/workflows/ci.yml`) runs this subset of the commands above: fmt, clippy, nextest on Linux/macOS/Windows; deny, docs (`cargo doc` and `mdbook build docs`), spdx on Linux. Since T5 the Linux `check` and `docs` jobs install the GPUI build packages with apt, and the macOS `check` job guards the Metal toolchain; the `deny` job also runs the "Dependency rules" step.
+- Plugins (P3, ADR-0054): guest crates live in the separate workspace `plugins/` (own `Cargo.lock`, excluded from the root workspace). `plugins build` compiles them for `wasm32-wasip2` into `target/plugins/cargo` and stages each plugin as `target/plugins/<debug|release>/<id>/{sqler.toml,<component>}`; `plugins check` runs fmt and clippy on the guests; `plugins clean` removes `target/plugins`. Exit codes: 0 ok, 1 failure, 2 usage error. The CI `plugins` job builds (debug and release) on Linux/macOS/Windows; on Linux it also runs `plugins check`, `cargo deny` over `plugins/Cargo.toml` and `plugins clean`. See `plugins/README.md`.
+- CI (`.github/workflows/ci.yml`) runs this subset of the commands above: fmt, clippy, nextest on Linux/macOS/Windows; plugins build on Linux/macOS/Windows; deny, docs (`cargo doc` and `mdbook build docs`), spdx on Linux. Since T5 the Linux `check` and `docs` jobs install the GPUI build packages with apt, and the macOS `check` job guards the Metal toolchain; the `deny` job also runs the "Dependency rules" step.
 - DB tests (ADR-0009): `crates/sqler-driver-postgres/tests/docker/start-postgres.sh <outdir>` starts `PostgreSQL` with TLS in Docker (container `sqler-test-postgres`, `127.0.0.1:54329`) and prints `KEY=value` lines; locally use `eval "$(sh crates/sqler-driver-postgres/tests/docker/start-postgres.sh /tmp/pg | sed 's/^/export /')"`. The tests read `SQLER_TEST_POSTGRES_URL` and `SQLER_TEST_POSTGRES_CA` (the pattern is `SQLER_TEST_<DB>_URL`/`_CA`); when the URL is unset they print `skipped: <VAR> is not set (see AGENTS.md §3)` and pass. `SQLER_TEST_REQUIRE_DB=postgres` (a comma list of ids) turns a missing variable into a panic. Test files are `tests/db_<db>*.rs`, so the filter above selects them. Remove the local container with `docker rm -f sqler-test-postgres`. `MySQL` and `MariaDB` (ADR-0010): `sh crates/sqler-driver-mysql/tests/docker/start-mysql.sh <outdir> [mysql|mariadb]` (container `sqler-test-mysql`, `127.0.0.1:33069`, images `mysql:8.4` and `mariadb:11.8`) prints `SQLER_TEST_MYSQL_URL` and `SQLER_TEST_MYSQL_CA`; run the tests once per variant; remove with `docker rm -f sqler-test-mysql`. SSH tunnel RSA tests (ADR-0018, gate id `ssh`): `sh crates/sqler-tunnel/tests/docker/start-sshd.sh <outdir>` (container `sqler-test-sshd`, Alpine OpenSSH; sshd on `127.0.0.1:33256` limited to `rsa-sha2-256` and `33512` to `rsa-sha2-512`) generates RSA test keys with `ssh-keygen` and prints `SQLER_TEST_SSH_HOST`, `SQLER_TEST_SSH_PORT_SHA256`, `SQLER_TEST_SSH_PORT_SHA512`, `SQLER_TEST_SSH_USER`, `SQLER_TEST_SSH_KNOWN_HOSTS`, `SQLER_TEST_SSH_KEY_RSA`, `SQLER_TEST_SSH_KEY_RSA_PEM`, `SQLER_TEST_SSH_KEY_RSA_PKCS8`, `SQLER_TEST_SSH_KEY_RSA_ENC` and `SQLER_TEST_SSH_KEY_PASSPHRASE`; `tests/ssh_rsa.rs` skips without them; remove with `docker rm -f sqler-test-sshd`.
 - CI has a Linux `db` job (no GPUI apt packages) that starts the server with the script, sets `SQLER_TEST_REQUIRE_DB=postgres,mysql,ssh`, runs `cargo nextest run -p sqler-driver-postgres --no-tests=fail`, then the same for `sqler-driver-mysql` against `MySQL` 8.4 and `MariaDB` 11.8, a step that starts the SSH server and runs `cargo nextest run -p sqler-tunnel --no-tests=fail`, and CLI smoke tests with `--driver postgres` and, for each of `MySQL` and `MariaDB`, `--driver mysql`.
 - SPDX check (`sh .github/scripts/check-spdx.sh`) prints the offending paths and exits 1 when a tracked `*.rs` file lacks the header on line 1; it prints nothing otherwise. It skips `vendor/` (third-party code that keeps its upstream licence files, ADR-0018).
@@ -330,7 +334,7 @@ in the iteration report: maintainer-only display and hardware checks may be carr
 pending list (as for M3 and M4, section 9 above); all code-verifiable Definition of Done items must still
 be met.
 
-M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build job, which is deferred (see Gotchas); `bench.yml` covers benchmark regressions.
+M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`); `bench.yml` covers benchmark regressions.
 
 ## 10. Gotchas
 
@@ -343,7 +347,7 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`) except the plugin-build j
 - The `cargo-dist` tool was renamed `dist`, but the `dist` crate on crates.io is unrelated; the crate is still `cargo-dist`.
 - `clippy::unwrap_used`/`clippy::expect_used` are denied everywhere except tests; there is no exemption for `main`, so add an `allow` attribute there if needed.
 - GitHub Pages must be enabled once by hand (Settings > Pages > Source: GitHub Actions) before `pages.yml` can deploy.
-- The plugin-build CI job is deferred until `plugins/` (M6).
+- Plugin guests are a separate workspace (`plugins/`), built only through `cargo run -p xtask -- plugins build` into `target/plugins/`. `cargo fmt/clippy --workspace` at the root skips them (use `plugins check`), and the `wasm32-wasip2` target comes from `rust-toolchain.toml`.
 - `cargo bench` passes `--bench` to `harness = false` binaries; their argument parser must ignore it.
 - CI installs the toolchain with a bare `rustup toolchain install`, which reads `rust-toolchain.toml` (rustup 1.28 or newer), so the Rust version is pinned in one place only.
 - UI framework spike (ADR-0001): GPUI is accepted. The resolved GPUI crate is `gpui-pre` (=0.3.9, pulled by `gpui-component` 0.8.0), not `gpui` or `gpui-ce`; the check is `cargo tree -i gpui-pre`, since `cargo tree -i gpui` can never match. Application creation needs `gpui-pre-platform` (features `font-kit`, `x11`, `wayland`); `gpui-component` does not re-export it.
