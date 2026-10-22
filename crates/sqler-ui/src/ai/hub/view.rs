@@ -10,17 +10,18 @@ use gpui::{
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::{ActiveTheme as _, Sizable as _};
+use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
-use super::{HubConnection, HubModel, ProviderRow, set_up_action};
+use super::{HubConnection, HubModel, ProviderRow, SessionRow, set_up_action};
 use crate::ai::action::AiAction;
 use crate::ai::indicator::AiStatus;
 use crate::ai::kind_label;
 use crate::theme::SPACE;
 use crate::theme::icons::AppIcon;
 use crate::theme::widgets::{empty_state, env_chip, section_header};
+use crate::workspace::WorkspaceAction;
 use crate::workspace::WorkspaceView;
-use crate::workspace::chrome::ui_scale;
+use crate::workspace::chrome::{RowState, list_row, ui_scale};
 
 /// The text of the empty state's line.
 const EMPTY_LINE: &str = "Add a provider in Settings > AI. Ollama runs on this computer and is the default; nothing is sent until you turn AI on for a connection.";
@@ -43,6 +44,7 @@ pub(crate) fn ai_view(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> 
     } else {
         body = body
             .child(connection_section(&model, cx))
+            .child(sessions_section(&model, cx))
             .child(providers_section(&model, cx))
             .child(buttons_section(cx));
     }
@@ -236,6 +238,56 @@ fn connection_head(connection: &HubConnection, cx: &Context<WorkspaceView>) -> D
                 "AI off"
             }),
     )
+}
+
+/// The AI session tabs, a click activates one, and the button that opens another.
+fn sessions_section(model: &HubModel, cx: &mut Context<WorkspaceView>) -> Div {
+    let mut section = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE[1]))
+        .child(caption("SESSIONS", cx));
+    if model.sessions.is_empty() {
+        section = section.child(muted("No sessions yet.", cx));
+    }
+    for row in &model.sessions {
+        section = section.child(session_row(row, cx));
+    }
+    let mut new = Button::new("ai-new-session")
+        .label("New session")
+        .small()
+        .outline()
+        .disabled(model.new_session_blocked.is_some())
+        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+            view.dispatch_ai(AiAction::OpenSession, cx);
+        }));
+    if let Some(reason) = model.new_session_blocked {
+        new = new.tooltip(reason);
+    }
+    section.child(div().px(px(SPACE[4])).pt(px(SPACE[1])).child(new))
+}
+
+/// One session: title, connection and what it does now.
+fn session_row(row: &SessionRow, cx: &mut Context<WorkspaceView>) -> impl gpui::IntoElement {
+    let tab = row.tab;
+    let muted_fg = cx.theme().muted_foreground;
+    let size = ui_scale(cx).sm;
+    list_row(("ai-session-row", row.tab.raw()), RowState::default(), cx)
+        .mx(px(SPACE[2]))
+        .text_size(px(size))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_weight(FontWeight::MEDIUM)
+                .child(row.title.clone()),
+        )
+        .child(div().text_color(muted_fg).child(row.connection.clone()))
+        .child(div().flex_1())
+        .child(div().text_color(muted_fg).child(row.label))
+        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            view.dispatch(WorkspaceAction::ActivateTab(tab), cx);
+        }))
 }
 
 /// The configured providers.

@@ -8,6 +8,7 @@
 
 mod action;
 mod ai;
+mod ai_session;
 mod assist;
 mod audit;
 mod bridge;

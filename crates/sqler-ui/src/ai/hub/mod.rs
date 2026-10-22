@@ -11,6 +11,7 @@ use super::action::AiAction;
 use super::indicator::{AiStatus, ai_status, is_local};
 use super::models::{SLOTS, slot, use_case_title};
 use super::state::AiState;
+use crate::tabs::TabId;
 
 #[cfg(feature = "gui")]
 pub(crate) mod view;
@@ -43,6 +44,19 @@ pub struct HubConnection {
     pub status: Option<AiStatus>,
 }
 
+/// One AI session tab in the hub.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRow {
+    /// The tab (a click activates it).
+    pub tab: TabId,
+    /// The tab title.
+    pub title: String,
+    /// The connection name.
+    pub connection: String,
+    /// `Starting…`, `Ready`, what the model does, or `Failed`.
+    pub label: &'static str,
+}
+
 /// Everything the AI side view shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HubModel {
@@ -54,6 +68,10 @@ pub struct HubModel {
     pub connection: Option<HubConnection>,
     /// The model of the default and of each use case as `provider/model`, `None` when unset.
     pub models: Vec<(&'static str, Option<String>)>,
+    /// The open AI session tabs.
+    pub sessions: Vec<SessionRow>,
+    /// Why "New session" is blocked, if it is.
+    pub new_session_blocked: Option<&'static str>,
 }
 
 /// What "Set up a provider" does: add the first provider kind this build has, else open the
@@ -100,6 +118,8 @@ pub fn hub_model(ai: &AiState, profile: Option<&ConnectionProfile>) -> HubModel 
         providers,
         connection,
         models,
+        sessions: Vec::new(),
+        new_session_blocked: None,
     }
 }
 

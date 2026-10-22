@@ -30,6 +30,7 @@ use sqler_config::{
 use tokio::sync::oneshot;
 
 mod ai;
+mod ai_session;
 mod assist;
 mod audit;
 mod edit_ui;
@@ -202,6 +203,8 @@ pub(crate) struct WorkspaceView {
     inputs: Option<DialogInputs>,
     /// The text inputs of the AI section, while the settings page is shown.
     ai_inputs: Option<ai::AiInputs>,
+    /// The composer and the Deny focus of each AI session tab.
+    ai_session_inputs: ai_session::AiSessionInputs,
     /// The `ai.toml` saves: one in flight, the latest waiting.
     ai_saves: crate::workspace::ai::SaveQueue,
     /// The scroll position of the settings page.
@@ -432,6 +435,7 @@ impl WorkspaceView {
             tasks: HashMap::new(),
             inputs: None,
             ai_inputs: None,
+            ai_session_inputs: ai_session::AiSessionInputs::default(),
             ai_saves: crate::workspace::ai::SaveQueue::default(),
             settings_scroll: ScrollHandle::new(),
             ai_factory: startup.ai.factory,
@@ -1195,6 +1199,9 @@ impl WorkspaceView {
             Effect::SaveAiConfig { .. } | Effect::TestAiProvider { .. } => {
                 self.apply_ai(effect, cx);
             }
+            Effect::StartAiSession { .. } | Effect::RunAiTurn(_) => {
+                self.apply_ai_session(effect, cx);
+            }
             edit @ Effect::EditorEdit { .. } => self.assist_edits.push(edit),
             Effect::RunAssist(job) => self.run_assist_effect(job, cx),
             Effect::CancelAssist(id) => self.cancel_assist_effect(id),
@@ -1389,9 +1396,21 @@ impl WorkspaceView {
             .map(crate::tabs::Tab::id)
     }
 
+    /// The active tab if it runs through the run gate: a query tab or an AI session tab.
+    fn active_gate_tab(&self) -> Option<TabId> {
+        if self.ws.settings_tab_active() {
+            return None;
+        }
+        self.ws
+            .tabs()
+            .active()
+            .filter(|t| t.kind().uses_run_gate())
+            .map(crate::tabs::Tab::id)
+    }
+
     /// The active query tab while its parameter prompt or confirmation is open.
     fn query_overlay_tab(&self) -> Option<TabId> {
-        let tab = self.active_query_tab()?;
+        let tab = self.active_gate_tab()?;
         matches!(
             self.ws.query_tab(tab)?.phase(),
             query::Phase::Prompting(_) | query::Phase::Confirming(_)
@@ -1623,6 +1642,7 @@ impl Render for WorkspaceView {
         self.sync_edit(window, cx);
         self.sync_dialog_inputs(window, cx);
         self.sync_ai_inputs(window, cx);
+        self.sync_ai_session_inputs(window, cx);
         self.sync_assist_inputs(window, cx);
         self.flush_assist_edits(window, cx);
         self.sync_export_inputs(window, cx);

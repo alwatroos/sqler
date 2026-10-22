@@ -53,6 +53,8 @@ Each row shows the name, a dot in the connection colour and an environment badge
 
 You can open several tabs on the same connection. Each tab has its own session. The second tab is titled `name (2)`, the third `name (3)`, and so on.
 
+An **AI session** tab (`ai:open-session`, pinned, titled `AI: name`) holds a conversation with the model about a connection that has AI turned on; it has its own database session and keeps its transcript in memory only. Statements the model wants to run wait for your approval, and on production connections for the usual second confirmation. See [AI session tabs](ai.md#ai-session-tabs).
+
 ## Tab bars, groups and preview tabs
 
 Each group has its own tab bar. A tab shows a dot in the connection colour, an icon for its kind (query, results, DDL, properties), the title and an environment badge (`DEV`, `STAGING` or `PROD`). At the right end of the bar a drop-down lists every tab of the group, and the row scrolls when the tabs do not fit. The active tab of a `prod` connection has a red stripe on top and a solid `PROD` badge, and the whole status bar turns red while a `prod` tab is active, so you do not run a statement on production by mistake.
