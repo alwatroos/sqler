@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use proptest::prelude::*;
-use sqler_plugin_api::{GrantKey, Manifest};
+use sqler_plugin_api::{Manifest, ParsedGrantKey};
 
 const POOL: &[&str] = &[
     "db.read",
@@ -97,12 +97,12 @@ proptest! {
     fn grant_key_round_trips(a in proptest::collection::btree_set(0usize..POOL.len(), 0..6)) {
         let m = Manifest::parse(&manifest_with(&a)).map_err(|e| TestCaseError::fail(e.to_string()))?;
         let key = m.grant_key(None).unwrap();
-        let parsed: GrantKey = key.to_string().parse().map_err(|e| TestCaseError::fail(format!("{e}")))?;
+        let parsed: ParsedGrantKey = key.to_string().parse().map_err(|e| TestCaseError::fail(format!("{e}")))?;
         prop_assert_eq!(parsed, key);
     }
 
     #[test]
     fn grant_key_parse_never_panics(s in any::<String>()) {
-        let _ = s.parse::<GrantKey>();
+        let _ = s.parse::<ParsedGrantKey>();
     }
 }

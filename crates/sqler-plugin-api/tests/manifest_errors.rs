@@ -409,9 +409,11 @@ fn component_digest_binds_the_grant_key() {
     let a = with_entry.grant_key(Some(&one)).unwrap();
     let b = with_entry.grant_key(Some(&two)).unwrap();
     assert_ne!(a, b);
-    assert_eq!(a.component, Some(one));
+    assert_eq!(a.component(), Some(&one));
     assert_eq!(
-        a.to_string().parse::<sqler_plugin_api::GrantKey>().unwrap(),
+        a.to_string()
+            .parse::<sqler_plugin_api::ParsedGrantKey>()
+            .unwrap(),
         a
     );
     // [entry] without a digest: refused, never a key that a swapped .wasm would reuse
@@ -421,7 +423,7 @@ fn component_digest_binds_the_grant_key() {
     );
     // declarative without a digest: a key with nothing to bind
     let key = decl.grant_key(None).unwrap();
-    assert!(key.component.is_none());
+    assert!(key.component().is_none());
     assert!(!key.to_string().contains('+'));
     // declarative with a digest: refused
     assert_eq!(

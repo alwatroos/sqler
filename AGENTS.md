@@ -275,6 +275,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0054](docs/src/adr/0054-plugin-runtime-and-driver-feasibility.md) | Plugin runtime and driver feasibility (P1 spike): wasmtime variants and sizes, epoch interruption, DuckDB NO-GO, SQL Server NO-GO as shipped, host-provided engines as the fallback | accepted |
 | [0055](docs/src/adr/0055-plugin-abi-wit.md) | Plugin ABI: the `sqler:plugin` WIT package, version rule, worlds, interfaces, WASI set | accepted |
 | [0056](docs/src/adr/0056-plugin-sandbox-and-capabilities.md) | Plugin sandbox and capabilities: grammar, gates, default deny, grant key, query rule, limits | accepted |
+| [0059](docs/src/adr/0059-plugin-capability-grants.md) | Plugin capability grants: `plugin-grants.toml`, all-or-nothing approval, re-prompt rules, damaged-file lock | accepted |
 
 ## 9. Roadmap status
 

@@ -41,6 +41,20 @@ pub(crate) fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, Config
 /// This does not promise power-loss durability: on macOS `fsync` does not force
 /// the drive cache to flush (that needs `F_FULLFSYNC`).
 pub(crate) fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<(), ConfigError> {
+    write_atomic_with(path, contents.as_ref(), false)
+}
+
+/// Like [`write_atomic`], but the file is private to the user: mode `0600` on Unix, also for
+/// a stale temporary file that already existed. On Windows the profile ACL applies, as for
+/// [`write_atomic`].
+pub(crate) fn write_atomic_private(
+    path: &Path,
+    contents: impl AsRef<[u8]>,
+) -> Result<(), ConfigError> {
+    write_atomic_with(path, contents.as_ref(), true)
+}
+
+fn write_atomic_with(path: &Path, contents: &[u8], private: bool) -> Result<(), ConfigError> {
     let werr = |source| ConfigError::Write {
         path: path.to_owned(),
         source,
@@ -53,8 +67,33 @@ pub(crate) fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()
     name.push(".tmp");
     let tmp = path.with_file_name(name);
     let write_tmp = || -> io::Result<()> {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(contents.as_ref())?;
+        let mut options = fs::OpenOptions::new();
+        if private {
+            // A planted file or symlink at the tmp path must not be followed or truncated:
+            // remove it (a symlink is removed, not its target), then create exclusively.
+            match fs::remove_file(&tmp) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+            options.write(true).create_new(true);
+        } else {
+            options.write(true).create(true).truncate(true);
+        }
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp)?;
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(not(unix))]
+        let _ = private;
+        file.write_all(contents)?;
         file.sync_all()
     };
     if let Err(e) = write_tmp() {
@@ -95,6 +134,45 @@ mod tests {
         write_atomic(&path, "two").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "two");
         assert!(!path.with_file_name("f.toml.tmp").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_private_is_0600_even_over_an_old_tmp_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("private");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f.toml");
+        let tmp = dir.join("f.toml.tmp");
+        fs::write(&tmp, "stale").unwrap();
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o666)).unwrap();
+        write_atomic_private(&path, "secret").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "secret");
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert!(!tmp.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_private_does_not_follow_a_symlink_at_the_tmp_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("private-link");
+        fs::create_dir_all(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        fs::write(&victim, "keep me").unwrap();
+        fs::set_permissions(&victim, fs::Permissions::from_mode(0o644)).unwrap();
+        let path = dir.join("f.toml");
+        std::os::unix::fs::symlink(&victim, dir.join("f.toml.tmp")).unwrap();
+        write_atomic_private(&path, "secret").unwrap();
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "keep me");
+        assert_eq!(
+            fs::metadata(&victim).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "secret");
         let _ = fs::remove_dir_all(&dir);
     }
 
