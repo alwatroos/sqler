@@ -10,7 +10,8 @@
 
 use sqler_config::{KeyChord, Modifiers};
 use sqler_plugin_api::{
-    Capability, CapabilityKind, CapabilitySet, FsRoot, GrantKey, HostPattern, Manifest,
+    Capability, CapabilityKind, CapabilitySet, ComponentDigest, FsRoot, GrantKey,
+    GrantKeyBuildError, HostPattern, Manifest,
 };
 
 use super::GrantCommand;
@@ -34,44 +35,79 @@ pub struct CapabilityLine {
     pub detail: Option<String>,
     /// Extra remarks the user should read.
     pub notes: Vec<String>,
-    /// Whether the line is drawn with a warning.
+    /// Whether the line needs attention: drawn with a warning and repeated in the always-visible
+    /// block. Everything but the calm kinds (see `needs_attention`) is prominent.
     pub prominent: bool,
     /// Whether an earlier decision did not include it. Only set on a re-prompt.
     pub is_new: bool,
 }
 
 /// The model of the permission dialog.
+///
+/// A prompt cannot be forged: every field is private and the only constructor,
+/// [`GrantPrompt::new`], takes the manifest and the component digest and derives the grant key
+/// and the capability set itself. [`GrantBook::decide`](super::GrantBook::decide) stores only
+/// what the prompt derived, so an approval is always for the manifest and component that were
+/// shown.
+///
+/// ```compile_fail,E0451
+/// use sqler_plugin_api::CapabilitySet;
+/// use sqler_ui::plugins::grant::GrantPrompt;
+///
+/// // A prompt cannot be built by struct literal, whatever the key text or capability set.
+/// let _ = GrantPrompt {
+///     capabilities: CapabilitySet::new(),
+///     problem: None,
+/// };
+/// ```
+///
+/// ```compile_fail,E0616
+/// use sqler_ui::plugins::grant::GrantPrompt;
+///
+/// // A built prompt cannot be edited.
+/// fn edit(mut p: GrantPrompt) {
+///     p.problem = None;
+/// }
+/// ```
+///
+/// ```compile_fail,E0616
+/// use sqler_ui::plugins::grant::GrantPrompt;
+///
+/// fn read_key_field(p: &GrantPrompt) -> String {
+///     p.key.clone()
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantPrompt {
-    /// The grant key in text form; Approve stores the decision under it.
-    pub key: String,
-    /// The plugin id.
-    pub plugin_id: String,
-    /// The plugin version.
-    pub version: String,
-    /// The display name, sanitised.
-    pub name: String,
-    /// The description, sanitised.
-    pub description: Option<String>,
-    /// `Allow plugin <name>?`.
-    pub title: String,
-    /// What Approve grants.
-    pub capabilities: CapabilitySet,
-    /// The capabilities in words: prominent lines first, then set order.
-    pub lines: Vec<CapabilityLine>,
-    /// What the plugin adds, for example `3 commands`; zero counts are left out.
-    pub contributions: Vec<String>,
-    /// Whether the plugin had an earlier decision under another key.
-    pub reprompt: bool,
-    /// Why Approve is not possible, if it is not.
-    pub problem: Option<String>,
+    key: GrantKey,
+    plugin_id: String,
+    version: String,
+    name: String,
+    description: Option<String>,
+    title: String,
+    capabilities: CapabilitySet,
+    lines: Vec<CapabilityLine>,
+    contributions: Vec<String>,
+    reprompt: bool,
+    problem: Option<String>,
+    /// The status of the key the prompt was built from; `decide` refuses if the file moved on.
+    basis: GrantStatus,
 }
 
 impl GrantPrompt {
-    #[allow(clippy::needless_pass_by_value)] // the signature is the contract with the plugin manager
-    /// Builds the prompt for `manifest` under `key`, given what the book says about it.
-    #[must_use]
-    pub fn new(manifest: &Manifest, key: GrantKey, status: &GrantStatus) -> Self {
+    /// Builds the prompt for `manifest` with its component `component` (`None` for a declarative
+    /// plugin), given what the book says about the resulting key.
+    ///
+    /// # Errors
+    ///
+    /// [`GrantKeyBuildError`] when the digest does not fit the manifest (a wasm plugin without a
+    /// digest, or a declarative plugin with one).
+    pub fn new(
+        manifest: &Manifest,
+        component: Option<&ComponentDigest>,
+        status: &GrantStatus,
+    ) -> Result<Self, GrantKeyBuildError> {
+        let key = manifest.grant_key(component)?;
         let (previous, problem) = match status {
             GrantStatus::NeedsPrompt { previous } => (previous.as_ref(), None),
             GrantStatus::Unavailable { problem } => (None, Some(sanitize(problem))),
@@ -85,10 +121,10 @@ impl GrantPrompt {
             .collect();
         // Stable: prominent rows first, set order inside each group.
         lines.sort_by_key(|l| !l.prominent);
-        Self {
-            key: sanitize(&key.to_string()),
+        Ok(Self {
             plugin_id: sanitize(key.id().as_str()),
             version: sanitize(&key.version().to_string()),
+            key,
             title: format!("Allow plugin {name}?"),
             name,
             description: manifest
@@ -100,7 +136,87 @@ impl GrantPrompt {
             contributions: contributions(manifest),
             reprompt: previous.is_some(),
             problem,
-        }
+            basis: status.clone(),
+        })
+    }
+
+    /// The grant key Approve and Deny are stored under.
+    #[must_use]
+    pub fn key(&self) -> &GrantKey {
+        &self.key
+    }
+
+    /// What Approve grants: exactly the capabilities of the manifest the prompt was built from.
+    #[must_use]
+    pub fn capabilities(&self) -> &CapabilitySet {
+        &self.capabilities
+    }
+
+    /// The status the prompt was built from.
+    #[must_use]
+    pub(crate) fn basis(&self) -> &GrantStatus {
+        &self.basis
+    }
+
+    /// The plugin id, sanitised.
+    #[must_use]
+    pub fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+
+    /// The plugin version.
+    #[must_use]
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// The display name, sanitised.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The description, sanitised.
+    #[must_use]
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    /// `Allow plugin <name>?`.
+    #[must_use]
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// The capabilities in words: attention lines first, then set order.
+    #[must_use]
+    pub fn lines(&self) -> &[CapabilityLine] {
+        &self.lines
+    }
+
+    /// What the plugin adds, for example `3 commands`; zero counts are left out.
+    #[must_use]
+    pub fn contributions(&self) -> &[String] {
+        &self.contributions
+    }
+
+    /// Whether the plugin had an earlier decision under another key.
+    #[must_use]
+    pub fn is_reprompt(&self) -> bool {
+        self.reprompt
+    }
+
+    /// Why Approve is not possible, if it is not.
+    #[must_use]
+    pub fn problem(&self) -> Option<&str> {
+        self.problem.as_deref()
+    }
+
+    /// Marks the prompt as not approvable, as a locked book does.
+    #[cfg(test)]
+    pub(crate) fn with_problem(mut self, problem: &str) -> Self {
+        self.problem = Some(problem.to_owned());
+        self
     }
 
     /// Whether Approve can be offered.
@@ -142,14 +258,46 @@ impl GrantPrompt {
     }
 }
 
-/// Replaces control characters and bidirectional marks with U+FFFD.
+/// Replaces control characters, line and paragraph separators and every format character
+/// (Unicode category Cf: zero-width and joiner characters, bidirectional marks and isolates, the
+/// soft hyphen, the byte order mark, the tag block) with U+FFFD.
 fn sanitize(text: &str) -> String {
     text.chars()
         .map(|c| {
-            let bidi = matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
-            if c.is_control() || bidi { '\u{FFFD}' } else { c }
+            if c.is_control() || is_format(c) || matches!(c, '\u{2028}' | '\u{2029}') {
+                '\u{FFFD}'
+            } else {
+                c
+            }
         })
         .collect()
+}
+
+/// Unicode general category Cf (format), by range.
+fn is_format(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}'
+        | '\u{0600}'..='\u{0605}'
+        | '\u{061C}'
+        | '\u{06DD}'
+        | '\u{070F}'
+        | '\u{0890}'..='\u{0891}'
+        | '\u{08E2}'
+        | '\u{180E}'
+        | '\u{200B}'..='\u{200F}'
+        | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{2064}'
+        | '\u{2066}'..='\u{206F}'
+        | '\u{FEFF}'
+        | '\u{FFF9}'..='\u{FFFB}'
+        | '\u{110BD}'
+        | '\u{110CD}'
+        | '\u{13430}'..='\u{1343F}'
+        | '\u{1BCA0}'..='\u{1BCA3}'
+        | '\u{1D173}'..='\u{1D17A}'
+        | '\u{E0001}'
+        | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 fn clip_chars(text: &str, max: usize) -> String {
@@ -304,8 +452,17 @@ fn line(capability: &Capability, previous: Option<&CapabilitySet>) -> Capability
         },
         _ => unknown(capability),
     };
+    l.prominent = l.prominent || needs_attention(capability.kind());
     l.is_new = previous.is_some_and(|p| !p.contains(capability));
     l
+}
+
+/// Whether a capability of `kind` needs attention. Only the calm kinds, which neither leave the
+/// machine nor reach files, other tools or drivers, are quiet: reading the catalog of the
+/// connections the user already opened and drawing the plugin's own panels. Everything else,
+/// including any kind added later, is shown with a warning, whatever its argument.
+fn needs_attention(kind: CapabilityKind) -> bool {
+    !matches!(kind, CapabilityKind::DbRead | CapabilityKind::UiPanel)
 }
 
 fn fs_line(
@@ -351,12 +508,26 @@ pub(crate) fn fixture_manifest(id: &str, version: &str, caps: &[&str], entry: bo
 }
 
 /// The key of a fixture manifest (with a component digest when it has an `[entry]`).
-#[cfg(any(test, feature = "screenshots"))]
+#[cfg(test)]
 #[allow(clippy::expect_used)] // fixed fixture text
 pub(crate) fn fixture_key(m: &Manifest) -> GrantKey {
-    let digest = sqler_plugin_api::ComponentDigest::of(b"wasm");
-    m.grant_key(m.entry.is_some().then_some(&digest))
+    m.grant_key(fixture_digest(m).as_ref())
         .expect("fixture key")
+}
+
+/// The component digest of a fixture manifest (`None` without an `[entry]`).
+#[cfg(any(test, feature = "screenshots"))]
+pub(crate) fn fixture_digest(m: &Manifest) -> Option<sqler_plugin_api::ComponentDigest> {
+    m.entry
+        .is_some()
+        .then(|| sqler_plugin_api::ComponentDigest::of(b"wasm"))
+}
+
+/// The prompt of a fixture manifest for `status`.
+#[cfg(any(test, feature = "screenshots"))]
+#[allow(clippy::expect_used)] // fixed fixture text
+pub(crate) fn fixture_prompt(m: &Manifest, status: &GrantStatus) -> GrantPrompt {
+    GrantPrompt::new(m, fixture_digest(m).as_ref(), status).expect("fixture prompt")
 }
 
 /// The prompt of the `plugins-grant` scene: a re-prompt with a new, prominent set.
@@ -377,9 +548,8 @@ pub(crate) fn sample_prompt() -> GrantPrompt {
     );
     let mut previous = CapabilitySet::new();
     previous.insert("db.read".parse().expect("capability"));
-    GrantPrompt::new(
+    fixture_prompt(
         &m,
-        fixture_key(&m),
         &GrantStatus::NeedsPrompt {
             previous: Some(previous),
         },
@@ -393,11 +563,7 @@ mod tests {
 
     fn prompt_for(caps: &[&str]) -> GrantPrompt {
         let m = fixture_manifest("acme-sync", "1.0.0", caps, true);
-        GrantPrompt::new(
-            &m,
-            fixture_key(&m),
-            &GrantStatus::NeedsPrompt { previous: None },
-        )
+        fixture_prompt(&m, &GrantStatus::NeedsPrompt { previous: None })
     }
 
     fn only(caps: &str) -> CapabilityLine {
@@ -407,7 +573,11 @@ mod tests {
             &[caps]
         };
         let p = prompt_for(all);
-        p.lines.into_iter().find(|l| l.capability == caps).unwrap()
+        p.lines()
+            .iter()
+            .find(|l| l.capability == caps)
+            .cloned()
+            .unwrap()
     }
 
     #[test]
@@ -432,6 +602,7 @@ mod tests {
         assert_eq!(only("driver.host:duckdb").detail.as_deref(), Some("duckdb"));
         assert!(only("db.write").prominent);
         assert!(!only("db.read").prominent);
+        assert!(!only("ui.panel").prominent);
     }
 
     #[test]
@@ -442,12 +613,52 @@ mod tests {
         assert!(l.notes.iter().any(|n| n.contains("punycode")));
         assert!(l.notes.iter().any(|n| n.contains("every subdomain")));
         assert!(l.notes.iter().any(|n| n == "ports 80 and 443"));
-        assert!(!only("net.http:example.com").prominent);
         assert!(
             only("net.http:example.com:8080")
                 .notes
                 .contains(&"port 8080".to_owned())
         );
+    }
+
+    #[test]
+    fn every_net_http_host_needs_attention_and_shows_its_host() {
+        for c in [
+            "net.http:attacker.example",
+            "net.http:example.com:8080",
+            "net.http:*.example.com",
+        ] {
+            let l = only(c);
+            assert!(l.prominent, "{c}");
+            assert_eq!(l.capability, c);
+        }
+    }
+
+    #[test]
+    fn only_the_calm_kinds_are_quiet() {
+        for c in ["db.read", "ui.panel"] {
+            assert!(!only(c).prominent, "{c}");
+        }
+        for c in [
+            "db.write",
+            "ai.tool",
+            "driver.guest",
+            "driver.host:duckdb",
+            "net.http:example.com",
+            "fs.read:plugin",
+            "fs.read:data",
+            "fs.read:data/cache",
+            "fs.read:home/Documents",
+        ] {
+            assert!(only(c).prominent, "{c}");
+        }
+    }
+
+    #[test]
+    fn db_read_with_a_web_host_is_not_calm() {
+        let p = prompt_for(&["db.read", "net.http:attacker.example"]);
+        assert_eq!(p.attention_count(), 1);
+        assert_eq!(p.summary(), "2 permissions, 1 needs attention");
+        assert_eq!(p.lines()[0].capability, "net.http:attacker.example");
     }
 
     #[test]
@@ -464,14 +675,21 @@ mod tests {
             assert!(l.prominent, "{host}");
             assert!(l.notes.iter().any(|n| n.contains("your own computer")));
         }
-        assert!(!only("net.http:localhost.example.com").prominent);
-        assert!(!only("net.http:notlocalhost.com").prominent);
+        for host in ["localhost.example.com", "notlocalhost.com"] {
+            let l = only(&format!("net.http:{host}"));
+            assert!(
+                !l.notes.iter().any(|n| n.contains("your own computer")),
+                "{host}"
+            );
+        }
     }
 
     #[test]
     fn the_summary_counts_permissions_and_warnings() {
-        let p = prompt_for(&["db.read", "fs.read:data", "fs.read:home/Library/x"]);
+        let p = prompt_for(&["db.read", "ui.panel", "fs.read:home/Library/x"]);
         assert_eq!(p.summary(), "3 permissions, 1 needs attention");
+        let p = prompt_for(&["db.read", "fs.read:data", "fs.read:home/Library/x"]);
+        assert_eq!(p.summary(), "3 permissions, 2 need attention");
         assert_eq!(
             prompt_for(&["db.read"]).summary(),
             "1 permission, none need attention"
@@ -498,8 +716,8 @@ mod tests {
         let docs = only("fs.read:home/Documents");
         assert!(docs.prominent);
         assert_eq!(docs.notes.len(), 0);
-        assert!(!only("fs.read:data").prominent);
-        assert!(!only("fs.read:plugin").prominent);
+        assert!(only("fs.read:data").prominent);
+        assert!(only("fs.read:plugin").prominent);
         assert_eq!(docs.detail.as_deref(), Some("home/Documents"));
     }
 
@@ -513,23 +731,22 @@ mod tests {
         );
         let mut previous = CapabilitySet::new();
         previous.insert(Capability::DbRead);
-        let p = GrantPrompt::new(
+        let p = fixture_prompt(
             &m,
-            fixture_key(&m),
             &GrantStatus::NeedsPrompt {
                 previous: Some(previous),
             },
         );
-        assert!(p.reprompt);
-        let prominent = p.lines.iter().take_while(|l| l.prominent).count();
+        assert!(p.is_reprompt());
+        let prominent = p.lines().iter().take_while(|l| l.prominent).count();
         assert_eq!(prominent, 2);
-        assert!(p.lines[prominent..].iter().all(|l| !l.prominent));
-        for l in &p.lines {
+        assert!(p.lines()[prominent..].iter().all(|l| !l.prominent));
+        for l in p.lines() {
             assert_eq!(l.is_new, l.capability != "db.read", "{}", l.capability);
         }
         let first = prompt_for(&["db.read"]);
-        assert!(!first.reprompt);
-        assert!(first.lines.iter().all(|l| !l.is_new));
+        assert!(!first.is_reprompt());
+        assert!(first.lines().iter().all(|l| !l.is_new));
     }
 
     #[test]
@@ -537,31 +754,66 @@ mod tests {
         let mut m = fixture_manifest("acme-sync", "1.0.0", &["db.read"], false);
         m.name = format!("Evil\u{202E}Name\u{7}{}", "x".repeat(200));
         m.description = Some(format!("a\u{2066}b\n{}", "é".repeat(2000)));
-        let p = GrantPrompt::new(
-            &m,
-            fixture_key(&m),
-            &GrantStatus::NeedsPrompt { previous: None },
-        );
-        assert!(p.name.starts_with("Evil\u{FFFD}Name\u{FFFD}"));
-        assert_eq!(p.name.chars().count(), 80);
-        assert_eq!(p.title, format!("Allow plugin {}?", p.name));
-        let d = p.description.unwrap();
+        let p = fixture_prompt(&m, &GrantStatus::NeedsPrompt { previous: None });
+        assert!(p.name().starts_with("Evil\u{FFFD}Name\u{FFFD}"));
+        assert_eq!(p.name().chars().count(), 80);
+        assert_eq!(p.title(), format!("Allow plugin {}?", p.name()));
+        let d = p.description().unwrap();
         assert!(d.starts_with("a\u{FFFD}b\u{FFFD}"));
         assert!(d.len() <= 1024);
         assert!(!d.chars().any(char::is_control));
     }
 
     #[test]
+    fn invisible_and_separator_characters_are_stripped() {
+        let evil = [
+            '\u{200B}',
+            '\u{200C}',
+            '\u{200D}',
+            '\u{2060}',
+            '\u{FEFF}',
+            '\u{00AD}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{E0041}',
+            '\u{E007F}',
+            '\u{202E}',
+            '\u{2066}',
+            '\u{061C}',
+            '\u{0085}',
+            '\u{1D173}',
+        ];
+        let mut m = fixture_manifest("acme-sync", "1.0.0", &["db.read"], false);
+        let text: String = evil.iter().flat_map(|&c| ['a', c]).collect();
+        m.name = text.clone();
+        m.description = Some(text);
+        let p = fixture_prompt(&m, &GrantStatus::NeedsPrompt { previous: None });
+        let want = "a\u{FFFD}".repeat(evil.len());
+        assert_eq!(p.name(), want);
+        assert_eq!(p.description(), Some(want.as_str()));
+        assert_eq!(sanitize("plain é 日本 ok"), "plain é 日本 ok");
+    }
+
+    #[test]
+    fn a_prompt_for_a_mismatched_digest_is_refused() {
+        let wasm = fixture_manifest("acme-sync", "1.0.0", &["db.read"], true);
+        let declarative = fixture_manifest("acme-sync", "1.0.0", &["db.read"], false);
+        let digest = ComponentDigest::of(b"x");
+        let s = GrantStatus::NeedsPrompt { previous: None };
+        assert!(GrantPrompt::new(&wasm, None, &s).is_err());
+        assert!(GrantPrompt::new(&declarative, Some(&digest), &s).is_err());
+        let p = GrantPrompt::new(&wasm, Some(&digest), &s).unwrap();
+        assert_eq!(*p.key(), wasm.grant_key(Some(&digest)).unwrap());
+        assert_eq!(p.capabilities(), &wasm.capabilities);
+    }
+
+    #[test]
     fn contributions_are_counted_without_zeros() {
         let p = prompt_for(&["db.read"]);
-        assert_eq!(p.contributions, ["3 commands"]);
+        assert_eq!(p.contributions(), ["3 commands"]);
         let m = fixture_manifest("acme-sync", "1.0.0", &["db.read"], false);
-        let none = GrantPrompt::new(
-            &m,
-            fixture_key(&m),
-            &GrantStatus::NeedsPrompt { previous: None },
-        );
-        assert_eq!(none.contributions.len(), 0);
+        let none = fixture_prompt(&m, &GrantStatus::NeedsPrompt { previous: None });
+        assert_eq!(none.contributions().len(), 0);
     }
 
     #[test]
@@ -574,15 +826,14 @@ mod tests {
     #[test]
     fn a_problem_disables_approve() {
         let m = fixture_manifest("acme-sync", "1.0.0", &["db.read"], false);
-        let p = GrantPrompt::new(
+        let p = fixture_prompt(
             &m,
-            fixture_key(&m),
             &GrantStatus::Unavailable {
                 problem: "damaged".into(),
             },
         );
         assert!(!p.can_approve());
-        assert_eq!(p.problem.as_deref(), Some("damaged"));
+        assert_eq!(p.problem(), Some("damaged"));
         assert!(prompt_for(&["db.read"]).can_approve());
     }
 
@@ -600,10 +851,11 @@ mod tests {
     #[test]
     fn the_sample_shows_the_reprompt_state() {
         let p = sample_prompt();
-        assert!(p.reprompt);
-        assert_eq!(p.lines.len(), 5);
-        assert!(p.lines.iter().any(|l| l.is_new));
-        assert!(p.lines.iter().any(|l| !l.is_new));
-        assert!(p.lines[0].prominent);
+        assert!(p.is_reprompt());
+        assert_eq!(p.lines().len(), 5);
+        assert!(p.lines().iter().any(|l| l.is_new));
+        assert!(p.lines().iter().any(|l| !l.is_new));
+        assert!(p.lines()[0].prominent);
+        assert_eq!(p.attention_count(), 4);
     }
 }

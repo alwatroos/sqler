@@ -10,7 +10,10 @@ use std::str::FromStr as _;
 use std::sync::RwLock;
 
 use sqler_config::{ConfigDir, ConfigError, GrantDecision, GrantRecord, GrantsLoad, PluginGrants};
-use sqler_plugin_api::{Capability, CapabilitySet, GrantKey, GrantSource, PluginId};
+use sqler_plugin_api::{
+    Capability, CapabilitySet, ComponentDigest, GrantKey, GrantKeyBuildError, GrantSource,
+    Manifest, PluginId,
+};
 use thiserror::Error;
 
 use super::GrantCommand;
@@ -46,6 +49,11 @@ pub enum GrantBookError {
     /// The file could not be written; nothing was granted.
     #[error("could not save plugin permissions: {0}")]
     Save(#[from] ConfigError),
+    /// The decision of the plugin changed (another instance denied, revoked or approved it) after
+    /// the dialog was built. Nothing was saved; build the prompt again from [`GrantBook::prompt`]
+    /// so the user answers what is on disk now.
+    #[error("the permissions of this plugin changed while the dialog was open; review them again")]
+    StaleDecision,
     /// An earlier panic poisoned the lock; reads deny and writes are refused.
     #[error("plugin permissions are unavailable after an internal error")]
     Poisoned,
@@ -119,47 +127,55 @@ impl GrantBook {
                 problem: problem.clone(),
             };
         }
-        let Some(record) = state.grants.for_plugin(key.id().as_str()) else {
-            return GrantStatus::NeedsPrompt { previous: None };
-        };
-        if record.key() == key.to_string() {
-            return match record.decision() {
-                GrantDecision::Approved => match parse_caps(record) {
-                    Some(set) => GrantStatus::Approved(set),
-                    None => GrantStatus::NeedsPrompt { previous: None },
-                },
-                _ => GrantStatus::Denied,
-            };
-        }
-        let previous = match record.decision() {
-            GrantDecision::Approved => parse_caps(record),
-            _ => None,
-        };
-        GrantStatus::NeedsPrompt { previous }
+        status_in(&state.grants, key)
+    }
+
+    /// The dialog model for `manifest` and its component, from what the book says now. Use it
+    /// again after [`GrantBookError::StaleDecision`].
+    ///
+    /// # Errors
+    ///
+    /// [`GrantKeyBuildError`] when the digest does not fit the manifest.
+    pub fn prompt(
+        &self,
+        manifest: &Manifest,
+        component: Option<&ComponentDigest>,
+    ) -> Result<GrantPrompt, GrantKeyBuildError> {
+        let key = manifest.grant_key(component)?;
+        GrantPrompt::new(manifest, component, &self.status(&key))
     }
 
     /// Records the answer to `prompt` and saves it. Nothing changes if the save fails.
     ///
+    /// Only what the prompt derived from its manifest is stored: its key and its capability set.
+    /// The record of the plugin on disk must still be what the prompt was built from; if another
+    /// instance changed it meanwhile, the answer is refused.
+    ///
     /// # Errors
     ///
-    /// [`GrantBookError::Unavailable`] when the book is locked, [`GrantBookError::Save`] when the
-    /// file cannot be written, [`GrantBookError::Poisoned`] after an internal error.
+    /// [`GrantBookError::Unavailable`] when the book is locked or the prompt has a problem,
+    /// [`GrantBookError::StaleDecision`] when the plugin's record changed since the prompt was
+    /// built, [`GrantBookError::Save`] when the file cannot be written,
+    /// [`GrantBookError::Poisoned`] after an internal error.
     pub fn decide(
         &self,
         prompt: &GrantPrompt,
         command: GrantCommand,
     ) -> Result<GrantStatus, GrantBookError> {
-        let key = prompt.key.clone();
+        if let Some(problem) = prompt.problem() {
+            return Err(GrantBookError::Unavailable(problem.to_owned()));
+        }
+        let key = prompt.key();
         let record = match command {
             GrantCommand::Approve => GrantRecord::approved(
-                key.clone(),
+                key.to_string(),
                 prompt
-                    .capabilities
+                    .capabilities()
                     .iter()
                     .map(ToString::to_string)
                     .collect(),
             ),
-            _ => GrantRecord::denied(key.clone()),
+            _ => GrantRecord::denied(key.to_string()),
         }
         .map_err(|e| GrantBookError::Unavailable(e.to_string()))?;
 
@@ -168,11 +184,16 @@ impl GrantBook {
             return Err(GrantBookError::Unavailable(problem.clone()));
         }
         let mut next = self.fresh(&mut state)?;
+        if status_in(&next, key) != *prompt.basis() {
+            // Show the user what is on disk now on the next prompt.
+            state.grants = next;
+            return Err(GrantBookError::StaleDecision);
+        }
         next.record(record);
         self.save(&next)?;
         state.grants = next;
         Ok(match command {
-            GrantCommand::Approve => GrantStatus::Approved(prompt.capabilities.clone()),
+            GrantCommand::Approve => GrantStatus::Approved(prompt.capabilities().clone()),
             _ => GrantStatus::Denied,
         })
     }
@@ -223,6 +244,27 @@ impl GrantBook {
     }
 }
 
+/// What `grants` say about `key`.
+fn status_in(grants: &PluginGrants, key: &GrantKey) -> GrantStatus {
+    let Some(record) = grants.for_plugin(key.id().as_str()) else {
+        return GrantStatus::NeedsPrompt { previous: None };
+    };
+    if record.key() == key.to_string() {
+        return match record.decision() {
+            GrantDecision::Approved => match parse_caps(record) {
+                Some(set) => GrantStatus::Approved(set),
+                None => GrantStatus::NeedsPrompt { previous: None },
+            },
+            _ => GrantStatus::Denied,
+        };
+    }
+    let previous = match record.decision() {
+        GrantDecision::Approved => parse_caps(record),
+        _ => None,
+    };
+    GrantStatus::NeedsPrompt { previous }
+}
+
 fn parse_caps(record: &GrantRecord) -> Option<CapabilitySet> {
     let mut set = CapabilitySet::new();
     for text in record.capabilities() {
@@ -243,7 +285,7 @@ impl GrantSource for GrantBook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::grant::prompt::{fixture_key, fixture_manifest};
+    use crate::plugins::grant::prompt::{fixture_digest, fixture_key, fixture_manifest};
 
     struct Scratch(std::path::PathBuf);
 
@@ -267,9 +309,7 @@ mod tests {
     }
 
     fn prompt(m: &sqler_plugin_api::Manifest, book: &GrantBook) -> GrantPrompt {
-        let key = fixture_key(m);
-        let status = book.status(&key);
-        GrantPrompt::new(m, key, &status)
+        book.prompt(m, fixture_digest(m).as_ref()).unwrap()
     }
 
     fn set(caps: &[&str]) -> CapabilitySet {
@@ -383,7 +423,7 @@ mod tests {
         let status = book.status(&key);
         assert!(matches!(status, GrantStatus::Unavailable { .. }));
         assert_eq!(book.approved(&key), None);
-        let p = GrantPrompt::new(&m, key, &status);
+        let p = prompt(&m, &book);
         assert!(!p.can_approve());
         for c in [GrantCommand::Approve, GrantCommand::Deny] {
             assert!(matches!(
@@ -503,5 +543,90 @@ mod tests {
             book.status(&fixture_key(&m)),
             GrantStatus::Unavailable { .. }
         ));
+    }
+
+    #[test]
+    fn a_decision_after_another_instance_denied_is_stale() {
+        let (_s, dir) = scratch();
+        let m = manifest("1.0.0", &["db.read", "net.http:example.com"]);
+        let (one, two) = (GrantBook::open(dir.clone()), GrantBook::open(dir.clone()));
+        let stale = prompt(&m, &one);
+        two.decide(&prompt(&m, &two), GrantCommand::Deny).unwrap();
+        let before = std::fs::read_to_string(dir.plugin_grants_path()).unwrap();
+        assert!(matches!(
+            one.decide(&stale, GrantCommand::Approve),
+            Err(GrantBookError::StaleDecision)
+        ));
+        assert_eq!(
+            std::fs::read_to_string(dir.plugin_grants_path()).unwrap(),
+            before
+        );
+        let key = fixture_key(&m);
+        assert_eq!(one.approved(&key), None);
+        // The book now knows the denial, so the rebuilt prompt is current and can be answered.
+        assert_eq!(one.status(&key), GrantStatus::Denied);
+        let fresh = prompt(&m, &one);
+        assert!(one.decide(&fresh, GrantCommand::Approve).is_ok());
+        assert!(one.approved(&key).is_some());
+    }
+
+    #[test]
+    fn a_decision_after_another_instance_revoked_is_stale() {
+        let (_s, dir) = scratch();
+        let v1 = manifest("1.0.0", &["db.read"]);
+        let v2 = manifest("2.0.0", &["db.read", "net.http:example.com"]);
+        let one = GrantBook::open(dir.clone());
+        one.decide(&prompt(&v1, &one), GrantCommand::Approve)
+            .unwrap();
+        let two = GrantBook::open(dir);
+        let reprompt = prompt(&v2, &one);
+        assert!(reprompt.is_reprompt());
+        assert!(two.revoke(&v1.id).unwrap());
+        for command in [GrantCommand::Approve, GrantCommand::Deny] {
+            assert!(matches!(
+                one.decide(&reprompt, command),
+                Err(GrantBookError::StaleDecision)
+            ));
+        }
+        assert_eq!(one.approved(&fixture_key(&v2)), None);
+    }
+
+    #[test]
+    fn an_unchanged_record_is_not_stale() {
+        let (_s, dir) = scratch();
+        let m = manifest("1.0.0", &["db.read"]);
+        let (one, two) = (GrantBook::open(dir.clone()), GrantBook::open(dir));
+        let p = prompt(&m, &one);
+        // Another instance decides a different plugin meanwhile.
+        let other = fixture_manifest("other-plugin", "1.0.0", &["db.read"], true);
+        two.decide(&prompt(&other, &two), GrantCommand::Approve)
+            .unwrap();
+        assert!(one.decide(&p, GrantCommand::Approve).is_ok());
+    }
+
+    #[test]
+    fn a_prompt_with_a_problem_is_never_stored() {
+        let book = GrantBook::in_memory();
+        let m = manifest("1.0.0", &["db.read"]);
+        let p = prompt(&m, &book).with_problem("damaged");
+        for c in [GrantCommand::Approve, GrantCommand::Deny] {
+            assert!(matches!(
+                book.decide(&p, c),
+                Err(GrantBookError::Unavailable(_))
+            ));
+        }
+        assert_eq!(book.approved(&fixture_key(&m)), None);
+    }
+
+    #[test]
+    fn what_is_stored_is_the_key_and_capabilities_of_the_manifest() {
+        let (_s, dir) = scratch();
+        let book = GrantBook::open(dir.clone());
+        let m = manifest("1.0.0", &["db.read", "net.http:example.com"]);
+        book.decide(&prompt(&m, &book), GrantCommand::Approve)
+            .unwrap();
+        let text = std::fs::read_to_string(dir.plugin_grants_path()).unwrap();
+        assert!(text.contains(&fixture_key(&m).to_string()), "{text}");
+        assert!(text.contains("net.http:example.com"), "{text}");
     }
 }

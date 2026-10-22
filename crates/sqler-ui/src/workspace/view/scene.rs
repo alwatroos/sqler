@@ -782,7 +782,7 @@ pub fn open(
     });
     let root = if scene.name == "plugins-grant" {
         // The dialog is drawn by a small host over the real workspace, so `view.rs` is untouched.
-        let host = cx.new(|_| GrantSceneHost::new(view.clone(), sample_prompt()));
+        let host = cx.new(|cx| GrantSceneHost::new(view.clone(), sample_prompt(), cx));
         cx.new(|cx| Root::new(host, window, cx))
     } else {
         cx.new(|cx| Root::new(view.clone(), window, cx))

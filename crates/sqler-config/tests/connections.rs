@@ -195,7 +195,19 @@ fn save_leaves_no_tmp_and_stale_tmp_is_ignored() {
     // A stale temporary file does not affect load.
     assert_eq!(d.load_connection_store().unwrap(), ConnectionStore::new());
     d.save_connection_store(&rich_store()).unwrap();
-    assert!(!tmp.exists());
+    // The planted file is not ours and stays; the save left no temporary file of its own.
+    assert!(tmp.exists());
+    let tmps = fs::read_dir(&sc.0)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        })
+        .count();
+    assert_eq!(tmps, 1);
     assert!(d.connections_path().is_file());
     assert_eq!(d.load_connection_store().unwrap(), rich_store());
 }

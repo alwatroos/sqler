@@ -18,35 +18,40 @@ the plugin asks for, when it first meets a plugin or a changed one.
 | `db.read` | Read the catalog and run read-only queries on your connections | |
 | `db.write` | Ask to change data or schema on your connections | Highlighted. Every change goes through the same confirmation as your own statements. |
 | `ui.panel` | Show its own panels | |
-| `ai.tool` | Offer tools to the AI assistant | |
-| `driver.guest` | Provide a database driver that runs inside the plugin | |
-| `driver.host:<engine>` | Use a built-in database engine | The engine name. |
-| `net.http:<host>` | Connect to a web host | The host pattern exactly as declared, with its port ("ports 80 and 443" or "port N"). |
-| `fs.read:plugin`, `fs.read:data...` | Read files in its own install folder or its own data folder | The folder scope. |
+| `ai.tool` | Offer tools to the AI assistant | Highlighted. |
+| `driver.guest` | Provide a database driver that runs inside the plugin | Highlighted. |
+| `driver.host:<engine>` | Use a built-in database engine | Highlighted, with the engine name. |
+| `net.http:<host>` | Connect to a web host | Highlighted. The host pattern exactly as declared, with its port ("ports 80 and 443" or "port N"). |
+| `fs.read:plugin`, `fs.read:data...` | Read files in its own install folder or its own data folder | Highlighted, with the folder scope. |
 | `fs.read:home/...` | Read files in your home folder | Highlighted, with the folder scope. |
+
+Only `db.read` and `ui.panel` are shown quietly. Every other permission is highlighted, whatever host or folder it names.
 
 Warnings you should read:
 
 - **Wildcard hosts** (`*.example.com`) include every subdomain.
 - **Punycode hosts** (a label starting `xn--`) are international names shown in their encoded form, never decoded.
-  Check them carefully; they can imitate another site. Highlighted.
-- **`localhost`** and every `*.localhost` name are your own computer. Highlighted.
-- **Home folder scopes** are highlighted. Under `Library` or `AppData` they hold the settings and data of other
+  Check them carefully; they can imitate another site.
+- **`localhost`** and every `*.localhost` name are your own computer.
+- **Home folder scopes**: under `Library` or `AppData` they hold the settings and data of other
   applications.
 
-At the top the dialog shows a summary ("N permissions, M need attention") and the text of every highlighted
-permission; the full list below scrolls and has a scrollbar. Highlighted rows are listed first. When the dialog opens because the plugin changed, capabilities that were not in your
+At the top the dialog shows a summary ("N permissions, M need attention"; "none need attention" appears only when no
+permission is highlighted) and, as a chip, every highlighted permission with its host or folder; the full list below scrolls and has a scrollbar. Highlighted rows are listed first. When the dialog opens because the plugin changed, capabilities that were not in your
 previous approval are marked as new. Names and descriptions come from the plugin; control and direction-changing
-characters are replaced and long text is cut.
+characters, invisible format characters and line separators are replaced and long text is cut.
 
 ### Answering
 
 - **Approve** allows exactly the permissions listed. There is no partial approval. It answers only to a mouse (or
   touch) click: no key is bound to it, it is skipped by Tab, and Enter or Space on it does nothing.
-- **Deny** (or **Escape**) allows nothing. The answer is remembered and the plugin still loads without permissions.
+- **Deny** (or **Escape**, pressed anywhere in the dialog) allows nothing. The answer is remembered and the plugin still loads without permissions.
 
 Known limitation: with the keyboard alone you can read the dialog and Deny, but you cannot Approve. A keyboard way to
-confirm may be added later.
+confirm (typing the plugin id) is planned before the dialog is reachable.
+
+If another SQLer window denied or revoked the same plugin while the dialog was open, your answer is not saved and the
+dialog is shown again with the current state.
 
 The commands are `plugins:approve-grant` ("Approve Plugin Permissions") and `plugins:deny-grant` ("Deny Plugin
 Permissions").

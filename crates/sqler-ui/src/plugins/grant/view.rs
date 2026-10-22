@@ -7,15 +7,19 @@
 //!
 //! Deny is listed first and Approve second. Approve answers only to a pointer click: it is not a
 //! tab stop and a keyboard-originated click on it is ignored (`activates`). Nothing binds a key to
-//! Approve; Escape is Deny (`GrantPrompt::key_command`).
+//! Approve; Escape is Deny (`GrantPrompt::key_command`): the overlay container tracks a focus handle
+//! owned by the caller, who focuses it when the dialog opens, and answers Escape from there. The
+//! container is not a tab stop and Approve stays out of the tab order.
 //!
-//! The summary line and the compact text of every prominent permission sit outside the scrolling
-//! list, so a dangerous permission cannot be clipped away while Approve stays visible.
+//! Every permission that needs attention (`CapabilityLine::prominent`) is shown as a chip in an
+//! always-visible block, with its host or scope, so a risky permission cannot hide in the list.
+//!
+//! The summary line and the chips sit outside the scrolling list.
 
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Div, InteractiveElement as _, IntoElement as _,
+    AnyElement, App, ClickEvent, Div, FocusHandle, InteractiveElement as _, IntoElement as _,
     ParentElement as _, Stateful, Styled as _, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
@@ -25,6 +29,8 @@ use sqler_plugin_api::CapabilityKind;
 
 use super::GrantCommand;
 use super::prompt::{CapabilityLine, GrantPrompt};
+use crate::keymap::chord_from_input;
+use crate::keymap::input::key_input;
 use crate::theme::SPACE;
 use crate::theme::icons::AppIcon;
 use crate::workspace::chrome::{
@@ -153,7 +159,7 @@ fn summary_and_attention(prompt: &GrantPrompt, cx: &App) -> (String, Stateful<Di
     let scale = ui_scale(cx);
     let (danger, radius) = (theme.danger, theme.radius);
     let mut summary = prompt.summary();
-    if prompt.lines.len() > SCROLL_HINT_FROM {
+    if prompt.lines().len() > SCROLL_HINT_FROM {
         summary.push_str(". The list below scrolls.");
     }
     let mut attention = div()
@@ -165,7 +171,7 @@ fn summary_and_attention(prompt: &GrantPrompt, cx: &App) -> (String, Stateful<Di
         .font_family(theme.mono_font_family.clone())
         .text_size(px(scale.mono))
         .text_color(danger);
-    for line in prompt.lines.iter().filter(|l| l.prominent) {
+    for line in prompt.lines().iter().filter(|l| l.prominent) {
         attention = attention.child(
             div()
                 .px(px(SPACE[2]))
@@ -179,12 +185,41 @@ fn summary_and_attention(prompt: &GrantPrompt, cx: &App) -> (String, Stateful<Di
     (summary, attention)
 }
 
-/// Draws the dialog for `prompt`. The Approve button is left out when the book is unavailable.
-#[allow(clippy::needless_pass_by_value)] // the handler type is the contract; a clone is cheap
-pub(crate) fn grant_overlay(prompt: &GrantPrompt, on: GrantHandler, cx: &App) -> AnyElement {
+/// The banner that says why Approve is not offered.
+fn problem_banner(problem: &str, cx: &App) -> Div {
     let theme = cx.theme();
     let scale = ui_scale(cx);
-    let (muted, danger, radius) = (theme.muted_foreground, theme.danger, theme.radius);
+    let danger = theme.danger;
+    div()
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap(px(SPACE[3]))
+        .p(px(SPACE[3]))
+        .rounded(theme.radius)
+        .border_1()
+        .border_color(danger)
+        .text_size(px(scale.sm))
+        .text_color(danger)
+        .child(Icon::new(AppIcon::TriangleAlert).size(px(ICON_MD)))
+        .child(format!(
+            "Permissions cannot be approved right now: {problem}"
+        ))
+}
+
+/// Draws the dialog for `prompt`. The Approve button is left out when the book is unavailable.
+/// `focus` belongs to the caller, who focuses it when the dialog opens; Escape pressed anywhere
+/// inside the dialog is Deny.
+#[allow(clippy::needless_pass_by_value)] // the handler type is the contract; a clone is cheap
+pub(crate) fn grant_overlay(
+    prompt: &GrantPrompt,
+    on: GrantHandler,
+    focus: &FocusHandle,
+    cx: &App,
+) -> AnyElement {
+    let theme = cx.theme();
+    let scale = ui_scale(cx);
+    let muted = theme.muted_foreground;
 
     let mut body = div()
         .flex()
@@ -193,24 +228,26 @@ pub(crate) fn grant_overlay(prompt: &GrantPrompt, on: GrantHandler, cx: &App) ->
         .text_size(px(scale.sm));
     body = body.child(div().text_color(muted).child(format!(
         "{} {} · {}",
-        prompt.name, prompt.version, prompt.plugin_id
+        prompt.name(),
+        prompt.version(),
+        prompt.plugin_id()
     )));
-    if let Some(description) = &prompt.description {
+    if let Some(description) = prompt.description() {
         body = body.child(
             div()
                 .text_size(px(scale.md))
                 .text_color(theme.popover_foreground)
-                .child(description.clone()),
+                .child(description.to_owned()),
         );
     }
-    if !prompt.contributions.is_empty() {
+    if !prompt.contributions().is_empty() {
         body = body.child(
             div()
                 .text_color(muted)
-                .child(format!("Adds {}.", prompt.contributions.join(", "))),
+                .child(format!("Adds {}.", prompt.contributions().join(", "))),
         );
     }
-    if prompt.reprompt {
+    if prompt.is_reprompt() {
         body = body.child(div().text_color(muted).child(
             "This plugin changed since you last decided. Permissions it did not have before are marked New.",
         ));
@@ -223,7 +260,7 @@ pub(crate) fn grant_overlay(prompt: &GrantPrompt, on: GrantHandler, cx: &App) ->
         .flex()
         .flex_col()
         .gap(px(SPACE[2]));
-    for (i, line) in prompt.lines.iter().enumerate() {
+    for (i, line) in prompt.lines().iter().enumerate() {
         list = list.child(row(i, line, cx));
     }
     let list = list.overflow_y_scrollbar();
@@ -242,26 +279,14 @@ pub(crate) fn grant_overlay(prompt: &GrantPrompt, on: GrantHandler, cx: &App) ->
 
     let mut panel = dialog_panel("grant-dialog", DIALOG_W_MD, cx)
         .debug_selector(|| "grant-dialog".to_owned())
-        .child(dialog_title(Some(AppIcon::Plug), prompt.title.clone(), cx))
+        .child(dialog_title(
+            Some(AppIcon::Plug),
+            prompt.title().to_owned(),
+            cx,
+        ))
         .child(body);
-    if let Some(problem) = &prompt.problem {
-        panel = panel.child(
-            div()
-                .flex()
-                .flex_row()
-                .items_start()
-                .gap(px(SPACE[3]))
-                .p(px(SPACE[3]))
-                .rounded(radius)
-                .border_1()
-                .border_color(danger)
-                .text_size(px(scale.sm))
-                .text_color(danger)
-                .child(Icon::new(AppIcon::TriangleAlert).size(px(ICON_MD)))
-                .child(format!(
-                    "Permissions cannot be approved right now: {problem}"
-                )),
-        );
+    if let Some(problem) = prompt.problem() {
+        panel = panel.child(problem_banner(problem, cx));
     }
     panel = panel
         .child(
@@ -281,7 +306,19 @@ pub(crate) fn grant_overlay(prompt: &GrantPrompt, on: GrantHandler, cx: &App) ->
     }
     panel = panel.child(list).child(footer);
 
-    scrim("grant-scrim", cx).child(panel).into_any_element()
+    let deny = Rc::clone(&on);
+    scrim("grant-scrim", cx)
+        .track_focus(focus)
+        .on_key_down(move |event, window, cx| {
+            let command = chord_from_input(&key_input(&event.keystroke))
+                .and_then(|chord| GrantPrompt::key_command(&chord));
+            if let Some(command) = command {
+                cx.stop_propagation();
+                deny(command, window, cx);
+            }
+        })
+        .child(panel)
+        .into_any_element()
 }
 
 /// The `plugins-grant` scene: the real workspace with the dialog drawn over it.
@@ -289,6 +326,7 @@ pub(crate) fn grant_overlay(prompt: &GrantPrompt, on: GrantHandler, cx: &App) ->
 pub(crate) struct GrantSceneHost {
     workspace: gpui::Entity<crate::workspace::WorkspaceView>,
     prompt: GrantPrompt,
+    focus: FocusHandle,
 }
 
 #[cfg(feature = "screenshots")]
@@ -296,8 +334,13 @@ impl GrantSceneHost {
     pub(crate) fn new(
         workspace: gpui::Entity<crate::workspace::WorkspaceView>,
         prompt: GrantPrompt,
+        cx: &mut gpui::Context<Self>,
     ) -> Self {
-        Self { workspace, prompt }
+        Self {
+            workspace,
+            prompt,
+            focus: cx.focus_handle(),
+        }
     }
 }
 
@@ -308,12 +351,19 @@ impl gpui::Render for GrantSceneHost {
             .relative()
             .size_full()
             .child(self.workspace.clone())
-            .child(grant_overlay(&self.prompt, Rc::new(|_, _, _| {}), cx))
+            .child(grant_overlay(
+                &self.prompt,
+                Rc::new(|_, _, _| {}),
+                &self.focus,
+                cx,
+            ))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use gpui::TestAppContext;
     use gpui::{Context, Render};
 
@@ -330,12 +380,56 @@ mod tests {
         "grant-row-4",
     ];
 
-    struct Host(GrantPrompt);
+    /// Draws the overlay and records every answer; focuses the overlay like the caller must.
+    struct Host {
+        prompt: GrantPrompt,
+        focus: FocusHandle,
+        seen: Rc<RefCell<Vec<GrantCommand>>>,
+    }
+
+    impl Host {
+        fn new(prompt: GrantPrompt, seen: Rc<RefCell<Vec<GrantCommand>>>, cx: &mut App) -> Self {
+            Self {
+                prompt,
+                focus: cx.focus_handle(),
+                seen,
+            }
+        }
+    }
 
     impl Render for Host {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
-            grant_overlay(&self.0, Rc::new(|_, _, _| {}), cx)
+            let seen = Rc::clone(&self.seen);
+            grant_overlay(
+                &self.prompt,
+                Rc::new(move |c, _, _| seen.borrow_mut().push(c)),
+                &self.focus,
+                cx,
+            )
         }
+    }
+
+    fn open(
+        cx: &mut TestAppContext,
+        prompt: GrantPrompt,
+    ) -> (
+        gpui::Entity<Host>,
+        &mut gpui::VisualTestContext,
+        Rc<RefCell<Vec<GrantCommand>>>,
+    ) {
+        cx.update(gpui_component::init);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen2 = Rc::clone(&seen);
+        let (host, cx) = cx.add_window_view(move |_, cx| Host::new(prompt, seen2, cx));
+        cx.update(|window, cx| {
+            apply(Appearance::Dark, 14, cx);
+            let focus = host.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        (host, cx, seen)
     }
 
     fn has_bounds(cx: &mut gpui::VisualTestContext, selector: &'static str) -> bool {
@@ -345,10 +439,9 @@ mod tests {
 
     #[gpui::test]
     fn the_dialog_renders_in_both_themes(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
         let prompt = sample_prompt();
-        assert_eq!(prompt.lines.len(), ROWS.len());
-        let (_host, cx) = cx.add_window_view(|_, _| Host(prompt));
+        assert_eq!(prompt.lines().len(), ROWS.len());
+        let (_host, cx, _) = open(cx, prompt);
         for look in [Appearance::Dark, Appearance::Light] {
             cx.update(|_, cx| apply(look, 14, cx));
             cx.run_until_parked();
@@ -365,22 +458,16 @@ mod tests {
 
     #[gpui::test]
     fn a_problem_removes_approve(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
-        let mut prompt = sample_prompt();
-        prompt.problem = Some("the file is damaged".into());
-        let (_host, cx) = cx.add_window_view(|_, _| Host(prompt));
-        cx.update(|_, cx| apply(Appearance::Dark, 14, cx));
-        cx.run_until_parked();
-        cx.update(|window, _| window.refresh());
-        cx.run_until_parked();
+        let prompt = sample_prompt().with_problem("the file is damaged");
+        let (_host, cx, _) = open(cx, prompt);
         assert!(has_bounds(cx, "grant-deny"));
         assert!(cx.debug_bounds("grant-approve").is_none());
     }
 
-    fn many(prominent: usize, total: usize) -> GrantPrompt {
+    fn many(attention: usize, total: usize) -> GrantPrompt {
         use crate::plugins::grant::book::GrantStatus;
-        use crate::plugins::grant::prompt::{fixture_key, fixture_manifest};
-        let mut caps: Vec<String> = (0..prominent)
+        use crate::plugins::grant::prompt::{fixture_manifest, fixture_prompt};
+        let mut caps: Vec<String> = (0..attention)
             .map(|i| format!("fs.read:home/Library/app{i}"))
             .collect();
         caps.push("db.read".to_owned());
@@ -392,25 +479,17 @@ mod tests {
         }
         let refs: Vec<&str> = caps.iter().map(String::as_str).collect();
         let m = fixture_manifest("acme-sync", "1.0.0", &refs, true);
-        GrantPrompt::new(
-            &m,
-            fixture_key(&m),
-            &GrantStatus::NeedsPrompt { previous: None },
-        )
+        fixture_prompt(&m, &GrantStatus::NeedsPrompt { previous: None })
     }
 
     #[gpui::test]
-    fn many_prominent_permissions_stay_visible_outside_the_scroll_area(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
-        for (prominent, total) in [(8, 10), (10, 32)] {
-            let prompt = many(prominent, total);
-            assert_eq!(prompt.lines.len(), total);
-            assert_eq!(prompt.attention_count(), prominent + 1); // + db.write
-            let (_host, cx) = cx.add_window_view(|_, _| Host(prompt));
-            cx.update(|_, cx| apply(Appearance::Dark, 14, cx));
-            cx.run_until_parked();
-            cx.update(|window, _| window.refresh());
-            cx.run_until_parked();
+    fn many_attention_permissions_stay_visible_outside_the_scroll_area(cx: &mut TestAppContext) {
+        for (attention, total) in [(8, 10), (10, 32)] {
+            let prompt = many(attention, total);
+            assert_eq!(prompt.lines().len(), total);
+            // Everything but db.read needs attention.
+            assert_eq!(prompt.attention_count(), total - 1);
+            let (_host, cx, _) = open(cx, prompt);
             for selector in [
                 "grant-summary",
                 "grant-attention",
@@ -424,6 +503,11 @@ mod tests {
             let summary = cx.debug_bounds("grant-summary").unwrap();
             let approve = cx.debug_bounds("grant-approve").unwrap();
             assert!(approve.origin.y > summary.origin.y);
+            let window = cx.update(|window, _| window.viewport_size());
+            assert!(
+                approve.origin.y + approve.size.height <= window.height,
+                "{total}"
+            );
         }
     }
 
@@ -446,26 +530,29 @@ mod tests {
 
     #[gpui::test]
     fn tab_and_enter_never_approve(cx: &mut TestAppContext) {
-        use std::cell::RefCell;
-        struct Recording(GrantPrompt, Rc<RefCell<Vec<GrantCommand>>>);
-        impl Render for Recording {
-            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
-                let seen = Rc::clone(&self.1);
-                grant_overlay(
-                    &self.0,
-                    Rc::new(move |c, _, _| seen.borrow_mut().push(c)),
-                    cx,
-                )
-            }
-        }
-        cx.update(gpui_component::init);
-        let seen = Rc::new(RefCell::new(Vec::new()));
-        let seen2 = Rc::clone(&seen);
-        let (_host, cx) = cx.add_window_view(move |_, _| Recording(sample_prompt(), seen2));
-        cx.update(|_, cx| apply(Appearance::Dark, 14, cx));
-        cx.run_until_parked();
+        let (_host, cx, seen) = open(cx, sample_prompt());
         cx.simulate_keystrokes("tab tab tab enter space");
         cx.run_until_parked();
         assert!(!seen.borrow().contains(&GrantCommand::Approve));
+    }
+
+    #[gpui::test]
+    fn escape_denies(cx: &mut TestAppContext) {
+        let (_host, cx, seen) = open(cx, sample_prompt());
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(*seen.borrow(), [GrantCommand::Deny]);
+    }
+
+    #[gpui::test]
+    fn escape_denies_from_a_focused_button_and_other_keys_do_nothing(cx: &mut TestAppContext) {
+        let (_host, cx, seen) = open(cx, sample_prompt());
+        // Tab moves focus onto Deny (the only tab stop); Escape still denies.
+        cx.simulate_keystrokes("a y ctrl-escape shift-escape cmd-enter tab");
+        cx.run_until_parked();
+        assert!(seen.borrow().is_empty());
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(*seen.borrow(), [GrantCommand::Deny]);
     }
 }

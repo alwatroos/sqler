@@ -76,22 +76,35 @@ implements the trait and returns `Some` only for an approved exact key.
 
 ### Dialog
 
-Title "Allow plugin {name}?". One row per capability, risky ones first: `db.write`, a punycode or `localhost` host, and a
-`home/...` scope are prominent. Warnings: punycode hosts are shown encoded, never decoded; wildcards say they include
+Title "Allow plugin {name}?". One row per capability. Every capability needs attention (is prominent: warning row, listed
+first, repeated as a chip in the always-visible block) except a defined calm set: `db.read` and `ui.panel`. So every
+`net.http` host, every `fs.read` scope, `db.write`, `ai.tool` and every `driver.*` is prominent whatever its argument;
+a kind added later is prominent until it is classified as calm. Warnings: punycode hosts are shown encoded, never decoded; wildcards say they include
 every subdomain; `localhost` says it is the user's own computer; `home/Library` and `home/AppData` say they hold other
 applications' data; `db.write` says every change goes through the usual confirmation. Names and descriptions are
-sanitised (control and bidi characters become U+FFFD) and cut. Escape is Deny. No key chord maps to Approve, Approve is not a
+sanitised (control characters, line and paragraph separators and every Unicode format character, which covers
+zero-width, joiner, bidi and tag characters, become U+FFFD) and cut. Escape is Deny: the overlay tracks a focus handle
+that the caller focuses when it opens it, and answers Escape from there. No key chord maps to Approve, Approve is not a
 tab stop, and a click on it that came from the keyboard (Enter or Space on a focused button) is ignored, so only a
 pointer click approves. Commands: `plugins:approve-grant`, `plugins:deny-grant`; `plugins:approve-grant` must be reachable
 only through the dialog button, not the palette or a user key binding (a requirement on the plugin manager, P7).
 
-The dialog always shows a summary line ("N permissions, M need attention"), the grammar text of every prominent
-permission in a compact block outside the scrolling area, and the full list in a scroll area with a visible scrollbar,
+The dialog always shows a summary line ("N permissions, M need attention"; "none need attention" only when none does),
+the grammar text of every prominent permission (host or scope included) as a chip in a block outside the scrolling area, and the full list in a scroll area with a visible scrollbar,
 so a dangerous permission cannot be hidden below the fold while Approve is visible.
+
+The prompt cannot be forged. `GrantPrompt` has private fields and one constructor, `GrantPrompt::new(manifest,
+component, status)`, which derives the `GrantKey` (through `Manifest::grant_key`, so a digest that does not fit is an
+error) and the capability set itself. `GrantBook::decide` stores only that key and set, refuses a prompt with a problem,
+and refuses a prompt whose basis is out of date (`StaleDecision`): the prompt remembers the status it was built from and
+`decide` compares it with the file as it is on disk at that moment, so a denial, revoke or approval made by another
+instance while the dialog was open is not overwritten. The caller then rebuilds the dialog with `GrantBook::prompt`
+(the book has re-read the file). `compile_fail` doctests pin the struct literal (E0451) and the field accesses (E0616).
 
 Accessibility trade-off (known limitation): keyboard-only users can read the dialog and Deny (Tab to Deny and Enter, or
 Escape) but cannot Approve in it; a deliberate pointer click is the price of a keypress never granting. A keyboard
-confirmation path (for example typing the plugin id) is not built yet and is left for the maintainer to decide.
+confirmation path (typing the plugin id, or a hold-to-confirm control) is required of the plugin manager (P7) before the
+dialog is reachable; until then nothing shows the dialog.
 
 ### Consequences
 
@@ -100,7 +113,9 @@ confirmation path (for example typing the plugin id) is not built yet and is lef
   and saves atomically, so a denial or revoke written by the other instance is not undone by an unrelated change. There
   is no file lock, so two changes in the same instant can still lose one of them (the later write wins), and an
   instance keeps answering from the grants it loaded until its next change or restart, so a revoke made by another
-  instance takes effect there only then.
+  instance takes effect there only then. P7 must re-read the file on every plugin load, dialog and command (or watch it)
+  so a revoke in another instance takes effect in a running one. The temporary file of a write has a unique name
+  (process id, counter, time) and is created exclusively, so concurrent writers never share it.
 - Residual risk: the file is plain text, so someone with write access to the config directory can add grants. The 0600
   mode and the other-writable check reduce this; the trust level is that of `connections.toml`.
 - Wildcards such as `*.co.uk` pass the grammar (no public-suffix list); the dialog shows them verbatim.

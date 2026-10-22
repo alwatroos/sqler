@@ -31,7 +31,7 @@ pub(crate) fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, Config
     }
 }
 
-/// Writes `contents` to a sibling `<name>.tmp` file, flushes it to disk, then renames
+/// Writes `contents` to a uniquely named sibling `.<name>.….tmp` file, flushes it to disk, then renames
 /// it over `path`. Creates the parent directory when missing.
 ///
 /// The temporary file is flushed (`fsync`) before the rename, so a process crash
@@ -44,8 +44,7 @@ pub(crate) fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()
     write_atomic_with(path, contents.as_ref(), false)
 }
 
-/// Like [`write_atomic`], but the file is private to the user: mode `0600` on Unix, also for
-/// a stale temporary file that already existed. On Windows the profile ACL applies, as for
+/// Like [`write_atomic`], but the file is private to the user: mode `0600` on Unix. On Windows the profile ACL applies, as for
 /// [`write_atomic`].
 pub(crate) fn write_atomic_private(
     path: &Path,
@@ -63,23 +62,12 @@ fn write_atomic_with(path: &Path, contents: &[u8], private: bool) -> Result<(), 
     if let Some(parent) = parent {
         fs::create_dir_all(parent).map_err(werr)?;
     }
-    let mut name = path.file_name().unwrap_or_default().to_owned();
-    name.push(".tmp");
-    let tmp = path.with_file_name(name);
+    let tmp = unique_tmp_path(path);
     let write_tmp = || -> io::Result<()> {
+        // A fresh, unpredictable name per write, created exclusively: concurrent writers never
+        // share a temporary file and a planted file or symlink is never followed or truncated.
         let mut options = fs::OpenOptions::new();
-        if private {
-            // A planted file or symlink at the tmp path must not be followed or truncated:
-            // remove it (a symlink is removed, not its target), then create exclusively.
-            match fs::remove_file(&tmp) {
-                Ok(()) => {}
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e),
-            }
-            options.write(true).create_new(true);
-        } else {
-            options.write(true).create(true).truncate(true);
-        }
+        options.write(true).create_new(true);
         #[cfg(unix)]
         if private {
             use std::os::unix::fs::OpenOptionsExt;
@@ -109,6 +97,24 @@ fn write_atomic_with(path: &Path, contents: &[u8], private: bool) -> Result<(), 
     Ok(())
 }
 
+/// A temporary path beside `path`, unique per process, call and moment:
+/// `.<name>.<pid>.<counter>.<nanos>.tmp`.
+fn unique_tmp_path(path: &Path) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let mut name = std::ffi::OsString::from(".");
+    name.push(path.file_name().unwrap_or_default());
+    name.push(format!(
+        ".{}.{}.{nanos:08x}.tmp",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    path.with_file_name(name)
+}
+
 /// Flushes a directory entry change (the rename) to disk.
 #[cfg(unix)]
 fn sync_dir(dir: &Path) -> io::Result<()> {
@@ -125,6 +131,55 @@ mod tests {
         p
     }
 
+    fn leftovers(dir: &Path) -> usize {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")
+            })
+            .count()
+    }
+
+    #[test]
+    fn tmp_names_are_unique_and_beside_the_target() {
+        let path = Path::new("/x/y/f.toml");
+        let (a, b) = (unique_tmp_path(path), unique_tmp_path(path));
+        assert_ne!(a, b);
+        assert_eq!(a.parent(), path.parent());
+        assert!(
+            a.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".f.toml.")
+        );
+    }
+
+    #[test]
+    fn concurrent_writers_do_not_share_a_tmp_file() {
+        let dir = scratch("concurrent");
+        let path = dir.join("f.toml");
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for j in 0..20 {
+                        write_atomic_private(&path, format!("writer {i} round {j}\n")).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert!(fs::read_to_string(&path).unwrap().starts_with("writer "));
+        assert_eq!(leftovers(&dir), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn write_atomic_creates_replaces_and_leaves_no_tmp() {
         let dir = scratch("atomic");
@@ -133,13 +188,13 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "one");
         write_atomic(&path, "two").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "two");
-        assert!(!path.with_file_name("f.toml.tmp").exists());
+        assert_eq!(leftovers(&dir.join("nested")), 0);
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
     #[test]
-    fn write_atomic_private_is_0600_even_over_an_old_tmp_file() {
+    fn write_atomic_private_is_0600_and_ignores_an_old_tmp_file() {
         use std::os::unix::fs::PermissionsExt;
         let dir = scratch("private");
         fs::create_dir_all(&dir).unwrap();
@@ -151,7 +206,7 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "secret");
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
-        assert!(!tmp.exists());
+        assert_eq!(fs::read_to_string(&tmp).unwrap(), "stale");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -185,7 +240,7 @@ mod tests {
         let blocked = dir.join("blocked");
         fs::create_dir_all(blocked.join("sub")).unwrap();
         assert!(write_atomic(&blocked, "x").is_err());
-        assert!(!dir.join("blocked.tmp").exists());
+        assert_eq!(leftovers(&dir), 0);
         assert_eq!(fs::read_to_string(&path).unwrap(), "keep");
         let _ = fs::remove_dir_all(&dir);
     }
