@@ -52,6 +52,9 @@ pub struct StatusBarModel {
     pub timing: Option<String>,
     /// The AI provider that receives the schema, or why none does; `None` without a connection.
     pub ai: Option<crate::ai::AiStatus>,
+    /// How many agent tabs have their tool endpoint open; the status bar shows an item when it
+    /// is not 0 (ADR-0051).
+    pub agent_endpoints: usize,
 }
 
 /// `1 row`, `1,234 rows`, `500 of 1,234 rows`, `100,000+ rows`.

@@ -96,6 +96,19 @@ impl AiStatus {
     }
 }
 
+/// The text of the status bar item that shows the tool endpoints of the agent tabs: `MCP · 2`.
+#[must_use]
+pub fn endpoint_label(count: usize) -> String {
+    format!("MCP \u{b7} {count}")
+}
+
+/// The tooltip of the endpoint item. The endpoints answer on this computer only, behind a token.
+#[must_use]
+pub fn endpoint_tooltip(count: usize) -> String {
+    let agents = if count == 1 { "agent" } else { "agents" };
+    format!("SQLer's tools are open to {count} {agents} on this computer only.")
+}
+
 /// The model the connection uses: the default, else the first use case with a model of its own.
 #[must_use]
 pub fn main_choice(config: &AiConfig) -> Option<&ModelChoice> {
@@ -168,6 +181,7 @@ pub fn ai_status(config: &AiConfig, spec: Option<&ConnectionSpec>) -> Option<AiS
 mod tests {
     use super::*;
     use sqler_config::{ConnectionAi, ProviderId};
+
     use sqler_driver_api::sqler_core::{DriverId, Environment};
 
     fn id(s: &str) -> ProviderId {
@@ -217,6 +231,19 @@ mod tests {
         assert!(!is_local(&remote));
     }
 
+    #[test]
+    fn the_endpoint_item_counts_the_agents() {
+        assert_eq!(endpoint_label(1), "MCP \u{b7} 1");
+        assert_eq!(endpoint_label(3), "MCP \u{b7} 3");
+        assert_eq!(
+            endpoint_tooltip(1),
+            "SQLer's tools are open to 1 agent on this computer only."
+        );
+        assert_eq!(
+            endpoint_tooltip(2),
+            "SQLer's tools are open to 2 agents on this computer only."
+        );
+    }
     #[test]
     fn no_connection_no_status() {
         assert_eq!(ai_status(&AiConfig::default(), None), None);

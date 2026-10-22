@@ -12,7 +12,7 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
-use super::{HubConnection, HubModel, ProviderRow, SessionRow, set_up_action};
+use super::{AgentRow, HubConnection, HubModel, ProviderRow, SessionRow, set_up_action};
 use crate::ai::action::AiAction;
 use crate::ai::indicator::AiStatus;
 use crate::ai::kind_label;
@@ -40,11 +40,15 @@ pub(crate) fn ai_view(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> 
         body = body.child(notice(error.clone(), cx));
     }
     if model.providers.is_empty() {
-        body = body.child(empty(view, cx));
+        // Agents bring their own model: they need no provider (ADR-0051).
+        body = body
+            .child(empty(view, cx))
+            .child(agents_section(&model, cx));
     } else {
         body = body
             .child(connection_section(&model, cx))
             .child(sessions_section(&model, cx))
+            .child(agents_section(&model, cx))
             .child(providers_section(&model, cx))
             .child(buttons_section(cx));
     }
@@ -284,6 +288,58 @@ fn session_row(row: &SessionRow, cx: &mut Context<WorkspaceView>) -> impl gpui::
         )
         .child(div().text_color(muted_fg).child(row.connection.clone()))
         .child(div().flex_1())
+        .child(div().text_color(muted_fg).child(row.label))
+        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            view.dispatch(WorkspaceAction::ActivateTab(tab), cx);
+        }))
+}
+
+/// The agent tabs, a click activates one, and the button that opens another.
+fn agents_section(model: &HubModel, cx: &mut Context<WorkspaceView>) -> Div {
+    let mut section = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE[1]))
+        .child(caption("AGENTS", cx));
+    if model.agents.is_empty() {
+        section = section.child(muted("No agents yet.", cx));
+    }
+    for row in &model.agents {
+        section = section.child(agent_row(row, cx));
+    }
+    let mut new = Button::new("ai-new-agent")
+        .label("New agent")
+        .small()
+        .outline()
+        .disabled(model.new_agent_blocked.is_some())
+        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+            view.dispatch_ai(AiAction::OpenAgent, cx);
+        }));
+    if let Some(reason) = model.new_agent_blocked {
+        new = new.tooltip(reason);
+    }
+    section.child(div().px(px(SPACE[4])).pt(px(SPACE[1])).child(new))
+}
+
+/// One agent tab: title, the agent's name and what it does now.
+fn agent_row(row: &AgentRow, cx: &mut Context<WorkspaceView>) -> impl gpui::IntoElement {
+    let tab = row.tab;
+    let muted_fg = cx.theme().muted_foreground;
+    let size = ui_scale(cx).sm;
+    let mut line = list_row(("ai-agent-row", row.tab.raw()), RowState::default(), cx)
+        .mx(px(SPACE[2]))
+        .text_size(px(size))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_weight(FontWeight::MEDIUM)
+                .child(row.title.clone()),
+        );
+    if let Some(agent) = &row.agent {
+        line = line.child(div().text_color(muted_fg).child(agent.clone()));
+    }
+    line.child(div().flex_1())
         .child(div().text_color(muted_fg).child(row.label))
         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
             view.dispatch(WorkspaceAction::ActivateTab(tab), cx);

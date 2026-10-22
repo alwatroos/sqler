@@ -55,6 +55,8 @@ You can open several tabs on the same connection. Each tab has its own session. 
 
 An **AI session** tab (`ai:open-session`, pinned, titled `AI: name`) holds a conversation with the model about a connection that has AI turned on; it has its own database session and keeps its transcript in memory only. Statements the model wants to run wait for your approval, and on production connections for the usual second confirmation. See [AI session tabs](ai.md#ai-session-tabs).
 
+An **Agent** tab (`ai:open-agent`, pinned, titled `Agent: name`) hosts an external coding agent that uses a connection through SQLer's tools, with its own endpoint, approvals and transcript. Closing the tab stops the agent. See [Agent tabs](ai.md#agent-tabs).
+
 ## Tab bars, groups and preview tabs
 
 Each group has its own tab bar. A tab shows a dot in the connection colour, an icon for its kind (query, results, DDL, properties), the title and an environment badge (`DEV`, `STAGING` or `PROD`). At the right end of the bar a drop-down lists every tab of the group, and the row scrolls when the tabs do not fit. The active tab of a `prod` connection has a red stripe on top and a solid `PROD` badge, and the whole status bar turns red while a `prod` tab is active, so you do not run a statement on production by mistake.

@@ -166,6 +166,23 @@ pub(crate) fn status_bar(
         );
     }
 
+    if model.agent_endpoints > 0 {
+        let count = model.agent_endpoints;
+        left = left.child(
+            action_item(
+                "status-mcp",
+                colors,
+                None,
+                "workbench:show-ai",
+                crate::ai::endpoint_label(count),
+                Some(crate::ai::endpoint_tooltip(count).into()),
+                cx,
+            )
+            .child(Icon::new(AppIcon::Plug).size(px(12.)).text_color(text))
+            .child(crate::ai::endpoint_label(count)),
+        );
+    }
+
     let mut right = div().h_full().flex().flex_row().items_center();
     let running = match model.run {
         RunIndicator::Idle => None,

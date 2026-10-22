@@ -45,9 +45,14 @@ impl WorkspaceView {
         self.ai_session_inputs.tabs.get(&tab).map(|ui| &ui.composer)
     }
 
-    /// The focus of the Deny button of the approval card of `tab`.
+    /// The focus of the Deny button of the approval card of `tab`: an AI session tab's, else an
+    /// agent tab's.
     pub(crate) fn ai_deny_focus(&self, tab: TabId) -> Option<&FocusHandle> {
-        self.ai_session_inputs.tabs.get(&tab).map(|ui| &ui.deny)
+        self.ai_session_inputs
+            .tabs
+            .get(&tab)
+            .map(|ui| &ui.deny)
+            .or_else(|| self.agent_deny_focus(tab))
     }
 
     /// The scroll position of the transcript of `tab`.

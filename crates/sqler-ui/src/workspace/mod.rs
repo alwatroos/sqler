@@ -7,6 +7,7 @@
 //! and `run` exist with the `gui` feature.
 
 mod action;
+mod agent;
 mod ai;
 mod ai_session;
 mod assist;

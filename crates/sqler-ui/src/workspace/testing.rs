@@ -3205,3 +3205,1709 @@ mod ai_session_flow {
         }
     }
 }
+
+/// Whole-flow tests of the agent tab with the mock ACP agent of `sqler-acp` (ADR-0051). The agent
+/// really runs as a process and the tool endpoint really listens on loopback; a test MCP client
+/// stands in for the agent's own MCP calls (the mock agent cannot make them). Every wait is a
+/// channel wait with a hang guard, and every test closes its agents and checks that the process
+/// was reaped.
+#[cfg(test)]
+mod agent_flow {
+    use std::collections::HashMap;
+    use std::fmt::Write as _;
+    use std::future::Future;
+    use std::net::SocketAddr;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
+
+    use bytes::Bytes;
+    use http::{HeaderMap, Request, StatusCode};
+    use http_body_util::{BodyExt, Full};
+    use hyper::client::conn::http1;
+    use hyper_util::rt::TokioIo;
+    use serde_json::{Value, json};
+    use sqler_acp::{
+        AgentEvent, ExitInfo, PermissionOption, PermissionOptionKind, PermissionRequest, SessionId,
+        SessionUpdate, ToolCallInfo, ToolCallStatus as AcpStatus,
+    };
+    use sqler_ai_tools::{ApprovalOutcome, ApprovalStage, MemoryAudit, Surface, unwrap_untrusted};
+    use sqler_config::{AiConfig, ConnectionAi, ConnectionSpec, MemoryStore};
+    use sqler_driver_api::sqler_core::{ConnectionConfig, Environment, Value as Cell};
+    use sqler_driver_api::{DriverRegistry, collect};
+    use sqler_driver_sqlite::{DRIVER_ID, SqliteDriver};
+    use tokio::net::TcpStream;
+    use tokio::runtime::{Builder, Runtime};
+    use tokio::sync::mpsc::UnboundedReceiver;
+    use tokio::sync::oneshot;
+
+    use super::*;
+    use crate::ai::agent::{
+        AGENT_AI_OFF, AGENT_BUSY, AGENT_NOT_READY, AGENT_STOPPED_AI_OFF, AGENT_UNKNOWN, AgentEntry,
+        AgentFailure, AgentMsg, AgentPhase, AgentStarted, AgentTab, PermissionAsk, start_agent,
+    };
+    use crate::ai::session::{
+        SESSION_CONFIG_BROKEN, SESSION_EMPTY, SESSION_NO_CONNECTION, STALE_ANSWER,
+    };
+    use crate::ai::{AiAction, AiStartup, AiState, NoProviders, action_for};
+    use crate::command::CommandId;
+    use crate::query::{Phase, QueryTab};
+    use crate::sidebar::SidebarModel;
+    use crate::tabs::{TabId, TabKind};
+    use crate::workspace::{Effect, SessionBridge, Workspace, WorkspaceAction};
+
+    /// The hang guard of every wait. It is never asserted against.
+    const HANG: Duration = Duration::from_secs(30);
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+    const UPDATE: &str = "update customers set country = 'GB' where id = 2";
+    const OTHER_UPDATE: &str = "update customers set country = 'XX' where id = 4";
+    /// A secret in the `env` of the mock profile: it must never show up anywhere.
+    const ENV_CANARY: &str = "sk-env-canary-7741";
+
+    /// The path of the mock agent. A missing binary fails the test: it never skips.
+    fn mock_agent() -> String {
+        if let Ok(path) = std::env::var("SQLER_TEST_MOCK_AGENT") {
+            return path;
+        }
+        let exe = std::env::current_exe().unwrap();
+        let name = format!("sqler-acp-mock-agent{}", std::env::consts::EXE_SUFFIX);
+        let path = exe.parent().and_then(Path::parent).unwrap().join(name);
+        assert!(
+            path.exists(),
+            "the mock agent is missing at {}: run `cargo build -p sqler-acp --bins`",
+            path.display()
+        );
+        path.display().to_string()
+    }
+
+    #[cfg(unix)]
+    fn alive(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+
+    #[cfg(not(unix))]
+    fn alive(_pid: u32) -> bool {
+        false
+    }
+
+    /// A folder that is removed with the guard: the database, the config and the agent's cwd.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            let n = SEQ.fetch_add(1, Ordering::SeqCst);
+            let path =
+                std::env::temp_dir().join(format!("sqler-agent-flow-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(path.join("config")).unwrap();
+            Self(path)
+        }
+
+        fn db(&self) -> String {
+            self.0.join("db.sqlite").display().to_string()
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn open_sqlite(path: &str) -> Box<dyn Session> {
+        let mut registry = DriverRegistry::new();
+        registry.register(Box::new(SqliteDriver::new())).unwrap();
+        let config = ConnectionConfig::new("t", DriverId::new(DRIVER_ID).unwrap(), path);
+        registry.connect(&config).await.unwrap()
+    }
+
+    async fn run_sql(path: &str, sql: &str) -> Vec<Vec<Cell>> {
+        let mut session = open_sqlite(path).await;
+        let q = Query::new(sql);
+        let mut stream = session.execute(&q).await.unwrap();
+        let result = collect(&mut *stream).await.unwrap();
+        let rows = result.rows().iter().map(|r| r.0.clone()).collect();
+        drop(stream);
+        session.close().await.unwrap();
+        rows
+    }
+
+    /// Opens real `SQLite` sessions on the target of the request.
+    struct Lite;
+
+    impl Connector for Lite {
+        fn driver_ids(&self) -> Vec<DriverId> {
+            vec![DriverId::new(DRIVER_ID).unwrap()]
+        }
+
+        fn connect(
+            &self,
+            request: ConnectRequest,
+        ) -> BoxFuture<'static, Result<Box<dyn Session>, ConnectFailure>> {
+            Box::pin(async move { Ok(open_sqlite(&request.spec.target).await) })
+        }
+
+        fn trust_host_key(
+            &self,
+            _key: HostKeyPrompt,
+        ) -> BoxFuture<'static, Result<(), ConnectFailure>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+
+    /// One reply of the endpoint.
+    struct Reply {
+        status: StatusCode,
+        headers: HeaderMap,
+        body: String,
+    }
+
+    /// The test stand-in for the agent's MCP client: the URL and the header the mock agent
+    /// echoes for `descriptor`.
+    #[derive(Clone)]
+    struct McpClient {
+        addr: SocketAddr,
+        auth: String,
+    }
+
+    impl McpClient {
+        async fn post(&self, auth: Option<&str>, session: Option<&str>, body: &Value) -> Reply {
+            let stream = TcpStream::connect(self.addr).await.unwrap();
+            let (mut sender, connection) = http1::handshake(TokioIo::new(stream)).await.unwrap();
+            tokio::spawn(connection);
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("host", self.addr.to_string())
+                .header("accept", "application/json, text/event-stream")
+                .header("content-type", "application/json");
+            if let Some(auth) = auth {
+                builder = builder.header("authorization", auth);
+            }
+            if let Some(session) = session {
+                builder = builder.header("mcp-session-id", session);
+            }
+            let request = builder
+                .body(Full::new(Bytes::from(body.to_string())))
+                .unwrap();
+            let response = tokio::time::timeout(HANG, sender.send_request(request))
+                .await
+                .expect("a response")
+                .unwrap();
+            let (parts, body) = response.into_parts();
+            let body = tokio::time::timeout(HANG, body.collect())
+                .await
+                .expect("a finished body")
+                .unwrap()
+                .to_bytes();
+            Reply {
+                status: parts.status,
+                headers: parts.headers,
+                body: String::from_utf8_lossy(&body).into_owned(),
+            }
+        }
+
+        /// The JSON-RPC response with this id, whether the body is JSON or an event stream.
+        fn response_to(reply: &Reply, id: i64) -> Value {
+            let text = reply.body.trim();
+            let mut all = Vec::new();
+            if let Ok(value) = serde_json::from_str::<Value>(text) {
+                all.push(value);
+            }
+            all.extend(
+                text.lines()
+                    .filter_map(|line| line.strip_prefix("data:"))
+                    .filter_map(|data| serde_json::from_str::<Value>(data.trim()).ok()),
+            );
+            all.into_iter()
+                .find(|m| m["id"] == id)
+                .unwrap_or_else(|| panic!("no response {id} in {:?}", reply.body))
+        }
+
+        /// Initializes a session and returns its id.
+        async fn session(&self) -> String {
+            let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-11-25", "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0"}}});
+            let reply = self.post(Some(&self.auth), None, &init).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let session = reply
+                .headers
+                .get("mcp-session-id")
+                .expect("a session id")
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let note = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+            let reply = self.post(Some(&self.auth), Some(&session), &note).await;
+            assert_eq!(reply.status, StatusCode::ACCEPTED, "{}", reply.body);
+            session
+        }
+
+        /// Calls one tool on a session of its own and returns the JSON-RPC response.
+        async fn call(&self, tool: &str, args: Value) -> Value {
+            let session = self.session().await;
+            let body = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": tool, "arguments": args}});
+            let reply = self.post(Some(&self.auth), Some(&session), &body).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            Self::response_to(&reply, 2)
+        }
+    }
+
+    /// The text of a tool response, with the untrusted envelope removed.
+    fn tool_text(response: &Value) -> String {
+        let Some(text) = response["result"]["content"][0]["text"].as_str() else {
+            return response.to_string();
+        };
+        unwrap_untrusted(text).unwrap_or(text).to_owned()
+    }
+
+    fn run_query(sql: &str) -> Value {
+        json!({"connection": "db", "sql": sql})
+    }
+
+    /// The TOML of `agents.toml` for the mock profiles.
+    fn agents_toml() -> String {
+        let command = format!("{:?}", mock_agent());
+        let mut text = String::new();
+        let profiles: [(&str, &str, &str, &str); 3] = [
+            ("mock", "Mock Agent", &command, ""),
+            (
+                "mock-crash-init",
+                "Crash On Init",
+                &command,
+                "\"--crash-on-init\"",
+            ),
+            (
+                "mock-missing",
+                "Missing Agent",
+                "\"/nonexistent/sqler-no-such-agent\"",
+                "",
+            ),
+        ];
+        for (id, name, program, args) in profiles {
+            writeln!(
+                text,
+                "[[agent]]\nid = \"{id}\"\nname = \"{name}\"\ncommand = {program}\nargs = [{args}]"
+            )
+            .unwrap();
+            text.push_str("install_hint = \"npm install -g no-such-agent\"\n");
+            if id == "mock" {
+                writeln!(text, "env = [[\"SQLER_FLOW_SECRET\", \"{ENV_CANARY}\"]]").unwrap();
+            }
+        }
+        text
+    }
+
+    /// What was started: the tab, the pid and the exit that resolves when it is torn down.
+    struct Run {
+        tab: TabId,
+        pid: Option<u32>,
+        finished: Option<oneshot::Receiver<ExitInfo>>,
+    }
+
+    /// The workspace with one real `SQLite` connection, standing in for the view.
+    struct Desk {
+        w: Workspace,
+        bridge: SessionBridge,
+        scratch: Scratch,
+        audit: Arc<MemoryAudit>,
+        hosts: HashMap<TabId, UnboundedReceiver<AgentMsg>>,
+        runs: Vec<Run>,
+        workers: Vec<oneshot::Receiver<()>>,
+        closed_sessions: Vec<usize>,
+        /// Everything that was shown or logged: Debug output and notices. Secrets must not be in it.
+        log: String,
+        /// How many approval asks reached a tab.
+        asks: usize,
+        /// Starts are spawned but not awaited: the test delivers the result itself.
+        defer_starts: bool,
+        pending: HashMap<TabId, oneshot::Receiver<Result<AgentStarted, AgentFailure>>>,
+        rt: Runtime,
+    }
+
+    impl Desk {
+        fn new(env: Option<Environment>) -> Self {
+            Self::build(env, true, Some(agents_toml()), None)
+        }
+
+        fn build(
+            env: Option<Environment>,
+            ai_on: bool,
+            toml: Option<String>,
+            ai: Option<AiState>,
+        ) -> Self {
+            let rt = Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            let scratch = Scratch::new();
+            rt.block_on(async {
+                for sql in [
+                    "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT, country TEXT)",
+                    "INSERT INTO customers VALUES (1,'Acme','US'),(2,'Contoso','DE'),\
+                     (3,'Globex','FR'),(4,'Initech','US')",
+                ] {
+                    run_sql(&scratch.db(), sql).await;
+                }
+            });
+            if let Some(toml) = toml {
+                std::fs::write(scratch.0.join("config").join("agents.toml"), toml).unwrap();
+            }
+            let bridge = SessionBridge::new(
+                Arc::new(Lite),
+                Arc::new(MemoryStore::new()),
+                rt.handle().clone(),
+            );
+            let mut spec =
+                ConnectionSpec::new("db", DriverId::new(DRIVER_ID).unwrap(), scratch.db())
+                    .with_ai(ConnectionAi::new(ai_on));
+            if let Some(env) = env {
+                spec = spec.with_environment(env);
+            }
+            let mut sidebar = SidebarModel::default();
+            sidebar.add_connection(spec, None).unwrap();
+            let ai = ai.unwrap_or_else(|| AiState::new(AiConfig::default(), Vec::new(), None));
+            Self {
+                w: Workspace::new(sidebar).with_ai(ai),
+                bridge,
+                scratch,
+                audit: Arc::new(MemoryAudit::new()),
+                hosts: HashMap::new(),
+                runs: Vec::new(),
+                workers: Vec::new(),
+                closed_sessions: Vec::new(),
+                log: String::new(),
+                asks: 0,
+                defer_starts: false,
+                pending: HashMap::new(),
+                rt,
+            }
+        }
+
+        /// Runs a future with the hang guard.
+        fn block<T>(&self, fut: impl Future<Output = T>) -> T {
+            self.rt
+                .block_on(async { tokio::time::timeout(HANG, fut).await })
+                .expect("hang guard: a wait took too long")
+        }
+
+        fn wait<T>(&self, rx: oneshot::Receiver<T>) -> T {
+            self.block(rx).expect("the task was lost")
+        }
+
+        fn note(&mut self, what: impl std::fmt::Debug) {
+            writeln!(self.log, "{what:?}").unwrap();
+        }
+
+        fn notice(&mut self) -> Option<String> {
+            let notice = self.w.take_notice();
+            if let Some(text) = &notice {
+                self.log.push_str(text);
+                self.log.push('\n');
+            }
+            notice
+        }
+
+        fn pump(&mut self, effect: Effect) {
+            match effect {
+                Effect::None
+                | Effect::LoadCatalog { .. }
+                | Effect::RecordHistory(_)
+                | Effect::SaveConnections { .. }
+                | Effect::Quit => {}
+                Effect::Batch(effects) => effects.into_iter().for_each(|e| self.pump(e)),
+                Effect::Connect { request, connect } => {
+                    let result = self.block(self.bridge.connect(connect));
+                    let next = self.w.connect_finished(request, result);
+                    self.pump(next);
+                }
+                Effect::StartCatalog { worker, .. } => {
+                    let done = self.bridge.run_catalog(worker);
+                    self.workers.push(done);
+                }
+                Effect::LoadAgentProfiles => {
+                    let dir = self.scratch.0.join("config");
+                    let profiles = crate::ai::agent::load_agent_profiles(Some(&dir));
+                    self.note(&profiles);
+                    self.w.agent_profiles_loaded(profiles);
+                }
+                Effect::StartAgent { mut start, host } => {
+                    self.note(&start);
+                    start.cwd = self.scratch.0.join("agent-cwd");
+                    start.audit = Some(self.audit.clone());
+                    start.launch.cancel_grace = Duration::from_millis(200);
+                    let tab = start.tab;
+                    let done = self
+                        .bridge
+                        .spawn(start_agent(*start, self.bridge.connector()));
+                    self.hosts.insert(tab, host);
+                    if self.defer_starts {
+                        self.pending.insert(tab, done);
+                        return;
+                    }
+                    let result = self.wait(done);
+                    let ready = match result {
+                        Ok(started) => {
+                            self.note(&started.ready);
+                            self.runs.push(Run {
+                                tab,
+                                pid: started.ready.control.pid(),
+                                finished: Some(started.finished),
+                            });
+                            Ok(started.ready)
+                        }
+                        Err(failure) => {
+                            self.note(&failure);
+                            Err(failure)
+                        }
+                    };
+                    let next = self.w.agent_ready(tab, ready);
+                    self.pump(next);
+                }
+                Effect::CancelQuery(handle) => {
+                    let _ = self.block(handle.cancel());
+                }
+                Effect::CloseSession(session) => {
+                    let _ = self.block(session.close());
+                }
+                Effect::CloseSessions(sessions) => {
+                    self.closed_sessions.push(sessions.len());
+                    for session in sessions {
+                        let _ = self.block(session.close());
+                    }
+                }
+                other => panic!("unexpected effect {other:?}"),
+            }
+        }
+
+        fn dispatch(&mut self, action: AiAction) {
+            self.note(&action);
+            let effect = self.w.dispatch_ai(action);
+            self.note(&effect);
+            self.pump(effect);
+        }
+
+        /// Applies one message of the host channel of `tab`.
+        fn apply(&mut self, tab: TabId, message: AgentMsg) {
+            self.note(&message);
+            if matches!(message, AgentMsg::Ask(_)) {
+                self.asks += 1;
+            }
+            let next = self.w.agent_message(tab, message);
+            self.pump(next);
+        }
+
+        /// Applies every message until the host channel ends: all its senders are gone once the
+        /// agent, its endpoint and the runner are torn down.
+        fn drain(&mut self, tab: TabId) {
+            loop {
+                let host = self.hosts.get_mut(&tab).expect("a host channel");
+                let message = self
+                    .rt
+                    .block_on(async { tokio::time::timeout(HANG, host.recv()).await });
+                match message {
+                    Ok(Some(message)) => self.apply(tab, message),
+                    Ok(None) => return,
+                    Err(elapsed) => panic!("hang guard: the host channel did not end ({elapsed})"),
+                }
+            }
+        }
+
+        /// Applies host messages until `done` holds. The wait is a channel wait with a hang guard.
+        fn until(&mut self, tab: TabId, what: &str, done: impl Fn(&Workspace) -> bool) {
+            while !done(&self.w) {
+                let host = self.hosts.get_mut(&tab).expect("a host channel");
+                let message = self
+                    .rt
+                    .block_on(async { tokio::time::timeout(HANG, host.recv()).await });
+                match message {
+                    Ok(Some(message)) => self.apply(tab, message),
+                    Ok(None) => panic!("the host channel closed before: {what}"),
+                    Err(elapsed) => panic!("hang guard: {what} ({elapsed})"),
+                }
+            }
+        }
+
+        fn until_phase(&mut self, tab: TabId, what: &str, phase: impl Fn(&AgentPhase) -> bool) {
+            self.until(tab, what, |w| {
+                w.agent(tab).is_some_and(|a| phase(a.phase()))
+            });
+        }
+
+        fn until_ready(&mut self, tab: TabId) {
+            self.until_phase(tab, "the agent is ready", |p| *p == AgentPhase::Ready);
+        }
+
+        fn until_stopped(&mut self, tab: TabId) {
+            self.until_phase(tab, "the agent stopped", |p| {
+                matches!(p, AgentPhase::Stopped(_))
+            });
+        }
+
+        /// Opens the connection and an agent tab (the profiles load) without picking an agent.
+        fn open_picker(&mut self) -> TabId {
+            let effect = self.w.dispatch(WorkspaceAction::OpenConnection(0));
+            self.pump(effect);
+            self.dispatch(AiAction::OpenAgent);
+            self.w.active_agent().expect("an agent tab").0
+        }
+
+        /// Opens an agent tab and starts the profile `id`; waits until it is ready.
+        fn open_agent(&mut self, id: &str) -> TabId {
+            let tab = self.open_picker();
+            self.dispatch(AiAction::PickAgent(tab, id.to_owned()));
+            self.until_ready(tab);
+            tab
+        }
+
+        fn say(&mut self, tab: TabId, text: &str) {
+            self.dispatch(AiAction::SetAgentDraft(tab, text.to_owned()));
+            self.dispatch(AiAction::SendAgentPrompt(tab));
+        }
+
+        /// Sends a prompt and waits for the end of the turn.
+        fn ask(&mut self, tab: TabId, text: &str) {
+            self.say(tab, text);
+            self.until_ready(tab);
+        }
+
+        fn agent(&self, tab: TabId) -> &AgentTab {
+            self.w.agent(tab).expect("the agent tab")
+        }
+
+        fn messages(&self, tab: TabId) -> Vec<String> {
+            self.agent(tab)
+                .transcript()
+                .entries()
+                .iter()
+                .filter_map(|e| match e {
+                    AgentEntry::Message(m) => Some(m.text.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn pid(&self, tab: TabId) -> u32 {
+            self.runs
+                .iter()
+                .rev()
+                .find(|r| r.tab == tab)
+                .and_then(|r| r.pid)
+                .expect("a pid")
+        }
+
+        fn addr(&self, tab: TabId) -> SocketAddr {
+            let url = self.agent(tab).endpoint_url().expect("an endpoint");
+            addr_of(url)
+        }
+
+        /// The client the mock agent's `descriptor` reply describes: its URL and `Authorization`
+        /// header, as the agent got them in `session/new`. The reply is also the canary: the
+        /// token is in the transcript (the agent said it) and nowhere else.
+        fn client(&mut self, tab: TabId) -> McpClient {
+            self.ask(tab, "descriptor");
+            let text = self.messages(tab).pop().expect("a descriptor message");
+            let servers: Value = serde_json::from_str(&text).unwrap();
+            let server = &servers[0];
+            let url = server["url"].as_str().unwrap();
+            assert_eq!(url, self.agent(tab).endpoint_url().unwrap());
+            let header = server["headers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|h| h["name"] == "Authorization")
+                .expect("the Authorization header");
+            McpClient {
+                addr: addr_of(url),
+                auth: header["value"].as_str().unwrap().to_owned(),
+            }
+        }
+
+        /// Starts a tool call from the stand-in agent; the answer arrives on the receiver.
+        fn call(&self, client: &McpClient, tool: &str, args: Value) -> oneshot::Receiver<Value> {
+            let (tx, rx) = oneshot::channel();
+            let client = client.clone();
+            let tool = tool.to_owned();
+            self.rt.spawn(async move {
+                let _ = tx.send(client.call(&tool, args).await);
+            });
+            rx
+        }
+
+        fn front(&self, tab: TabId) -> u64 {
+            self.agent(tab).approvals().current().expect("an ask").id
+        }
+
+        fn until_asked(&mut self, tab: TabId) {
+            self.until(tab, "an approval waits", |w| {
+                w.agent(tab).is_some_and(|a| a.approvals().is_waiting())
+            });
+        }
+
+        fn until_permission(&mut self, tab: TabId) {
+            self.until(tab, "a permission request waits", |w| {
+                w.agent(tab).is_some_and(|a| a.permissions().is_waiting())
+            });
+        }
+
+        fn country(&self, id: i64) -> String {
+            let rows = self.block(run_sql(
+                &self.scratch.db(),
+                &format!("select country from customers where id = {id}"),
+            ));
+            match &rows[0][0] {
+                Cell::Text(t) => t.clone(),
+                other => panic!("{other:?}"),
+            }
+        }
+
+        fn refuses(&self, addr: SocketAddr) -> bool {
+            self.block(TcpStream::connect(addr)).is_err()
+        }
+
+        /// Waits for the teardown of every run of `tab` and returns how the processes ended.
+        fn finished(&mut self, tab: TabId) -> Vec<ExitInfo> {
+            let waits: Vec<_> = self
+                .runs
+                .iter_mut()
+                .filter(|r| r.tab == tab)
+                .filter_map(|r| r.finished.take())
+                .collect();
+            let exits: Vec<ExitInfo> = waits.into_iter().map(|rx| self.wait(rx)).collect();
+            for pid in self
+                .runs
+                .iter()
+                .filter(|r| r.tab == tab)
+                .filter_map(|r| r.pid)
+            {
+                assert!(!alive(pid), "the agent process {pid} is still there");
+            }
+            exits
+        }
+
+        /// Closes the tab through the real close path and waits until its agent is gone.
+        fn close(&mut self, tab: TabId) -> Vec<ExitInfo> {
+            let effect = self.w.request_close_tab(tab);
+            self.pump(effect);
+            self.finished(tab)
+        }
+
+        /// Closes every agent tab that is left and checks that no process is.
+        fn finish(mut self) {
+            let tabs: Vec<TabId> = self.w.agents.tabs.keys().copied().collect();
+            for tab in tabs {
+                self.close(tab);
+            }
+            let tabs: Vec<TabId> = self.runs.iter().map(|r| r.tab).collect();
+            for tab in tabs {
+                self.finished(tab);
+            }
+            assert!(!self.log.contains(ENV_CANARY), "the env secret leaked");
+        }
+    }
+
+    impl Drop for Desk {
+        fn drop(&mut self) {
+            // A test that failed still stops its agents.
+            for tab in self.w.agents.tabs.values() {
+                if let Some(control) = &tab.control {
+                    control.close();
+                }
+            }
+            let runs: Vec<_> = self
+                .runs
+                .iter_mut()
+                .filter_map(|r| r.finished.take())
+                .collect();
+            self.rt.block_on(async {
+                for run in runs {
+                    let _ = tokio::time::timeout(HANG, run).await;
+                }
+            });
+        }
+    }
+
+    fn addr_of(url: &str) -> SocketAddr {
+        url.strip_prefix("http://")
+            .and_then(|rest| rest.strip_suffix("/mcp"))
+            .and_then(|addr| addr.parse().ok())
+            .unwrap_or_else(|| panic!("not a loopback endpoint url: {url}"))
+    }
+
+    fn canned_permission(options: &[(&str, PermissionOptionKind)]) -> PermissionRequest {
+        PermissionRequest {
+            session_id: SessionId::new("s"),
+            tool_call: ToolCallInfo {
+                id: "call".to_owned(),
+                title: Some("Run DELETE".to_owned()),
+                kind: None,
+                status: Some(AcpStatus::Pending),
+                text: Vec::new(),
+            },
+            options: options
+                .iter()
+                .map(|(id, kind)| PermissionOption {
+                    id: (*id).to_owned(),
+                    name: (*id).to_owned(),
+                    kind: *kind,
+                })
+                .collect(),
+        }
+    }
+
+    // ---- the gates and the profiles ----
+
+    #[test]
+    fn the_gates_block_an_agent_and_the_hub_says_why() {
+        // AI off for the connection.
+        let mut desk = Desk::build(None, false, Some(agents_toml()), None);
+        let effect = desk.w.dispatch(WorkspaceAction::OpenConnection(0));
+        desk.pump(effect);
+        let tabs = desk.w.tabs().groups()[0].tabs().len();
+        desk.dispatch(AiAction::OpenAgent);
+        assert_eq!(desk.notice().as_deref(), Some(AGENT_AI_OFF));
+        assert_eq!(desk.w.tabs().groups()[0].tabs().len(), tabs);
+        assert_eq!(desk.w.hub_model().new_agent_blocked, Some(AGENT_AI_OFF));
+        assert_eq!(desk.w.hub_model().agents.len(), 0);
+        assert!(desk.w.agent_profiles().is_none());
+        desk.finish();
+
+        // A broken ai.toml.
+        let broken = AiState::from_startup(&AiStartup {
+            config: Err("bad".into()),
+            dir: None,
+            factory: Arc::new(NoProviders),
+        });
+        let mut desk = Desk::build(None, true, Some(agents_toml()), Some(broken));
+        let effect = desk.w.dispatch(WorkspaceAction::OpenConnection(0));
+        desk.pump(effect);
+        desk.dispatch(AiAction::OpenAgent);
+        assert_eq!(desk.notice().as_deref(), Some(SESSION_CONFIG_BROKEN));
+        assert_eq!(
+            desk.w.hub_model().new_agent_blocked,
+            Some(SESSION_CONFIG_BROKEN)
+        );
+        desk.finish();
+
+        // No connection at all.
+        let mut empty = Workspace::new(SidebarModel::default());
+        assert!(matches!(
+            empty.dispatch_ai(AiAction::OpenAgent),
+            Effect::None
+        ));
+        assert_eq!(empty.take_notice().as_deref(), Some(SESSION_NO_CONNECTION));
+        assert_eq!(
+            empty.hub_model().new_agent_blocked,
+            Some(SESSION_NO_CONNECTION)
+        );
+        assert_eq!(empty.agent_endpoints(), 0);
+    }
+
+    #[test]
+    fn opening_an_agent_loads_the_profiles_once_and_the_picker_starts_one() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_picker();
+        assert_eq!(desk.w.tabs().get(tab).unwrap().kind(), TabKind::Agent);
+        assert_eq!(desk.w.tabs().get(tab).unwrap().title(), "Agent: db (2)");
+        assert_eq!(
+            desk.w.breadcrumbs(tab).unwrap().items,
+            ["db".to_owned(), "Agent".to_owned()]
+        );
+        assert_eq!(desk.agent(tab).phase(), &AgentPhase::Picking);
+        assert_eq!(desk.agent(tab).label(), "Choose an agent");
+        let profiles = desk.w.agent_profiles().expect("profiles are loaded");
+        let ids: Vec<_> = profiles.list.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "claude-code",
+                "codex",
+                "mock",
+                "mock-crash-init",
+                "mock-missing"
+            ]
+        );
+        // The second tab does not read the file again.
+        let effect = desk.w.dispatch_ai(AiAction::OpenAgent);
+        assert!(!format!("{effect:?}").contains("LoadAgentProfiles"));
+        // An id that is not in the list, and a pick on a tab that is not picking.
+        desk.dispatch(AiAction::PickAgent(tab, "nope".into()));
+        assert_eq!(desk.notice().as_deref(), Some(AGENT_UNKNOWN));
+        assert_eq!(desk.agent(tab).phase(), &AgentPhase::Picking);
+        // A prompt before the pick.
+        desk.dispatch(AiAction::SetAgentDraft(tab, "hi".into()));
+        desk.dispatch(AiAction::SendAgentPrompt(tab));
+        assert_eq!(desk.notice().as_deref(), Some(AGENT_NOT_READY));
+        desk.dispatch(AiAction::PickAgent(tab, "mock".into()));
+        assert_eq!(desk.agent(tab).phase(), &AgentPhase::Ready);
+        assert_eq!(desk.agent(tab).profile().unwrap().id, "mock");
+        assert_eq!(desk.agent(tab).agent_name(), Some("sqler-acp-mock-agent"));
+        desk.dispatch(AiAction::PickAgent(tab, "mock".into()));
+        assert_eq!(desk.agent(tab).phase(), &AgentPhase::Ready);
+        desk.finish();
+    }
+
+    #[test]
+    fn a_user_profile_replaces_a_built_in_one_and_an_invalid_file_shows_a_notice() {
+        let toml = format!(
+            "[[agent]]\nid = \"codex\"\nname = \"My Codex\"\ncommand = {:?}\n",
+            mock_agent()
+        );
+        let mut desk = Desk::build(None, true, Some(toml), None);
+        let tab = desk.open_picker();
+        assert_eq!(desk.notice(), None);
+        desk.dispatch(AiAction::PickAgent(tab, "codex".into()));
+        desk.until_ready(tab);
+        assert_eq!(desk.agent(tab).profile().unwrap().name, "My Codex");
+        assert_eq!(
+            desk.w.breadcrumbs(tab).unwrap().items,
+            ["db".to_owned(), "My Codex".to_owned()]
+        );
+        desk.finish();
+
+        let secret = "sk-file-canary-5521";
+        let bad =
+            format!("[[agent]]\nid = \"Bad Id\"\ncommand = \"x\"\nenv = [[\"K\", \"{secret}\"]]\n");
+        let mut desk = Desk::build(None, true, Some(bad), None);
+        let tab = desk.open_picker();
+        let notice = desk.notice().expect("a notice");
+        assert!(notice.contains("agents.toml"), "{notice}");
+        assert!(!notice.contains(secret));
+        let profiles = desk.w.agent_profiles().unwrap();
+        assert_eq!(profiles.list.len(), 2);
+        assert!(profiles.error.is_some());
+        assert_eq!(desk.agent(tab).phase(), &AgentPhase::Picking);
+        assert!(!desk.log.contains(secret));
+        desk.finish();
+    }
+
+    // ---- the conversation ----
+
+    #[test]
+    fn echo_renders_the_message_the_plan_and_the_tool_call() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_agent("mock");
+        assert_eq!(desk.agent(tab).label(), "Ready");
+        desk.say(tab, "echo");
+        assert!(desk.agent(tab).is_running());
+        assert_eq!(desk.agent(tab).draft(), "");
+        // Busy and empty prompts are refused.
+        desk.dispatch(AiAction::SetAgentDraft(tab, "again".into()));
+        desk.dispatch(AiAction::SendAgentPrompt(tab));
+        assert_eq!(desk.notice().as_deref(), Some(AGENT_BUSY));
+        assert_eq!(desk.agent(tab).draft(), "again");
+        desk.until_ready(tab);
+        desk.dispatch(AiAction::SetAgentDraft(tab, "   ".into()));
+        desk.dispatch(AiAction::SendAgentPrompt(tab));
+        assert_eq!(desk.notice().as_deref(), Some(SESSION_EMPTY));
+        let entries = desk.agent(tab).transcript().entries();
+        assert!(matches!(&entries[0], AgentEntry::User(u) if u.text == "echo"));
+        assert!(matches!(&entries[1], AgentEntry::Message(m) if m.text == "Hello world"));
+        let AgentEntry::Plan(plan) = &entries[2] else {
+            panic!("not a plan: {:?}", entries[2]);
+        };
+        assert_eq!(plan.len(), 2);
+        assert_eq!(plan[0].content, "Look at the schema");
+        let AgentEntry::Tool(tool) = &entries[3] else {
+            panic!("not a tool call");
+        };
+        assert_eq!(tool.title, "List tables");
+        assert_eq!(tool.status, AcpStatus::InProgress);
+        assert_eq!(tool.kind.as_deref(), Some("read"));
+        assert_eq!(entries.len(), 4);
+        desk.finish();
+    }
+
+    #[test]
+    fn a_permission_request_is_answered_by_the_user_with_an_offered_option() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_agent("mock");
+        desk.say(tab, "permission");
+        desk.until_permission(tab);
+        let (id, options): (u64, Vec<String>) = {
+            let current = desk.agent(tab).permissions().current().unwrap();
+            (
+                current.id,
+                current
+                    .request
+                    .options
+                    .iter()
+                    .map(|o| o.id.clone())
+                    .collect(),
+            )
+        };
+        // The options are in the order the agent sent them.
+        assert_eq!(
+            options,
+            ["allow-once", "allow-always", "reject-once", "reject-always"]
+        );
+        assert_eq!(desk.agent(tab).label(), "Waiting for your approval");
+        // An option the agent did not offer answers nothing.
+        desk.dispatch(AiAction::AllowAgentRequest(tab, id, "allow-forever".into()));
+        assert_eq!(desk.notice().as_deref(), Some(STALE_ANSWER));
+        assert!(desk.agent(tab).permissions().is_waiting());
+        // A command answers only a request whose card was drawn.
+        let allow = CommandId::new("ai:allow-agent-request").unwrap();
+        let reject = CommandId::new("ai:reject-agent-request").unwrap();
+        assert_eq!(action_for(&allow, &desk.w), None);
+        desk.agent(tab).permissions().mark_shown(id);
+        assert_eq!(
+            action_for(&allow, &desk.w),
+            Some(AiAction::AllowAgentRequest(tab, id, "allow-once".into()))
+        );
+        assert_eq!(
+            action_for(&reject, &desk.w),
+            Some(AiAction::RejectAgentRequest(tab, id, "reject-once".into()))
+        );
+        desk.dispatch(AiAction::AllowAgentRequest(tab, id, "allow-once".into()));
+        desk.until_ready(tab);
+        assert_eq!(desk.messages(tab).last().unwrap(), "selected:allow-once");
+        // The same click again is stale.
+        desk.dispatch(AiAction::AllowAgentRequest(tab, id, "allow-once".into()));
+        assert_eq!(desk.notice().as_deref(), Some(STALE_ANSWER));
+        assert_eq!(action_for(&allow, &desk.w), None);
+
+        // Reject.
+        desk.say(tab, "permission");
+        desk.until_permission(tab);
+        let id = desk.agent(tab).permissions().current().unwrap().id;
+        desk.dispatch(AiAction::RejectAgentRequest(tab, id, "reject-once".into()));
+        desk.until_ready(tab);
+        assert_eq!(desk.messages(tab).last().unwrap(), "selected:reject-once");
+        desk.finish();
+    }
+
+    #[test]
+    fn cancelling_a_turn_with_a_permission_request_cancels_the_request() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_agent("mock");
+        desk.say(tab, "permission");
+        desk.until_permission(tab);
+        desk.dispatch(AiAction::CancelAgent(tab));
+        assert!(desk.agent(tab).permissions().is_empty());
+        desk.until_ready(tab);
+        assert_eq!(desk.messages(tab).last().unwrap(), "cancelled");
+        // Cancelling a turn that waits for the user keeps the process: it ended the turn itself.
+        assert!(alive(desk.pid(tab)), "a cancelled turn keeps the process");
+        desk.finish();
+    }
+
+    // ---- statements through the endpoint ----
+
+    #[test]
+    fn a_write_through_the_endpoint_needs_the_card_to_be_shown() {
+        let mut desk = Desk::new(Some(Environment::Dev));
+        let tab = desk.open_agent("mock");
+        let client = desk.client(tab);
+        let reply = desk.call(&client, "run_query", run_query(UPDATE));
+        desk.until_asked(tab);
+        let id = desk.front(tab);
+        let request = &desk.agent(tab).approvals().current().unwrap().request;
+        assert_eq!(request.stage, ApprovalStage::Confirm);
+        assert_eq!(request.sql, UPDATE);
+        // Nothing runs while the ask waits.
+        assert_eq!(desk.country(2), "DE");
+        let approve = CommandId::new("ai:approve-statement").unwrap();
+        let deny = CommandId::new("ai:deny-statement").unwrap();
+        // The palette answers only an ask whose card was drawn with its exact SQL.
+        assert_eq!(action_for(&approve, &desk.w), None);
+        assert_eq!(action_for(&deny, &desk.w), None);
+        desk.agent(tab).approvals().mark_shown(id);
+        assert_eq!(
+            action_for(&approve, &desk.w),
+            Some(AiAction::ApproveStatement(tab, id))
+        );
+        assert_eq!(
+            action_for(&deny, &desk.w),
+            Some(AiAction::DenyStatement(tab, id))
+        );
+        // A stale id answers nothing.
+        desk.dispatch(AiAction::ApproveStatement(tab, id + 9));
+        assert_eq!(desk.notice().as_deref(), Some(STALE_ANSWER));
+        assert!(desk.agent(tab).approvals().is_waiting());
+        desk.dispatch(AiAction::ApproveStatement(tab, id));
+        let response = desk.wait(reply);
+        assert_eq!(response["result"]["isError"], json!(false), "{response}");
+        assert_eq!(desk.country(2), "GB");
+        let entries = desk.audit.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].surface, Surface::Agent);
+        assert_eq!(entries[0].approval, ApprovalOutcome::Approved);
+        assert_eq!(desk.asks, 1);
+
+        // Denied.
+        let reply = desk.call(&client, "run_query", run_query(OTHER_UPDATE));
+        desk.until_asked(tab);
+        let id = desk.front(tab);
+        desk.dispatch(AiAction::DenyStatement(tab, id));
+        let response = desk.wait(reply);
+        assert_eq!(response["result"]["isError"], json!(true));
+        assert!(tool_text(&response).contains("denied"), "{response}");
+        assert_eq!(desk.country(4), "US");
+        let entries = desk.audit.entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].approval, ApprovalOutcome::Denied);
+        assert!(entries.iter().all(|e| e.surface == Surface::Agent));
+        desk.finish();
+    }
+
+    #[test]
+    fn a_read_asks_nothing_and_is_audited_as_the_agent() {
+        let mut desk = Desk::new(Some(Environment::Prod));
+        let tab = desk.open_agent("mock");
+        let client = desk.client(tab);
+        let reply = desk.call(&client, "run_query", run_query("select id from customers"));
+        let response = desk.wait(reply);
+        assert_eq!(response["result"]["isError"], json!(false), "{response}");
+        assert_eq!(desk.asks, 0);
+        let entries = desk.audit.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].surface, Surface::Agent);
+        assert_eq!(entries[0].approval, ApprovalOutcome::NotNeeded);
+        desk.finish();
+    }
+
+    #[test]
+    fn production_adds_the_gate_as_a_second_confirmation() {
+        let mut desk = Desk::new(Some(Environment::Prod));
+        let tab = desk.open_agent("mock");
+        assert_eq!(desk.w.query_tab(tab).unwrap().phase(), &Phase::Idle);
+        let client = desk.client(tab);
+        let reply = desk.call(&client, "run_query", run_query(UPDATE));
+        desk.until_asked(tab);
+        assert_eq!(
+            desk.agent(tab).approvals().current().unwrap().request.stage,
+            ApprovalStage::Confirm
+        );
+        let id = desk.front(tab);
+        desk.dispatch(AiAction::ApproveStatement(tab, id));
+        // The second stage opens the ADR-0024 gate with the exact SQL.
+        desk.until(tab, "the gate opens", |w| {
+            matches!(
+                w.query_tab(tab).map(QueryTab::phase),
+                Some(Phase::Confirming(_))
+            )
+        });
+        {
+            let Phase::Confirming(list) = desk.w.query_tab(tab).unwrap().phase() else {
+                unreachable!()
+            };
+            assert_eq!(list.len(), 1);
+            assert_eq!(list[0].sql, UPDATE);
+        }
+        assert_eq!(
+            desk.agent(tab).approvals().current().unwrap().request.stage,
+            ApprovalStage::ProdSecond
+        );
+        // The card commands do not answer the second stage.
+        let second = desk.front(tab);
+        desk.dispatch(AiAction::ApproveStatement(tab, second));
+        assert!(desk.agent(tab).approvals().is_waiting());
+        assert_eq!(desk.country(2), "DE");
+        // The gate does.
+        assert!(matches!(desk.w.confirm_query(tab), Effect::None));
+        let response = desk.wait(reply);
+        assert_eq!(response["result"]["isError"], json!(false), "{response}");
+        assert_eq!(desk.country(2), "GB");
+        assert_eq!(desk.w.query_tab(tab).unwrap().phase(), &Phase::Idle);
+
+        // Dismissing the gate denies.
+        let reply = desk.call(&client, "run_query", run_query(OTHER_UPDATE));
+        desk.until_asked(tab);
+        let id = desk.front(tab);
+        desk.dispatch(AiAction::ApproveStatement(tab, id));
+        desk.until(tab, "the gate opens", |w| {
+            matches!(
+                w.query_tab(tab).map(QueryTab::phase),
+                Some(Phase::Confirming(_))
+            )
+        });
+        desk.w.dismiss_query_prompt(tab);
+        let response = desk.wait(reply);
+        assert!(tool_text(&response).contains("denied"), "{response}");
+        assert_eq!(desk.country(4), "US");
+        assert_eq!(desk.w.query_tab(tab).unwrap().phase(), &Phase::Idle);
+        desk.finish();
+    }
+
+    #[test]
+    fn the_endpoint_refuses_a_missing_or_wrong_token() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_agent("mock");
+        let client = desk.client(tab);
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0"}}});
+        let wrong = format!("Bearer {}", "A".repeat(43));
+        for auth in [None, Some("Bearer nope"), Some(wrong.as_str())] {
+            let client = client.clone();
+            let body = body.clone();
+            let reply = desk.block(async move { client.post(auth, None, &body).await });
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{auth:?}");
+        }
+        // The right token works.
+        let ok = desk.block(async { client.post(Some(&client.auth), None, &body).await });
+        assert_eq!(ok.status, StatusCode::OK);
+        desk.finish();
+    }
+
+    // ---- failures ----
+
+    #[test]
+    fn a_missing_program_shows_the_install_hint_and_starts_nothing() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_picker();
+        desk.dispatch(AiAction::PickAgent(tab, "mock-missing".into()));
+        let AgentPhase::Failed(failure) = desk.agent(tab).phase().clone() else {
+            panic!("not failed: {:?}", desk.agent(tab).phase());
+        };
+        assert!(failure.message.contains("was not found"), "{failure:?}");
+        assert_eq!(
+            failure.install_hint.as_deref(),
+            Some("npm install -g no-such-agent")
+        );
+        assert_eq!(desk.agent(tab).label(), "Failed");
+        assert!(desk.runs.is_empty(), "nothing was started");
+        assert_eq!(desk.agent(tab).endpoint_url(), None);
+        assert_eq!(desk.w.agent_endpoints(), 0);
+        // A prompt shows the failure.
+        desk.dispatch(AiAction::SetAgentDraft(tab, "hi".into()));
+        desk.dispatch(AiAction::SendAgentPrompt(tab));
+        assert_eq!(desk.notice(), Some(failure.message));
+        desk.finish();
+    }
+
+    #[test]
+    fn an_agent_that_crashes_while_starting_fails_the_tab() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_picker();
+        desk.dispatch(AiAction::PickAgent(tab, "mock-crash-init".into()));
+        let AgentPhase::Failed(failure) = desk.agent(tab).phase().clone() else {
+            panic!("not failed: {:?}", desk.agent(tab).phase());
+        };
+        assert!(failure.message.contains("exit code 4"), "{failure:?}");
+        assert!(desk.runs.is_empty());
+        assert_eq!(desk.w.agent_endpoints(), 0);
+        desk.finish();
+    }
+
+    #[test]
+    fn a_crash_stops_the_tab_with_the_exit_and_stderr_and_a_restart_works() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_agent("mock");
+        let addr = desk.addr(tab);
+        let first = desk.pid(tab);
+        desk.say(tab, "crash");
+        desk.until_stopped(tab);
+        let AgentPhase::Stopped(failure) = desk.agent(tab).phase().clone() else {
+            unreachable!()
+        };
+        assert!(failure.message.contains("exit code 3"), "{failure:?}");
+        assert!(failure.stderr_tail.iter().any(|l| l == "mock: crashing"));
+        assert_eq!(desk.agent(tab).label(), "Stopped");
+        assert!(!desk.agent(tab).approvals().is_waiting());
+        assert_eq!(desk.agent(tab).endpoint_url(), None);
+        assert_eq!(desk.w.agent_endpoints(), 0);
+        desk.finished(tab);
+        assert!(!alive(first));
+        assert!(desk.refuses(addr));
+        // A prompt to a stopped agent is refused with the reason.
+        desk.dispatch(AiAction::SetAgentDraft(tab, "hi".into()));
+        desk.dispatch(AiAction::SendAgentPrompt(tab));
+        assert_eq!(desk.notice(), Some(failure.message.clone()));
+        // Restart starts a new process behind a new endpoint.
+        desk.dispatch(AiAction::RestartAgent(tab));
+        desk.until_ready(tab);
+        assert_ne!(desk.pid(tab), first);
+        assert_ne!(desk.addr(tab), addr);
+        desk.ask(tab, "echo");
+        assert_eq!(desk.w.agent_endpoints(), 1);
+        desk.finish();
+    }
+
+    // ---- cancel ----
+
+    #[test]
+    fn cancel_ends_a_hanging_turn_whatever_the_agent_does_with_it() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_agent("mock");
+        desk.say(tab, "hang");
+        assert!(desk.agent(tab).is_running());
+        desk.dispatch(AiAction::CancelAgent(tab));
+        // The mock agent resets its cancel flag when the prompt starts, so a cancel that gets
+        // there first is lost: the agent then counts as deaf and is killed after the grace
+        // period. Both ends are fine; the tab is never stuck in `Running`.
+        desk.until_phase(tab, "the turn ended", |p| {
+            !matches!(p, AgentPhase::Running { .. })
+        });
+        assert!(matches!(
+            desk.agent(tab).phase(),
+            AgentPhase::Ready | AgentPhase::Stopped(_)
+        ));
+        if *desk.agent(tab).phase() == AgentPhase::Ready {
+            assert!(matches!(
+                desk.agent(tab).transcript().entries().last(),
+                Some(AgentEntry::Notice(n)) if n == "Cancelled."
+            ));
+            // Cancel while idle does nothing.
+            desk.dispatch(AiAction::CancelAgent(tab));
+            assert_eq!(desk.agent(tab).phase(), &AgentPhase::Ready);
+        }
+        desk.finish();
+    }
+
+    #[test]
+    fn an_agent_that_ignores_the_cancel_is_killed() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_agent("mock");
+        let addr = desk.addr(tab);
+        let pid = desk.pid(tab);
+        desk.say(tab, "hang-deaf");
+        desk.dispatch(AiAction::CancelAgent(tab));
+        desk.until_stopped(tab);
+        desk.finished(tab);
+        assert!(!alive(pid));
+        assert!(desk.refuses(addr));
+        desk.finish();
+    }
+
+    // ---- stopping ----
+
+    #[test]
+    fn closing_a_tab_with_a_pending_permission_stops_the_agent() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_agent("mock");
+        let addr = desk.addr(tab);
+        desk.say(tab, "permission");
+        desk.until_permission(tab);
+        assert_eq!(desk.w.agent_endpoints(), 1);
+        let exits = desk.close(tab);
+        assert_eq!(exits.len(), 1);
+        assert!(desk.w.agent(tab).is_none());
+        assert!(desk.refuses(addr));
+        assert_eq!(desk.w.agent_endpoints(), 0);
+        assert_eq!(desk.w.hub_model().agents.len(), 0);
+        // Late messages for the closed tab are dropped.
+        let (reply, answer) = oneshot::channel();
+        let ask = PermissionAsk {
+            request: canned_permission(&[("allow-once", PermissionOptionKind::AllowOnce)]),
+            reply,
+        };
+        assert!(matches!(
+            desk.w.agent_message(tab, AgentMsg::Permission(ask)),
+            Effect::None
+        ));
+        assert!(desk.block(answer).is_err(), "the request was dropped");
+        desk.finish();
+    }
+
+    #[test]
+    fn closing_a_tab_with_a_pending_statement_denies_it_and_stops_the_agent() {
+        let mut desk = Desk::new(Some(Environment::Dev));
+        let tab = desk.open_agent("mock");
+        let client = desk.client(tab);
+        let addr = desk.addr(tab);
+        let reply = desk.call(&client, "run_query", run_query(UPDATE));
+        desk.until_asked(tab);
+        desk.close(tab);
+        assert!(desk.refuses(addr));
+        assert_eq!(desk.country(2), "DE");
+        // The call of the stand-in agent ends: denied, cancelled by the endpoint going down, or
+        // the connection went with it. Whichever it is, nothing ran.
+        let outcome = desk.block(reply);
+        if let Ok(response) = outcome {
+            let cancelled = response["error"]["code"] == json!(-32800);
+            assert!(
+                cancelled || tool_text(&response).contains("denied"),
+                "{response}"
+            );
+        }
+        desk.finish();
+    }
+
+    #[test]
+    fn quitting_with_two_agents_closes_both() {
+        let mut desk = Desk::new(None);
+        let first = desk.open_agent("mock");
+        let second = desk.open_agent("mock");
+        let addrs = [desk.addr(first), desk.addr(second)];
+        assert_ne!(addrs[0], addrs[1], "one endpoint per tab");
+        assert_eq!(desk.w.agent_endpoints(), 2);
+        // The agents are the only thing left to stop: no editor session, no browser.
+        let query_tabs: Vec<TabId> = desk
+            .w
+            .tabs()
+            .iter()
+            .filter(|t| t.kind() == TabKind::Query)
+            .map(crate::tabs::Tab::id)
+            .collect();
+        for tab in query_tabs {
+            let effect = desk.w.request_close_tab(tab);
+            desk.pump(effect);
+        }
+        desk.w.shutdown_browsers();
+        let effect = desk.w.dispatch(WorkspaceAction::Quit);
+        // The quit still waits for the agents: it is not a plain Quit.
+        assert!(
+            matches!(&effect, Effect::CloseSessions(s) if s.is_empty()),
+            "{effect:?}"
+        );
+        desk.pump(effect);
+        assert_eq!(desk.closed_sessions.last(), Some(&0));
+        desk.finished(first);
+        desk.finished(second);
+        for addr in addrs {
+            assert!(desk.refuses(addr));
+        }
+        assert_eq!(desk.w.agent_endpoints(), 0);
+        // The catalog workers stopped with the browsers.
+        for done in std::mem::take(&mut desk.workers) {
+            desk.wait(done);
+        }
+        desk.finish();
+    }
+
+    #[test]
+    fn turning_ai_off_stops_the_agents_of_the_connection() {
+        let mut desk = Desk::new(Some(Environment::Dev));
+        let tab = desk.open_agent("mock");
+        let client = desk.client(tab);
+        let addr = desk.addr(tab);
+        desk.say(tab, "hang");
+        let reply = desk.call(&client, "run_query", run_query(UPDATE));
+        desk.until_asked(tab);
+        desk.dispatch(AiAction::ToggleConnection);
+        let AgentPhase::Stopped(failure) = desk.agent(tab).phase().clone() else {
+            panic!("not stopped: {:?}", desk.agent(tab).phase());
+        };
+        assert_eq!(failure.message, AGENT_STOPPED_AI_OFF);
+        assert!(!desk.agent(tab).approvals().is_waiting());
+        desk.finished(tab);
+        assert!(desk.refuses(addr));
+        assert_eq!(desk.w.agent_endpoints(), 0);
+        assert_eq!(desk.country(2), "DE");
+        let _ = desk.block(reply);
+        // The exit that follows does not replace the reason, and the channel ends with the agent.
+        desk.drain(tab);
+        assert_eq!(
+            desk.agent(tab).phase(),
+            &AgentPhase::Stopped(AgentFailure::plain(AGENT_STOPPED_AI_OFF))
+        );
+        desk.finish();
+    }
+
+    /// A profile whose process can be found by its marker argument.
+    fn marked_toml(marker: &str) -> String {
+        let mut text = agents_toml();
+        writeln!(
+            text,
+            "[[agent]]\nid = \"mock-marked\"\nname = \"Marked Agent\"\ncommand = {:?}\nargs = [\"{marker}\"]",
+            mock_agent()
+        )
+        .unwrap();
+        text
+    }
+
+    /// The ids of the processes that have `marker` in their command line.
+    #[cfg(unix)]
+    fn marked(marker: &str) -> Vec<u32> {
+        let out = std::process::Command::new("pgrep")
+            .args(["-f", marker])
+            .output()
+            .expect("pgrep");
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .filter_map(|p| p.parse().ok())
+            .collect()
+    }
+
+    #[cfg(not(unix))]
+    fn marked(_marker: &str) -> Vec<u32> {
+        Vec::new()
+    }
+
+    /// Waits (a short, bounded poll) until a process with `marker` exists or is gone.
+    fn wait_marked(marker: &str, present: bool) -> bool {
+        for _ in 0..200 {
+            if marked(marker).is_empty() != present {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        false
+    }
+
+    impl Desk {
+        /// A tab whose agent is on its way: the start is spawned and not delivered yet. Returns
+        /// once the process exists, so the start is cut during `initialize` or `session/new`.
+        fn starting(&mut self, marker: &str) -> TabId {
+            self.defer_starts = true;
+            let tab = self.open_picker();
+            self.dispatch(AiAction::PickAgent(tab, "mock-marked".to_owned()));
+            assert_eq!(self.agent(tab).phase(), &AgentPhase::Starting);
+            assert!(self.pending.contains_key(&tab));
+            // The process may be gone again when the start is fast and already torn down.
+            wait_marked(marker, true);
+            tab
+        }
+
+        /// Delivers the result of the start to the tab, then checks that nothing is left: no
+        /// process with the marker, no endpoint, no live control.
+        fn delivered(&mut self, tab: TabId, marker: &str) {
+            let done = self.pending.remove(&tab).expect("a pending start");
+            let result = self.wait(done);
+            let addr = match result {
+                Ok(started) => {
+                    let addr = addr_of(&started.ready.endpoint_url);
+                    self.runs.push(Run {
+                        tab,
+                        pid: started.ready.control.pid(),
+                        finished: Some(started.finished),
+                    });
+                    let next = self.w.agent_ready(tab, Ok(started.ready));
+                    self.pump(next);
+                    Some(addr)
+                }
+                Err(failure) => {
+                    self.note(&failure);
+                    let next = self.w.agent_ready(tab, Err(failure));
+                    self.pump(next);
+                    None
+                }
+            };
+            assert!(
+                self.w.agent(tab).is_none_or(|a| !a.is_live()),
+                "a stopped tab holds no control"
+            );
+            if addr.is_some() {
+                self.finished(tab);
+            }
+            if let Some(addr) = addr {
+                assert!(self.refuses(addr), "the endpoint is closed");
+            }
+            assert!(
+                wait_marked(marker, false),
+                "the agent process {:?} is still there",
+                marked(marker)
+            );
+            assert_eq!(self.w.agent_endpoints(), 0);
+        }
+    }
+
+    #[test]
+    fn quitting_while_an_agent_starts_does_not_leave_it_running() {
+        let marker = format!("--flow-marker-quit-{}", std::process::id());
+        let mut desk = Desk::build(None, true, Some(marked_toml(&marker)), None);
+        let tab = desk.starting(&marker);
+        let query_tabs: Vec<TabId> = desk
+            .w
+            .tabs()
+            .iter()
+            .filter(|t| t.kind() == TabKind::Query)
+            .map(crate::tabs::Tab::id)
+            .collect();
+        for query in query_tabs {
+            let effect = desk.w.request_close_tab(query);
+            desk.pump(effect);
+        }
+        desk.w.shutdown_browsers();
+        let effect = desk.w.dispatch(WorkspaceAction::Quit);
+        // The starting agent is something to wait for: not a plain Quit.
+        assert!(!matches!(effect, Effect::Quit), "{effect:?}");
+        desk.pump(effect);
+        assert!(matches!(desk.agent(tab).phase(), AgentPhase::Stopped(_)));
+        desk.delivered(tab, &marker);
+        for done in std::mem::take(&mut desk.workers) {
+            desk.wait(done);
+        }
+        desk.finish();
+    }
+
+    #[test]
+    fn closing_the_tab_while_the_agent_starts_does_not_leave_it_running() {
+        let marker = format!("--flow-marker-close-{}", std::process::id());
+        let mut desk = Desk::build(None, true, Some(marked_toml(&marker)), None);
+        let tab = desk.starting(&marker);
+        let effect = desk.w.request_close_tab(tab);
+        desk.pump(effect);
+        assert!(desk.w.agent(tab).is_none());
+        desk.delivered(tab, &marker);
+        desk.finish();
+    }
+
+    #[test]
+    fn turning_ai_off_while_the_agent_starts_does_not_leave_it_running() {
+        let marker = format!("--flow-marker-off-{}", std::process::id());
+        let mut desk = Desk::build(None, true, Some(marked_toml(&marker)), None);
+        let tab = desk.starting(&marker);
+        desk.dispatch(AiAction::ToggleConnection);
+        let AgentPhase::Stopped(failure) = desk.agent(tab).phase().clone() else {
+            panic!("not stopped: {:?}", desk.agent(tab).phase());
+        };
+        assert_eq!(failure.message, AGENT_STOPPED_AI_OFF);
+        desk.delivered(tab, &marker);
+        // The late result does not replace the reason.
+        assert_eq!(
+            desk.agent(tab).phase(),
+            &AgentPhase::Stopped(AgentFailure::plain(AGENT_STOPPED_AI_OFF))
+        );
+        desk.finish();
+    }
+
+    #[test]
+    fn dropping_the_control_tears_the_agent_down() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_agent("mock");
+        let addr = desk.addr(tab);
+        let control = desk.w.agents.tabs.get_mut(&tab).unwrap().control.take();
+        assert!(control.is_some());
+        drop(control);
+        desk.finished(tab);
+        assert!(desk.refuses(addr));
+        desk.finish();
+    }
+
+    // ---- secrets, labels, caps ----
+
+    #[test]
+    fn secrets_never_appear_in_debug_notices_or_the_audit() {
+        let mut desk = Desk::new(Some(Environment::Dev));
+        let tab = desk.open_agent("mock");
+        let client = desk.client(tab);
+        let token = client.auth.strip_prefix("Bearer ").unwrap().to_owned();
+        assert_eq!(token.len(), 43);
+        let reply = desk.call(&client, "run_query", run_query("select id from customers"));
+        desk.wait(reply);
+        desk.ask(tab, "echo");
+        let tab_debug = format!("{:?}", desk.agent(tab));
+        let ws_debug = format!("{:?}", desk.w);
+        let hub = format!("{:?}", desk.w.hub_model());
+        let audit = format!("{:?}", desk.audit.entries());
+        let status = format!("{:?}", desk.w.status_bar(None));
+        for (what, text) in [
+            ("tab", &tab_debug),
+            ("workspace", &ws_debug),
+            ("hub", &hub),
+            ("audit", &audit),
+            ("status", &status),
+            ("log", &desk.log),
+        ] {
+            assert!(!text.contains(&token), "the token is in the {what}");
+            assert!(
+                !text.contains(ENV_CANARY),
+                "the env secret is in the {what}"
+            );
+        }
+        // The agent said its descriptor itself: SQLer shows what the agent says, and only that.
+        assert!(desk.messages(tab).iter().any(|m| m.contains(&token)));
+        // The endpoint URL holds no token.
+        assert!(!desk.agent(tab).endpoint_url().unwrap().contains(&token));
+        desk.finish();
+    }
+
+    #[test]
+    fn the_hub_and_the_status_bar_follow_the_agents() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_picker();
+        let model = desk.w.hub_model();
+        assert_eq!(model.new_agent_blocked, None);
+        assert_eq!(model.agents.len(), 1);
+        assert_eq!(model.agents[0].tab, tab);
+        assert_eq!(model.agents[0].title, "Agent: db (2)");
+        assert_eq!(model.agents[0].connection, "db");
+        assert_eq!(model.agents[0].agent, None);
+        assert_eq!(model.agents[0].label, "Choose an agent");
+        assert_eq!(desk.w.status_bar(None).agent_endpoints, 0);
+        desk.dispatch(AiAction::PickAgent(tab, "mock".into()));
+        let model = desk.w.hub_model();
+        assert_eq!(model.agents[0].label, "Ready");
+        assert_eq!(
+            model.agents[0].agent.as_deref(),
+            Some("sqler-acp-mock-agent")
+        );
+        assert_eq!(desk.w.status_bar(None).agent_endpoints, 1);
+        let other = desk.open_agent("mock");
+        assert_eq!(desk.w.status_bar(None).agent_endpoints, 2);
+        assert_eq!(desk.w.hub_model().agents.len(), 2);
+        desk.say(other, "hang");
+        assert_eq!(desk.w.hub_model().agents[1].label, "Working\u{2026}");
+        desk.dispatch(AiAction::CancelAgent(other));
+        desk.until_ready(other);
+        desk.close(tab);
+        assert_eq!(desk.w.status_bar(None).agent_endpoints, 1);
+        desk.finish();
+    }
+
+    #[test]
+    fn the_transcript_of_a_tab_is_capped() {
+        let mut desk = Desk::new(None);
+        let tab = desk.open_agent("mock");
+        for ix in 0..crate::ai::agent::MAX_ENTRIES + 20 {
+            desk.w
+                .agents
+                .tabs
+                .get_mut(&tab)
+                .unwrap()
+                .transcript
+                .push_notice(format!("n{ix}"));
+        }
+        assert_eq!(
+            desk.agent(tab).transcript().entries().len(),
+            crate::ai::agent::MAX_ENTRIES
+        );
+        assert_eq!(desk.agent(tab).transcript().dropped(), 20);
+        // A flood of stderr keeps a ring and a message stays under the entry cap.
+        let update = |text: String| {
+            AgentMsg::Event(AgentEvent::Update {
+                session_id: SessionId::new("s"),
+                update: SessionUpdate::AgentMessage(text),
+            })
+        };
+        for _ in 0..4 {
+            let msg = update("x".repeat(30_000));
+            desk.apply(tab, msg);
+        }
+        let AgentEntry::Message(last) = desk.agent(tab).transcript().entries().last().unwrap()
+        else {
+            panic!("not a message");
+        };
+        assert!(last.cut);
+        assert_eq!(last.text.len(), crate::ai::agent::MAX_ENTRY_BYTES);
+        for ix in 0..200 {
+            let line = AgentMsg::Event(AgentEvent::Stderr(format!("line {ix}")));
+            desk.apply(tab, line);
+        }
+        assert_eq!(
+            desk.agent(tab).transcript().stderr().len(),
+            crate::ai::agent::STDERR_LINES
+        );
+        desk.finish();
+    }
+
+    #[test]
+    fn a_fixture_tab_is_ready_without_a_process() {
+        let mut desk = Desk::new(None);
+        let effect = desk.w.dispatch(WorkspaceAction::OpenConnection(0));
+        desk.pump(effect);
+        let conn = desk.w.ai_target().unwrap();
+        let profile = sqler_acp::builtin_profiles().remove(0);
+        let tab = desk
+            .w
+            .agent_fixture(&conn, profile, Vec::new())
+            .expect("a fixture tab");
+        assert_eq!(desk.agent(tab).phase(), &AgentPhase::Ready);
+        assert_eq!(desk.w.agent_endpoints(), 0);
+        // Closing it has nothing to stop.
+        let effect = desk.w.request_close_tab(tab);
+        assert!(matches!(effect, Effect::None));
+        assert!(desk.runs.is_empty());
+        desk.finish();
+    }
+}

@@ -103,6 +103,22 @@ pub enum AiAction {
     RerunSql(TabId, usize),
     /// Open a statement of the transcript (stable entry number) in a new editor tab.
     OpenSqlInEditor(TabId, usize),
+    /// Open an agent tab on the connection the user works on.
+    OpenAgent,
+    /// Start the agent with this profile id in an agent tab that waits for the pick.
+    PickAgent(TabId, String),
+    /// Set the text in the composer of an agent tab.
+    SetAgentDraft(TabId, String),
+    /// Send the composer text of an agent tab to the agent.
+    SendAgentPrompt(TabId),
+    /// Cancel the running prompt of an agent tab.
+    CancelAgent(TabId),
+    /// Start the agent of a stopped or failed agent tab again.
+    RestartAgent(TabId),
+    /// Answer the permission request with this ask id with the offered option (an allow).
+    AllowAgentRequest(TabId, u64, String),
+    /// Answer the permission request with this ask id with the offered option (a reject).
+    RejectAgentRequest(TabId, u64, String),
 }
 
 impl AiAction {
@@ -119,6 +135,22 @@ impl AiAction {
                 | Self::DenyStatement(..)
                 | Self::RerunSql(..)
                 | Self::OpenSqlInEditor(..)
+        )
+    }
+
+    /// Whether the agent tab handles this action.
+    #[must_use]
+    pub fn is_agent(&self) -> bool {
+        matches!(
+            self,
+            Self::OpenAgent
+                | Self::PickAgent(..)
+                | Self::SetAgentDraft(..)
+                | Self::SendAgentPrompt(_)
+                | Self::CancelAgent(_)
+                | Self::RestartAgent(_)
+                | Self::AllowAgentRequest(..)
+                | Self::RejectAgentRequest(..)
         )
     }
 }
@@ -196,6 +228,29 @@ impl std::fmt::Debug for AiAction {
                 .field(tab)
                 .field(ix)
                 .finish(),
+            Self::OpenAgent => f.write_str("OpenAgent"),
+            Self::PickAgent(tab, id) => f.debug_tuple("PickAgent").field(tab).field(id).finish(),
+            // The length only: the draft is the user's message.
+            Self::SetAgentDraft(tab, text) => f
+                .debug_struct("SetAgentDraft")
+                .field("tab", tab)
+                .field("len", &text.len())
+                .finish(),
+            Self::SendAgentPrompt(tab) => f.debug_tuple("SendAgentPrompt").field(tab).finish(),
+            Self::CancelAgent(tab) => f.debug_tuple("CancelAgent").field(tab).finish(),
+            Self::RestartAgent(tab) => f.debug_tuple("RestartAgent").field(tab).finish(),
+            Self::AllowAgentRequest(tab, id, option) => f
+                .debug_tuple("AllowAgentRequest")
+                .field(tab)
+                .field(id)
+                .field(option)
+                .finish(),
+            Self::RejectAgentRequest(tab, id, option) => f
+                .debug_tuple("RejectAgentRequest")
+                .field(tab)
+                .field(id)
+                .field(option)
+                .finish(),
         }
     }
 }
@@ -228,6 +283,12 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("ai:deny-statement", "AI: Deny Statement"),
     ("ai:rerun-sql", "AI: Re-run SQL"),
     ("ai:open-sql-in-editor", "AI: Open SQL in Editor"),
+    ("ai:open-agent", "AI: Open Agent"),
+    ("ai:send-agent-prompt", "AI: Send to Agent"),
+    ("ai:cancel-agent", "AI: Cancel Agent Turn"),
+    ("ai:restart-agent", "AI: Restart Agent"),
+    ("ai:allow-agent-request", "AI: Allow Agent Request Once"),
+    ("ai:reject-agent-request", "AI: Reject Agent Request"),
 ];
 
 impl AiAction {
@@ -275,6 +336,12 @@ impl AiAction {
             Self::DenyStatement(..) => "ai:deny-statement",
             Self::RerunSql(..) => "ai:rerun-sql",
             Self::OpenSqlInEditor(..) => "ai:open-sql-in-editor",
+            Self::OpenAgent | Self::PickAgent(..) => "ai:open-agent",
+            Self::SetAgentDraft(..) | Self::SendAgentPrompt(_) => "ai:send-agent-prompt",
+            Self::CancelAgent(_) => "ai:cancel-agent",
+            Self::RestartAgent(_) => "ai:restart-agent",
+            Self::AllowAgentRequest(..) => "ai:allow-agent-request",
+            Self::RejectAgentRequest(..) => "ai:reject-agent-request",
         };
         CommandId::new(id).expect("constant command ID is valid")
     }
@@ -357,12 +424,24 @@ pub fn action_for(id: &CommandId, ws: &Workspace) -> Option<AiAction> {
         | "ai:deny-statement"
         | "ai:rerun-sql"
         | "ai:open-sql-in-editor" => session_action(id.as_str(), ws),
+        "ai:open-agent" => Some(AiAction::OpenAgent),
+        "ai:send-agent-prompt"
+        | "ai:cancel-agent"
+        | "ai:restart-agent"
+        | "ai:allow-agent-request"
+        | "ai:reject-agent-request" => agent_action(id.as_str(), ws),
         _ => None,
     }
 }
 
 /// The session tab commands: they apply only while the active tab is an AI session.
 fn session_action(id: &str, ws: &Workspace) -> Option<AiAction> {
+    // The statement cards of an agent tab are answered by the same two commands.
+    if matches!(id, "ai:approve-statement" | "ai:deny-statement")
+        && ws.active_ai_session().is_none()
+    {
+        return agent_statement_action(id, ws);
+    }
     let (tab, session) = ws.active_ai_session()?;
     let last_sql = || {
         session
@@ -384,6 +463,55 @@ fn session_action(id: &str, ws: &Workspace) -> Option<AiAction> {
         "ai:deny-statement" => shown().map(|id| AiAction::DenyStatement(tab, id)),
         "ai:rerun-sql" => last_sql().map(|ix| AiAction::RerunSql(tab, ix)),
         "ai:open-sql-in-editor" => last_sql().map(|ix| AiAction::OpenSqlInEditor(tab, ix)),
+        _ => None,
+    }
+}
+
+/// `ai:approve-statement` and `ai:deny-statement` on an agent tab: only the ask whose card the
+/// user has seen with its exact SQL.
+fn agent_statement_action(id: &str, ws: &Workspace) -> Option<AiAction> {
+    let (tab, agent) = ws.active_agent()?;
+    let ask = agent
+        .approvals()
+        .shown_current(sqler_ai_tools::ApprovalStage::Confirm)?;
+    match id {
+        "ai:approve-statement" => Some(AiAction::ApproveStatement(tab, ask)),
+        "ai:deny-statement" => Some(AiAction::DenyStatement(tab, ask)),
+        _ => None,
+    }
+}
+
+/// The agent tab commands: they apply only while the active tab is an agent tab.
+fn agent_action(id: &str, ws: &Workspace) -> Option<AiAction> {
+    use sqler_acp::PermissionOptionKind as Kind;
+
+    let (tab, agent) = ws.active_agent()?;
+    // The permission commands answer only the request whose card the user has seen. The option
+    // is the first one of the kind: the agent's own order (A7).
+    let option = |kinds: &[Kind]| {
+        let id = agent.permissions().shown_current()?;
+        let current = agent.permissions().current()?;
+        kinds.iter().find_map(|kind| {
+            current
+                .request
+                .options
+                .iter()
+                .find(|o| o.kind == *kind)
+                .map(|o| (id, o.id.clone()))
+        })
+    };
+    match id {
+        "ai:send-agent-prompt" => Some(AiAction::SendAgentPrompt(tab)),
+        "ai:cancel-agent" => agent.is_running().then_some(AiAction::CancelAgent(tab)),
+        "ai:restart-agent" => matches!(
+            agent.phase(),
+            crate::ai::AgentPhase::Stopped(_) | crate::ai::AgentPhase::Failed(_)
+        )
+        .then_some(AiAction::RestartAgent(tab)),
+        "ai:allow-agent-request" => option(&[Kind::AllowOnce])
+            .map(|(ask, option)| AiAction::AllowAgentRequest(tab, ask, option)),
+        "ai:reject-agent-request" => option(&[Kind::RejectOnce, Kind::RejectAlways])
+            .map(|(ask, option)| AiAction::RejectAgentRequest(tab, ask, option)),
         _ => None,
     }
 }
@@ -455,6 +583,14 @@ mod tests {
             AiAction::DenyStatement(tab(), 0),
             AiAction::RerunSql(tab(), 0),
             AiAction::OpenSqlInEditor(tab(), 0),
+            AiAction::OpenAgent,
+            AiAction::PickAgent(tab(), "claude-code".into()),
+            AiAction::SetAgentDraft(tab(), String::new()),
+            AiAction::SendAgentPrompt(tab()),
+            AiAction::CancelAgent(tab()),
+            AiAction::RestartAgent(tab()),
+            AiAction::AllowAgentRequest(tab(), 0, "allow-once".into()),
+            AiAction::RejectAgentRequest(tab(), 0, "reject-once".into()),
         ]
     }
 
@@ -548,6 +684,7 @@ mod tests {
         for a in all() {
             let assist = a.command_id().as_str().starts_with("ai:")
                 && !a.is_session()
+                && !a.is_agent()
                 && !matches!(
                     a.command_id().as_str(),
                     "ai:open-settings"
@@ -653,6 +790,46 @@ mod tests {
             "ai:deny-statement",
             "ai:rerun-sql",
             "ai:open-sql-in-editor",
+        ] {
+            assert_eq!(act(id, &w), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn agent_actions_are_ours_and_hide_the_message() {
+        let secret = "canary agent message";
+        let draft = AiAction::SetAgentDraft(tab(), secret.into());
+        assert!(draft.is_agent());
+        assert!(!draft.is_session());
+        let text = format!("{draft:?}");
+        assert!(!text.contains(secret));
+        assert!(text.contains("len"));
+        assert!(AiAction::OpenAgent.is_agent());
+        assert!(!AiAction::OpenSession.is_agent());
+        assert_eq!(
+            AiAction::SetAgentDraft(tab(), String::new())
+                .command_id()
+                .as_str(),
+            "ai:send-agent-prompt"
+        );
+        assert_eq!(
+            AiAction::PickAgent(tab(), "codex".into())
+                .command_id()
+                .as_str(),
+            "ai:open-agent"
+        );
+    }
+
+    #[test]
+    fn agent_commands_need_an_agent_tab() {
+        let w = Workspace::new(SidebarModel::default());
+        assert_eq!(act("ai:open-agent", &w), Some(AiAction::OpenAgent));
+        for id in [
+            "ai:send-agent-prompt",
+            "ai:cancel-agent",
+            "ai:restart-agent",
+            "ai:allow-agent-request",
+            "ai:reject-agent-request",
         ] {
             assert_eq!(act(id, &w), None, "{id}");
         }
