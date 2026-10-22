@@ -28,8 +28,8 @@ Every call has the same guards as in the app ([safety](safety.md)):
   `ai.toml` stops the server instead of falling back to defaults.
 - Up to 4 calls run at once; the others wait.
 
-Not audited: a call the client cancels before it finishes. A follow-up will record these once the tool
-layer has a cancelled outcome (see ADR-0040).
+A call the client cancels before it finishes (`notifications/cancelled`, a dropped HTTP connection or
+shutdown) is audited with the outcome `cancelled` and gets no response (see ADR-0040).
 
 ## Protocol
 
@@ -95,7 +95,8 @@ no non-loopback `Origin`. The endpoint is `http://127.0.0.1:PORT/mcp`. At most 6
 - `SQLER_MCP_TOKEN` sets the token (32 to 512 visible ASCII characters).
 - `--token-file PATH` reads the token from a file. If the file does not exist, it is created with
   mode 0600 and a generated token. An existing file readable by group or others is refused
-  (`chmod 600` it). It needs `--http`; with `--stdio` it is a usage error. Giving both the variable
+  (`chmod 600` it). This holds on Unix only: on Windows the file inherits the ACL of its directory and
+  the permission check is skipped, so keep it in a directory only you can read. It needs `--http`; with `--stdio` it is a usage error. Giving both the variable
   and the flag is a usage error (exit 2).
 - With neither, a token is generated and printed once on stdout in the start block, together with the URL.
   It is never written to stderr or logs.
