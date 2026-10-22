@@ -6,7 +6,7 @@
 //! `gui` feature.
 //!
 //! The workspace holds the state; a runner task on tokio owns the process, the tool endpoint and
-//! the connection source ([`runner`]). Everything the agent does reaches the tab through one
+//! the connection source (`runner`). Everything the agent does reaches the tab through one
 //! ordered channel of [`AgentMsg`]. Writes need the user: SQL statements go through the approval
 //! queue of ADR-0053, the agent's own permission requests through the [`PermissionQueue`].
 

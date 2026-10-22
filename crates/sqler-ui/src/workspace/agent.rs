@@ -6,7 +6,7 @@
 //! State only. Picking an agent returns [`Effect::StartAgent`]; the view starts it on tokio and
 //! reports with [`Workspace::agent_ready`], then everything the agent does arrives on one ordered
 //! channel and is applied by [`Workspace::agent_message`]. The tab talks to the runner task
-//! through an [`AgentControl`], which needs no runtime. Closing the tab, quitting, a crash and
+//! through an `AgentControl`, which needs no runtime. Closing the tab, quitting, a crash and
 //! turning AI off all end the same way: the control closes, the queues are answered with a deny
 //! or a cancel, the statement in flight is cancelled and the idle session is closed.
 //!
