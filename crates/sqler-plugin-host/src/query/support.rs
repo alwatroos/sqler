@@ -359,6 +359,7 @@ pub enum After {
 
 struct Playback {
     events: std::vec::IntoIter<QueryEvent>,
+    error: Option<DriverError>,
     after: After,
     reached: mpsc::UnboundedSender<()>,
 }
@@ -368,7 +369,15 @@ impl QueryStream for Playback {
         let next = self.events.next();
         let after = self.after;
         let reached = self.reached.clone();
+        let error = if next.is_none() {
+            self.error.take()
+        } else {
+            None
+        };
         Box::pin(async move {
+            if let Some(e) = error {
+                return Some(Err(e));
+            }
             match (next, after) {
                 (Some(e), _) => Some(Ok(e)),
                 (None, After::End) => None,
@@ -381,8 +390,16 @@ impl QueryStream for Playback {
     }
 }
 
+/// Driver errors a [`ScriptData`] session fails with once.
+#[derive(Default)]
+pub struct FailWith {
+    pub execute: Mutex<Option<DriverError>>,
+    pub stream: Mutex<Option<DriverError>>,
+}
+
 struct ScriptSession {
     events: Vec<QueryEvent>,
+    errors: Arc<FailWith>,
     after: After,
     cancels: Arc<AtomicUsize>,
     hang_execute: bool,
@@ -398,6 +415,9 @@ impl Session for ScriptSession {
         &'s mut self,
         _query: &'s Query,
     ) -> BoxFuture<'s, Result<Box<dyn QueryStream + 's>, DriverError>> {
+        if let Some(e) = self.errors.execute.lock().unwrap().take() {
+            return Box::pin(std::future::ready(Err(e)));
+        }
         if self.hang_execute {
             let reached = self.reached.clone();
             return Box::pin(async move {
@@ -407,6 +427,7 @@ impl Session for ScriptSession {
         }
         let stream = Playback {
             events: self.events.clone().into_iter(),
+            error: self.errors.stream.lock().unwrap().take(),
             after: self.after,
             reached: self.reached.clone(),
         };
@@ -432,6 +453,8 @@ pub struct ScriptData {
     pub releases: AtomicUsize,
     /// When set, `acquire` fails with this error.
     pub acquire_error: Mutex<Option<DataError>>,
+    /// Driver errors the next session fails with, at `execute` or after the scripted events.
+    pub errors: Arc<FailWith>,
     released_tx: mpsc::UnboundedSender<()>,
     released_rx: Mutex<Option<mpsc::UnboundedReceiver<()>>>,
     reached_tx: mpsc::UnboundedSender<()>,
@@ -465,6 +488,7 @@ impl ScriptData {
             acquires: AtomicUsize::new(0),
             releases: AtomicUsize::new(0),
             acquire_error: Mutex::new(None),
+            errors: Arc::new(FailWith::default()),
             released_tx,
             released_rx: Mutex::new(Some(released_rx)),
             reached_tx,
@@ -513,6 +537,7 @@ impl DataService for ScriptData {
         }
         let session = ScriptSession {
             events: self.events.clone(),
+            errors: Arc::clone(&self.errors),
             after: self.after,
             cancels: Arc::clone(&self.cancels),
             hang_execute: self.hang_execute,

@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use sqler_driver_api::QueryEvent;
 use sqler_driver_api::sqler_core::{Column, DataType, Environment, Row, Value};
+use sqler_driver_api::{DriverError, QueryEvent};
 use sqler_plugin_api::{CapabilitySet, Limits, QueryLimits};
 use sqler_sql::StatementClass;
 
@@ -723,5 +723,62 @@ mod wasm {
         assert!(outcome.is_err());
         assert_eq!(src.cancels.load(Ordering::SeqCst), 1);
         assert_eq!(src.releases.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// Every driver error variant, each with a host, a user and a password in its text.
+fn hostile_driver_errors() -> Vec<DriverError> {
+    let t = "host=db.prod.example user=admin password=hunter2";
+    vec![
+        DriverError::Connection(t.into()),
+        DriverError::Cancelled,
+        DriverError::Unsupported(t.into()),
+        DriverError::Protocol(t.into()),
+        DriverError::UnknownDriver(t.into()),
+        DriverError::DuplicateDriver(t.into()),
+        DriverError::Backend(Box::new(std::io::Error::other(t))),
+        DriverError::Core(sqler_driver_api::sqler_core::CoreError::InvalidDriverId(
+            t.into(),
+        )),
+    ]
+}
+
+fn assert_no_target(m: &str) {
+    for needle in ["db.prod", "admin", "hunter2", "host=", "user="] {
+        assert!(!m.contains(needle), "{m}");
+    }
+}
+
+#[test]
+fn only_query_text_of_a_driver_error_passes() {
+    for e in hostile_driver_errors() {
+        let out = super::exec::driver_error(&e);
+        assert_no_target(&out.message);
+    }
+    let q = super::exec::driver_error(&DriverError::Query("syntax error near x".into()));
+    assert_eq!(q.message, "syntax error near x");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn driver_errors_on_execute_and_stream_never_reach_the_guest() {
+    let who = me();
+    for at_stream in [false, true] {
+        for e in hostile_driver_errors() {
+            let src = ScriptData::new(Vec::new(), After::End);
+            let slot = if at_stream {
+                &src.errors.stream
+            } else {
+                &src.errors.execute
+            };
+            *slot.lock().unwrap() = Some(e);
+            let d = data(src.clone(), None);
+            let mut request = req("select 1");
+            request.connection = "fake".to_owned();
+            let (c, m) = call(&who, &caps(&["db.read"]), Some(d), limits(), request)
+                .await
+                .unwrap_err();
+            assert_eq!(c, ErrorCode::Failed);
+            assert_no_target(&m);
+        }
     }
 }

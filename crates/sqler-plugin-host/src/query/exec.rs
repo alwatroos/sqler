@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqler_driver_api::sqler_core::{Query, Value};
-use sqler_driver_api::{CancelHandle, QueryEvent, QueryStream, Session};
+use sqler_driver_api::{CancelHandle, DriverError, QueryEvent, QueryStream, Session};
 use sqler_plugin_api::{CapabilityKind, CapabilitySet, QueryLimits};
 use tokio::time::{Instant, timeout, timeout_at};
 
@@ -63,6 +63,26 @@ pub(crate) fn data_error(e: &DataError) -> PluginError {
         ),
         DataError::NotAvailable(text) => plugin_error(ErrorCode::Failed, clip(text)),
         _ => plugin_error(ErrorCode::Failed, "the connection could not be opened"),
+    }
+}
+
+/// What the plugin learns of a driver error on the execute and stream path. Only `DriverError::Query` text (the
+/// database's own message about the statement: syntax, constraint) passes, clipped. Every other variant (connection,
+/// backend, I/O, TLS, auth, timeout, and any variant added later) can name the host, the user or the database when a
+/// connection drops mid-statement, so it becomes a fixed text per category.
+pub(crate) fn driver_error(e: &DriverError) -> PluginError {
+    match e {
+        DriverError::Query(text) => plugin_error(ErrorCode::Failed, clip(text)),
+        DriverError::Cancelled => plugin_error(ErrorCode::Failed, "the statement was cancelled"),
+        DriverError::Unsupported(_) => plugin_error(
+            ErrorCode::Failed,
+            "the driver does not support this statement",
+        ),
+        DriverError::Connection(_) => plugin_error(
+            ErrorCode::Failed,
+            "the connection failed while the statement ran",
+        ),
+        _ => plugin_error(ErrorCode::Failed, "the database reported an error"),
     }
 }
 
@@ -159,7 +179,7 @@ async fn read_stream(
                     "the driver ended the result before it was complete",
                 ));
             }
-            Some(Err(e)) => return Err(plugin_error(ErrorCode::Failed, clip(&e.to_string()))),
+            Some(Err(e)) => return Err(driver_error(&e)),
             Some(Ok(QueryEvent::Columns(columns))) => {
                 out.columns = columns
                     .iter()
@@ -307,7 +327,7 @@ async fn run_statement(
             .session()
             .execute(&query)
             .await
-            .map_err(|e| plugin_error(ErrorCode::Failed, clip(&e.to_string())))?;
+            .map_err(|e| driver_error(&e))?;
         read_stream(stream, rows_cap).await
     })
     .await;

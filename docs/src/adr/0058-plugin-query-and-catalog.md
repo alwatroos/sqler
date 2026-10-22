@@ -82,7 +82,7 @@ All of these types are `#[non_exhaustive]`.
 5. Plan. When the driver has a SQL dialect the text is split and classified with `classify_each`; otherwise the trimmed
    text is a single `Unknown` statement. No statement or more than one: `invalid-argument` (one statement per call).
    Approval is needed when the class is not Read, or for `EXPLAIN ANALYZE` (it executes the query; this check is a
-   deliberate copy of the one in `sqler-ai-tools`, because the SQL crates are not a dependency of this layer). The text
+   deliberate copy of the one in `sqler-ai-tools`, where the function is private; that crate's guard imports `sqler-sql` itself). The text
    sent and shown is the statement body.
 6. Gate. No approval needed: `db.read` is required. Approval needed: `db.write` is required (`capability-denied`),
    then a `read_only` connection is `declined`, then no approver is `declined`. The approver is asked with `Confirm`,
@@ -107,7 +107,7 @@ Every non-Read statement asks, also on a non-prod connection. This is stricter t
 
 The row and byte caps stop reading and set `truncated = true`; they do not cancel the statement for the user. A
 timeout calls the driver's cancel handle (2 s grace) and returns `timeout` with no partial rows. A driver error is
-`failed`, with the message cut at 512 characters.
+`failed`. Only the text of `DriverError::Query` (the database's own statement message) reaches the guest, cut at 512 characters; every other variant, on `execute` and on the stream alike, and any variant added later, becomes a fixed text, because a dropped connection can name the host, user or database.
 
 ### Cancellation and the session lease
 
