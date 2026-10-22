@@ -356,7 +356,11 @@ impl Workspace {
         let Some(buffer) = buffer else {
             return self.assist_notice(NO_EDITOR);
         };
-        match fix_edit(&buffer.text, &original, &sql) {
+        let dialect = self
+            .tabs
+            .get(tab)
+            .and_then(|t| Dialect::from_driver_id(t.connection().driver.as_str()));
+        match fix_edit(dialect, &buffer.text, &original, &sql) {
             Ok(edit) => {
                 self.assist.entry(tab).state = AssistState::FixApplied;
                 Effect::EditorEdit { tab, edit }

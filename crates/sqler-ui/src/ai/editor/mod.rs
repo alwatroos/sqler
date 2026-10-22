@@ -301,41 +301,62 @@ pub fn insert_edit(buf: &EditorBuffer, sql: &str) -> TextEdit {
     }
 }
 
-/// Whether the match at `at..at + len` is a whole statement: it starts at the
-/// text start or after whitespace/`;`, and (unless it ends with `;` itself) only
-/// whitespace and then the end of the text or a `;` follow it.
-fn on_statement_boundary(text: &str, at: usize, len: usize) -> bool {
-    let starts = text[..at]
-        .chars()
-        .next_back()
-        .is_none_or(|c| c.is_whitespace() || c == ';');
-    let end = at + len;
-    let ends = text[..end].ends_with(';') || {
-        let rest = text[end..].trim_start();
-        rest.is_empty() || rest.starts_with(';')
-    };
-    starts && ends
+/// The length of the whitespace and comments a statement body starts with.
+fn skip_leading_trivia(sql: &str) -> usize {
+    let mut rest = sql;
+    loop {
+        let t = rest.trim_start();
+        rest = if t.starts_with("--") {
+            t.find('\n').map_or("", |i| &t[i..])
+        } else if t.starts_with("/*") {
+            t.find("*/").map_or("", |i| &t[i + 2..])
+        } else {
+            return sql.len() - t.len();
+        };
+    }
 }
 
 /// The edit that replaces the failed statement `original` with `fixed`.
 ///
+/// `text` is split into statements by the splitter the query runner uses (`plan`), so strings,
+/// comments and dollar quotes are understood. The statement is the one whose trimmed text equals
+/// the trimmed `original`, ignoring a trailing `;`.
+///
 /// # Errors
-/// [`FIX_STALE`] unless the trimmed `original` is in `text` exactly once as a whole statement.
-pub fn fix_edit(text: &str, original: &str, fixed: &str) -> Result<TextEdit, &'static str> {
-    let needle = original.trim();
+/// [`FIX_STALE`] unless exactly one statement of `text` is the failed statement.
+pub fn fix_edit(
+    dialect: Option<Dialect>,
+    text: &str,
+    original: &str,
+    fixed: &str,
+) -> Result<TextEdit, &'static str> {
+    fn bare(sql: &str) -> &str {
+        sql.trim().trim_end_matches(';').trim_end()
+    }
+    let needle = bare(original);
     if needle.is_empty() {
         return Err(FIX_STALE);
     }
-    let mut found = text
-        .match_indices(needle)
-        .filter(|&(at, m)| on_statement_boundary(text, at, m.len()));
-    let (start, _) = found.next().ok_or(FIX_STALE)?;
+    let snapshot = BufferSnapshot::at_cursor(text, 0);
+    let statements = plan(dialect, &snapshot, RunMode::All)
+        .map_err(|_| FIX_STALE)?
+        .statements;
+    let mut found = statements
+        .iter()
+        .filter(|s| bare(&s.sql[skip_leading_trivia(&s.sql)..]) == needle);
+    let first = found.next().ok_or(FIX_STALE)?;
     if found.next().is_some() {
         return Err(FIX_STALE);
     }
+    let lead = skip_leading_trivia(&first.sql);
+    let start = first.range.start + lead;
+    let mut end = start + bare(&first.sql[lead..]).len();
     let fixed = fixed.trim();
+    if fixed.ends_with(';') && text[end..].starts_with(';') {
+        end += 1;
+    }
     Ok(TextEdit {
-        range: start..start + needle.len(),
+        range: start..end,
         text: fixed.to_owned(),
         select_after: start..start + fixed.len(),
     })
@@ -415,6 +436,8 @@ pub fn status_line(kind: AssistKind, status: Option<&AiStatus>) -> String {
 
 #[cfg(test)]
 mod tests {
+    const D: Option<Dialect> = Some(Dialect::Sqlite);
+
     use super::*;
     use sqler_config::ProviderKind;
 
@@ -471,7 +494,7 @@ mod tests {
     #[test]
     fn fix_replaces_exactly_one_match() {
         let text = "-- x\nselect nme from t;\n";
-        let e = fix_edit(text, "select nme from t;", "select name from t;").unwrap();
+        let e = fix_edit(D, text, "select nme from t;", "select name from t;").unwrap();
         let out = apply(text, &e);
         assert_eq!(out, "-- x\nselect name from t;\n");
         assert_eq!(&out[e.select_after], "select name from t;");
@@ -479,49 +502,95 @@ mod tests {
 
     #[test]
     fn fix_refuses_none_two_and_changed_text() {
-        assert_eq!(fix_edit("select 1", "select 2", "x"), Err(FIX_STALE));
+        assert_eq!(fix_edit(D, "select 1", "select 2", "x"), Err(FIX_STALE));
         assert_eq!(
-            fix_edit("select 1;\nselect 1;", "select 1", "x"),
+            fix_edit(D, "select 1;\nselect 1;", "select 1", "x"),
             Err(FIX_STALE)
         );
-        assert_eq!(fix_edit("select 1", "  ", "x"), Err(FIX_STALE));
-        assert_eq!(fix_edit("", "select 1", "x"), Err(FIX_STALE));
+        assert_eq!(fix_edit(D, "select 1", "  ", "x"), Err(FIX_STALE));
+        assert_eq!(fix_edit(D, "", "select 1", "x"), Err(FIX_STALE));
     }
 
     #[test]
     fn fix_requires_statement_boundaries() {
         // A prefix of a longer statement is not a match.
         assert_eq!(
-            fix_edit("delete from t where id = 1", "delete from t", "x"),
+            fix_edit(D, "delete from t where id = 1", "delete from t", "x"),
             Err(FIX_STALE)
         );
         assert_eq!(
-            fix_edit("delete from t where id = 1;", "delete from t;", "x"),
+            fix_edit(D, "delete from t where id = 1;", "delete from t;", "x"),
             Err(FIX_STALE)
         );
         // Suffix of a longer token run.
-        assert_eq!(fix_edit("xselect 1", "select 1", "y"), Err(FIX_STALE));
+        assert_eq!(fix_edit(D, "xselect 1", "select 1", "y"), Err(FIX_STALE));
         // Two identical statements.
         assert_eq!(
-            fix_edit("select 1; select 1;", "select 1;", "x"),
+            fix_edit(D, "select 1; select 1;", "select 1;", "x"),
             Err(FIX_STALE)
         );
         // Exactly once between other statements, with and without semicolons.
         let text = "select 0;\nselect nme from t;\nselect 2;";
-        let e = fix_edit(text, "select nme from t", "select name from t").unwrap();
+        let e = fix_edit(D, text, "select nme from t", "select name from t").unwrap();
         assert_eq!(apply(text, &e), "select 0;\nselect name from t;\nselect 2;");
-        let e = fix_edit(text, "select nme from t;", "select name from t;").unwrap();
+        let e = fix_edit(D, text, "select nme from t;", "select name from t;").unwrap();
         assert_eq!(apply(text, &e), "select 0;\nselect name from t;\nselect 2;");
         // A short statement that is also a prefix elsewhere counts once.
         let text = "delete from t where id = 1;\ndelete from t;";
-        let e = fix_edit(text, "delete from t", "delete from t limit 1").unwrap();
+        let e = fix_edit(D, text, "delete from t", "delete from t limit 1").unwrap();
         assert_eq!(
             apply(text, &e),
             "delete from t where id = 1;\ndelete from t limit 1;"
         );
         // The editor text changed since the request.
         assert_eq!(
-            fix_edit("select nme from t where a = 1;", "select nme from t", "x"),
+            fix_edit(
+                D,
+                "select nme from t where a = 1;",
+                "select nme from t",
+                "x"
+            ),
+            Err(FIX_STALE)
+        );
+    }
+
+    #[test]
+    fn fix_ignores_comments_strings_and_longer_statements() {
+        // (a) the old line is only a comment now.
+        assert_eq!(
+            fix_edit(D, "-- delete from t;\nselect 1;", "delete from t;", "x"),
+            Err(FIX_STALE)
+        );
+        assert_eq!(
+            fix_edit(D, "/* delete from t; */ select 1;", "delete from t;", "x"),
+            Err(FIX_STALE)
+        );
+        // (b) inside a string literal.
+        assert_eq!(
+            fix_edit(D, "select 'a; delete from t; b'", "delete from t;", "x"),
+            Err(FIX_STALE)
+        );
+        // (c) the tail of a longer statement.
+        assert_eq!(
+            fix_edit(D, "insert into x select 1;", "select 1", "x"),
+            Err(FIX_STALE)
+        );
+        // Real once, also in a comment and a string: the real one only.
+        let text = "-- select nme from t;\nselect 'select nme from t;';\nselect nme from t;\n";
+        let e = fix_edit(D, text, "select nme from t;", "select name from t;").unwrap();
+        assert_eq!(
+            apply(text, &e),
+            "-- select nme from t;\nselect 'select nme from t;';\nselect name from t;\n"
+        );
+        // Multi-statement buffer, indented statement.
+        let text = "select 1;\n  select nme from t  ;\nselect 2;";
+        let e = fix_edit(D, text, "select nme from t", "select name from t").unwrap();
+        assert_eq!(
+            apply(text, &e),
+            "select 1;\n  select name from t  ;\nselect 2;"
+        );
+        assert_eq!(
+            fix_edit(D, "select 1;\nselect 2;\nselect 1", "select 1;", "x"),
             Err(FIX_STALE)
         );
     }
