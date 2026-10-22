@@ -83,8 +83,8 @@ jobs:
             spikes/plugin-runtime/guests/duckdb spikes/plugin-runtime/guests/mssql; do
             [ -f "$m/Cargo.toml" ] || { echo "skip $m (absent)"; continue; }
             echo "::group::cargo deny $m"
-            cargo deny --manifest-path "$m/Cargo.toml" fetch
-            cargo deny --manifest-path "$m/Cargo.toml" check --config deny.toml
+            cargo deny --manifest-path "$m/Cargo.toml" --config deny.toml fetch
+            cargo deny --manifest-path "$m/Cargo.toml" --config deny.toml check
             echo "::endgroup::"
           done
 
