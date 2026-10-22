@@ -35,6 +35,8 @@ use crate::workbench::{
 };
 use crate::workspace::WorkspaceAction;
 
+mod agent;
+
 /// How long a change of the layout waits before `workbench.toml` is written.
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 
@@ -288,6 +290,9 @@ impl WorkspaceView {
         let kind = self.ws.tabs().get(tab).map(tabs::Tab::kind);
         if kind == Some(TabKind::AiSession) {
             return crate::ai::session::view::session_tab_body(self, tab, cx);
+        }
+        if kind == Some(TabKind::Agent) {
+            return agent::agent_tab_body(self, tab, cx);
         }
         if kind == Some(TabKind::Query)
             && let Some(editor) = self.editors.body(tab)

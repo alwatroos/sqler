@@ -57,14 +57,17 @@ pub enum TabKind {
     History,
     /// An AI exploration session on one connection.
     AiSession,
+    /// An ACP agent (Claude Code, Codex, ...) that works on one connection through `SQLer`'s tools.
+    Agent,
 }
 
 impl TabKind {
     /// Whether the tab owns a run gate (the production confirmation of ADR-0024): a query tab
-    /// runs statements through it, an AI session tab opens it for the second confirmation.
+    /// runs statements through it, an AI session or agent tab opens it for the second
+    /// confirmation.
     #[must_use]
     pub fn uses_run_gate(self) -> bool {
-        matches!(self, Self::Query | Self::AiSession)
+        matches!(self, Self::Query | Self::AiSession | Self::Agent)
     }
 }
 
@@ -140,6 +143,7 @@ impl Tab {
                 TabKind::Grid => format!("Results: {object}"),
                 TabKind::History => format!("History: {object}"),
                 TabKind::AiSession => format!("AI: {object}"),
+                TabKind::Agent => format!("Agent: {object}"),
                 TabKind::Query => object.clone(),
             };
         }
@@ -152,6 +156,7 @@ impl Tab {
             TabKind::Grid => format!("Results: {base}"),
             TabKind::History => format!("History: {base}"),
             TabKind::AiSession => format!("AI: {base}"),
+            TabKind::Agent => format!("Agent: {base}"),
             TabKind::Query | TabKind::Ddl | TabKind::Properties => base,
         }
     }
@@ -735,6 +740,19 @@ mod tests {
         assert!(TabKind::Query.uses_run_gate());
         assert!(!TabKind::Grid.uses_run_gate());
         assert!(!TabKind::History.uses_run_gate());
+    }
+
+    #[test]
+    fn agent_tab_is_pinned_titled_and_uses_the_run_gate() {
+        let mut s = TabStrip::default();
+        let first = s.open(conn("x"), TabKind::Agent);
+        let second = s.open(conn("x"), TabKind::Agent);
+        let named = s.open_object(conn("y"), TabKind::Agent, "orders");
+        assert_eq!(s.get(first).unwrap().title(), "Agent: x");
+        assert_eq!(s.get(second).unwrap().title(), "Agent: x (2)");
+        assert_eq!(s.get(named).unwrap().title(), "Agent: orders");
+        assert_eq!(s.get(first).unwrap().mode(), TabMode::Pinned);
+        assert!(TabKind::Agent.uses_run_gate());
     }
 
     fn titles(s: &TabStrip, g: GroupId) -> Vec<TabId> {
