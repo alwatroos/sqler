@@ -7987,6 +7987,7 @@ name = "sqler-config"
 version = "0.1.0"
 dependencies = [
  "keyring",
+ "proptest",
  "serde",
  "serde_json",
  "sqler-core",
@@ -8186,6 +8187,7 @@ dependencies = [
  "sqler-driver-sqlite",
  "sqler-export",
  "sqler-mcp",
+ "sqler-plugin-api",
  "sqler-sql",
  "thiserror 2.0.21",
  "tokio",

@@ -5,14 +5,8 @@
 
 use sqler_plugin_api::{CapabilitySet, GrantKey};
 
-/// Answers which capabilities the user approved for one exact plugin build (id, version, manifest hash and component
-/// digest, see [`GrantKey`]). The grants store (P6) implements it; the host only consumes it.
-///
-/// This is declared here with P6's exact shape until P6 is on `main`, then it becomes a re-export.
-pub trait GrantSource: Send + Sync {
-    /// The approved set for `key`, or `None` when nothing was approved (default deny).
-    fn approved(&self, key: &GrantKey) -> Option<CapabilitySet>;
-}
+// The grants store (P6) implements it; the host only consumes it.
+pub use sqler_plugin_api::GrantSource;
 
 /// A [`GrantSource`] that approves nothing.
 #[derive(Debug, Clone, Copy, Default)]

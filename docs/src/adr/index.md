@@ -64,5 +64,6 @@ consequences. SQLer uses the MADR format.
 | [0055](0055-plugin-abi-wit.md) | Plugin ABI: the `sqler:plugin` WIT package, version rule, worlds, interfaces, WASI set | accepted |
 | [0056](0056-plugin-sandbox-and-capabilities.md) | Plugin sandbox and capabilities: grammar, gates, default deny, grant key, query rule, limits | accepted |
 | [0057](0057-plugin-host-runtime.md) | Plugin host runtime: two layers and features, wasmtime 50 engine configuration, epoch deadlines, limits and the three-fault rule, WASI scope (clocks and random stay linked), egress rules, extension protocol | accepted |
+| [0059](0059-plugin-capability-grants.md) | Plugin capability grants: `plugin-grants.toml`, all-or-nothing approval, re-prompt rules, damaged-file lock | accepted |
 
 ADR number 0039 is reserved for M5.

@@ -29,6 +29,7 @@ use crate::browser::{BrowserAction, LoadState, TreeNodeId};
 use crate::command::CommandId;
 use crate::connections::{ConnectionAction, Connector};
 use crate::palette::OPEN_PALETTE;
+use crate::plugins::grant::{sample_prompt, view::GrantSceneHost};
 use crate::settings::SettingsModel;
 use crate::tabs::{TabId, TabKind};
 use crate::workspace::WorkspaceAction;
@@ -173,6 +174,10 @@ pub const SCENES: &[Scene] = &[
     },
     Scene {
         name: "ai-fix-diff",
+        pending: None,
+    },
+    Scene {
+        name: "plugins-grant",
         pending: None,
     },
 ];
@@ -775,7 +780,13 @@ pub fn open(
     view.update(cx, |view, _| {
         view.ws.ai_audit = Some(crate::ai::AiAudit::in_memory());
     });
-    let root = cx.new(|cx| Root::new(view.clone(), window, cx));
+    let root = if scene.name == "plugins-grant" {
+        // The dialog is drawn by a small host over the real workspace, so `view.rs` is untouched.
+        let host = cx.new(|cx| GrantSceneHost::new(view.clone(), sample_prompt(), cx));
+        cx.new(|cx| Root::new(host, window, cx))
+    } else {
+        cx.new(|cx| Root::new(view.clone(), window, cx))
+    };
     let player = ScenePlayer {
         view,
         scene: *scene,

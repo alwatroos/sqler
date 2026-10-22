@@ -171,9 +171,8 @@ hop-by-hop headers are dropped. Bodies are buffered: 8 MiB for a request, 16 MiB
 
 ### Grants, settings and logs
 
-The host reads grants through `GrantSource::approved(&GrantKey) -> Option<CapabilitySet>`, the shape P6 pins. P6 is not
-on `main` yet, so the trait is declared in this crate with that exact shape and becomes a re-export when P6 lands. The
-effective set is `declared ∩ approved`; a key the user never approved gives the empty set, and the plugin still loads and
+The host reads grants through `GrantSource::approved(&GrantKey) -> Option<CapabilitySet>`, defined in
+`sqler-plugin-api` (ADR-0059) and re-exported by this crate; the grants store of P6 implements it. The effective set is `declared ∩ approved`; a key the user never approved gives the empty set, and the plugin still loads and
 runs (denied calls return `capability-denied`). Because the key contains the component digest, a swapped component has no
 grant.
 

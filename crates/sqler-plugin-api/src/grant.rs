@@ -8,6 +8,7 @@ use std::str::FromStr;
 
 use thiserror::Error;
 
+use crate::capability::CapabilitySet;
 use crate::hash::{ComponentDigest, ManifestHash};
 use crate::id::PluginId;
 
@@ -33,16 +34,141 @@ pub enum GrantKeyBuildError {
 ///
 /// Text form: `<id>@<version>#<manifest_hash>` for a declarative plugin (no `[entry]`), and
 /// `<id>@<version>#<manifest_hash>+<component_hash>` for a plugin with a component.
+///
+/// The fields are private and there is no other constructor: outside this crate a key exists only as the result of
+/// `Manifest::grant_key`, which checks that the component digest fits the manifest. A key cannot be built from text or
+/// edited afterwards. To read what a stored key text says, parse it as a [`ParsedGrantKey`], which can be compared with a
+/// key but is not accepted by [`GrantSource::approved`].
+///
+/// ```compile_fail,E0451
+/// use sqler_plugin_api::{GrantKey, ManifestHash};
+///
+/// let _ = GrantKey {
+///     id: "my-plugin".parse().unwrap(),
+///     version: "1.0.0".parse().unwrap(),
+///     hash: ManifestHash::from_bytes([0; 32]),
+///     component: None,
+/// };
+/// ```
+///
+/// ```compile_fail,E0616
+/// use sqler_plugin_api::{GrantKey, Manifest};
+///
+/// fn strip(m: &Manifest, mut key: GrantKey) {
+///     key.component = None;
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// use sqler_plugin_api::GrantKey;
+///
+/// // A key has no text constructor.
+/// let _: GrantKey = "my-plugin@1.0.0#00".parse().unwrap();
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GrantKey {
+    id: PluginId,
+    version: semver::Version,
+    hash: ManifestHash,
+    component: Option<ComponentDigest>,
+}
+
+impl GrantKey {
+    /// Only the manifest code builds a key.
+    pub(crate) fn new(
+        id: PluginId,
+        version: semver::Version,
+        hash: ManifestHash,
+        component: Option<ComponentDigest>,
+    ) -> Self {
+        Self {
+            id,
+            version,
+            hash,
+            component,
+        }
+    }
+
     /// The plugin id.
-    pub id: PluginId,
+    #[must_use]
+    pub fn id(&self) -> &PluginId {
+        &self.id
+    }
+
     /// The plugin version.
-    pub version: semver::Version,
+    #[must_use]
+    pub fn version(&self) -> &semver::Version {
+        &self.version
+    }
+
     /// The hash of the whole manifest.
-    pub hash: ManifestHash,
+    #[must_use]
+    pub fn hash(&self) -> &ManifestHash {
+        &self.hash
+    }
+
     /// SHA-256 of the `.wasm` computed by the host at load time; `None` only for a declarative plugin without `[entry]`.
-    pub component: Option<ComponentDigest>,
+    #[must_use]
+    pub fn component(&self) -> Option<&ComponentDigest> {
+        self.component.as_ref()
+    }
+}
+
+/// A grant key read back from text (for example from `plugin-grants.toml`).
+///
+/// It is for comparison and display only: it compares equal to a [`GrantKey`] with the same text form, and no API that
+/// looks up or enforces a grant accepts it. Only a key derived from a manifest does.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ParsedGrantKey(GrantKey);
+
+impl ParsedGrantKey {
+    /// The plugin id.
+    #[must_use]
+    pub fn id(&self) -> &PluginId {
+        &self.0.id
+    }
+
+    /// The plugin version.
+    #[must_use]
+    pub fn version(&self) -> &semver::Version {
+        &self.0.version
+    }
+
+    /// The hash of the whole manifest.
+    #[must_use]
+    pub fn hash(&self) -> &ManifestHash {
+        &self.0.hash
+    }
+
+    /// The component digest, if the text had one.
+    #[must_use]
+    pub fn component(&self) -> Option<&ComponentDigest> {
+        self.0.component.as_ref()
+    }
+}
+
+impl PartialEq<GrantKey> for ParsedGrantKey {
+    fn eq(&self, other: &GrantKey) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<ParsedGrantKey> for GrantKey {
+    fn eq(&self, other: &ParsedGrantKey) -> bool {
+        *self == other.0
+    }
+}
+
+impl fmt::Display for ParsedGrantKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// Where the host looks up what the user approved (ADR-0059).
+pub trait GrantSource: Send + Sync {
+    /// The capabilities approved under exactly `key`; `None` = nothing granted.
+    fn approved(&self, key: &GrantKey) -> Option<CapabilitySet>;
 }
 
 impl fmt::Display for GrantKey {
@@ -55,7 +181,7 @@ impl fmt::Display for GrantKey {
     }
 }
 
-impl FromStr for GrantKey {
+impl FromStr for ParsedGrantKey {
     type Err = GrantKeyError;
 
     fn from_str(s: &str) -> Result<Self, GrantKeyError> {
@@ -68,12 +194,12 @@ impl FromStr for GrantKey {
             None => (tail, None),
         };
         let (id, version) = rest.split_once('@').ok_or(GrantKeyError)?;
-        Ok(Self {
+        Ok(Self(GrantKey {
             id: id.parse().map_err(|_| GrantKeyError)?,
             version: version.parse().map_err(|_| GrantKeyError)?,
             hash: hash.parse().map_err(|_| GrantKeyError)?,
             component,
-        })
+        }))
     }
 }
 
@@ -91,7 +217,8 @@ mod tests {
         };
         let text = key.to_string();
         assert!(text.starts_with("my-plugin@1.2.3-rc.1+build.5#abab"));
-        assert_eq!(text.parse::<GrantKey>().unwrap(), key);
+        assert_eq!(text.parse::<ParsedGrantKey>().unwrap(), key);
+        assert_eq!(key, text.parse::<ParsedGrantKey>().unwrap());
         for bad in [
             "",
             "a@1.0.0",
@@ -101,7 +228,7 @@ mod tests {
             "My@1.0.0#ab",
             "a@1.0.0#+",
         ] {
-            assert!(bad.parse::<GrantKey>().is_err(), "{bad}");
+            assert!(bad.parse::<ParsedGrantKey>().is_err(), "{bad}");
         }
     }
 
@@ -120,13 +247,17 @@ mod tests {
         assert_ne!(a, key(None));
         let text = a.to_string();
         assert!(text.contains(&format!("#{hash}+")));
-        assert_eq!(text.parse::<GrantKey>().unwrap(), a);
+        assert_eq!(text.parse::<ParsedGrantKey>().unwrap(), a);
         assert_eq!(
-            key(None).to_string().parse::<GrantKey>().unwrap(),
+            key(None).to_string().parse::<ParsedGrantKey>().unwrap(),
             key(None)
         );
         let bad = format!("{text}+{}", ComponentDigest::of(b"x"));
-        assert!(bad.parse::<GrantKey>().is_err());
-        assert!(format!("{}+zz", key(None)).parse::<GrantKey>().is_err());
+        assert!(bad.parse::<ParsedGrantKey>().is_err());
+        assert!(
+            format!("{}+zz", key(None))
+                .parse::<ParsedGrantKey>()
+                .is_err()
+        );
     }
 }

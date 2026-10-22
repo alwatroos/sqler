@@ -95,14 +95,14 @@ fn valid_plugins_with_and_without_component() {
     assert_eq!(ids, ["alpha", "beta"]);
     let alpha = &d.plugins[0];
     assert!(alpha.component.is_none());
-    assert_eq!(alpha.key.component, None);
+    assert_eq!(alpha.key.component(), None);
     assert_eq!(alpha.source, PluginSource::Config);
     assert_eq!(alpha.dir, s.path("alpha").canonicalize().unwrap());
     let beta = &d.plugins[1];
     let c = beta.component.as_ref().unwrap();
     assert_eq!(c.digest, ComponentDigest::of(b"\0asm-bytes"));
     assert_eq!(c.len, 10);
-    assert_eq!(beta.key.component, Some(c.digest));
+    assert_eq!(beta.key.component(), Some(&c.digest));
     assert_eq!(beta.roots.plugin_dir, beta.dir);
     assert_eq!(beta.roots.data_dir, s.0.join("beta").join("data"));
 }
@@ -115,7 +115,7 @@ fn digest_and_key_change_with_the_bytes() {
     fs::write(s.path("beta/beta.wasm"), b"two").unwrap();
     let second = discover(&config(&s.0)).plugins.remove(0);
     assert_ne!(first.key, second.key);
-    assert_eq!(first.key.hash, second.key.hash);
+    assert_eq!(first.key.hash(), second.key.hash());
     assert_eq!(first.manifest.hash(), second.manifest.hash());
 }
 
