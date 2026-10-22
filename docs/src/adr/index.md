@@ -47,6 +47,7 @@ consequences. SQLer uses the MADR format.
 | [0035](0035-ai-configuration.md) | AI configuration: `ai.toml`, provider key references, per-connection opt-in, connections format v2 | accepted |
 | [0036](0036-ai-tool-schemas-guards-and-host-traits.md) | AI tool schemas, guards and host traits: one `ToolSet`, approval per statement, prod twice, no approver refuses, row and time caps | accepted |
 | [0037](0037-ai-redaction-untrusted-data-and-audit-log.md) | AI redaction, untrusted-data envelope and audit log: redact by result shape, wrap every result, JSON Lines audit with rotation | accepted |
+| [0040](0040-mcp-server.md) | MCP server: in-crate JSON-RPC layer (rmcp measured, not adopted), stdio and loopback HTTP with a bearer token | accepted |
 | [0041](0041-acp-client.md) | ACP client: agent profiles, one supervisor task per agent, scrubbed environment, MCP descriptor and no client capabilities | accepted |
 | [0042](0042-workbench-layout.md) | Workbench layout and editor groups: headless layout, groups, preview tabs, bottom panel, status bar | accepted |
 | [0043](0043-visual-system-and-themes.md) | Visual system and themes: scales, embedded SQLer Dark/Light themes, env accents, contrast test | accepted |
@@ -56,4 +57,4 @@ consequences. SQLer uses the MADR format.
 | [0047](0047-screenshot-harness.md) | Screenshot harness: headless GPUI renderer, scenes in both themes, Linux CI artifact | accepted |
 | [0050](0050-ai-surfaces-in-the-workbench.md) | AI surfaces in the workbench: activity item, side view, status item, command ids, additive `side_view` value, provider factory | accepted |
 
-ADR numbers 0038 to 0040 are reserved for M5.
+ADR numbers 0038 and 0039 are reserved for M5.

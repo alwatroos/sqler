@@ -73,6 +73,13 @@ base64 = "0.22.1"
 # Dev only (T4): capture log and tracing output in the secret-redaction test; both are already in Cargo.lock.
 log = "0.4.34"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+# sqler-mcp (T15, ADR-0040): the HTTP front service. `rmcp` 3.6.0 was measured and rejected (+2.39 MiB, over the 1.5 MiB
+# gate), so the MCP protocol layer is in-crate; these are the versions already in Cargo.lock through reqwest.
+hyper = { version = "1.12.0", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
+http-body-util = "0.1.5"
+http = "1.5.0"
+subtle = "2.6.1"
 gpui-component = { version = "0.8.0", features = ["tree-sitter-sql"] }
 # Lucide icon assets (ADR-0044); pinned to the version gpui-component 0.8.0 resolves.
 gpui-kit-assets = "=0.8.0"

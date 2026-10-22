@@ -50,7 +50,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-export` | L2 | CSV, JSON, SQL `INSERT`, Markdown, Parquet and XLSX writers behind a push-style `RowWriter` API and a format registry (ADR-0028); Parquet and XLSX sit behind the cargo features `parquet` and `xlsx` (ADR-0029) |
 | `sqler-ai-tools` | L3 | Tool set exposed to models: catalog tools, `run_query`, `sample_rows`, `explain_query` (guarded by classification, approval and limits), `search_data`; host traits `SessionSource`, `Approver`, `UiHost` (ADR-0036) |
 | `sqler-plugin-host` | L3 | Plugin loading, sandboxing, capability grants, lifecycle |
-| `sqler-mcp` | L4 | MCP server (rmcp) exposing `sqler-ai-tools` to external agents |
+| `sqler-mcp` | L4 | MCP server (in-crate JSON-RPC layer; `rmcp` was measured and not adopted, ADR-0040) exposing `sqler-ai-tools` to external agents |
 | `sqler-acp` | L5 | ACP client: spawn and host Claude Code, Codex CLI, Gemini CLI and others inside SQLer |
 | `sqler-ui` | L6 | GPUI app: workspace, tabs, panels, grid, editor, palette, themes |
 | `sqler-cli` | L6 | Headless CLI (run query, export, start MCP server); proves the core is UI-independent |
@@ -95,6 +95,8 @@ sh .github/scripts/check-spdx.sh
 cargo tree --workspace -i sqler-ui
 cargo run -p sqler-cli -- run :memory: "select 1"
 cargo run -p sqler-cli -- run --driver postgres "$SQLER_TEST_POSTGRES_URL" "select 1"
+cargo run -p sqler-cli -- mcp ./data.db
+cargo run -p sqler-cli -- mcp --http 0 ./data.db
 cargo nextest run --workspace -E 'binary(/^db_/)' --no-tests=pass
 cargo run -p sqler-app
 cargo build --release -p sqler-app --locked
@@ -256,6 +258,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0035](docs/src/adr/0035-ai-configuration.md) | AI configuration: `ai.toml`, provider key references, per-connection opt-in, connections format v2 | accepted |
 | [0036](docs/src/adr/0036-ai-tool-schemas-guards-and-host-traits.md) | AI tool schemas, guards and host traits: one `ToolSet`, approval per statement, prod twice, no approver refuses, row and time caps | accepted |
 | [0037](docs/src/adr/0037-ai-redaction-untrusted-data-and-audit-log.md) | AI redaction, untrusted-data envelope and audit log: redact by result shape, wrap every result, JSON Lines audit with rotation | accepted |
+| [0040](docs/src/adr/0040-mcp-server.md) | MCP server: in-crate JSON-RPC layer (rmcp measured, not adopted), stdio and loopback HTTP with a bearer token | accepted |
 | [0041](docs/src/adr/0041-acp-client.md) | ACP client: agent profiles, one supervisor task per agent, scrubbed environment, MCP descriptor and no client capabilities | accepted |
 | [0042](docs/src/adr/0042-workbench-layout.md) | Workbench layout and editor groups: headless layout, groups, preview tabs, bottom panel, status bar | accepted |
 | [0043](docs/src/adr/0043-visual-system-and-themes.md) | Visual system and themes: scales, embedded SQLer Dark/Light themes, env accents, contrast test | accepted |

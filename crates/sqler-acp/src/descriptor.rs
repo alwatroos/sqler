@@ -18,6 +18,10 @@ use zeroize::Zeroizing;
 use crate::error::AcpError;
 
 /// Header that carries the token (value: `Bearer <token>`).
+///
+/// Must equal `sqler_mcp::AUTH_HEADER`. Not asserted by a test: `sqler-mcp` would pull the AI tool set, the
+/// catalog and the HTTP stack into this crate's dev build. The real `sqler-cli mcp --http` endpoint is
+/// `http://127.0.0.1:PORT/mcp` and its `Host` check needs that explicit port.
 pub const MCP_AUTH_HEADER: &str = "Authorization";
 
 /// A secret for the HTTP `MCP` endpoint. Zeroized on drop; `Debug` never prints it.
