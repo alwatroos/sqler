@@ -44,10 +44,21 @@ fn profile_name(release: bool) -> &'static str {
 
 /// Fail with the fix when the `wasm32-wasip2` target is not installed.
 fn check_target() -> Result<(), String> {
-    let output = Command::new(env_or("RUSTC", "rustc"))
+    check_target_with(&env_or("RUSTC", "rustc"))
+}
+
+fn check_target_with(rustc: &OsString) -> Result<(), String> {
+    let output = Command::new(rustc)
         .args(["--print", "sysroot"])
         .output()
         .map_err(|e| format!("cannot run rustc: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`rustc --print sysroot` failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
     let sysroot = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     let installed = Path::new(&sysroot)
         .join("lib")
@@ -266,8 +277,12 @@ pub fn clean(root: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::ffi::OsString;
     use std::path::Path;
 
+    #[cfg(unix)]
+    use super::check_target_with;
     use super::{artefact_name, stage, validate_manifest};
     use crate::plugins::table::PluginRow;
     use sqler_plugin_api::Manifest;
@@ -279,6 +294,14 @@ mod tests {
         dir: "x",
         package: Some("p"),
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn failing_rustc_is_reported_not_blamed_on_the_target() {
+        let err = check_target_with(&OsString::from("false")).unwrap_err();
+        assert!(err.contains("`rustc --print sysroot` failed"), "{err}");
+        assert!(!err.contains("rustup target add"), "{err}");
+    }
 
     #[test]
     fn artefact_name_replaces_dashes() {
