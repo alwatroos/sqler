@@ -132,6 +132,20 @@ Errors are a fixed enum with fixed texts that never contain a URL: `NotConfigure
 - Out of scope: downloading or installing a binary, the settings and notice UI (R4), manifest generation in CI (R5),
   and the production key (R17).
 
+## Note 2026-10-23: production key (R17)
+
+The production key now exists and is committed as `crates/sqler-update/keys/efe45a1253fd9347.pub`, so builds are
+configured and `check()` no longer returns `NotConfigured` (the empty-list behaviour remains and is tested).
+
+- Key id: `efe45a1253fd9347`.
+- Fingerprint (SHA-256 of the raw public key): `efe45a1253fd934792dea0989d12ce98ed74acea6acb8832fa00362341fc394b`.
+- The private key is the secret `SQLER_UPDATE_SIGNING_KEY` of the GitHub environment `release`: one line, standard
+  base64 of the 32-byte Ed25519 seed (`ring` `Ed25519KeyPair::from_seed_unchecked`). It is not stored in the
+  repository.
+- A sample manifest signed with it verified with `sqler-update` against the committed key before the scratch files
+  were deleted.
+- Rotation: follow the rotation rule above; the page `releasing/update-feed.md` lists the current key.
+
 ## Rejected alternatives
 
 - A detached `.sig` second asset: two requests, and two `latest` redirects that can race during a release.
