@@ -67,6 +67,7 @@ consequences. SQLer uses the MADR format.
 | [0058](0058-plugin-query-and-catalog.md) | Plugin query and catalog: `DataService`/`QueryApprover` traits, order of checks, write approval (twice on prod), limits, session lease, catalog behaviour, threat model | accepted |
 | [0059](0059-plugin-capability-grants.md) | Plugin capability grants: `plugin-grants.toml`, all-or-nothing approval, re-prompt rules, damaged-file lock | accepted |
 | [0060](0060-plugins-in-the-workbench.md) | Plugins in the workbench: activity item and side view, command ids, `PluginsBackend` trait, typed-id keyboard approval, grants re-read, own runtime, explicit dev paths, data folder, `plugins` feature (off by default) and the size rule | accepted |
+| [0062](0062-plugin-ai-tools.md) | Plugin AI tools through the tool contract: `ExternalTools` seam in `sqler-ai-tools`, `<plugin-id>__<tool>` names, schema subset, approval through the surface's approver, per-call data and approver swap, audit scope, surfaces, no tools in `sqler-cli mcp` | accepted |
 | [0068](0068-ci-pipeline-speed.md) | CI pipeline speed: what runs where, path gating with always-reporting names, caches saved on `main` only, Windows PR subset, `CI result` aggregate, rollback | accepted |
 
 ADR number 0039 is reserved for M5.

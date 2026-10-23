@@ -7,6 +7,7 @@
 //! else: no folder is scanned, no runtime or engine exists, no plugin is compiled or instantiated. The window asks for
 //! the first `refresh` after its first frame.
 
+mod ai;
 mod approver;
 mod backend;
 mod data;
@@ -25,20 +26,16 @@ use sqler_ui::connections::Connector;
 use sqler_ui::plugins::grant::GrantBook;
 use sqler_ui::plugins::{PluginsStartup, WriteSender};
 
+use ai::AppAiTools;
 use approver::UiApprover;
 use backend::AppPlugins;
 use data::AppData;
 use settings::Prefs;
 
-/// The host services every plugin sees: the saved connections (opened on `connector`, one fresh session per
-/// statement) and the approver that sends every write to the window through `writes`.
-fn services(
-    config: Option<&ConfigDir>,
-    connector: Arc<dyn Connector>,
-    writes: WriteSender,
-) -> Services {
-    let data = PluginData::new(Arc::new(AppData::new(config.cloned(), connector)))
-        .with_approver(Arc::new(UiApprover::new(writes)));
+/// The host services every plugin sees: the saved connections (`data`, one fresh session per statement) and the
+/// approver that sends every write to the window through `writes`.
+fn services(data: Arc<AppData>, writes: WriteSender) -> Services {
+    let data = PluginData::new(data).with_approver(Arc::new(UiApprover::new(writes)));
     let mut services = Services::new();
     services.insert(Arc::new(data));
     services
@@ -57,15 +54,22 @@ pub(crate) fn startup(
         Arc::new(config.map_or_else(GrantBook::in_memory, |dir| GrantBook::open(dir.clone())));
     let prefs = Arc::new(Prefs::new(config.cloned()));
     let (writes, inbox) = sqler_ui::plugins::write_channel();
-    let backend = AppPlugins::new(
-        Arc::clone(&grants),
-        prefs,
-        config,
-        dev,
-        std::env::home_dir(),
-    )
-    .with_services(services(config, connector, writes));
-    PluginsStartup::new(Some(Arc::new(backend)), grants).with_writes(inbox)
+    let data = Arc::new(AppData::new(config.cloned(), connector));
+    let backend = Arc::new(
+        AppPlugins::new(
+            Arc::clone(&grants),
+            prefs,
+            config,
+            dev,
+            std::env::home_dir(),
+        )
+        .with_services(services(Arc::clone(&data), writes)),
+    );
+    // The AI surfaces list the plugins' tools; each call lends the plugin its own data and approver (ADR-0062).
+    let ai_tools = AppAiTools::new(Arc::clone(&backend), data);
+    PluginsStartup::new(Some(backend), grants)
+        .with_writes(inbox)
+        .with_ai_tools(Arc::new(ai_tools))
 }
 
 #[cfg(test)]
@@ -117,6 +121,13 @@ mod tests {
         assert!(started.backend.is_some());
         // Nothing was scanned or created.
         assert_eq!(std::fs::read_dir(s.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn startup_hands_the_ui_the_plugin_tools_without_starting_anything() {
+        let started = startup(None, Vec::new());
+        let tools = started.ai_tools.expect("the AI tools are wired");
+        assert_eq!(tools.tools().len(), 0);
     }
 
     #[test]

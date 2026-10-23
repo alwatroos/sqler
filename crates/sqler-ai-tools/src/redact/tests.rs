@@ -229,3 +229,12 @@ fn r4_withholds_the_error_of_a_tainted_statement_without_a_listed_word() {
     let again = Redaction::default().apply(&mut v, scope(true));
     assert_eq!(again.errors_withheld, 0);
 }
+
+#[test]
+fn plain_string_columns_of_an_external_tool_are_masked_like_named_ones() {
+    let mut v = json!({"columns": ["id", "user_password"], "rows": [[1, "CANARY-CELL"]]});
+    let s = Redaction::default().apply(&mut v, scope(true));
+    assert_eq!(v["rows"][0], json!([1, REDACTED]));
+    assert_eq!(s.columns, vec!["user_password".to_owned()]);
+    assert!(!v.to_string().contains("CANARY-CELL"));
+}

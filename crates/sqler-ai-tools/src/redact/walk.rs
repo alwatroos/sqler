@@ -102,7 +102,12 @@ fn object(red: &Redaction, map: &mut Map<String, Value>, scope: RedactScope, acc
     let names: Vec<Option<String>> = match map.get("columns") {
         Some(Value::Array(cols)) => cols
             .iter()
-            .map(|c| c.get("name").and_then(Value::as_str).map(str::to_owned))
+            .map(|c| {
+                // A column is an object with a `name` (built-in tools) or a plain name (external tools).
+                c.as_str()
+                    .or_else(|| c.get("name").and_then(Value::as_str))
+                    .map(str::to_owned)
+            })
             .collect(),
         _ => Vec::new(),
     };

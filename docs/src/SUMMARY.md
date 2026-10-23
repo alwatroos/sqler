@@ -91,6 +91,7 @@
   - [ADR-0058: Plugin query and catalog](adr/0058-plugin-query-and-catalog.md)
   - [ADR-0059: Plugin capability grants](adr/0059-plugin-capability-grants.md)
   - [ADR-0060: Plugins in the workbench](adr/0060-plugins-in-the-workbench.md)
+  - [ADR-0062: Plugin AI tools](adr/0062-plugin-ai-tools.md)
   - [ADR-0068: CI pipeline speed](adr/0068-ci-pipeline-speed.md)
 - [Plugin development](plugin-development/index.md)
   - [Manifest](plugin-development/manifest.md)

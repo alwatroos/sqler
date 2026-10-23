@@ -89,6 +89,15 @@ permission is highlighted) and, as a chip, every highlighted permission with its
 previous approval are marked as new. Names and descriptions come from the plugin; control and direction-changing
 characters, invisible format characters and line separators are replaced and long text is cut.
 
+### AI tools
+
+A plugin with the `ai.tool` permission offers its tools to the AI assistant, the agent and the built-in MCP server as
+`<plugin-id>__<tool-name>`. The tool only sees the connections you allowed for AI. A statement it wants to run that
+changes data asks you on the AI approval card (exact SQL, connection, and a second confirmation on `prod`); with no
+way to ask, it is refused. Its result is redacted and marked as untrusted data like any other tool result, and every
+call is written to the AI audit log. The standalone `sqler-cli mcp` offers no plugin tools. See
+[ADR-0062](../adr/0062-plugin-ai-tools.md).
+
 ### Data leaving your machine
 
 `db.read` is highlighted because a plugin that has it can read what your connections hold. If it also has
