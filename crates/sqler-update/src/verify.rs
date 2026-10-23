@@ -199,6 +199,42 @@ mod tests {
     }
 
     #[test]
+    fn embedded_key_id_matches_its_file_name() {
+        assert_eq!(EMBEDDED.len(), crate::keys::EMBEDDED_FILE_IDS.len());
+        assert_ne!(EMBEDDED.len(), 0);
+        for (text, file_id) in EMBEDDED.iter().zip(crate::keys::EMBEDDED_FILE_IDS) {
+            let key = TrustedKey::from_base64(text).unwrap();
+            assert_eq!(key.id(), *file_id);
+            assert_eq!(key.id().len(), 16);
+        }
+    }
+
+    #[test]
+    fn every_key_file_is_embedded() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("keys");
+        let mut on_disk: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| {
+                let name = e.unwrap().file_name().into_string().unwrap();
+                name.strip_suffix(".pub").map(str::to_owned)
+            })
+            .collect();
+        on_disk.sort();
+        let mut listed: Vec<String> = crate::keys::EMBEDDED_FILE_IDS
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        listed.sort();
+        assert_eq!(on_disk, listed);
+    }
+
+    #[test]
+    fn empty_key_list_trusts_nothing() {
+        let good = envelope(PAYLOAD.as_bytes(), "0000000000000000");
+        assert_eq!(verify_envelope(&good, &[]), Err(UpdateError::UnknownKey));
+    }
+
+    #[test]
     fn verifies_and_rejects() {
         let raw = public(&pair());
         let key = TrustedKey::from_base64(&STANDARD.encode(raw)).unwrap();

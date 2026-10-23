@@ -118,6 +118,7 @@
   - [Prompts and assist](ai/prompts.md)
   - [MCP server](ai/mcp.md)
   - [ACP agents](ai/acp.md)
+- [Update feed](releasing/update-feed.md)
 - [Benchmarks](benchmarks.md)
 - [Dependencies](dependencies.md)
 - [Contributing](contributing.md)
