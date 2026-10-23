@@ -24,3 +24,10 @@ context: Qualified, replace: 19..19 "", items: 4
  2. "total" [Column] insert="total" detail="o · numeric"
  3. "status" [Column] insert="status" detail="o · text"
  4. "user_id" [Column] insert="user_id" detail="o · integer"
+
+== tsql ==
+context: Qualified, replace: 19..19 "", items: 4
+ 1. "id" [Column] insert="id" detail="o · integer"
+ 2. "total" [Column] insert="total" detail="o · numeric"
+ 3. "status" [Column] insert="status" detail="o · text"
+ 4. "user_id" [Column] insert="user_id" detail="o · integer"

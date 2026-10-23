@@ -48,3 +48,18 @@ context: Expression, replace: 7..7 "", items: 200
 10. "U" [Alias] insert="U" detail="USERS"
 11. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
 12. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
+
+== tsql ==
+context: Expression, replace: 7..7 "", items: 144
+ 1. "id" [Column] insert="U.id" detail="U · integer"
+ 2. "id" [Column] insert="O.id" detail="O · integer"
+ 3. "name" [Column] insert="name" detail="U · Text"
+ 4. "email" [Column] insert="email" detail="U · text"
+ 5. "total" [Column] insert="total" detail="O · numeric"
+ 6. "status" [Column] insert="status" detail="O · text"
+ 7. "user_id" [Column] insert="user_id" detail="O · integer"
+ 8. "created_at" [Column] insert="created_at" detail="U · timestamp"
+ 9. "O" [Alias] insert="O" detail="orders"
+10. "U" [Alias] insert="U" detail="USERS"
+11. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+12. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"

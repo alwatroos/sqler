@@ -19,3 +19,7 @@ context: Expression, replace: 40..42 "no", items: 2
 context: Expression, replace: 40..42 "no", items: 2
  1. "not" [Keyword] insert="not" detail="-"
  2. "nothing" [Keyword] insert="nothing" detail="-"
+
+== tsql ==
+context: Expression, replace: 40..42 "no", items: 1
+ 1. "not" [Keyword] insert="not" detail="-"

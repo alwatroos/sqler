@@ -42,3 +42,16 @@ context: Expression, replace: 28..29 "e", items: 12
  8. "explain" [Keyword] insert="explain" detail="-"
  9. "json_each" [Function] insert="json_each($1)" snippet detail="json_each(json [, path]) -> table"
 10. "json_extract" [Function] insert="json_extract($1)" snippet detail="json_extract(json, path, ...) -> value"
+
+== tsql ==
+context: Expression, replace: 28..29 "e", items: 10
+ 1. "email" [Column] insert="email" detail="u · text"
+ 2. "exp" [Function] insert="exp($1)" snippet detail="exp(x) -> number"
+ 3. "end" [Keyword] insert="end" detail="-"
+ 4. "else" [Keyword] insert="else" detail="-"
+ 5. "escape" [Keyword] insert="escape" detail="-"
+ 6. "except" [Keyword] insert="except" detail="-"
+ 7. "exists" [Keyword] insert="exists" detail="-"
+ 8. "explain" [Keyword] insert="explain" detail="-"
+ 9. "name" [Column] insert="name" detail="u · Text"
+10. "created_at" [Column] insert="created_at" detail="u · timestamp"

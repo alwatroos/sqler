@@ -28,6 +28,7 @@ fn home(d: Dialect) -> &'static str {
     match d {
         Dialect::MySql => "shop",
         Dialect::Sqlite => "main",
+        Dialect::TSql => "dbo",
         _ => "public",
     }
 }
@@ -77,6 +78,24 @@ fn none(sql: &str) {
 
 fn one(sql: &str, code: DiagnosticCode, text: &str) {
     assert_eq!(pg(sql), [(code, text.to_owned())], "{sql}");
+}
+
+#[test]
+fn tsql_variables_brackets_and_temp_tables_are_not_flagged() {
+    let d = Dialect::TSql;
+    for sql in [
+        "SELECT @x, @@rowcount, $5 FROM users",
+        "SELECT [u].[id] FROM [dbo].[users] [u]",
+        "SELECT u.id FROM dbo.USERS AS U WHERE U.NAME = N'a''b'",
+        "SELECT * FROM #tmp",
+    ] {
+        let got = run(sql, d);
+        assert!(got.is_empty(), "{sql}\n{got:#?}");
+    }
+    let sql = "SELECT * FROM [dbo].[usrs]";
+    let got = run(sql, d);
+    assert_eq!(got.len(), 1, "{got:#?}");
+    assert_eq!(got[0].code, UnknownRelation);
 }
 
 #[test]

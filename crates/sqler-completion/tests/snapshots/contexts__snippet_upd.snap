@@ -18,3 +18,8 @@ context: StatementStart, replace: 0..3 "upd", items: 2
 context: StatementStart, replace: 0..3 "upd", items: 2
  1. "upd" [Snippet] insert="update ${1:table}\nset ${2:column} = ${3:value}\nwhere ${4:condition}$0" snippet detail="UPDATE ... SET ... WHERE"
  2. "update" [Keyword] insert="update" detail="-"
+
+== tsql ==
+context: StatementStart, replace: 0..3 "upd", items: 2
+ 1. "upd" [Snippet] insert="update ${1:table}\nset ${2:column} = ${3:value}\nwhere ${4:condition}$0" snippet detail="UPDATE ... SET ... WHERE"
+ 2. "update" [Keyword] insert="update" detail="-"

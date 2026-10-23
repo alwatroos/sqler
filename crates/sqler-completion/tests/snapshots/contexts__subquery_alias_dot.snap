@@ -21,3 +21,9 @@ context: Qualified, replace: 9..9 "", items: 3
  1. "c" [Column] insert="c" detail="s"
  2. "id" [Column] insert="id" detail="s"
  3. "who" [Column] insert="who" detail="s"
+
+== tsql ==
+context: Qualified, replace: 9..9 "", items: 3
+ 1. "c" [Column] insert="c" detail="s"
+ 2. "id" [Column] insert="id" detail="s"
+ 3. "who" [Column] insert="who" detail="s"

@@ -150,7 +150,7 @@ pub(crate) fn positive(name: &str, value: Option<u32>) -> Result<(), ToolError> 
 }
 
 fn dialect_of(info: &ConnectionInfo, tool: &str) -> Result<Dialect, ToolError> {
-    Dialect::from_driver_id(info.driver.as_str()).ok_or_else(|| {
+    info.dialect.ok_or_else(|| {
         ToolError::Unsupported(format!(
             "{tool} is not supported for the {} driver",
             info.driver
@@ -174,7 +174,10 @@ pub(crate) async fn sample_rows(
     let limit = caps
         .rows_for(Some(args.limit.unwrap_or(DEFAULT_SAMPLE_ROWS)))
         .unwrap_or(DEFAULT_SAMPLE_ROWS);
-    let sql = format!("SELECT * FROM {name} LIMIT {limit}");
+    let sql = match dialect {
+        Dialect::TSql => format!("SELECT TOP ({limit}) * FROM {name}"),
+        _ => format!("SELECT * FROM {name} LIMIT {limit}"),
+    };
     run_sql(
         ts,
         crate::schema::names::SAMPLE_ROWS,
@@ -195,6 +198,11 @@ pub(crate) async fn explain_query(
 ) -> Result<Value, ToolError> {
     let tool = crate::schema::names::EXPLAIN_QUERY;
     let dialect = dialect_of(info, tool)?;
+    if dialect == Dialect::TSql {
+        return Err(ToolError::Unsupported(
+            "explain_query is not supported for T-SQL".to_owned(),
+        ));
+    }
     let analyze = args.analyze.unwrap_or(false);
     if guard::starts_with_explain_like(dialect, &args.sql) {
         return Err(ToolError::InvalidArguments(

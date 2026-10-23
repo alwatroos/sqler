@@ -157,7 +157,8 @@ pub(crate) fn ident_from_token(text: &str, t: &Token) -> Ident {
         inner.strip_suffix(close).unwrap_or(inner)
     };
     let value = if open == '[' {
-        inner.to_owned()
+        // `]]` is an escaped `]` in T-SQL; SQLite brackets never hold a `]`.
+        inner.replace("]]", "]")
     } else {
         let doubled: String = [close, close].iter().collect();
         inner.replace(&doubled, &close.to_string())

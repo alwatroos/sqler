@@ -36,3 +36,14 @@ context: Expression, replace: 17..17 "", items: 200
  6. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
  7. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
  8. "avg" [Function] insert="avg($1)" snippet detail="avg(expr) -> number"
+
+== tsql ==
+context: Expression, replace: 17..17 "", items: 139
+ 1. "id" [Column] insert="id" detail="users · integer"
+ 2. "name" [Column] insert="name" detail="users · Text"
+ 3. "email" [Column] insert="email" detail="users · text"
+ 4. "created_at" [Column] insert="created_at" detail="users · timestamp"
+ 5. "users" [Alias] insert="users" detail="table"
+ 6. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+ 7. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
+ 8. "avg" [Function] insert="avg($1)" snippet detail="avg(expr) -> number"

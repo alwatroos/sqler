@@ -18,3 +18,8 @@ context: Qualified, replace: 12..12 "", items: 2
 context: Qualified, replace: 12..12 "", items: 2
  1. "Label" [Column] insert="Label" detail="oi · text"
  2. "Item Id" [Column] insert="\"Item Id\"" detail="oi · integer"
+
+== tsql ==
+context: Qualified, replace: 12..12 "", items: 2
+ 1. "Label" [Column] insert="Label" detail="oi · text"
+ 2. "Item Id" [Column] insert="[Item Id]" detail="oi · integer"

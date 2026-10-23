@@ -605,7 +605,7 @@ impl Assist {
         let shown_sql = redact_credentials(sql.trim()).into_owned();
         let message = redact_credentials(cap_bytes(error.trim(), MAX_ERROR_BYTES)).into_owned();
         let mut body = json!({"error": {"code": "driver", "message": message}});
-        let dialect = Dialect::from_driver_id(info.driver.as_str());
+        let dialect = info.dialect;
         self.tools
             .redaction()
             .apply(&mut body, RedactScope::new(info.send_rows, dialect));
@@ -653,7 +653,7 @@ impl Assist {
     }
 
     fn system_for(info: &ConnectionInfo, task: Task, json: bool) -> String {
-        let dialect = Dialect::from_driver_id(info.driver.as_str()).map(Dialect::as_str);
+        let dialect = info.dialect.map(Dialect::as_str);
         prompts::system(task, dialect, info.driver.as_str(), json)
     }
 

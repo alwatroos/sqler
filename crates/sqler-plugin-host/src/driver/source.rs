@@ -14,6 +14,7 @@ use sqler_driver_api::{Driver, DriverError, DriverSource, SourceLookup};
 use sqler_plugin_api::{
     Capability, CapabilityKind, DriverContribution, DriverKind, EngineId, PluginId,
 };
+use sqler_sql::Dialect;
 
 use super::error;
 use super::guest::GuestDriver;
@@ -156,6 +157,23 @@ impl PluginDrivers {
             return Err(error::collision(driver, first.plugin_id().as_str()));
         }
         Ok(())
+    }
+
+    /// The SQL dialect the manifest declares for driver `id`: the first claim of that id, only when it passes
+    /// [`check`](Self::check), through [`Dialect::from_name`]. An unknown or absent name, an unavailable driver and
+    /// an unknown id give `None`. Reads the plugin host's state: do not call it on the UI thread.
+    #[must_use]
+    pub fn dialect(&self, id: &DriverId) -> Option<Dialect> {
+        let claims = self.claims();
+        let at = claims
+            .iter()
+            .position(|c| c.driver.id.as_str() == id.as_str())?;
+        self.check(&claims, at).ok()?;
+        claims[at]
+            .driver
+            .dialect
+            .as_deref()
+            .and_then(Dialect::from_name)
     }
 
     /// Whether `plugin`'s driver `driver` can be used now, or the fixed text that says why not. Reads the plugin

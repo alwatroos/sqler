@@ -558,3 +558,111 @@ fn the_driver_module_has_no_write_path_of_its_own() {
     scan(&dir, &mut hits);
     assert!(hits.is_empty(), "{hits:?}");
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// The declared SQL dialect (ADR-0073)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Adds `dialect = "<name>"` to the only `[[drivers]]` table of the plugin written by `write_plugin`.
+fn declare_dialect(root: &Path, plugin: &str, name: &str) {
+    use std::fmt::Write as _;
+    let path = root.join(plugin).join("sqler.toml");
+    let mut text = fs::read_to_string(&path).unwrap();
+    writeln!(text, "dialect = \"{name}\"").unwrap();
+    fs::write(path, text).unwrap();
+}
+
+/// Like `world` for host plugins `(id, driver, dialect)`.
+fn dialect_world(test: &str, plugins: &[(&str, &str, Option<&str>)]) -> World {
+    let scratch = Scratch::new(test);
+    let dirs: Vec<_> = plugins
+        .iter()
+        .map(|(id, driver, dialect)| {
+            let dir = write_plugin(scratch.path(), id, driver, Kind::Host);
+            if let Some(name) = dialect {
+                declare_dialect(scratch.path(), id, name);
+            }
+            dir
+        })
+        .collect();
+    let d = discover_all(&dirs);
+    let grants = Arc::new(Grants::default());
+    grants.approve_declared(&d);
+    let keys = d
+        .plugins
+        .iter()
+        .map(|p| (p.manifest.id().clone(), p.key.clone()))
+        .collect();
+    let rt = runtime();
+    let host = host(
+        &rt,
+        grants.clone(),
+        &test_limits(std::time::Duration::from_secs(30)),
+    );
+    assert_eq!(host.load(d).len(), 0);
+    let drivers = PluginDrivers::new(engines());
+    drivers.attach(&host);
+    let mut registry = DriverRegistry::new();
+    registry.add_source(drivers.clone());
+    World {
+        _scratch: scratch,
+        rt,
+        host,
+        grants,
+        keys,
+        drivers,
+        registry,
+    }
+}
+
+#[test]
+fn the_dialect_is_the_one_the_manifest_declares() {
+    use sqler_sql::Dialect;
+    let w = dialect_world(
+        "dialect-names",
+        &[
+            ("p1", "tsql-db", Some("tsql")),
+            ("p2", "pg-db", Some("postgres")),
+            ("p3", "duck-db", Some("duckdb")),
+            ("p4", "plain-db", None),
+            ("p5", "case-db", Some("TSQL")),
+        ],
+    );
+    assert_eq!(w.drivers.dialect(&id("tsql-db")), Some(Dialect::TSql));
+    assert_eq!(w.drivers.dialect(&id("pg-db")), Some(Dialect::Postgres));
+    // An unknown name, no name and a name in the wrong case mean no dialect.
+    assert_eq!(w.drivers.dialect(&id("duck-db")), None);
+    assert_eq!(w.drivers.dialect(&id("plain-db")), None);
+    assert_eq!(w.drivers.dialect(&id("case-db")), None);
+    assert_eq!(w.drivers.dialect(&id("nope")), None);
+}
+
+#[test]
+fn an_unavailable_driver_has_no_dialect() {
+    use sqler_sql::Dialect;
+    let before = PluginDrivers::new(engines());
+    assert_eq!(before.dialect(&id("tsql-db")), None);
+
+    let w = dialect_world("dialect-unavailable", &[("p1", "tsql-db", Some("tsql"))]);
+    assert_eq!(w.drivers.dialect(&id("tsql-db")), Some(Dialect::TSql));
+    let p1: PluginId = "p1".parse().unwrap();
+    w.host.disable(&p1);
+    assert_eq!(w.drivers.dialect(&id("tsql-db")), None);
+    w.host.enable(&p1);
+    assert_eq!(w.drivers.dialect(&id("tsql-db")), Some(Dialect::TSql));
+    w.grants.revoke(&w.key("p1"));
+    assert_eq!(w.drivers.dialect(&id("tsql-db")), None);
+}
+
+#[test]
+fn the_first_claim_decides_the_dialect() {
+    use sqler_sql::Dialect;
+    let w = dialect_world(
+        "dialect-first",
+        &[
+            ("aaa", "shared", Some("tsql")),
+            ("bbb", "shared", Some("postgres")),
+        ],
+    );
+    assert_eq!(w.drivers.dialect(&id("shared")), Some(Dialect::TSql));
+}

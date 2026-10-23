@@ -109,8 +109,7 @@ fn export_failure(err: ExportError) -> Failure {
 }
 
 /// The write gate. Returns the warning to print when a non-read statement is allowed.
-fn gate(args: &ExportArgs) -> Result<Option<String>, Failure> {
-    let dialect = Dialect::from_driver_id(&args.driver);
+fn gate(args: &ExportArgs, dialect: Option<Dialect>) -> Result<Option<String>, Failure> {
     let segments = classify_each(dialect.unwrap_or(Dialect::Postgres), &args.sql);
     if segments.len() != 1 {
         return Err(Failure::Usage(
@@ -142,6 +141,7 @@ fn gate(args: &ExportArgs) -> Result<Option<String>, Failure> {
 fn resolve_format<'r>(
     registry: &'r Registry,
     args: &ExportArgs,
+    dialect: Option<Dialect>,
 ) -> Result<(&'r dyn Format, ExportOptions), Failure> {
     // Only literals and registered ids are printed, never the argument itself.
     let id = args.format.as_str();
@@ -175,7 +175,7 @@ fn resolve_format<'r>(
             .table
             .clone()
             .ok_or_else(|| Failure::Usage("the sql format needs --table".to_owned()))?;
-        let dialect = Dialect::from_driver_id(&args.driver).ok_or_else(|| {
+        let dialect = dialect.ok_or_else(|| {
             Failure::Usage("the sql format does not support this driver".to_owned())
         })?;
         options.sql.table = table;
@@ -400,9 +400,10 @@ async fn run_export(args: &ExportArgs) -> Result<(), Failure> {
     if !drivers.available_ids().contains(&id) {
         return Err(Failure::Runtime(anyhow!(crate::UNKNOWN_DRIVER)));
     }
-    let warning = gate(args)?;
+    let dialect = crate::dialect_of_driver(&args.driver);
+    let warning = gate(args, dialect)?;
     let formats = formats_for(args);
-    let (format, options) = resolve_format(&formats, args)?;
+    let (format, options) = resolve_format(&formats, args, dialect)?;
     if let Some(warning) = warning {
         eprintln!("{warning}");
     }
@@ -554,6 +555,10 @@ mod tests {
         }
     }
 
+    fn gate(a: &ExportArgs) -> Result<Option<String>, Failure> {
+        super::gate(a, Dialect::from_driver_id(&a.driver))
+    }
+
     fn refused(sql: &str) -> String {
         match gate(&args("sqlite", sql)) {
             Err(Failure::Refused(msg)) => msg,
@@ -604,6 +609,31 @@ mod tests {
     }
 
     #[test]
+    fn gate_with_a_declared_tsql_dialect() {
+        let a = args("sqlserver", "select 1");
+        assert!(super::gate(&a, Some(Dialect::TSql)).unwrap().is_none());
+        for sql in ["exec p", "update t set a = 1"] {
+            let a = args("sqlserver", sql);
+            assert!(
+                matches!(
+                    super::gate(&a, Some(Dialect::TSql)),
+                    Err(Failure::Refused(_))
+                ),
+                "{sql:?}"
+            );
+        }
+        // `GO` separates two statements: export takes exactly one.
+        let a = args("sqlserver", "select 1\nGO\ndelete from t");
+        assert!(matches!(
+            super::gate(&a, Some(Dialect::TSql)),
+            Err(Failure::Usage(_))
+        ));
+        // Without a declared dialect the same read is not one.
+        let a = args("sqlserver", "select 1");
+        assert!(matches!(super::gate(&a, None), Err(Failure::Refused(_))));
+    }
+
+    #[test]
     fn gate_unknown_driver_is_never_a_read() {
         assert!(matches!(
             gate(&args("nope", "select 1")),
@@ -613,7 +643,7 @@ mod tests {
 
     fn resolve(a: &ExportArgs) -> Result<ExportOptions, Failure> {
         let r = Registry::with_builtin();
-        resolve_format(&r, a).map(|(_, o)| o)
+        resolve_format(&r, a, Dialect::from_driver_id(&a.driver)).map(|(_, o)| o)
     }
 
     #[test]
@@ -702,7 +732,9 @@ mod tests {
         let mut a = args("sqlite", "select 1");
         a.format = "plugin-x:y".to_owned();
         a.output = Output::Stdout;
-        let Err(Failure::Usage(msg)) = resolve_format(&registry, &a).map(|(_, o)| o) else {
+        let Err(Failure::Usage(msg)) =
+            resolve_format(&registry, &a, Dialect::from_driver_id(&a.driver)).map(|(_, o)| o)
+        else {
             panic!("expected a usage error");
         };
         assert!(msg.contains("binary format"), "{msg}");

@@ -109,6 +109,26 @@ pub(crate) fn registry() -> Result<DriverRegistry> {
     Ok(registry)
 }
 
+/// The SQL dialect of `driver`: a built-in id, else (with the `plugins` feature) the dialect the manifest of the
+/// plugin that offers it declares. `None` when there is none. Call it inside a tokio runtime.
+pub(crate) fn dialect_of_driver(driver: &str) -> Option<sqler_sql::Dialect> {
+    if let Some(dialect) = sqler_sql::Dialect::from_driver_id(driver) {
+        return Some(dialect);
+    }
+    plugin_dialect(driver)
+}
+
+#[cfg(feature = "plugins")]
+fn plugin_dialect(driver: &str) -> Option<sqler_sql::Dialect> {
+    let id = driver_id(driver).ok()?;
+    plugins::dialect_for(plugins::driver_source().as_deref(), &id)
+}
+
+#[cfg(not(feature = "plugins"))]
+fn plugin_dialect(_driver: &str) -> Option<sqler_sql::Dialect> {
+    None
+}
+
 /// The connection for a CLI target. The name is the driver id: the target (a URL can carry a
 /// password) must never end up in a name that errors or logs print.
 pub(crate) fn connection_config(driver: &str, target: &str) -> Result<ConnectionConfig> {
