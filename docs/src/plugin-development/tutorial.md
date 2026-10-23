@@ -13,10 +13,10 @@ same shape with a panel.
 - A checkout of the SQLer repository. All commands below run from its root unless a step says otherwise.
 - [rustup](https://rustup.rs/). The repository's `rust-toolchain.toml` selects the Rust version and the
   `wasm32-wasip2` target, so the first `cargo` command in the checkout installs them.
-- `cargo-generate`:
+- `cargo-generate` 0.25.1, the version this tutorial was checked with (the install compiles it and takes a few minutes):
 
 ```sh
-cargo install cargo-generate --locked
+cargo install cargo-generate --version 0.25.1 --locked
 ```
 
 - A SQLer build with plugin support. Plugin support is a build option that is off by default
