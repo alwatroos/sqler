@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// Export formats. The host writes the bytes; the plugin never writes files.
+interface exporter {
+    use types.{value, column, plugin-error};
+
+    /// An open export.
+    resource writer {
+        /// Encodes a batch of rows.
+        push: func(rows: list<list<value>>) -> result<list<u8>, plugin-error>;
+
+        /// Ends the export and returns the trailing bytes.
+        finish: func() -> result<list<u8>, plugin-error>;
+    }
+
+    /// Starts an export in a declared format.
+    start: func(format: string, columns: list<column>) -> result<writer, plugin-error>;
+}
