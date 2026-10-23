@@ -210,6 +210,11 @@ jobs:
       - name: Test (plugin host runtime and egress)
         if: needs.changes.outputs.rust == 'true'
         run: cargo nextest run -p sqler-plugin-host --features cl,net --no-tests=fail
+      # The `plugins` feature of the app is off by default (ADR-0060), so the workspace run skips its code. A second
+      # invocation, not `--workspace --features plugins`, which would also turn the feature on for other crates.
+      - name: Test sqler-app with plugin support
+        if: needs.changes.outputs.rust == 'true' && (matrix.os != 'windows-latest' || needs.changes.outputs.full == 'true')
+        run: cargo nextest run -p sqler-app --features plugins --no-tests=fail
       - name: Check sqler-export feature sets
         if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         run: |
@@ -383,6 +388,11 @@ jobs:
           # `cargo tree` runs on its own so a failure of the command itself fails the step instead of passing the grep.
           tree=$(cargo tree -p sqler-app -e normal --prefix none) || { echo "cargo tree failed"; exit 1; }
           if printf '%s\n' "$tree" | grep -q '^wasmtime '; then echo "wasmtime is in the default sqler-app tree"; exit 1; fi
+          # With the `plugins` feature the host must really be wired in.
+          tree=$(cargo tree -p sqler-app -e normal --prefix none --features plugins) || { echo "cargo tree failed"; exit 1; }
+          if ! printf '%s\n' "$tree" | grep -q '^wasmtime '; then echo "wasmtime is missing with --features plugins"; exit 1; fi
+          # sqler-ui must stay wasmtime-free whatever the app enables.
+          if cargo tree -p sqler-ui -i wasmtime 2>/dev/null; then echo "wasmtime is in the sqler-ui tree"; exit 1; fi
 
   plugins:
     name: plugins (${{ matrix.os }})
