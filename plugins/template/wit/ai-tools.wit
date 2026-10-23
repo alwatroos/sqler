@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// AI tools declared in the manifest. Needs `ai.tool`.
+interface ai-tools {
+    use types.{plugin-error};
+
+    /// Invokes a tool with JSON arguments; returns JSON.
+    invoke: func(tool: string, arguments-json: string) -> result<string, plugin-error>;
+}

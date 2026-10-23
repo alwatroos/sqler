@@ -81,8 +81,8 @@ saying it is build-time only. Never an advisory ignore, never the `rsa` crate.
 
 - Positive: a working, tested `DuckDB` engine behind a plugin shell, streaming with bounded memory, interruptible, no
   new licence class in the allow list, no exception to maintain.
-- Negative: the bundled C++ build adds minutes to every uncached build that compiles the crate (workspace tests and
-  `clippy --all-features`), and the engine plus Arrow is large; it stays off by default and the integration step
+- Negative (compile cost superseded by amendment 2: the workspace jobs no longer compile the crate, only the
+  path-filtered `duckdb` job does): the bundled C++ build adds minutes to every uncached build that compiles the crate, and the engine plus Arrow is large; it stays off by default and the integration step
   reports the binary size. `arrow` brings about 30 new crates to `Cargo.lock`, all permissively licensed.
 - Size (macOS aarch64, release `sqler-app`): `plugins` 49,757,680 bytes, `plugins,driver-duckdb` 95,180,224 bytes,
   delta +45,422,544 bytes. With the engine the binary is 21,779,904 bytes over the 73,400,320 byte budget of
@@ -103,6 +103,9 @@ saying it is build-time only. Never an advisory ignore, never the `rsa` crate.
   no consumer so a `duckdb` connection is classified `Unknown`; sandboxing is engine-specific and not shown in the grant
   dialog.
 - Follow-up: a bump of `duckdb` must re-run `cargo tree -i webpki-roots` and `cargo deny check`.
+- Known issues (not fixed, follow-ups):
+  - A statement with `RETURNING` reports a row count that may not match the returned rows (edge case of the changed-row count).
+  - The engine registry decides on `Arc::strong_count`, which can race with a concurrent clone.
 
 ## Amendment 2 (2026-10-23): DuckDB is out of version 1.0
 
@@ -123,7 +126,7 @@ saying it is build-time only. Never an advisory ignore, never the `rsa` crate.
   - The tests of `sqler-app` and `sqler-cli` with the feature `plugins` no longer add `driver-duckdb`.
   - A separate job `duckdb` (Linux only, 120 minute limit) runs clippy and the tests of `sqler-driver-duckdb`, and
     clippy and the tests of `sqler-app` and `sqler-cli` with `driver-duckdb`. It runs on `workflow_dispatch` or on a
-    pull request that changes `crates/sqler-driver-duckdb/**`, `plugins/**duckdb**`, the `Cargo.toml` of `sqler-app` or
+    pull request that changes `crates/sqler-driver-duckdb/**`, `plugins/duckdb/**`, the `Cargo.toml` of `sqler-app` or
     `sqler-cli`, or their plugin driver wiring (`sqler-app/src/plugins/drivers.rs`, `sqler-cli/src/plugins.rs`). Not on
     pushes to `main` and not through the label `full-ci`. When it does not run it reports `skipped`, which `CI result`
     counts as a pass; job names, path gating and the cache policy of

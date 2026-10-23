@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// Commands, panels and status items. Panels need `ui.panel`.
+interface ui-handler {
+    use types.{plugin-error};
+    use widgets.{widget-tree, widget-event, command-context};
+
+    /// Runs a declared command.
+    run-command: func(command: string, context: command-context) -> result<_, plugin-error>;
+
+    /// Renders a declared panel.
+    render-panel: func(panel: string) -> widget-tree;
+
+    /// Handles a panel event; a returned tree replaces the panel.
+    panel-event: func(panel: string, event: widget-event) -> option<widget-tree>;
+
+    /// The text of a declared status item.
+    status: func(item: string) -> option<string>;
+}

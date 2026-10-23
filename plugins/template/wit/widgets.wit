@@ -1,0 +1,156 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// The declarative widget tree, flattened: node 0 is the root, children are indices.
+interface widgets {
+    use types.{db-object, column};
+
+    /// Stack direction.
+    enum direction {
+        vertical,
+        horizontal,
+    }
+
+    /// Spacing token.
+    enum gap {
+        none,
+        small,
+        medium,
+        large,
+    }
+
+    /// Semantic text style.
+    enum text-style {
+        body,
+        muted,
+        heading,
+        code,
+    }
+
+    /// Semantic button style.
+    enum button-style {
+        primary,
+        secondary,
+    }
+
+    /// A container.
+    record stack {
+        direction: direction,
+        gap: gap,
+    }
+
+    /// A text label.
+    record text {
+        content: string,
+        style: text-style,
+    }
+
+    /// A button.
+    record button {
+        id: string,
+        label: string,
+        style: button-style,
+    }
+
+    /// A single-line input.
+    record text-input {
+        id: string,
+        value: string,
+        placeholder: option<string>,
+    }
+
+    /// A checkbox.
+    record checkbox {
+        id: string,
+        label: string,
+        checked: bool,
+    }
+
+    /// A drop-down.
+    record select {
+        id: string,
+        options: list<string>,
+        selected: option<u32>,
+    }
+
+    /// A read-only table.
+    record table {
+        columns: list<string>,
+        rows: list<list<string>>,
+    }
+
+    /// One widget.
+    variant widget {
+        stack(stack),
+        text(text),
+        button(button),
+        text-input(text-input),
+        checkbox(checkbox),
+        select(select),
+        table(table),
+        divider,
+    }
+
+    /// A widget and the indices of its children (only a stack has children).
+    record widget-node {
+        widget: widget,
+        children: list<u32>,
+    }
+
+    /// A whole tree; the root is node 0.
+    record widget-tree {
+        nodes: list<widget-node>,
+    }
+
+    /// A text input changed.
+    record field-change {
+        id: string,
+        value: string,
+    }
+
+    /// A checkbox toggled.
+    record toggle {
+        id: string,
+        checked: bool,
+    }
+
+    /// A drop-down selection.
+    record selection {
+        id: string,
+        index: u32,
+    }
+
+    /// A user interaction with a panel.
+    variant widget-event {
+        clicked(string),
+        changed(field-change),
+        toggled(toggle),
+        selected(selection),
+    }
+
+    /// The editor state at a command.
+    record editor-context {
+        connection: option<string>,
+        selection: string,
+    }
+
+    /// The object-browser item at a command.
+    record object-context {
+        connection: string,
+        object: db-object,
+    }
+
+    /// The results grid at a command.
+    record results-context {
+        connection: string,
+        columns: list<column>,
+    }
+
+    /// Where a command was invoked.
+    variant command-context {
+        none,
+        editor(editor-context),
+        object(object-context),
+        results(results-context),
+    }
+}

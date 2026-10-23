@@ -1,0 +1,20 @@
+# SQLer plugin manifest. `api` must match the WIT package copied in `wit/`.
+[plugin]
+id = "{{project-name}}"
+name = "{{display_name}}"
+version = "0.1.0"
+api = "0.1.1"
+description = "A SQLer plugin made from the template."
+capabilities = []
+
+[entry]
+component = "{{crate_name}}.wasm"
+
+[[commands]]
+id = "say-hello"
+title = "Say hello"
+
+[[status-items]]
+id = "greetings"
+tooltip = "Times Say hello ran"
+alignment = "left"

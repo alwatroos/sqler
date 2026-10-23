@@ -125,11 +125,12 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - 'deny.toml'
+              - 'docs/src/plugin-development/wit-reference.md'
               - '.github/workflows/ci.yml'
             # DuckDB is out of v1.0 (ADR-0070, amendment 2): its engine is built only when its own code changes.
             duckdb:
               - 'crates/sqler-driver-duckdb/**'
-              - 'plugins/**duckdb**'
+              - 'plugins/duckdb/**'
               - 'crates/sqler-app/Cargo.toml'
               - 'crates/sqler-cli/Cargo.toml'
               - 'crates/sqler-app/src/plugins/drivers.rs'
@@ -501,6 +502,29 @@ jobs:
         if: needs.changes.outputs.plugins == 'true'
         shell: bash
         run: test -f target/plugins/release/smoke/smoke.wasm && test -f target/plugins/release/smoke/sqler.toml && test -f target/plugins/release/sqlserver/sqler.toml
+      # The plugin template (plugins/template): generated outside the checkout (cargo-generate may add a crate
+      # generated inside a workspace to its members), then built like a plugin developer would.
+      # Built from source, pinned and locked. taiki-e/install-action has no manifest for cargo-generate and would
+      # fall back to an unverified prebuilt binary. Not cached: ADR-0068 saves caches on main only, and the build
+      # (about two minutes) runs only when the plugins filter is true.
+      - name: Install cargo-generate (source build, locked)
+        if: needs.changes.outputs.plugins == 'true'
+        shell: bash
+        run: cargo install cargo-generate --version 0.25.1 --locked
+      - name: Template (generate and build)
+        if: needs.changes.outputs.plugins == 'true'
+        shell: bash
+        run: |
+          cargo generate --path plugins/template --name template-check --define display_name="Template check" --destination "$RUNNER_TEMP" --vcs none --silent
+          cargo build --locked --release --target wasm32-wasip2 --manifest-path "$RUNNER_TEMP/template-check/Cargo.toml" --target-dir target/plugins/template
+          wasm=target/plugins/template/wasm32-wasip2/release/template_check.wasm
+          test -f "$wasm"
+          magic=$(od -An -tx1 -N8 "$wasm" | tr -d ' \n')
+          test "$magic" = "0061736d0d000100" || { echo "not a component: $magic"; exit 1; }
+      - name: Template and WIT reference tests
+        if: needs.changes.outputs.plugins == 'true'
+        shell: bash
+        run: cargo test --locked -p xtask --test template --test wit_reference
       # End-to-end: the host runs the staged debug guests. A missing fixture is a failure here, not a skip.
       - name: Guest tests (plugin host)
         if: needs.changes.outputs.plugins == 'true'

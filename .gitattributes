@@ -2,3 +2,6 @@ crates/sqler-sql/tests/snapshots/* -text
 
 # Test fixtures are compared and split byte-exactly (SSE/NDJSON "\n\n" framing); never convert line endings.
 crates/*/tests/fixtures/** text eol=lf
+
+# The plugin template is copied byte-exactly (WIT, toolchain file) and compared by xtask/tests/template.rs.
+plugins/template/** text eol=lf

@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// Logging into the host log.
+interface log {
+    /// Severity.
+    enum level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    /// Writes one log line.
+    write: func(level: level, message: string);
+}

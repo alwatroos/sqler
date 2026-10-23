@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// Plugin start-up.
+interface lifecycle {
+    use types.{plugin-error};
+
+    /// Called once after instantiation.
+    init: func() -> result<_, plugin-error>;
+}
