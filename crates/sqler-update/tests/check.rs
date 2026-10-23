@@ -250,11 +250,17 @@ async fn not_configured_makes_no_request() {
     assert!(!c.is_configured());
     assert_eq!(c.check().await, Err(UpdateError::NotConfigured));
     assert!(server.requests().is_empty());
-    // The build has no embedded key yet.
-    let default = UpdateClient::new(&server.url(), Version::new(1, 0, 0)).unwrap();
-    assert!(!default.is_configured());
-    assert_eq!(default.check().await, Err(UpdateError::NotConfigured));
-    assert!(server.requests().is_empty());
+}
+
+#[tokio::test]
+async fn default_client_is_configured_and_rejects_test_signatures() {
+    // The build embeds the production key; a TEST ONLY signature has another
+    // key id and is refused.
+    let server = serving(signed_envelope(&manifest("1.1.0"), &TEST_ONLY_SEED_A)).await;
+    let default =
+        UpdateClient::new(&format!("{}{FEED}", server.url()), Version::new(1, 0, 0)).unwrap();
+    assert!(default.is_configured());
+    assert_eq!(default.check().await, Err(UpdateError::UnknownKey));
 }
 
 #[tokio::test]
