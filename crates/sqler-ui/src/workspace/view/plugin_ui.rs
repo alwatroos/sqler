@@ -637,6 +637,7 @@ mod tests {
             },
             plugins,
             export_sources: Vec::new(),
+            update: crate::update::UpdateStartup::unavailable(),
         };
         // `Root` hosts the notifications a failing command or a pushed message shows.
         let shared = std::rc::Rc::new(std::cell::RefCell::new(None));

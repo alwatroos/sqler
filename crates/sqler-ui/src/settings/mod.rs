@@ -64,6 +64,15 @@ impl SettingsModel {
         true
     }
 
+    /// Turns the automatic update check on or off; `true` if it changed.
+    pub fn set_check_for_updates(&mut self, on: bool) -> bool {
+        if self.settings.check_for_updates == on {
+            return false;
+        }
+        self.settings.check_for_updates = on;
+        true
+    }
+
     /// Saves the settings. Without a config directory this does nothing. A failure is kept as
     /// the [`notice`](Self::notice); a success clears it.
     pub fn save(&mut self) {
@@ -218,6 +227,18 @@ mod tests {
         m.save();
         assert_eq!(m.notice(), None);
         assert_eq!(s.dir().load_settings().unwrap().ui_font_size, 20);
+    }
+
+    #[test]
+    fn check_for_updates_is_off_by_default_and_saved() {
+        let s = Scratch::new("updates");
+        let mut m = SettingsModel::load(Ok(s.dir()));
+        assert!(!m.settings().check_for_updates);
+        assert!(!m.set_check_for_updates(false));
+        assert!(m.set_check_for_updates(true));
+        assert!(!m.set_check_for_updates(true));
+        m.save();
+        assert!(s.dir().load_settings().unwrap().check_for_updates);
     }
 
     #[test]

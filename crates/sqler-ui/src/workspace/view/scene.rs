@@ -215,6 +215,14 @@ pub const SCENES: &[Scene] = &[
         name: "plugins-hello-panel",
         pending: None,
     },
+    Scene {
+        name: "settings-updates",
+        pending: None,
+    },
+    Scene {
+        name: "update-notice",
+        pending: None,
+    },
 ];
 
 /// The window size of every scene, in logical pixels.
@@ -277,6 +285,8 @@ enum Wait {
     PluginsDialog,
     /// The plugin panel on screen has been drawn, or has failed.
     PluginPanel,
+    /// The update check has ended.
+    UpdateDone,
 }
 
 impl Wait {
@@ -294,6 +304,7 @@ impl Wait {
             Self::PluginsLoaded => "the plugins to be read".to_owned(),
             Self::PluginsDialog => "the permission dialog".to_owned(),
             Self::PluginPanel => "the plugin panel".to_owned(),
+            Self::UpdateDone => "the update check to end".to_owned(),
         }
     }
 }
@@ -340,6 +351,8 @@ enum Step {
     Wait(Wait),
     /// Starts the plugin manager, as the first-frame hook does (the headless renderer has no frame callbacks).
     StartPlugins,
+    /// Arms the update service, as the first-frame hook does.
+    StartUpdate,
     /// Selects the plugin with this id in the manager.
     SelectPlugin(&'static str),
     /// Queues a write approval of a plugin on a production connection at this stage.
@@ -479,6 +492,22 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Wait(Wait::Assist),
         ],
         "settings" => vec![Step::Command("settings:open")],
+        "settings-updates" => vec![
+            Step::Command("settings:open"),
+            Step::Command("settings:toggle-update-checks"),
+            Step::StartUpdate,
+            Step::Command("app:check-for-updates"),
+            Step::Wait(Wait::UpdateDone),
+            Step::ScrollSettingsToEnd,
+            Step::Pause(3),
+        ],
+        "update-notice" => vec![
+            Step::Command("settings:toggle-update-checks"),
+            Step::StartUpdate,
+            Step::Command("app:check-for-updates"),
+            Step::Wait(Wait::UpdateDone),
+            Step::Pause(3),
+        ],
         "plugins-manager" => vec![
             Step::StartPlugins,
             Step::Command("workbench:show-plugins"),
@@ -738,7 +767,25 @@ fn startup(
         ai: ai_startup(scene),
         plugins: crate::plugins::manager::fixture::scene_startup(scene.name),
         export_sources: export_sources(scene.name),
+        update: update_startup(scene.name),
     }
+}
+
+/// The update service of the scenes: scripted, so no request is ever made.
+fn update_startup(scene: &str) -> crate::update::UpdateStartup {
+    use crate::update::UpdateOutcome;
+    use crate::update::fake::ScriptedUpdates;
+    let outcome = match scene {
+        "settings-updates" => UpdateOutcome::UpToDate {
+            latest: "1.0.0".to_owned(),
+        },
+        "update-notice" => UpdateOutcome::Available {
+            version: "1.1.0".to_owned(),
+            notes_url: "https://github.com/alwatroos/sqler/releases/tag/v1.1.0".to_owned(),
+        },
+        _ => return crate::update::UpdateStartup::unavailable(),
+    };
+    ScriptedUpdates::startup(true, outcome).1
 }
 
 /// The model the scenes' mock provider lists.
@@ -1084,6 +1131,7 @@ impl WorkspaceView {
             Step::AgentFixture(scene) => self.open_agent_fixture(*scene, cx)?,
             Step::OpenExport => self.open_export_fixture(cx)?,
             Step::StartPlugins => self.start_plugins(cx),
+            Step::StartUpdate => self.start_update(cx),
             Step::SelectPlugin(id) => {
                 let id = id.parse().map_err(|_| format!("no plugin id {id}"))?;
                 self.plugin_select(&id, cx);
@@ -1194,6 +1242,7 @@ impl WorkspaceView {
             }
             Wait::Table { conn, name } => self.table_found(conn, name, cx),
             Wait::PluginsLoaded => !self.ws.plugins().loading(),
+            Wait::UpdateDone => self.ws.update().finished(),
             Wait::PluginsDialog => self.ws.plugins().dialog().is_some(),
             Wait::PluginPanel => self.ws.plugin_ui().selected_slot().is_some_and(|slot| {
                 matches!(
