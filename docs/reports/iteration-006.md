@@ -126,10 +126,10 @@ None set for M5. The binary growth is reported as a risk, not a miss.
 ### Cleanup verification
 Checked on 2026-10-22 for the whole milestone, before this PR was opened:
 - `git worktree list`: only `sqler-m5-T18` (this item, cleaned after the push) and the two M6 worktrees (`sqler-m6-P1`, `sqler-m6-P2`, PRs #83 and #84, not M5); no stale M5 item worktree.
-- `.agent-work/worktrees/`: no `target/` under a merged M5 item; `sqler-m6-P1` holds an empty one (0 B). This worktree's `target/` (19 GB, including the scratch `target/screenshots`, `target/book` and the release build) is removed with `cargo clean` after the push.
+- Local item worktrees: no `target/` under a merged M5 item; `sqler-m6-P1` holds an empty one (0 B). This worktree's `target/` (19 GB, including the scratch `target/screenshots`, `target/book` and the release build) is removed with `cargo clean` after the push.
 - Docker: no container exists (`docker ps -a` empty); the 119 anonymous volumes are the same pre-existing ones and are the user's to decide; the networks are the three defaults (`bridge`, `host`, `none`). Nothing was created by M5 agents.
 - Processes: no `sqler`, mock-agent, `ship` waiter or `nextest` process is left (checked with `ps`); the app instances launched for the RSS and cold-start runs were killed and the scratch `HOME` deleted.
-- Not an M5 worktree, reported for the owner: the main checkout `/Users/karolploski/Workspace/PERSONAL/sqler` is at `1ea7c39` with a 2.6 GB `target/` and an untracked `cleanup.sh`, and several merged local branches (`ai-*`, `acp-client`, `mcp-*`, `deny-advisory-fix`, ...) are not deleted.
+- Not an M5 worktree: the primary checkout has a large `target/` directory and an untracked helper script, and several merged local branches (`ai-*`, `acp-client`, `mcp-*`, `deny-advisory-fix`, ...) are not deleted.
 
 ### Owner decisions taken (intake)
 Approve = no, merge = auto, PRs ready, squash merges onto `main`, PR titles prefixed `[n/18]`, no Jira. M6 PRs (#83, #84) stay held until this PR merges.
@@ -139,7 +139,7 @@ Approve = no, merge = auto, PRs ready, squash merges onto `main`, PR titles pref
 - From iteration-005b and still open: Linux and Windows desktop cold start and idle RSS, input-to-paint latency, coverage (`cargo llvm-cov` is not installed here). The theme JSON parse is now measured (at most 0.4 ms).
 
 ### Next iteration plan
-M6 (plugins), planned in 17 items P1 to P17 (`.agent-work/team/sqler-m6/plan.md`). Two PRs are open with LGTM reviews and wait for this PR: P1 the plugin runtime spike (PR #83) and P2 the plugin API and WIT (PR #84). Order: land this PR, then P1 and P2, then the host, capability grants and the size decision of the Risks section before any runtime is linked into `sqler`. The provider-hardening PR and the audit-directory gap can be taken in M6 as small items.
+M6 (plugins), planned in 17 items P1 to P17. Two PRs are open with LGTM reviews and wait for this PR: P1 the plugin runtime spike (PR #83) and P2 the plugin API and WIT (PR #84). Order: land this PR, then P1 and P2, then the host, capability grants and the size decision of the Risks section before any runtime is linked into `sqler`. The provider-hardening PR and the audit-directory gap can be taken in M6 as small items.
 
 ### AGENTS.md changes
 Section 2 crate rows checked (all M5 crates present); section 9 now says "M5 done (code merged; maintainer-only checks run by the owner in parallel); M6 next", adds the M5 delivered paragraph and the consolidated pending maintainer list; section 10 adds the M5 gotchas (a yanked crate fails `cargo deny`, `ship --timeout` is in seconds, Windows CRLF in source scans, `serde_json` `preserve_order` under feature unification, merge-order clashes on the append-only files, timing tests must be deterministic).

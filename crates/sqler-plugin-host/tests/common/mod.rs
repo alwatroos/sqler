@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use sqler_plugin_api::{CapabilitySet, GrantKey, Limits};
@@ -112,8 +112,21 @@ impl GrantSource for Grants {
     }
 }
 
+/// Creates one dispatcher for the whole test process, once, before any host event can be emitted.
+///
+/// `tracing` caches, per call site, whether any subscriber wants it. While no dispatcher exists yet it asks only the
+/// calling thread's default, so a test thread that emits a plugin line without a collector can cache "nobody
+/// listens" for the site, and a `capture` on another thread that starts at the same time then sees no events at all.
+/// Once a dispatcher exists, every site registers against the full list instead. Every test calls this before it
+/// builds a host (`runtime`) or captures (`capture`).
+fn pin_dispatcher() {
+    static PINNED: OnceLock<tracing::Dispatch> = OnceLock::new();
+    PINNED.get_or_init(|| tracing::Dispatch::new(Collector(Arc::new(Mutex::new(Vec::new())))));
+}
+
 /// A current-thread runtime with timers.
 pub fn runtime() -> tokio::runtime::Runtime {
+    pin_dispatcher();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -204,6 +217,7 @@ impl Subscriber for Collector {
 
 /// Runs `f` and returns what it returned plus every event emitted on this thread meanwhile.
 pub fn capture<R>(f: impl FnOnce() -> R) -> (R, Vec<Line>) {
+    pin_dispatcher();
     let lines = Arc::new(Mutex::new(Vec::new()));
     let r = tracing::subscriber::with_default(Collector(Arc::clone(&lines)), f);
     let out = lines.lock().unwrap().clone();
