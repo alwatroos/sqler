@@ -325,7 +325,7 @@ pub async fn start_agent(
     let source = Arc::new(TabSource::new(info, request, connector));
     let approver = Arc::new(ChannelApprover::new(tx.clone(), AgentMsg::Ask));
     let tools = ToolSet::configured(source.clone(), &config).with_approver(approver);
-    let (endpoint, token) = match bind_endpoint(tools, &audit).await {
+    let (endpoint, token) = match bind_endpoint(audit.external(tools), &audit).await {
         Ok(bound) => bound,
         Err(message) => {
             close_source(&source).await;

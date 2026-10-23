@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use sqler_ai_tools::{AuditEntry, AuditSink, Surface, ToolSet};
+use sqler_ai_tools::{AuditEntry, AuditSink, ExternalTools, Surface, ToolSet};
 
 /// Why the AI surfaces are off when the host has no audit log.
 pub const NO_AUDIT: &str = "AI is off: SQLer found no config folder for the AI audit log, and every AI tool call must be audited.";
@@ -19,6 +19,7 @@ pub const NO_AUDIT: &str = "AI is off: SQLer found no config folder for the AI a
 #[derive(Clone)]
 pub struct AiAudit {
     sink: Arc<dyn AuditSink>,
+    external: Option<Arc<dyn ExternalTools>>,
 }
 
 // Prints only its name.
@@ -46,14 +47,33 @@ impl AiAudit {
     /// Wraps the sink of the host.
     #[must_use]
     pub fn new(sink: Arc<dyn AuditSink>) -> Self {
-        Self { sink }
+        Self {
+            sink,
+            external: None,
+        }
     }
 
-    /// `tools` with every call audited as `surface`.
+    /// Sets the tools plugins offer (`None` offers none). They are listed on every set built through this value.
     #[must_use]
-    #[allow(clippy::needless_pass_by_value)] // the audited set replaces the one given
+    pub fn with_external_tools(mut self, tools: Option<Arc<dyn ExternalTools>>) -> Self {
+        self.external = tools;
+        self
+    }
+
+    /// `tools` with the plugin tools added, when there are any. Use it for a set that is audited elsewhere
+    /// (the MCP server of the agent endpoint).
+    #[must_use]
+    pub fn external(&self, tools: ToolSet) -> ToolSet {
+        match &self.external {
+            Some(external) => tools.with_external_tools(external.clone()),
+            None => tools,
+        }
+    }
+
+    /// `tools` with every call audited as `surface`, and with the plugin tools added.
+    #[must_use]
     pub fn attach(&self, tools: ToolSet, surface: Surface) -> ToolSet {
-        tools.with_audit(self.sink.clone(), surface)
+        self.external(tools).with_audit(self.sink.clone(), surface)
     }
 
     /// A sink that rewrites the surface of each entry, for `McpServer::new`, which forces `mcp`.
@@ -118,6 +138,13 @@ mod tests {
         assert_eq!(format!("{a:?}"), "AiAudit");
     }
 
+    #[test]
+    fn external_tools_are_kept_and_debug_stays_opaque() {
+        let audit = AiAudit::new(Arc::new(MemoryAudit::new())).with_external_tools(None);
+        assert_eq!(format!("{audit:?}"), "AiAudit");
+        assert!(audit.clone().external.is_none());
+    }
+
     fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
         for item in std::fs::read_dir(dir).expect("read_dir") {
             let path = item.expect("entry").path();
@@ -143,6 +170,13 @@ mod tests {
         let server_new = ["McpServer", "::new("].concat();
         let null = ["Null", "Audit"].concat();
         let none = [" audit: ", "None"].concat();
+        let with_external = [".with_external_", "tools("].concat();
+        let on_audit = [
+            "AiAudit::new(log)",
+            &with_external,
+            "startup.plugins.ai_tools",
+        ]
+        .concat();
         for file in files {
             let name = norm(&file);
             if name.ends_with("workspace/testing.rs") {
@@ -155,6 +189,24 @@ mod tests {
             let prod = text.split("\nmod tests").next().unwrap_or("");
             if !name.ends_with("ai/audit/sink.rs") {
                 assert!(!prod.contains(&with_audit), "{name} attaches a sink itself");
+            }
+            // `workspace/view.rs` calls `AiAudit::with_external_tools` on the audit value, once; a tool set gets
+            // plugin tools only through the helper here.
+            if name.ends_with("workspace/view.rs") {
+                assert_eq!(
+                    prod.matches(&with_external).count(),
+                    1,
+                    "{name} must have exactly one plugin tools call"
+                );
+                assert!(
+                    prod.contains(&on_audit),
+                    "{name}: the plugin tools call is not on the AiAudit value"
+                );
+            } else if !name.ends_with("ai/audit/sink.rs") {
+                assert!(
+                    !prod.contains(&with_external),
+                    "{name} adds plugin tools to a tool set itself"
+                );
             }
             if !name.ends_with("ai/agent/endpoint.rs") && !name.ends_with("sqler-cli/src/mcp.rs") {
                 assert!(!prod.contains(&server_new), "{name} builds an MCP server");

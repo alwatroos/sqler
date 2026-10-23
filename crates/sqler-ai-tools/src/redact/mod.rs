@@ -7,6 +7,7 @@
 //! the ADR-0036 results, not inside the tool renderers, so a new tool that emits `columns` and
 //! `rows` is covered without doing anything. See [`Redaction::apply`] for the four rules.
 
+mod shape;
 mod walk;
 
 use sqler_config::RedactionList;

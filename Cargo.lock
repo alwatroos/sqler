@@ -8245,11 +8245,13 @@ dependencies = [
 name = "sqler-app"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sqler-ai-anthropic",
  "sqler-ai-api",
  "sqler-ai-mistral",
  "sqler-ai-ollama",
  "sqler-ai-openai",
+ "sqler-ai-tools",
  "sqler-catalog",
  "sqler-config",
  "sqler-driver-api",
