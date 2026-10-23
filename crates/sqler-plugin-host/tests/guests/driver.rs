@@ -438,3 +438,26 @@ fn disabling_the_plugin_ends_open_sessions_and_hides_the_driver() {
     let mut again = r.open();
     assert_eq!(r.run(&mut again, "rows 2").unwrap().len(), 2);
 }
+
+#[test]
+fn close_after_a_cancel_between_batches_keeps_the_other_sessions() {
+    let Some(r) = rig("cancel-then-close") else {
+        return;
+    };
+    let mut s = r.open();
+    let mut other = r.open();
+    let handle = s.cancel_handle();
+    let q = Query::new("rows 1000");
+    block_on(&r.rt, async {
+        let mut stream = s.execute(&q).await.unwrap();
+        let _ = stream.next_event().await;
+        let _ = stream.next_event().await;
+        handle.cancel().await.unwrap();
+        assert!(matches!(
+            stream.next_event().await,
+            Some(Err(DriverError::Cancelled))
+        ));
+    });
+    block_on(&r.rt, s.close()).unwrap();
+    assert_eq!(r.run(&mut other, "rows 2").unwrap().len(), 2);
+}

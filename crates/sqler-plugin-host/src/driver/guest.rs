@@ -327,6 +327,8 @@ impl Session for GuestSession {
 
     fn close(mut self: Box<Self>) -> BoxFuture<'static, Result<(), DriverError>> {
         self.closed = true;
+        // A cancel between two batches leaves the flag set; it must not cancel this call (which drops the instance).
+        self.link.cancel.reset();
         let link = Arc::clone(&self.link);
         let (ticket, session) = (link.ticket(), self.session);
         Box::pin(async move {
