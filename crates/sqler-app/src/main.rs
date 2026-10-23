@@ -152,6 +152,9 @@ fn registry() -> Result<DriverRegistry, DriverError> {
     registry.register(Box::new(sqler_driver_postgres::PostgresDriver::new()))?;
     #[cfg(feature = "driver-mysql")]
     registry.register(Box::new(sqler_driver_mysql::MySqlDriver::new()))?;
+    // Drivers of plugins are asked after the built-in ones; the source offers nothing until the plugin host exists.
+    #[cfg(feature = "plugins")]
+    registry.add_source(plugins::drivers::source());
     Ok(registry)
 }
 
@@ -186,5 +189,21 @@ mod tests {
     #[test]
     fn registry_lists_mysql() {
         assert!(ids().contains(&"mysql".to_string()));
+    }
+
+    /// With the `plugins` feature the registry asks the process-wide plugin source after the built-in drivers. The
+    /// source has no host in this test, so it knows no driver, and `available_ids` adds nothing to `ids`.
+    #[cfg(feature = "plugins")]
+    #[tokio::test]
+    async fn registry_asks_the_plugin_source() {
+        use sqler_driver_api::DriverError;
+        use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId};
+
+        let registry = super::registry().unwrap();
+        let built_in: Vec<_> = registry.ids().cloned().collect();
+        assert_eq!(registry.available_ids(), built_in);
+        let config = ConnectionConfig::new("t", DriverId::new("plugin-only").unwrap(), "x");
+        let err = registry.connect(&config).await.err().unwrap();
+        assert!(matches!(err, DriverError::UnknownDriver(_)), "{err:?}");
     }
 }

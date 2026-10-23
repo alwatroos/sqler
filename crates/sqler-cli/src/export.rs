@@ -88,7 +88,7 @@ impl From<anyhow::Error> for Failure {
 fn driver_failure(err: DriverError) -> Failure {
     match err {
         DriverError::Cancelled => Failure::Cancelled,
-        other => Failure::Runtime(anyhow!(crate::driver_message(&other))),
+        other => Failure::Runtime(anyhow!("{}", crate::driver_message(&other))),
     }
 }
 
@@ -378,7 +378,8 @@ async fn run_export(args: &ExportArgs) -> Result<(), Failure> {
     let drivers = registry()?;
     // Before the gate: an unknown driver is a runtime error, not a refusal to write.
     let id = crate::driver_id(&args.driver)?;
-    if drivers.get(&id).is_none() {
+    // Built-in drivers and the available drivers of plugins; one that is unavailable ends as unknown here.
+    if !drivers.available_ids().contains(&id) {
         return Err(Failure::Runtime(anyhow!(crate::UNKNOWN_DRIVER)));
     }
     let warning = gate(args)?;

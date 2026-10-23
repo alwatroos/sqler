@@ -84,7 +84,8 @@ gate; no new capability exists. A guest without `driver-catalog` still works, wi
   `affected(n)` (`Columns([])`, then `Done` with `n`).
 - The stream asks `next-batch(500)`. The host validates every batch: at most 500 rows, row width equal to the column
   count, summed cell cost within the result byte cap. A violation is a protocol error ("the plugin driver sent malformed
-  rows") and poisons the stream. An empty answer is `Done` and the resource is dropped.
+  rows") and poisons the stream. `none` is `Done` and the resource is dropped; an empty batch is only an empty `Rows`
+  event, so a guest that never answers `none` is stopped by a cancel or the call deadline.
 - `close` calls the guest `close`, then drops the resource. If the instance is gone, it succeeds.
 
 ### Cancel
@@ -105,9 +106,10 @@ connection, the environment, or the config of a host engine. `ConnectParams` red
 **Wording decision for `driver.guest`.** A guest driver receives the user name and the password of every connection that
 uses its driver. The grant dialog must say so: the line for `driver.guest` states that the plugin receives the host,
 username and password of every connection created with its driver, not only that it "provides a driver that runs inside
-the plugin" (the P6 text). `driver.guest` stays in the group of permissions that need attention. The text lives in
-`sqler-ui` `plugins/grant/prompt.rs` and changes with its test (and the screenshot scenes, if one shows it) after the
-plugin manager (P7) has merged.
+the plugin" (the P6 text). `driver.guest` stays in the group of permissions that need attention. The line now reads "Provide a database driver that
+runs inside the plugin. The plugin receives the host, username and password of every connection that uses its driver".
+The text lives in `sqler-ui` `plugins/grant/prompt.rs`, with a test that pins the words; no screenshot scene shows a
+`driver.guest` line, so none changed. The user guide shows the same text.
 
 ### Unavailable states and error texts
 
@@ -150,5 +152,8 @@ the dependency. No exception is added by this ADR or anywhere else.
   path for all drivers; the guest sees the minimum.
 - Negative: a guest driver does get the password of its connections, which is why the dialog says so. A cancel or a
   trap ends all sessions of that plugin. Revoke or disable stops a host-engine session at the next statement, not
-  mid-stream. `--open-sessions` before the first refresh sees plugin ids as unknown (the existing failure path).
+  mid-stream. `--open-sessions` before the first refresh sees plugin ids as unknown (the existing failure path). The
+  connect pipeline puts a keychain password into the target only for the URL schemes it knows (`postgres`, `mysql` and
+  their aliases) and opens SSH tunnels only for them, so a plugin driver with another scheme gets the password only when
+  the user wrote it into the target; widening the pipeline is a separate decision.
 - Neutral: the CLI honours stored grants and the plugin preferences, never prompts, and discovers `<config>/plugins` only.

@@ -70,7 +70,8 @@ replaced by a fixed text).
 `execute` returns `rows(stream)` or `affected(n)`. The host reads the stream with
 `next-batch(500)`. A batch must have at most 500 rows, each as wide as the column list, and
 the whole result stays under the result byte cap; otherwise the stream fails with "the
-plugin driver sent malformed rows". An empty batch ends the stream.
+plugin driver sent malformed rows". `none` ends the stream. An empty batch does not: the host
+asks again, and a cancel or the deadline stops a guest that never answers `none`.
 
 ### Cancel, traps and sessions
 
@@ -97,8 +98,29 @@ The user sees these fixed texts, never wasmtime text.
 | Plugin gone | the plugin driver is not available |
 | Bad batch | the plugin driver sent malformed rows |
 | Session over | the plugin driver session ended (the plugin was restarted, disabled or its permissions changed) |
+| Bad catalog answer | the plugin driver sent a malformed catalog answer |
 
 Your own error messages reach the user after the same scrub as `query` errors.
+
+## Where the driver shows up
+
+The connection form offers the plugin's driver id next to the built-in ones. The list is
+refreshed when the Plugins view changes something (a plugin is switched on or off, or a
+permission is approved or revoked), so a new driver appears without a restart; a form that is
+already open keeps the list it was built with. A driver that is not available (disabled, not
+approved, no engine) is not offered, and a saved connection that uses it fails with the text
+above. The `sqler-cli` binary built with its `plugins` feature (off by default) offers the
+drivers of approved plugins in `<config>/plugins` too, honours the stored approvals and the
+plugins switched off, and never asks.
+
+## Limits
+
+- The password from the keychain is put into the target by the connect pipeline, which knows
+  the URL schemes `postgres`, `postgresql`, `mysql` and `mariadb`. A driver with another
+  scheme gets the password only when the user wrote it into the target, and cannot use an SSH
+  tunnel.
+- A plugin driver is reached through the registry only, so the statement classifier and the
+  production confirmation always run before a statement reaches it.
 
 ## DuckDB
 

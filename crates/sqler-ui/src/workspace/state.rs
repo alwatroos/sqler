@@ -895,6 +895,12 @@ impl Workspace {
         self
     }
 
+    /// Replaces the drivers the connection form offers, after the plugin drivers changed (a plugin was switched on or
+    /// off, or its permissions changed). A form that is already open keeps what it was built with.
+    pub fn set_drivers(&mut self, drivers: Vec<DriverId>) {
+        self.drivers = drivers;
+    }
+
     /// The drivers the connection form offers.
     #[must_use]
     pub fn drivers(&self) -> &[DriverId] {
@@ -2855,6 +2861,20 @@ mod tests {
             .find(|e| e.config().name == name)
             .map(|e| e.id().clone())
             .unwrap()
+    }
+
+    #[test]
+    fn set_drivers_changes_what_the_next_form_offers() {
+        let mut w = manager();
+        w.set_drivers(vec![
+            DriverId::new("fixture-db").unwrap(),
+            DriverId::new("postgres").unwrap(),
+        ]);
+        assert_eq!(w.drivers().len(), 2);
+        assert!(matches!(w.dispatch_connection(A::New), Effect::None));
+        assert_eq!(form(&w).driver().map(DriverId::as_str), Some("fixture-db"));
+        w.set_drivers(Vec::new());
+        assert_eq!(w.drivers().len(), 0);
     }
 
     #[test]

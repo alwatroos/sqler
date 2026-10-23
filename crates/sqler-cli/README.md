@@ -31,4 +31,6 @@ The `driver-postgres` feature (on by default) registers the `PostgreSQL` driver.
 
 The `driver-mysql` feature (on by default) registers the `MySQL` driver for `MySQL` and `MariaDB`. The target is a `mysql://` or `mariadb://` URL; TLS follows its `ssl-mode` parameter (default `preferred`).
 
+The `plugins` feature (off by default) adds the drivers of plugins found in `<config>/plugins` (ADR-0061). The CLI uses the approvals stored in `plugin-grants.toml` and the plugins switched off in `plugin-prefs.toml`, never asks for an approval, and takes no `--plugin-dir`. A driver that is disabled, not approved or needs an engine this build lacks fails with a fixed text that names the plugin and the driver.
+
 See [AGENTS.md](../../AGENTS.md) for the project handbook.

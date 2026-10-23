@@ -128,15 +128,31 @@ impl WorkspaceView {
                 .detach();
                 return;
             }
-            other => self
-                .bridge
-                .blocking(move || other.run_blocking(&*backend, &grants)),
+            other => {
+                // Plugin drivers come and go with these effects: the connection form is told afterwards. The
+                // connector asks the driver sources, which may read files, so this runs on the blocking pool.
+                let connector = self.bridge.connector();
+                let drivers_may_change = matches!(
+                    other,
+                    PluginEffect::Load { .. }
+                        | PluginEffect::SetEnabled { .. }
+                        | PluginEffect::Decide { .. }
+                        | PluginEffect::Revoke(_)
+                );
+                self.bridge.blocking(move || {
+                    let done = other.run_blocking(&*backend, &grants);
+                    (done, drivers_may_change.then(|| connector.driver_ids()))
+                })
+            }
         };
         cx.spawn(async move |this, cx| {
-            let Ok(done) = done.await else {
+            let Ok((done, drivers)) = done.await else {
                 return;
             };
             this.update(cx, |view, cx| {
+                if let Some(drivers) = drivers {
+                    view.ws.set_drivers(drivers);
+                }
                 let effect = view.ws.plugin_finished(done);
                 view.apply(effect, cx);
                 view.settle(cx);
