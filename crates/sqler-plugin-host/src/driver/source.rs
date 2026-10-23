@@ -127,6 +127,9 @@ impl PluginDrivers {
         let claim = &claims[at];
         let driver = claim.driver.id.as_str();
         let plugin = claim.plugin_id().as_str();
+        if error::RESERVED_IDS.contains(&driver) {
+            return Err(error::reserved(driver, plugin));
+        }
         if matches!(claim.status.state, PluginState::Disabled { .. }) {
             return Err(error::disabled(driver, plugin));
         }

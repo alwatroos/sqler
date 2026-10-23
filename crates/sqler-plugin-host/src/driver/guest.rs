@@ -99,16 +99,19 @@ struct Link {
     /// False once the instance this link lives in is known to be gone.
     alive: AtomicBool,
     ticket: OnceLock<Ticket>,
+    /// Forms of the connect password a guest message must not echo (raw and percent-encoded).
+    secrets: Vec<String>,
 }
 
 impl Link {
-    fn new(host: PluginHost, gate: Gate) -> Self {
+    fn new(host: PluginHost, gate: Gate, secrets: Vec<String>) -> Self {
         Self {
             host,
             gate,
             cancel: Arc::new(Cancel::default()),
             alive: AtomicBool::new(true),
             ticket: OnceLock::new(),
+            secrets,
         }
     }
 
@@ -146,12 +149,12 @@ impl Link {
                 self.gate.plugin.as_str(),
                 "driver.guest",
             ))),
-            Ok(Err(Stop::Guest(g))) => Err(error::guest(&g, phase)),
+            Ok(Err(Stop::Guest(g))) => Err(error::guest(&g, phase, &self.secrets)),
             Err(e) => {
                 if error::kills_instance(&e) {
                     self.alive.store(false, Ordering::SeqCst);
                 }
-                Err(error::from_call(&e, phase))
+                Err(error::from_call(&e, phase, &self.secrets))
             }
         }
     }
@@ -221,10 +224,14 @@ impl Driver for GuestDriver {
     ) -> BoxFuture<'a, Result<Box<dyn Session>, DriverError>> {
         Box::pin(async move {
             self.gate.check()?;
-            let link = Arc::new(Link::new(self.host.clone(), self.gate.clone()));
-            let driver = self.gate.driver.clone();
             // Only the parts of the target; nothing else of the connection config.
             let params = ConnectParams::parse(&config.target);
+            let link = Arc::new(Link::new(
+                self.host.clone(),
+                self.gate.clone(),
+                error::secrets(&params),
+            ));
+            let driver = self.gate.driver.clone();
             let f: CallFn<Step<Opened>> =
                 Box::new(move |live: &mut Live| Box::pin(connect_in(live, driver, params)));
             let opened = link.call(Phase::Connect, f).await?;

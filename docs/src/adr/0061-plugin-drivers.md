@@ -44,7 +44,7 @@ driver list off-thread together with the plugin snapshot.
 
 The registry id is the `[[drivers]] id` of the manifest, not namespaced, so a driver that later becomes a built-in keeps
 its id in `connections.toml`. If two plugins claim one id, the first in load order wins and the later one is
-unavailable. A built-in always wins.
+unavailable. The built-in ids `sqlite`, `postgres` and `mysql` are reserved: a plugin driver with one of them is unavailable (a fixed text), also in a build without that built-in.
 
 `sqler-plugin-host` provides `PluginDrivers`, the `DriverSource`. It decides availability lazily from host state on every
 lookup, so enable, disable, revoke and reload need no lifecycle hooks and a revoke takes effect at the next lookup. Before
@@ -69,7 +69,7 @@ A guest driver is the WIT `driver` export, plus the optional `driver-catalog` ex
 `GuestDriver` maps them onto `Session`, `QueryStream` and `Introspect` through `PluginHost::run(.., CallKind::DriverCall, ..)`, so
 the sandbox, the deadline (300 s per call), the memory cap (256 MiB) and the fault counting of
 [ADR-0057](0057-plugin-host-runtime.md) are inherited. Every call first checks that `driver.guest` is still effective and
-that the session's instance generation is still live; otherwise it fails with "the plugin driver session ended (the plugin
+that the generation and the instance id of the session's instance are still live; otherwise it fails with "the plugin driver session ended (the plugin
 was restarted, disabled or its permissions changed)".
 
 ### WIT mapping and the 0.1.1 rule

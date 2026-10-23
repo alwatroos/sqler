@@ -19,7 +19,7 @@ Plugin drivers need a build with the `plugins` feature (off by default in the sh
 | What your component sees | nothing | the connect parameters |
 
 The driver id (`[[drivers]] id`) is the id stored in `connections.toml`. It is not
-namespaced. A built-in driver always wins over a plugin with the same id, and when two
+namespaced. The ids `sqlite`, `postgres` and `mysql` are reserved: a plugin driver with one of them is unavailable, also in a build without that built-in. When two
 plugins claim one id, the first loaded wins.
 
 ## Host drivers
@@ -62,8 +62,8 @@ connections or the environment. It has no sockets: the only network access is HT
 
 The user is told in the grant dialog that the plugin receives the host, username and
 password of every connection that uses its driver. Treat the password accordingly: do not
-log it and do not put it in an error message (a message that mentions the password is
-replaced by a fixed text).
+log it and do not put it in an error message (a message that carries the password value, raw or
+percent-encoded, or mentions the word, is replaced by a fixed text).
 
 ### Streaming
 

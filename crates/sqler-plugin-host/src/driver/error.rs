@@ -4,10 +4,13 @@
 //! The fixed texts of plugin drivers (ids only, never engine or guest text) and the mapping of call failures to
 //! [`DriverError`].
 
+use std::fmt::Write as _;
+
 use sqler_driver_api::DriverError;
 
+use super::params::ConnectParams;
 use crate::error::{CallError, GuestError};
-use crate::query::query_text;
+use crate::query::{DENIED, query_text};
 
 /// A session of a guest driver that outlived its instance.
 pub(crate) const SESSION_ENDED: &str = "the plugin driver session ended (the plugin was restarted, disabled or its permissions changed)";
@@ -23,6 +26,14 @@ pub(crate) const NOT_AVAILABLE: &str = "the plugin driver is not available";
 pub(crate) const MALFORMED: &str = "the plugin driver sent malformed rows";
 /// A catalog answer that breaks the size rules.
 pub(crate) const MALFORMED_CATALOG: &str = "the plugin driver sent a malformed catalog answer";
+
+/// The ids of the built-in drivers. A plugin never provides them, also in a build without that built-in.
+pub(crate) const RESERVED_IDS: &[&str] = &["sqlite", "postgres", "mysql"];
+
+/// Rule 0: the id belongs to a built-in driver.
+pub(crate) fn reserved(driver: &str, plugin: &str) -> String {
+    format!("driver `{driver}` of plugin `{plugin}` is reserved for a built-in driver")
+}
 
 /// Rule 1: the plugin is switched off or was disabled after faults.
 pub(crate) fn disabled(driver: &str, plugin: &str) -> String {
@@ -61,10 +72,38 @@ pub(crate) fn fixed(text: &str, phase: Phase) -> DriverError {
     }
 }
 
+/// The forms of the connect password (raw, percent-encoded in upper and lower case) a guest message must not carry.
+/// Empty for a missing or empty password.
+pub(crate) fn secrets(params: &ConnectParams) -> Vec<String> {
+    let Some(password) = params.password.as_deref().filter(|p| !p.is_empty()) else {
+        return Vec::new();
+    };
+    let encode = |upper: bool| {
+        let mut out = String::new();
+        for b in password.bytes() {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+                out.push(char::from(b));
+            } else if upper {
+                let _ = write!(out, "%{b:02X}");
+            } else {
+                let _ = write!(out, "%{b:02x}");
+            }
+        }
+        out
+    };
+    let mut all = vec![password.to_owned(), encode(true), encode(false)];
+    all.dedup();
+    all
+}
+
 /// An error the guest returned. The text passes the query scrub, so a message that echoes a secret becomes the fixed
 /// denial text.
-pub(crate) fn guest(e: &GuestError, phase: Phase) -> DriverError {
-    let text = query_text(&e.message);
+pub(crate) fn guest(e: &GuestError, phase: Phase, secrets: &[String]) -> DriverError {
+    let text = if secrets.iter().any(|s| e.message.contains(s.as_str())) {
+        DENIED.to_owned()
+    } else {
+        query_text(&e.message)
+    };
     match phase {
         Phase::Connect => DriverError::Connection(text),
         Phase::Run => DriverError::Query(text),
@@ -72,13 +111,13 @@ pub(crate) fn guest(e: &GuestError, phase: Phase) -> DriverError {
 }
 
 /// A failed call. Engine text never passes through.
-pub(crate) fn from_call(e: &CallError, phase: Phase) -> DriverError {
+pub(crate) fn from_call(e: &CallError, phase: Phase, secrets: &[String]) -> DriverError {
     match e {
         CallError::Trap { .. } => fixed(CRASHED, phase),
         CallError::Timeout { .. } => fixed(TIMED_OUT, phase),
         CallError::MemoryLimit { .. } => fixed(OUT_OF_MEMORY, phase),
         CallError::Cancelled => DriverError::Cancelled,
-        CallError::Guest(g) => guest(g, phase),
+        CallError::Guest(g) => guest(g, phase, secrets),
         _ => DriverError::Unavailable(NOT_AVAILABLE.to_owned()),
     }
 }
@@ -137,19 +176,19 @@ mod tests {
         let trap = CallError::Trap {
             message: "wasm trap at 0x1234 secret".into(),
         };
-        assert_eq!(text(&from_call(&trap, Phase::Run)), CRASHED);
+        assert_eq!(text(&from_call(&trap, Phase::Run, &[])), CRASHED);
         assert!(matches!(
-            from_call(&trap, Phase::Connect),
+            from_call(&trap, Phase::Connect, &[]),
             DriverError::Connection(_)
         ));
         let timeout = CallError::Timeout {
             after: Duration::from_secs(1),
         };
-        assert_eq!(text(&from_call(&timeout, Phase::Run)), TIMED_OUT);
+        assert_eq!(text(&from_call(&timeout, Phase::Run, &[])), TIMED_OUT);
         let memory = CallError::MemoryLimit { limit: 1 };
-        assert_eq!(text(&from_call(&memory, Phase::Run)), OUT_OF_MEMORY);
+        assert_eq!(text(&from_call(&memory, Phase::Run, &[])), OUT_OF_MEMORY);
         assert!(matches!(
-            from_call(&CallError::Cancelled, Phase::Run),
+            from_call(&CallError::Cancelled, Phase::Run, &[]),
             DriverError::Cancelled
         ));
         for e in [
@@ -164,7 +203,7 @@ mod tests {
             },
             CallError::Load(LoadError::NoCompiler),
         ] {
-            let mapped = from_call(&e, Phase::Run);
+            let mapped = from_call(&e, Phase::Run, &[]);
             assert!(matches!(&mapped, DriverError::Unavailable(t) if t == NOT_AVAILABLE));
         }
     }
@@ -175,14 +214,45 @@ mod tests {
             code: ErrorCode::Failed,
             message: "login failed, password was hunter2".into(),
         };
-        let mapped = guest(&g, Phase::Connect);
+        let mapped = guest(&g, Phase::Connect, &[]);
         assert!(matches!(&mapped, DriverError::Connection(t) if !t.contains("hunter2")));
         let plain = GuestError {
             code: ErrorCode::Failed,
             message: "no such table t".into(),
         };
         assert!(
-            matches!(guest(&plain, Phase::Run), DriverError::Query(t) if t == "no such table t")
+            matches!(guest(&plain, Phase::Run, &[]), DriverError::Query(t) if t == "no such table t")
+        );
+    }
+
+    #[test]
+    fn an_echoed_password_value_is_denied_without_a_marker_word() {
+        let params = ConnectParams::parse("mydb://u:p%40ss%2Fw@h/db");
+        let secrets = secrets(&params);
+        assert!(secrets.contains(&"p@ss/w".to_owned()));
+        for message in [
+            "connect failed: p@ss/w",
+            "bad token p%40ss%2Fw for db",
+            "x p%40ss%2fw",
+        ] {
+            let g = GuestError {
+                code: ErrorCode::Failed,
+                message: message.into(),
+            };
+            for phase in [Phase::Connect, Phase::Run] {
+                let t = text(&guest(&g, phase, &secrets));
+                assert_eq!(t, DENIED, "{message}");
+            }
+        }
+        let g = GuestError {
+            code: ErrorCode::Failed,
+            message: "no such table t".into(),
+        };
+        assert_eq!(text(&guest(&g, Phase::Run, &secrets)), "no such table t");
+        let none: Vec<String> = Vec::new();
+        assert_eq!(
+            super::secrets(&ConnectParams::parse("mydb://u:@h/db")),
+            none
         );
     }
 

@@ -33,7 +33,7 @@ pub(crate) use convert::{
     value_from_wit, value_to_wit,
 };
 pub(crate) use exec::NOT_AVAILABLE;
-pub(crate) use scrub::query_text;
+pub(crate) use scrub::{DENIED, query_text};
 pub use service::{
     ApprovalStage, DataError, DataService, Decision, MAX_CATALOG_ITEMS, MAX_PARAMS,
     MAX_RESULT_BYTES, MAX_SQL_BYTES, PluginConnection, PluginData, QueryApprover, WriteReason,

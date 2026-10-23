@@ -482,6 +482,17 @@ fn the_first_plugin_owns_a_contested_id() {
 }
 
 #[test]
+fn a_built_in_id_is_reserved() {
+    let w = world("reserved", &[("p1", "mysql", Kind::Host)]);
+    let p1: PluginId = "p1".parse().unwrap();
+    assert_eq!(
+        w.drivers.availability(&p1, "mysql").unwrap_err(),
+        "driver `mysql` of plugin `p1` is reserved for a built-in driver"
+    );
+    assert!(w.registry.available_ids().iter().all(|i| i != &id("mysql")));
+}
+
+#[test]
 fn an_unknown_driver_is_unknown() {
     let w = world("unknown", &[("p1", "fake-db", Kind::Host)]);
     assert!(matches!(
