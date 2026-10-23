@@ -159,6 +159,23 @@ database user in the `user` parameter. A target with a user part, `password=` or
 is rejected, and the message points to the password field. An SSH tunnel and a database password need
 a URL target.
 
+### DuckDB
+
+`DuckDB` is a plugin driver (driver id `duckdb`, [ADR-0070](../adr/0070-duckdb-engine-and-webpki-roots.md)). It needs:
+
+- a build with the `driver-duckdb` feature of `sqler-app` or `sqler-cli` (off by default; it implies `plugins`);
+- the plugin `plugins/duckdb` installed in the `plugins` folder of the configuration directory, and its permission
+  `driver.host:duckdb` approved in the [Plugins view](plugins.md).
+
+The target is `:memory:` (a private, empty database for that session) or a file path (created if it does not exist).
+There is no user or password. Notes:
+
+- Run one statement at a time, or select one statement. `DuckDB` has no statement splitter in SQLer yet, so a text with
+  several statements fails with the `DuckDB` error.
+- On a `prod` connection every run is confirmed, also a `SELECT`, because SQLer cannot classify `DuckDB` statements.
+- External files (for example `read_csv`) and extensions are switched off and cannot be switched on from SQL.
+- Error messages show `<database>` instead of the file path.
+
 ### Passwords
 
 The database password, the SSH password and the key passphrase have their own masked fields. They go

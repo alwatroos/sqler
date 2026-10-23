@@ -14,6 +14,8 @@ allow. See [Plugin development](../plugin-development/index.md) to write one.
   (repeatable) adds a folder that holds `sqler.toml` (one plugin) or whose children are plugins. These paths are the
   only extra places SQLer looks; it never searches a build output folder such as `target/plugins`. A development
   plugin with the id of an installed one replaces it.
+- **DuckDB.** The `plugins/duckdb` plugin adds a `DuckDB` driver, and works only in a build with the `driver-duckdb`
+  feature; see [Connections](connections.md#duckdb).
 - **Nothing runs at start.** The window appears first. Only then SQLer scans the folders; a plugin is compiled and
   started only when it is switched on and you have allowed it. Plugins run on their own threads, apart from your
   database work.
