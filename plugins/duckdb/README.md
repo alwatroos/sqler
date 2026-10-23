@@ -1,5 +1,8 @@
 # DuckDB plugin
 
+**Not in 1.0** (ADR-0070, amendment 2). This plugin and its engine stay in the repository, disabled; they are not part
+of any release artifact, installer or update manifest, and CI builds the engine only in the separate `duckdb` job.
+
 A declarative shell: `sqler.toml` declares one host driver (`id = "duckdb"`, `engine = "duckdb"`) and the capability
 `driver.host:duckdb`. There is no `[entry]` and no component. The engine itself is the crate
 `crates/sqler-driver-duckdb` (ADR-0070), linked into the binary only when it is built with the `driver-duckdb`

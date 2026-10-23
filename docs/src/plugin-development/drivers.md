@@ -124,7 +124,11 @@ plugins switched off, and never asks.
 
 ## DuckDB
 
-`DuckDB` is the first host driver that ships in the repository (ADR-0070). It has no guest: the plugin `plugins/duckdb` is a manifest only (`kind = "host"`, `engine = "duckdb"`, capability
+> **Not in 1.0.** `DuckDB` is out of version 1.0 (ADR-0070, amendment 2). The code below stays in the repository,
+> disabled: the feature `driver-duckdb` is off by default, is never part of a release artifact, installer or update
+> manifest, and is built in CI only by the separate `duckdb` job. It may return after 1.0 as a separate download.
+
+`DuckDB` is the first host driver in the repository (ADR-0070). It has no guest: the plugin `plugins/duckdb` is a manifest only (`kind = "host"`, `engine = "duckdb"`, capability
 `driver.host:duckdb`, no `[entry]`), and the engine is the crate `sqler-driver-duckdb`, a native driver on the
 `duckdb` crate with the `bundled` feature.
 

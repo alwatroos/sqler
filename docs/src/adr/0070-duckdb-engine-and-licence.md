@@ -1,6 +1,6 @@
 # ADR-0070: DuckDB native engine, sandbox and the `webpki-roots` licence question
 
-- Status: accepted
+- Status: accepted; amended 2026-10-23 (amendment 2: out of v1.0)
 - Date: 2026-10-23
 - Deciders: SQLer maintainers (the owner delegated the licence choice to the team: least complexity and maintenance)
 
@@ -89,7 +89,7 @@ saying it is build-time only. Never an advisory ignore, never the `rsa` crate.
   [ADR-0069](0069-binary-size-budget-70-mb.md). That is why the feature is off by default; a build with it is outside
   the budget by design. The default build is unchanged (a `deny` job assertion checks that `duckdb` is not in the
   default `sqler-app` or `sqler-cli` tree).
-- CI cost: the bundled C++ build took about 490 s of CPU for an uncached debug `cargo check` (64 s wall on 14 cores).
+- CI cost (superseded by amendment 2, CI isolation): the bundled C++ build took about 490 s of CPU for an uncached debug `cargo check` (64 s wall on 14 cores).
   The crate is a workspace member, so the Linux workspace run and `clippy --all-features` on all OSes compile it, but
   only when the cache misses: caches are saved on `main` and the build script output is shared between `check` and
   `build`. Estimated uncached wall time is 2 to 4 minutes on Linux and macOS and up to about 8 on Windows, below the
@@ -103,3 +103,31 @@ saying it is build-time only. Never an advisory ignore, never the `rsa` crate.
   no consumer so a `duckdb` connection is classified `Unknown`; sandboxing is engine-specific and not shown in the grant
   dialog.
 - Follow-up: a bump of `duckdb` must re-run `cargo tree -i webpki-roots` and `cargo deny check`.
+
+## Amendment 2 (2026-10-23): DuckDB is out of version 1.0
+
+- Status: accepted. The owner decided that `DuckDB` does not ship in 1.0. This amends the scope of this ADR; the
+  engine design, sandbox and licence finding above stay valid for the code that remains in the repository.
+- **Code stays, disabled.** `sqler-driver-duckdb`, the plugin `plugins/duckdb` and the feature `driver-duckdb` of
+  `sqler-app` and `sqler-cli` stay in the repository. The feature is off by default and is never part of a release
+  artifact, installer or update manifest. No document promises `DuckDB` in 1.0; user-facing driver lists name `SQLite`,
+  `PostgreSQL` and `MySQL`/`MariaDB`, and `DuckDB` appears only in one "Not in 1.0" note.
+- **After 1.0.** It may return as a separate download (not part of the main download, so the size budget of
+  [ADR-0069](0069-binary-size-budget-70-mb.md) is not affected). That needs its own decision.
+- **CI isolation (replaces the "CI cost" bullet above).** The bundled C++ build pushed `check (ubuntu-latest)` to the
+  45 minute limit on a cold cache, so no pull request job compiles it any more:
+  - Workspace-wide commands use `--workspace --exclude sqler-driver-duckdb` (`WS` in `ci.yml`), and clippy uses the
+    explicit feature list `WS_FEATURES` instead of `--all-features`, which would switch `driver-duckdb` on. The
+    `deny` job checks that the list names every workspace feature except `driver-duckdb`, so a new feature cannot be
+    forgotten.
+  - The tests of `sqler-app` and `sqler-cli` with the feature `plugins` no longer add `driver-duckdb`.
+  - A separate job `duckdb` (Linux only, 90 minute limit) runs clippy and the tests of `sqler-driver-duckdb`, and
+    clippy and the tests of `sqler-app` and `sqler-cli` with `driver-duckdb`. It runs on `workflow_dispatch` or on a
+    pull request that changes `crates/sqler-driver-duckdb/**`, `plugins/**duckdb**`, the `Cargo.toml` of `sqler-app` or
+    `sqler-cli`, or their plugin driver wiring (`sqler-app/src/plugins/drivers.rs`, `sqler-cli/src/plugins.rs`). Not on
+    pushes to `main` and not through the label `full-ci`. When it does not run it reports `skipped`, which `CI result`
+    counts as a pass; job names, path gating and the cache policy of
+    [ADR-0068](0068-ci-pipeline-speed.md) are otherwise unchanged.
+  - `cargo deny` keeps `all-features = true`, so licences and advisories of the `DuckDB` dependency tree are still
+    checked (no compile), and the `deny` job still asserts `duckdb` is absent from the default `sqler-app` and
+    `sqler-cli` trees.

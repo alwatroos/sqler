@@ -159,22 +159,12 @@ database user in the `user` parameter. A target with a user part, `password=` or
 is rejected, and the message points to the password field. An SSH tunnel and a database password need
 a URL target.
 
-### DuckDB
+### Supported databases
 
-`DuckDB` is a plugin driver (driver id `duckdb`, [ADR-0070](../adr/0070-duckdb-engine-and-licence.md)). It needs:
+Version 1.0 connects to `SQLite`, `PostgreSQL` and `MySQL`/`MariaDB`.
 
-- a build with the `driver-duckdb` feature of `sqler-app` or `sqler-cli` (off by default; it implies `plugins`);
-- the plugin `plugins/duckdb` installed in the `plugins` folder of the configuration directory, and its permission
-  `driver.host:duckdb` approved in the [Plugins view](plugins.md).
-
-The target is `:memory:` (a private, empty database for that session) or a file path (created if it does not exist).
-There is no user or password. Notes:
-
-- Run one statement at a time, or select one statement. `DuckDB` has no statement splitter in SQLer yet, so a text with
-  several statements fails with the `DuckDB` error.
-- On a `prod` connection every run is confirmed, also a `SELECT`, because SQLer cannot classify `DuckDB` statements.
-- External files (for example `read_csv`) and extensions are switched off and cannot be switched on from SQL.
-- Error messages show `<database>` instead of the file path.
+**Not in 1.0:** `DuckDB`. Its code is in the repository but switched off; no release, installer or update contains it
+([ADR-0070](../adr/0070-duckdb-engine-and-licence.md), amendment 2). It may return after 1.0 as a separate download.
 
 ### Passwords
 
