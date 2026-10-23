@@ -38,6 +38,7 @@ sqler-export = { path = "crates/sqler-export", version = "0.1.0", default-featur
 sqler-ui = { path = "crates/sqler-ui", version = "0.1.0" }
 sqler-import = { path = "crates/sqler-import", version = "0.1.0" }
 sqler-cli = { path = "crates/sqler-cli", version = "0.1.0" }
+sqler-update = { path = "crates/sqler-update", version = "0.1.0" }
 
 # external
 thiserror = "2.0.21"
