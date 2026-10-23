@@ -18,6 +18,10 @@ mod data;
 mod driver;
 #[path = "guests/exporter.rs"]
 mod exporter;
+#[path = "guests/exporter_markdown.rs"]
+mod exporter_markdown;
+#[path = "guests/hello_panel.rs"]
+mod hello_panel;
 
 use std::convert::Infallible;
 use std::fs;

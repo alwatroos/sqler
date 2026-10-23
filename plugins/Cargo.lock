@@ -171,6 +171,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqler-example-exporter-markdown"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.63.0",
+]
+
+[[package]]
+name = "sqler-example-hello-panel"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.63.0",
+]
+
+[[package]]
 name = "sqler-fixture-ai-probe"
 version = "0.1.0"
 dependencies = [

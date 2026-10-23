@@ -3,7 +3,15 @@
 # build it through `cargo run -p xtask -- plugins build` (see plugins/README.md).
 [workspace]
 resolver = "3"
-members = ["fixtures/smoke", "fixtures/probe", "fixtures/driver", "fixtures/exporter", "fixtures/ai-probe"]
+members = [
+    "hello-panel",
+    "exporter-markdown",
+    "fixtures/smoke",
+    "fixtures/probe",
+    "fixtures/driver",
+    "fixtures/exporter",
+    "fixtures/ai-probe",
+]
 
 [workspace.package]
 version = "0.1.0"
