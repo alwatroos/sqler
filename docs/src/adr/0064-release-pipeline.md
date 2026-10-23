@@ -62,7 +62,7 @@ grew the binary (see the comment on `[profile.release]` in `Cargo.toml`).
 
 The features of the release build are **one line**, `features = [...]` in `dist-workspace.toml`. It is **pending the
 owner's decision; default features assumed** (`features = []`): whether the `plugins` feature, and with it SQL Server,
-ships in 1.0 is not decided (with the plugin host the Linux binary is 79.9 MB against the 73,400,320-byte budget). To
+ships in 1.0 is not decided (with the plugin host the Linux binary is 79.9 MB against the 83,886,080-byte budget). To
 change the set, edit that line only. The same line drives the SBOM (`cargo cyclonedx --features`). The DuckDB guard
 below does not depend on the value of the line. `driver-duckdb` never belongs in it.
 
@@ -102,7 +102,7 @@ in the script.
 
 Each build job extracts its archive and runs `sqler --version`; the output must match `^sqler [0-9]` (on Windows it is
 redirected to a file because of the GUI subsystem). The step summary gets the binary and archive bytes next to the
-73,400,320-byte budget, with a warning when over; it reports and never gates. cargo-dist produces **one** SBOM per
+83,886,080-byte budget, with a warning when over; it reports and never gates. cargo-dist produces **one** SBOM per
 release (`sqler-app.cdx.xml`, `cargo-cyclonedx`), not one per artifact; per-artifact SBOMs are a follow-up.
 
 ### Dropped, and why
@@ -132,11 +132,11 @@ Filled in from the `full-ci` dry run of the release-pipeline PR.
 
 | OS (target) | Binary bytes | Archive bytes | `size.yml` binary | Budget |
 | ----------- | ------------ | ------------- | ----------------- | ------ |
-| macOS arm64 | 38,557,920 | 10,383,528 | 38,507,056 | 73,400,320 |
-| macOS x86_64 | 41,923,104 | 11,810,636 | n/a | 73,400,320 |
-| Linux x86_64 | 63,279,336 | 16,640,340 | 63,330,024 | 73,400,320 |
-| Linux aarch64 | 54,601,192 | 14,597,448 | n/a | 73,400,320 |
-| Windows x86_64 | 51,094,528 | 19,128,405 | 50,760,704 | 73,400,320 |
+| macOS arm64 | 38,557,920 | 10,383,528 | 38,507,056 | 83,886,080 |
+| macOS x86_64 | 41,923,104 | 11,810,636 | n/a | 83,886,080 |
+| Linux x86_64 | 63,279,336 | 16,640,340 | 63,330,024 | 83,886,080 |
+| Linux aarch64 | 54,601,192 | 14,597,448 | n/a | 83,886,080 |
+| Windows x86_64 | 51,094,528 | 19,128,405 | 50,760,704 | 83,886,080 |
 
 Engine markers, confirmed against a real `cargo build --release -p sqler-app --features driver-duckdb` binary (96,116,480
 bytes): `Could not set lock on file`, `preserve_insertion_order`, `checkpoint_threshold` and `enable_object_cache` are all

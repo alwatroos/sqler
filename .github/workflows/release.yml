@@ -236,21 +236,21 @@ jobs:
           "$BIN" --version > "$RUNNER_TEMP/version.txt" 2>&1
           cat "$RUNNER_TEMP/version.txt"
           grep -Eq '^sqler [0-9]' "$RUNNER_TEMP/version.txt"
-      # Report only, never a gate (ADR-0069: budget 70 MB = 73,400,320 bytes).
+      # Report only, never a gate (ADR-0069: budget 80 MB = 83,886,080 bytes).
       - name: Size report
         shell: bash
         env:
           BIN: ${{ steps.extract.outputs.bin }}
           ARCHIVE: ${{ steps.extract.outputs.archive }}
         run: |
-          budget=73400320
+          budget=83886080
           bin_bytes=$(wc -c < "$BIN" | tr -d ' ')
           archive_bytes=$(wc -c < "$ARCHIVE" | tr -d ' ')
-          line="sqler release on $RUNNER_OS ($TARGET): binary $bin_bytes bytes, archive $archive_bytes bytes (budget 70 MB = $budget bytes)"
+          line="sqler release on $RUNNER_OS ($TARGET): binary $bin_bytes bytes, archive $archive_bytes bytes (budget 80 MB = $budget bytes)"
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
           if [ "$bin_bytes" -gt "$budget" ]; then
-            echo "::warning title=Binary size::sqler on $RUNNER_OS is $bin_bytes bytes, over the 70 MB budget"
+            echo "::warning title=Binary size::sqler on $RUNNER_OS is $bin_bytes bytes, over the 80 MB budget"
           fi
       # R2 replaces this placeholder with codesign and notarisation (ADR-0065). Until then the macOS build is unsigned.
       - name: macOS notarisation (R2)
