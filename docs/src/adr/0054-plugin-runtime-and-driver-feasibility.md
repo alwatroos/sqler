@@ -1,6 +1,7 @@
 # ADR-0054: Plugin runtime and driver feasibility (P1 spike)
 
 - Status: accepted
+- Superseded in part by [ADR-0069](0069-binary-size-budget-70-mb.md) (2026-10-23): the binary size budget is now 70 MB (73,400,320 bytes); the 60 MB figures below are the budget at the time of writing.
 - Date: 2026-10-22
 - Deciders: SQLer maintainers (decided by the team; the product owner is informed of the items marked below)
 
