@@ -1,20 +1,17 @@
 # SQL Server
 
 The `SQL Server` driver (id `sqlserver`) connects over TCP, with TLS, using a SQL login. It is a
-plugin driver (see [Plugins](../plugins.md) and [ADR-0071](../../adr/0071-sql-server-plugin.md)) and
-is only in builds made with the feature `driver-mssql`; the prebuilt default does not include it.
+plugin driver (see [Plugins](../plugins.md) and [ADR-0071](../../adr/0071-sql-server-plugin.md)). It
+is in every 1.0 download, built in as a plugin.
 It is tested against SQL Server 2022. A run against a real SQL Server instance is still pending.
 
 ## Set up
 
-1. Build `sqler` (or `sqler-cli`) with `--features driver-mssql`.
-2. Stage the plugin with `cargo run -p xtask -- plugins build` and copy
-   `target/plugins/debug/sqlserver` (or `release`) to `<config>/plugins/sqlserver`.
-3. Open the Plugins view and approve the permission `driver.host:mssql`. The CLI never prompts; it
-   uses the stored approval.
+1. Open the Plugins view: "SQL Server" is listed.
+2. Approve the permission `driver.host:mssql`.
+3. Add a connection.
 
-Without the feature, the driver is listed as unavailable ("needs the `mssql` engine, which this
-build does not include").
+A `sqlserver` folder in `<config>/plugins` or under `--plugin-dir` replaces the built-in one.
 
 ## Targets
 
