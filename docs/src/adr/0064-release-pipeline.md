@@ -138,7 +138,13 @@ Filled in from the `full-ci` dry run of the release-pipeline PR.
 | Linux aarch64 | TBD (INT) | TBD (INT) | n/a | 73,400,320 |
 | Windows x86_64 | TBD (INT) | TBD (INT) | TBD (INT) | 73,400,320 |
 
-Smoke output, guard lines, the DuckDB negative-test exit codes and the confirmed engine markers: TBD (INT).
+Engine markers, confirmed against a real `cargo build --release -p sqler-app --features driver-duckdb` binary (96,116,480
+bytes): `Could not set lock on file`, `preserve_insertion_order`, `checkpoint_threshold` and `enable_object_cache` are all
+present, so `release-guard.sh binary` exits 1 on it; on the default release binary (38,557,248 bytes, macOS arm64) all
+four are absent and it exits 0. `release-guard.sh build-dir` exits 1 on the DuckDB build (two `libduckdb-sys-*` build
+directories). `SQLER_RELEASE_FEATURES=driver-duckdb release-guard.sh features` exits 1.
+
+Smoke output and guard lines of the dry run: TBD (INT).
 
 ## Rollback
 
