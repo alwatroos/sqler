@@ -288,7 +288,15 @@ mod tests {
 
     #[test]
     fn not_configured_without_keys() {
-        let c = new(crate::DEFAULT_FEED_URL).unwrap();
+        let c = new(crate::DEFAULT_FEED_URL)
+            .unwrap()
+            .with_trusted_keys(Vec::new());
         assert!(!c.is_configured());
+    }
+
+    #[test]
+    fn configured_with_the_embedded_key() {
+        let c = new(crate::DEFAULT_FEED_URL).unwrap();
+        assert!(c.is_configured());
     }
 }
