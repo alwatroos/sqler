@@ -46,6 +46,8 @@ manifest; none is added for a plugin that is off, has failed or whose permission
 
 ![The object menu with plugin entries, dark theme](../screenshots/after/plugins-panel-menu-dark.png)
 
+![The Hello Panel example plugin with a click counter and a status item, light theme](../screenshots/after/plugins-hello-panel-light.png)
+
 ### Rebinding
 
 Every plugin command is a normal command with an id of the form `plugin-<plugin id>:<command>` (menu entries
