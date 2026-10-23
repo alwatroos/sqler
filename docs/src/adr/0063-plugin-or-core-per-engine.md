@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-23
-- Deciders: SQLer maintainers; DuckDB out of 1.0 is the product owner's decision (owner decision 11 of M7 intake, recorded in [ADR-0070](0070-duckdb-engine-and-licence.md), amendment 2)
+- Deciders: SQLer maintainers; DuckDB out of 1.0 is the product owner's decision (owner decision (2026-10-23): DuckDB is out of v1.0, recorded in [ADR-0070](0070-duckdb-engine-and-licence.md), amendment 2)
 
 ## Context and Problem Statement
 
