@@ -65,6 +65,13 @@ zeroize = { version = "1.9.1", default-features = false, features = ["alloc"] }
 agent-client-protocol = "3.4.0"
 tokio-util = { version = "0.7.20", default-features = false, features = ["compat"] }
 tokio-stream = { version = "0.1.19", default-features = false, features = ["net"] }
+# SQL Server (ADR-0054, P16): tiberius without its defaults (native-tls, winauth: no OpenSSL, no Windows auth);
+# only TDS 7.3 and rustls. No chrono/time/decimal features: dates and decimals are decoded from the raw fields.
+# tiberius' rustls feature pulls tokio-rustls with its default (aws-lc-rs) provider, which is already in the lock
+# for sqlx-mysql (ADR-0018); the driver installs ring as the process default provider, so there is one TLS stack.
+tiberius = { version = "0.13.0", default-features = false, features = ["tds73", "rustls"] }
+# Direct dependency only to select the ring provider for tiberius' TLS (the same stack as sqlx and reqwest).
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 parquet = { version = "60.0.0", default-features = false, features = ["snap"] }
 flate2 = "1.1.10"
 calamine = { version = "0.37.0", default-features = false }

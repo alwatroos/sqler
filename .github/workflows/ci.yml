@@ -219,6 +219,9 @@ jobs:
       - name: Test sqler-cli with plugin support
         if: needs.changes.outputs.rust == 'true' && (matrix.os != 'windows-latest' || needs.changes.outputs.full == 'true')
         run: cargo nextest run -p sqler-cli --features plugins --no-tests=fail
+      - name: Test sqler-cli with the SQL Server engine
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
+        run: cargo nextest run -p sqler-cli --features plugins,driver-mssql --no-tests=fail
       - name: Check sqler-export feature sets
         if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         run: |
@@ -325,7 +328,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SQLER_TEST_REQUIRE_DB: postgres,mysql,ssh
+      SQLER_TEST_REQUIRE_DB: postgres,mysql,ssh,mssql
     steps:
       - uses: actions/checkout@v7
       - name: Install toolchain from rust-toolchain.toml
@@ -363,6 +366,14 @@ jobs:
         run: cargo nextest run -p sqler-tunnel --no-tests=fail
       - name: CLI smoke test (PostgreSQL)
         run: cargo run -p sqler-cli -- run --driver postgres "$SQLER_TEST_POSTGRES_URL" "select 1" | grep -qx 1
+      # The image is about 1.5 GB and starts in 30-60 s (ADR-0071).
+      - name: Start SQL Server 2022 (TLS forced)
+        run: sh crates/sqler-driver-mssql/tests/docker/start-mssql.sh "$RUNNER_TEMP/mssql" >> "$GITHUB_ENV"
+      - name: Database tests (SQL Server)
+        run: cargo nextest run -p sqler-driver-mssql --no-tests=fail
+      - name: Remove SQL Server container
+        if: always()
+        run: docker rm -f sqler-test-mssql
 
   # No rust-cache here: `cargo deny` and `cargo tree` compile nothing, the cache was 214 MiB of restore and save for no gain.
   deny:
@@ -395,6 +406,11 @@ jobs:
           # With the `plugins` feature the host must really be wired in.
           tree=$(cargo tree -p sqler-app -e normal --prefix none --features plugins) || { echo "cargo tree failed"; exit 1; }
           if ! printf '%s\n' "$tree" | grep -q '^wasmtime '; then echo "wasmtime is missing with --features plugins"; exit 1; fi
+          # SQL Server is opt-in (ADR-0071): the default app and CLI trees do not carry tiberius.
+          for pkg in sqler-app sqler-cli; do
+            tree=$(cargo tree -p "$pkg" -e normal --prefix none) || { echo "cargo tree failed"; exit 1; }
+            if printf '%s\n' "$tree" | grep -q '^tiberius '; then echo "tiberius is in the default $pkg tree"; exit 1; fi
+          done
           # sqler-ui must stay wasmtime-free whatever the app enables.
           if cargo tree -p sqler-ui -i wasmtime 2>/dev/null; then echo "wasmtime is in the sqler-ui tree"; exit 1; fi
 
@@ -435,7 +451,7 @@ jobs:
       - name: Staged files exist
         if: needs.changes.outputs.plugins == 'true'
         shell: bash
-        run: test -f target/plugins/release/smoke/smoke.wasm && test -f target/plugins/release/smoke/sqler.toml
+        run: test -f target/plugins/release/smoke/smoke.wasm && test -f target/plugins/release/smoke/sqler.toml && test -f target/plugins/release/sqlserver/sqler.toml
       # The plugin template (plugins/template): generated outside the checkout (cargo-generate may add a crate
       # generated inside a workspace to its members), then built like a plugin developer would.
       - uses: taiki-e/install-action@v2

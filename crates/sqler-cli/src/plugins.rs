@@ -57,8 +57,8 @@ pub(crate) fn driver_source() -> Option<Arc<PluginDrivers>> {
 pub(crate) fn driver_source_in(dir: &ConfigDir) -> Option<Arc<PluginDrivers>> {
     let runtime = tokio::runtime::Handle::try_current().ok()?;
     let host = host_in(dir, runtime)?;
-    // No native engine is linked into the CLI yet: a plugin that needs one is listed as unavailable.
-    let source = PluginDrivers::new(HostEngines::new());
+    // A plugin that needs an engine this build does not link is listed as unavailable.
+    let source = PluginDrivers::new(engines());
     source.attach(&host);
     Some(source)
 }
@@ -125,6 +125,22 @@ fn host_in(dir: &ConfigDir, runtime: tokio::runtime::Handle) -> Option<PluginHos
     Some(host)
 }
 
+/// The native engines this build links: `driver-mssql` adds SQL Server (ADR-0071).
+fn engines() -> HostEngines {
+    #[allow(unused_mut)]
+    let mut engines = HostEngines::new();
+    #[cfg(feature = "driver-mssql")]
+    {
+        use sqler_driver_mssql::{ENGINE_ID, MssqlDriver, install_ring_provider};
+        // rustls has both providers compiled in (tiberius pulls aws-lc-rs); ring is the one in effect.
+        install_ring_provider();
+        if let Ok(id) = ENGINE_ID.parse::<sqler_plugin_api::EngineId>() {
+            let _ = engines.register(id, Arc::new(MssqlDriver::new()));
+        }
+    }
+    engines
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -182,6 +198,52 @@ mod tests {
             DriverId::new(driver).unwrap(),
             "x",
         )
+    }
+
+    /// The real `plugins/sqlserver` manifest in a config folder, approved.
+    fn sqlserver_source(name: &str) -> (Scratch, Arc<PluginDrivers>) {
+        let s = Scratch::new(name);
+        let dir = ConfigDir::new(&s.0);
+        let target = s.0.join("plugins").join("sqlserver");
+        fs::create_dir_all(&target).unwrap();
+        let manifest =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/sqlserver/sqler.toml");
+        fs::copy(manifest, target.join("sqler.toml")).unwrap();
+        let found = discover(&PluginDirs {
+            dev: vec![target],
+            ..PluginDirs::default()
+        });
+        let key = found.plugins[0].key.to_string();
+        let mut grants = PluginGrants::new();
+        grants.record(GrantRecord::approved(key, vec!["driver.host:mssql".to_owned()]).unwrap());
+        dir.save_plugin_grants(&grants).unwrap();
+        let source = driver_source_in(&dir).unwrap();
+        (s, source)
+    }
+
+    #[cfg(feature = "driver-mssql")]
+    #[tokio::test]
+    async fn the_sqlserver_driver_is_available_with_the_feature() {
+        use sqler_driver_api::{DriverSource, SourceLookup};
+        let (_s, source) = sqlserver_source("mssql-on");
+        assert!(matches!(
+            source.lookup(&DriverId::new("sqlserver").unwrap()),
+            SourceLookup::Available(_)
+        ));
+    }
+
+    #[cfg(not(feature = "driver-mssql"))]
+    #[tokio::test]
+    async fn the_sqlserver_driver_is_unavailable_without_the_feature() {
+        let (_s, source) = sqlserver_source("mssql-off");
+        let mut registry = DriverRegistry::new();
+        registry.add_source(source);
+        let err = registry.connect(&config("sqlserver")).await.err().unwrap();
+        assert!(
+            matches!(&err, sqler_driver_api::DriverError::Unavailable(t)
+                if t == "driver `sqlserver` needs the `mssql` engine, which this build does not include"),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]

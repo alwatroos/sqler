@@ -1,0 +1,16 @@
+# Declarative host-driver shell: no [entry], the engine `mssql` is native (crates/sqler-driver-mssql) and is
+# linked only into builds with the `driver-mssql` feature.
+[plugin]
+id = "sqlserver"
+name = "SQL Server"
+version = "0.1.0"
+api = "0.1"
+description = "Microsoft SQL Server through the native mssql engine (SQL login, TLS)."
+capabilities = ["driver.host:mssql"]
+
+[[drivers]]
+id = "sqlserver"
+name = "SQL Server"
+kind = "host"
+engine = "mssql"
+dialect = "tsql"
