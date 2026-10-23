@@ -24,8 +24,8 @@ match client.check().await? {
   over `SIGNING_CONTEXT` followed by the manifest bytes. The payload is parsed only after it verifies.
 - Network access goes only to the configured feed URL (and its redirects: `https`, at most 3). The only request
   header of its own is `User-Agent: SQLer/<version> (update-check)`. No telemetry, no identifiers.
-- Not configured yet: the list of trusted keys (`keys/`) is empty until the production key is committed (R17).
-  Until then `check()` returns `UpdateError::NotConfigured` without any request.
+- Configured: the production public key is committed in `keys/` (ADR-0066 note). With an empty key list
+  `check()` would return `UpdateError::NotConfigured` without any request.
 - Tests use a loopback mock server and TEST-ONLY keys that exist only in `tests/support`; never a release key.
 
 See [AGENTS.md](../../AGENTS.md) for the project handbook and ADR-0066 for the format and policy.
