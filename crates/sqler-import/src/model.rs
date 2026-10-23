@@ -101,7 +101,7 @@ pub struct ImportOptions {
     pub available_drivers: Vec<DriverId>,
 }
 
-/// The dry run: what [`apply`](crate::apply) would do.
+/// The dry run: what [`apply`](crate::apply()) would do.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportPlan {
     /// The id of the source.
@@ -157,7 +157,7 @@ pub struct ProvidedSecret {
     pub secret: Secret,
 }
 
-/// What [`apply`](crate::apply) did.
+/// What [`apply`](crate::apply()) did.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ApplyReport {
     /// The added connections: plan item index and new id.
