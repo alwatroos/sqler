@@ -1,0 +1,2 @@
+# CRLF fixtures keep their line endings (the parent attribute forces LF for fixtures).
+*.crlf.json -text
