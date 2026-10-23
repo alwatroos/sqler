@@ -77,10 +77,15 @@ running `release-guard.sh` on it. Linux and Windows are untouched.
 
 ### Failure
 
-If signing or notarisation fails while the secrets exist, the sign step is `continue-on-error`: the job emits the
-warning `macOS signing failed`, that target keeps its unsigned archive and the release continues. The release must not
-depend on Apple's service availability. To make a failure fatal, remove `continue-on-error` from the two sign steps
-(a one-line change per step); this is a decision for the owner once signing is on.
+The pipeline fails closed. If the secrets exist and signing, notarisation or the hardened-runtime check fails, the
+`sign (macOS)` job fails and nothing publishes, so a release can never mix a signed and an unsigned macOS download
+unnoticed. With the secrets absent the job only prints notices (the unsigned 1.0 default). The repository variable
+`SQLER_ALLOW_UNSIGNED_FALLBACK` set to `true` is an explicit opt-out: the two sign steps then run with
+`continue-on-error`, emit the warning `macOS signing failed`, and that target ships unsigned (possibly next to a signed
+one) while the release continues, for example during an Apple outage. The default is fail closed.
+
+The verification of each signed archive (and the script itself) asserts the hardened-runtime flag: the output of
+`codesign -dv --verbose=2` must contain `flags=0x...(...runtime...)`, otherwise the job fails.
 
 ### Windows and Linux
 
@@ -122,7 +127,10 @@ secrets are absent. How the owner provides the secrets is in
 - With a certificate but no notary key, the binary is signed but not notarised, and Gatekeeper still warns.
 - The sign job adds a macOS runner step to every tag run, bounded by `timeout-minutes: 60` and by a 20-minute notary
   timeout per archive.
-- A failed signing run ships an unsigned macOS archive with a warning, not an error; the warning must be read.
+- A failed signing run blocks the release (fail closed) unless `SQLER_ALLOW_UNSIGNED_FALLBACK` is `true`; Apple
+  service outages therefore delay a release until the job is re-run.
+- The entitlements were tested on the plugin-host test binary, not on the shipped `sqler`. Pending (maintainer): run a
+  plugin smoke test (load and run a plugin) on the first signed build.
 - The code path with secrets cannot run in CI before the owner adds them; it is tested locally with a self-signed
   identity (below).
 

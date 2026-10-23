@@ -166,6 +166,7 @@ fi
 codesign --force --options runtime "$stamp" --entitlements "$entitlements" --keychain "$kc" --sign "$identity" "$bin" ||
     die "codesign failed"
 codesign --verify --strict --verbose=2 "$bin" || die "the signature does not verify"
+codesign -dv --verbose=2 "$bin" 2>&1 | grep -Eq 'flags=0x[0-9a-f]+\(.*runtime' || die "the signature lacks the hardened runtime flag"
 say "signed sqler in $base (hardened runtime)"
 
 if [ "$notarise" = yes ]; then

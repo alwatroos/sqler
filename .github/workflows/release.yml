@@ -294,7 +294,8 @@ jobs:
   # Signs and notarises the two macOS archives (ADR-0065). The only job that reads the APPLE_* secrets, and it runs
   # on a `v*` tag push only, in the environment `release` (deployment rule: tags `v*`; it also holds the update
   # signing key). Without the secrets it only prints notices and uploads nothing, so the archives stay as built.
-  # A failed signing run warns and ships that target unsigned (the sign step has continue-on-error).
+  # With the secrets set, a failed signing or notarisation FAILS this job and nothing publishes (fail closed). Only the
+  # repository variable SQLER_ALLOW_UNSIGNED_FALLBACK == 'true' restores warn-and-ship-that-target-unsigned.
   sign-macos:
     name: sign (macOS)
     needs:
@@ -345,7 +346,7 @@ jobs:
       - id: sign-arm64
         name: Sign and notarise (aarch64)
         if: steps.secrets.outputs.sign == 'true'
-        continue-on-error: true
+        continue-on-error: ${{ vars.SQLER_ALLOW_UNSIGNED_FALLBACK == 'true' }}
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -359,7 +360,7 @@ jobs:
       - id: sign-x64
         name: Sign and notarise (x86_64)
         if: steps.secrets.outputs.sign == 'true'
-        continue-on-error: true
+        continue-on-error: ${{ vars.SQLER_ALLOW_UNSIGNED_FALLBACK == 'true' }}
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -378,10 +379,10 @@ jobs:
           X64: ${{ steps.sign-x64.outcome }}
         run: |
           if [ "$ARM64" = "failure" ]; then
-            echo "::warning title=macOS signing failed::aarch64-apple-darwin ships unsigned"
+            echo "::warning title=macOS signing failed::aarch64-apple-darwin ships unsigned (SQLER_ALLOW_UNSIGNED_FALLBACK)"
           fi
           if [ "$X64" = "failure" ]; then
-            echo "::warning title=macOS signing failed::x86_64-apple-darwin ships unsigned"
+            echo "::warning title=macOS signing failed::x86_64-apple-darwin ships unsigned (SQLER_ALLOW_UNSIGNED_FALLBACK)"
           fi
       # A signed target is checked again from the files that will be uploaded, then replaces the build artifact.
       - name: Verify the signed aarch64 archive
@@ -398,6 +399,7 @@ jobs:
           bin=$(find "$out" -type f -name sqler | head -n 1)
           test -n "$bin"
           codesign --verify --strict --verbose=2 "$bin"
+          codesign -dv --verbose=2 "$bin" 2>&1 | grep -Eq 'flags=0x[0-9a-f]+\(.*runtime'
           sh .github/scripts/release-guard.sh binary "$bin"
           "$bin" --version | grep -Eq '^sqler [0-9]'
           (cd "$DIR" && shasum -a 256 -c "sqler-app-$TARGET.tar.xz.sha256")
@@ -416,6 +418,7 @@ jobs:
           bin=$(find "$out" -type f -name sqler | head -n 1)
           test -n "$bin"
           codesign --verify --strict --verbose=2 "$bin"
+          codesign -dv --verbose=2 "$bin" 2>&1 | grep -Eq 'flags=0x[0-9a-f]+\(.*runtime'
           sh .github/scripts/release-guard.sh binary "$bin"
           (cd "$DIR" && shasum -a 256 -c "sqler-app-$TARGET.tar.xz.sha256")
           sh .github/scripts/release-guard.sh artifacts "$DIR"

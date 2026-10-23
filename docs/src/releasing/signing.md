@@ -61,8 +61,13 @@ Expected: the first command reports a valid signature; `codesign -dvv` shows `Au
 <name> (<TEAM ID>)` and `flags=0x10000(runtime)`; `spctl` says `accepted` with `source=Notarized Developer ID`; the
 checksum matches (run it next to the downloaded archive).
 
-If signing failed in the run, the job shows the warning `macOS signing failed` and that target's archive is unsigned;
-read the step log of `sign (macOS)`.
+If signing or notarisation fails while the secrets are set, the `sign (macOS)` job fails and nothing publishes (fail
+closed); read the step log, fix the cause and re-run the job. To publish anyway, set the repository variable
+`SQLER_ALLOW_UNSIGNED_FALLBACK` to `true`: the failing target then ships unsigned with the warning `macOS signing
+failed` (possibly next to a signed one). Remove the variable again afterwards.
+
+Pending (maintainer): the entitlements were tested on the plugin-host test binary only, so run a plugin smoke test
+(load and run a plugin) on the first signed build.
 
 ## Test the script locally
 
@@ -87,6 +92,8 @@ SQLER_SIGN_LOCAL_TEST=1 APPLE_CERTIFICATE=$(base64 < "$d/id.p12") APPLE_CERTIFIC
 Expected: exit 0 and a last line `sign-macos: ok (..., notarised: no)`. Then check the result: extract the archive,
 run `codesign --verify --strict --verbose=2` and `codesign -dvv` (the flags show `0x10000(runtime)`) on the binary,
 `codesign -d --entitlements - <binary>` (one key), and `( cd "$d" && shasum -a 256 -c *.sha256 )`.
+
+The script itself fails (exit 1) when the signature lacks the hardened-runtime flag, so a successful run proves it.
 
 Negative check: with `APPLE_CERTIFICATE_PASSWORD=wrong` the script must exit 1 with `cannot import the certificate`
 and leave the archive byte-identical. Without `APPLE_CERTIFICATE` it exits 2.
