@@ -11,8 +11,8 @@ use std::sync::{Mutex, PoisonError};
 
 use sqler_driver_api::BoxFuture;
 use sqler_plugin_api::{
-    CapabilitySet, CommandContext, ComponentDigest, ContributionId, Manifest, PluginId,
-    SettingSpec, SettingValue, WidgetEvent, WidgetTree,
+    CapabilitySet, CommandContext, CompletionItem, CompletionRequest, ComponentDigest,
+    ContributionId, Manifest, PluginId, SettingSpec, SettingValue, WidgetEvent, WidgetTree,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -162,6 +162,36 @@ pub trait PluginsBackend: Send + Sync {
         let _ = (id, item);
         Box::pin(async { Err(NO_UI.to_owned()) })
     }
+
+    /// Asks the completion plugins for items: one future per eligible, free plugin, and for each busy
+    /// one a future that resolves when its call in flight ends. `only` limits the ask to those plugins.
+    ///
+    /// May read the grants file: call it off the UI thread.
+    fn complete(&self, request: &CompletionRequest, only: Option<&[PluginId]>) -> CompletionCalls {
+        let _ = (request, only);
+        CompletionCalls::default()
+    }
+}
+
+/// The calls one completion ask started.
+#[derive(Default)]
+pub struct CompletionCalls {
+    /// One future per plugin that was free.
+    pub calls: Vec<BoxFuture<'static, Result<PluginCompletions, String>>>,
+    /// For each plugin that was busy with an earlier call: a future that resolves when that call ends,
+    /// so the caller can ask it again.
+    pub busy: Vec<(PluginId, BoxFuture<'static, ()>)>,
+}
+
+/// The completion items one plugin answered with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCompletions {
+    /// The plugin.
+    pub plugin: PluginId,
+    /// The plugin's display name: one line, at most 64 bytes.
+    pub source: String,
+    /// The cleaned, capped items.
+    pub items: Vec<CompletionItem>,
 }
 
 /// What the binary hands over about plugins at startup.
@@ -310,9 +340,9 @@ mod fake {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{
-        Arc, BoxFuture, CapabilitySet, CommandContext, ComponentDigest, ContributionId, Manifest,
-        PanelRender, PluginId, PluginRow, PluginSnapshot, PluginsBackend, RowState, SettingValue,
-        WidgetEvent, WidgetTree,
+        Arc, BoxFuture, CapabilitySet, CommandContext, CompletionCalls, CompletionRequest,
+        ComponentDigest, ContributionId, Manifest, PanelRender, PluginCompletions, PluginId,
+        PluginRow, PluginSnapshot, PluginsBackend, RowState, SettingValue, WidgetEvent, WidgetTree,
     };
 
     type Key = (String, String);
@@ -344,6 +374,12 @@ mod fake {
         pub commands: Mutex<Vec<(String, String, CommandContext)>>,
         /// Panel events sent: (plugin, panel, event), in order.
         pub events: Mutex<Vec<(String, String, WidgetEvent)>>,
+        /// What `complete` answers, one future per entry (empty: no plugin asked).
+        pub completions: Mutex<Vec<PluginCompletions>>,
+        /// The requests `complete` saw, in order.
+        pub complete_requests: Mutex<Vec<CompletionRequest>>,
+        /// What `complete` reports as busy; handed out once.
+        pub busy: Mutex<Vec<(PluginId, BoxFuture<'static, ()>)>>,
         command_error: Mutex<Option<String>>,
         panels: Mutex<HashMap<Key, PanelRender>>,
         replies: Mutex<HashMap<Key, Result<Option<WidgetTree>, String>>>,
@@ -539,6 +575,26 @@ mod fake {
                 .unwrap_or(None);
             Box::pin(async move { Ok(text) })
         }
+
+        fn complete(
+            &self,
+            request: &CompletionRequest,
+            only: Option<&[PluginId]>,
+        ) -> CompletionCalls {
+            self.complete_requests.lock().unwrap().push(request.clone());
+            let busy = std::mem::take(&mut *self.busy.lock().unwrap());
+            let calls = self
+                .completions
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|a| only.is_none_or(|o| o.contains(&a.plugin)))
+                .filter(|a| !busy.iter().any(|(id, _)| *id == a.plugin))
+                .cloned()
+                .map(|answer| Box::pin(async move { Ok(answer) }) as BoxFuture<'static, _>)
+                .collect();
+            CompletionCalls { calls, busy }
+        }
     }
 
     /// A row for tests and scenes: idle, enabled, nothing effective.
@@ -655,6 +711,12 @@ mod tests {
             no.clone().map(|()| None)
         );
         assert_eq!(b.status(&plugin, &item).await, no.map(|()| None));
+        let request = CompletionRequest {
+            driver: None,
+            statement: "select 1".to_owned(),
+            cursor: 0,
+        };
+        assert!(b.complete(&request, None).calls.is_empty());
     }
 
     #[test]

@@ -10,6 +10,7 @@
 mod ai;
 mod approver;
 mod backend;
+mod completion;
 mod data;
 mod dirs;
 pub(crate) mod drivers;

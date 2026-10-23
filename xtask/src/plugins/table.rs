@@ -36,6 +36,11 @@ pub const PLUGINS: &[PluginRow] = &[
         package: Some("sqler-fixture-driver"),
     },
     PluginRow {
+        name: "completer",
+        dir: "plugins/fixtures/completer",
+        package: Some("sqler-fixture-completer"),
+    },
+    PluginRow {
         name: "exporter",
         dir: "plugins/fixtures/exporter",
         package: Some("sqler-fixture-exporter"),
