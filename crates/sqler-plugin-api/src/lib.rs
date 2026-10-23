@@ -17,6 +17,7 @@
 
 mod api;
 mod capability;
+mod completion;
 mod contribution;
 mod fs_scope;
 mod grant;
@@ -31,6 +32,11 @@ pub use api::{API_VERSION, ApiVersion, ApiVersionError, CompatError, WIT_PACKAGE
 pub use capability::{
     Capability, CapabilityDiff, CapabilityError, CapabilityKind, CapabilitySet, Gate,
     HostInterface, gate,
+};
+pub use completion::{
+    CompletionItem, CompletionKind, CompletionRequest, MAX_COMPLETION_DETAIL_BYTES,
+    MAX_COMPLETION_INSERT_BYTES, MAX_COMPLETION_ITEMS, MAX_COMPLETION_LABEL_BYTES,
+    MAX_COMPLETION_STATEMENT_BYTES,
 };
 pub use contribution::{
     AiTool, Alignment, Command, CompletionContribution, Contributions, DriverContribution,

@@ -11,8 +11,8 @@ use std::sync::{Mutex, PoisonError};
 
 use sqler_driver_api::BoxFuture;
 use sqler_plugin_api::{
-    CapabilitySet, CommandContext, ComponentDigest, ContributionId, Manifest, PluginId,
-    SettingSpec, SettingValue, WidgetEvent, WidgetTree,
+    CapabilitySet, CommandContext, CompletionItem, CompletionRequest, ComponentDigest,
+    ContributionId, Manifest, PluginId, SettingSpec, SettingValue, WidgetEvent, WidgetTree,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -162,6 +162,28 @@ pub trait PluginsBackend: Send + Sync {
         let _ = (id, item);
         Box::pin(async { Err(NO_UI.to_owned()) })
     }
+
+    /// Asks the completion plugins for items. One future per eligible, non-busy plugin; empty means none.
+    ///
+    /// May read the grants file: call it off the UI thread.
+    fn complete(
+        &self,
+        request: &CompletionRequest,
+    ) -> Vec<BoxFuture<'static, Result<PluginCompletions, String>>> {
+        let _ = request;
+        Vec::new()
+    }
+}
+
+/// The completion items one plugin answered with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCompletions {
+    /// The plugin.
+    pub plugin: PluginId,
+    /// The plugin's display name: one line, at most 64 bytes.
+    pub source: String,
+    /// The cleaned, capped items.
+    pub items: Vec<CompletionItem>,
 }
 
 /// What the binary hands over about plugins at startup.
@@ -644,6 +666,12 @@ mod tests {
             no.clone().map(|()| None)
         );
         assert_eq!(b.status(&plugin, &item).await, no.map(|()| None));
+        let request = CompletionRequest {
+            driver: None,
+            statement: "select 1".to_owned(),
+            cursor: 0,
+        };
+        assert!(b.complete(&request).is_empty());
     }
 
     #[test]
