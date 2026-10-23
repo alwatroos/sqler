@@ -219,7 +219,7 @@ jobs:
         shell: bash
         run: |
           rc=0
-          cargo nextest run -p sqler-plugin-host -p sqler-plugin-api -p sqler-config -p xtask -p sqler-acp -p sqler-mcp -p sqler-cli -p sqler-tunnel --no-tests=pass || rc=1
+          cargo nextest run -p sqler-plugin-host -p sqler-plugin-api -p sqler-config -p xtask -p sqler-acp -p sqler-mcp -p sqler-cli -p sqler-tunnel -p sqler-import --no-tests=pass || rc=1
           cargo nextest run -p sqler-ui -E 'test(/agent_flow/) | binary(guard_suite)' --no-tests=pass || rc=1
           exit $rc
       # The plugin host's runtime and egress layers are off by default (ADR-0057), so the workspace run above skips them.
