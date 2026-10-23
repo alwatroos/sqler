@@ -4,7 +4,8 @@
 //! Parsing and rewriting of URL connection targets.
 //!
 //! A stored target never holds a password (ADR-0011); the database user lives in the `user` query
-//! parameter. Right before a driver connects, the pipeline rewrites the in-memory target: the host
+//! parameter (or the userinfo). The schemes are `postgres`, `postgresql`, `mysql`, `mariadb`,
+//! `sqlserver` and `mssql`; a `?user=` on a `sqlserver://` target is moved into the userinfo too. Right before a driver connects, the pipeline rewrites the in-memory target: the host
 //! and port point at the tunnel, and the password from the keychain goes into the userinfo. The
 //! result exists only in memory and is never stored or printed. No error here echoes the target.
 
@@ -47,8 +48,15 @@ fn default_port(scheme: &str) -> Option<u16> {
     match scheme.to_ascii_lowercase().as_str() {
         "postgres" | "postgresql" => Some(5432),
         "mysql" | "mariadb" => Some(3306),
+        "sqlserver" | "mssql" => Some(1433),
         _ => None,
     }
+}
+
+/// Whether the scheme is a T-SQL target (`sqlserver`, `mssql`). The SQL Server engine takes no query
+/// keys, so TLS for these comes only from the connection's TLS settings, never from the URL.
+fn is_tsql(scheme: &str) -> bool {
+    matches!(scheme.to_ascii_lowercase().as_str(), "sqlserver" | "mssql")
 }
 
 impl UrlTarget {
@@ -121,8 +129,12 @@ impl UrlTarget {
 
     /// Whether the target itself asks for host-name verification
     /// (key `sslmode` or `ssl-mode`, value `verify-full` or `verify_identity`, in any driver,
-    /// case-insensitive, also percent-encoded).
+    /// case-insensitive, also percent-encoded). Always `false` for T-SQL targets: the engine
+    /// rejects the key by name and TLS comes only from the connection's TLS settings.
     pub(crate) fn wants_verify_full(&self) -> bool {
+        if is_tsql(&self.scheme) {
+            return false;
+        }
         query_pairs(&self.rest, decode_query).any(|(key, value)| {
             let key = key.to_ascii_lowercase();
             let value = value.to_ascii_lowercase();
@@ -606,8 +618,74 @@ mod tests {
     }
 
     #[test]
+    fn sql_server_schemes_default_to_port_1433() {
+        for text in [
+            "sqlserver://h/d",
+            "mssql://h/d",
+            "SQLSERVER://h/d",
+            "MsSql://h/d",
+        ] {
+            assert_eq!(parse(text).port(), 1433, "{text}");
+        }
+        assert_eq!(parse("sqlserver://h:14330/d").port(), 14330);
+        assert_eq!(parse("MSSQL://h:1/d").port(), 1);
+        assert_eq!(parse("sqlserver://[::1]/db").port(), 1433);
+        assert_eq!(parse("sqlserver://[::1]/db").host(), "::1");
+    }
+
+    #[test]
+    fn sql_server_password_goes_into_the_userinfo_without_a_query() {
+        let t = parse("sqlserver://db/sales?user=sa")
+            .with_password(&Secret::new("p@ss:w/rd?#%&é~-._"))
+            .unwrap();
+        assert_eq!(
+            t.render(),
+            "sqlserver://sa:p%40ss%3Aw%2Frd%3F%23%25%26%C3%A9~-._@db/sales"
+        );
+        assert!(!t.render().contains('?'));
+    }
+
+    #[test]
+    fn sql_server_query_user_is_moved_and_the_userinfo_user_wins() {
+        for target in ["sqlserver://db/sales?user=sa", "mssql://db/sales?USER=sa"] {
+            let rendered = parse(target).with_query_user().render();
+            assert!(
+                !rendered.to_ascii_lowercase().contains("user="),
+                "{rendered}"
+            );
+            assert!(!rendered.contains('?'), "{rendered}");
+            assert!(rendered.contains("://sa@db"), "{rendered}");
+        }
+        assert_eq!(
+            parse("sqlserver://me@db/sales?user=other")
+                .with_query_user()
+                .render(),
+            "sqlserver://me@db/sales"
+        );
+    }
+
+    #[test]
+    fn sql_server_host_and_port_can_be_replaced() {
+        let t = parse("sqlserver://sa@db.internal/sales").with_host_port("127.0.0.1", 40001);
+        assert_eq!(t.render(), "sqlserver://sa@127.0.0.1:40001/sales");
+    }
+
+    #[test]
+    fn sql_server_targets_never_lift_tls_from_the_url() {
+        for target in [
+            "sqlserver://h/d?sslmode=verify-full",
+            "mssql://h/d?ssl-mode=verify_identity",
+        ] {
+            assert!(!parse(target).wants_verify_full(), "{target}");
+        }
+    }
+
+    #[test]
     fn debug_hides_credentials() {
         let t = parse("postgres://zed:topsecret@db/x");
+        assert!(!format!("{t:?}").contains("topsecret"));
+        assert!(!format!("{t:?}").contains("zed"));
+        let t = parse("sqlserver://zed:topsecret@db/x");
         assert!(!format!("{t:?}").contains("topsecret"));
         assert!(!format!("{t:?}").contains("zed"));
     }

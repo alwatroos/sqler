@@ -26,8 +26,8 @@ is this a plugin or core, what does cancel do, and which TLS stack is in effect.
   `deny` job asserts there is no `tiberius` line in the default app and CLI trees.
 - The cost is real and recorded as API gaps in [Plugin drivers](../plugin-development/drivers.md#sql-server): there is
   no T-SQL dialect (so the production gate confirms every statement), a host-driver plugin cannot supply catalog SQL,
-  the connect pipeline injects no keychain password and opens no SSH tunnel for `sqlserver://`, `net` scopes do not
-  apply to host engines, and `rows_affected` is `None`. None of them is fixed here. One consequence: inline editing in
+  the connect pipeline injects no keychain password and opens no SSH tunnel for `sqlserver://` (fixed, see
+  Amendment 1), `net` scopes do not apply to host engines, and `rows_affected` is `None`. None of them is fixed here. One consequence: inline editing in
   the results grid cannot be applied on SQL Server until the driver reports a changed-row count. The apply path sees
   `rows_affected` as `None` and rolls back safely, so nothing is written.
 
@@ -76,3 +76,23 @@ reversible: an upstream issue asking `tiberius` to drop the default features, or
 - The CI `db` job pulls a 1.5 GB image and starts SQL Server in 30 to 60 seconds.
 - A run against a real SQL Server instance by a maintainer is pending (the container tests run against SQL Server 2022
   Developer edition).
+
+## Amendment 1 (2026-10-23): keychain password and SSH tunnel for `sqlserver://`
+
+- Status: accepted. This fixes the API gap "no keychain password and no SSH tunnel for `sqlserver://`" named above.
+- **Pipeline.** The connect pipeline knows the schemes `sqlserver` and `mssql` (default port 1433, case-insensitive).
+  It puts the keychain password (or a typed one) into the target as percent-encoded userinfo, and for an SSH tunnel it
+  rewrites the dial host to `127.0.0.1:<port>`. The engine parses the result as before. No new code path was added.
+- **`?user=` is moved.** A stored target `sqlserver://host/db?user=name` gets its user moved into the userinfo, so the
+  engine never sees a query key. A user already in the userinfo wins. Rejected: failing on `?user=`, because that would
+  break the stored-target convention of [ADR-0011](0011-connection-store-format.md) for one driver.
+- **No URL TLS for T-SQL.** TLS comes only from `ConnectionConfig::tls`. A `sslmode` key in the target is not lifted
+  into a TLS mode; it passes through and the engine refuses it by name.
+- **Tunnel and `verify-full`.** `server_name` is the original host, so `verify-full` checks that name and not
+  `127.0.0.1`. The Windows refusal of `verify-full` through a tunnel stays: it is raised before anything opens.
+- **Host-engine scrub.** Because a keychain password now reaches a host engine's target, `HostEngineDriver` denies any
+  connect, query, stream or catalog error text that contains the password, raw or percent-encoded (the guest adapter
+  already did this).
+- **No tunnel container test.** No existing setup reaches a database through `sshd`, and the SSH and SQL Server test
+  containers share no network. Fake tunnels cover the pipeline. A real check through an SSH tunnel and against a real
+  SQL Server instance is pending (maintainer).
