@@ -59,6 +59,8 @@ pub struct PluginsStartup {
     pub grants: Arc<GrantBook>,
     /// Where the plugins' write approvals arrive (the app's approver holds the sender). Empty by default.
     pub writes: WriteInbox,
+    /// The tools plugins offer to the AI surfaces, or `None` (the default). They ride on the AI audit sink.
+    pub ai_tools: Option<Arc<dyn sqler_ai_tools::ExternalTools>>,
 }
 
 impl std::fmt::Debug for PluginsStartup {
@@ -66,6 +68,7 @@ impl std::fmt::Debug for PluginsStartup {
         f.debug_struct("PluginsStartup")
             .field("backend", &self.backend.is_some())
             .field("writes", &self.writes.is_set())
+            .field("ai_tools", &self.ai_tools.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -78,7 +81,15 @@ impl PluginsStartup {
             backend,
             grants,
             writes: WriteInbox::default(),
+            ai_tools: None,
         }
+    }
+
+    /// Sets the tools plugins offer to the AI surfaces.
+    #[must_use]
+    pub fn with_ai_tools(mut self, tools: Arc<dyn sqler_ai_tools::ExternalTools>) -> Self {
+        self.ai_tools = Some(tools);
+        self
     }
 
     /// Sets the inbox of plugin write approvals.
