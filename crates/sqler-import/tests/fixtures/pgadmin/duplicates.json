@@ -1,0 +1,9 @@
+{
+  "Servers": {
+    "1": { "Name": "Same", "Host": "db.example.test", "Username": "alice" },
+    "2": { "Name": "Same", "Host": "other.example.test", "Username": "alice" },
+    "3": { "Name": "Same", "Host": "third.example.test", "Username": "alice" },
+    "4": { "Name": "Twin of one", "Host": "db.example.test", "Username": "alice" },
+    "5": { "Name": "Different user", "Host": "db.example.test", "Username": "bob" }
+  }
+}
