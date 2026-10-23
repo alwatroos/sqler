@@ -70,5 +70,6 @@ consequences. SQLer uses the MADR format.
 | [0061](0061-plugin-drivers.md) | Plugin drivers: `DriverSource` overlay on the registry, host-engine vs guest drivers, what a guest sees, `driver.guest` wording, unavailable texts, WIT 0.1.1, guard parity, DuckDB licence stop | accepted |
 | [0068](0068-ci-pipeline-speed.md) | CI pipeline speed: what runs where, path gating with always-reporting names, caches saved on `main` only, Windows PR subset, `CI result` aggregate, rollback | accepted |
 | [0069](0069-binary-size-budget-70-mb.md) | Binary size budget raised from 60 MB to 70 MB (owner decision); the plugin host stays off by default | accepted |
+| [0070](0070-duckdb-engine-and-licence.md) | DuckDB native engine, sandbox and the `webpki-roots` licence question: `duckdb` 1.20000.0 has no `webpki-roots` in the graph (no exception), worker thread per session, Arrow streaming, interrupt cancel, external access and extensions off, one instance per file | accepted |
 
 ADR number 0039 is reserved for M5.

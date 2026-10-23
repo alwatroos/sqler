@@ -93,6 +93,7 @@
   - [ADR-0060: Plugins in the workbench](adr/0060-plugins-in-the-workbench.md)
   - [ADR-0061: Plugin drivers](adr/0061-plugin-drivers.md)
   - [ADR-0068: CI pipeline speed](adr/0068-ci-pipeline-speed.md)
+  - [ADR-0070: DuckDB native engine and licence](adr/0070-duckdb-engine-and-licence.md)
 - [Plugin development](plugin-development/index.md)
   - [Manifest](plugin-development/manifest.md)
   - [Capabilities](plugin-development/capabilities.md)
