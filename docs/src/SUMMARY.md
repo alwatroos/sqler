@@ -3,6 +3,7 @@
 [Introduction](introduction.md)
 
 - [User guide](user-guide/index.md)
+  - [Install](user-guide/install.md)
   - [Command-line interface](user-guide/cli.md)
   - [Workspace](user-guide/workspace.md)
   - [Keybindings](user-guide/keybindings.md)
@@ -95,6 +96,7 @@
   - [ADR-0061: Plugin drivers](adr/0061-plugin-drivers.md)
   - [ADR-0062: Plugin AI tools](adr/0062-plugin-ai-tools.md)
   - [ADR-0063: Plugin or core per engine](adr/0063-plugin-or-core-per-engine.md)
+  - [ADR-0064: Release pipeline](adr/0064-release-pipeline.md)
   - [ADR-0066: Update check and signed manifest](adr/0066-update-check-and-signed-manifest.md)
   - [ADR-0067: Connection import](adr/0067-connection-import.md)
   - [ADR-0068: CI pipeline speed](adr/0068-ci-pipeline-speed.md)

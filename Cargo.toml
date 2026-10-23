@@ -143,3 +143,8 @@ sqlx-mysql = { path = "vendor/sqlx-mysql" }
 [profile.release]
 strip = "symbols"
 codegen-units = 1
+
+# ADR-0064: the cargo-dist release profile. No `lto`: thin LTO grew the binary (see the release profile above).
+# `dist build` uses this profile; the release feature set lives in dist-workspace.toml.
+[profile.dist]
+inherits = "release"
