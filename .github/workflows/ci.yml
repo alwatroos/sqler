@@ -18,6 +18,14 @@ env:
   CARGO_TERM_COLOR: always
   # Line tables are enough for test backtraces and panic locations; full DWARF only makes the cache and the link step bigger.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Crates a macOS PR run leaves out: pure logic, drivers, exporters and AI clients have no macOS-specific code
+  # (the macOS cfg code lives in sqler-config and sqler-ui) and Linux runs them. Used as `--workspace $MAC_SKIP`.
+  MAC_SKIP: >-
+    --exclude sqler-sql --exclude sqler-catalog --exclude sqler-completion --exclude sqler-driver-api
+    --exclude sqler-driver-sqlite --exclude sqler-driver-mysql --exclude sqler-driver-postgres
+    --exclude sqler-driver-mssql --exclude sqler-driver-duckdb --exclude sqler-export
+    --exclude sqler-ai-api --exclude sqler-ai-anthropic --exclude sqler-ai-mistral
+    --exclude sqler-ai-ollama --exclude sqler-ai-openai
 
 # Gating rules (ADR-0068):
 # - `changes` always runs and decides what is relevant. On main, on dispatch and on a PR with the label `full-ci`
@@ -126,8 +134,8 @@ jobs:
       - name: Linux system packages (GPUI build)
         if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends \
             pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
       # macOS images may ship Xcode without the separately downloaded Metal toolchain.
@@ -138,23 +146,35 @@ jobs:
         if: needs.changes.outputs.rust == 'true'
         run: cargo fmt --all --check
       # Windows clippy runs in its own job (`clippy (windows-latest)`) in parallel with the tests; `CI result` gates on it.
+      # macOS on a PR lints and tests the crates with OS-facing code only (MAC_SKIP: pure logic, drivers, exporters, AI
+      # clients; Linux covers them). Main, dispatch and the label `full-ci` run everything.
       - name: Clippy
-        if: needs.changes.outputs.rust == 'true' && matrix.os != 'windows-latest'
+        if: needs.changes.outputs.rust == 'true' && matrix.os != 'windows-latest' && (matrix.os != 'macos-latest' || needs.changes.outputs.full == 'true')
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Clippy (macOS PR subset)
+        if: needs.changes.outputs.rust == 'true' && matrix.os == 'macos-latest' && needs.changes.outputs.full != 'true'
+        run: cargo clippy --workspace $MAC_SKIP --all-targets --all-features -- -D warnings
       - uses: taiki-e/install-action@v2
         if: needs.changes.outputs.rust == 'true'
         with:
           tool: cargo-nextest@0.9.148
       - name: Test
-        if: needs.changes.outputs.rust == 'true' && (matrix.os != 'windows-latest' || needs.changes.outputs.full == 'true')
+        if: needs.changes.outputs.rust == 'true' && (matrix.os == 'ubuntu-latest' || needs.changes.outputs.full == 'true')
         run: cargo nextest run --workspace --no-tests=pass
-      # Windows PR subset: the crates with Windows-only history (paths, processes, reserved names, CRLF) and the two
-      # sqler-ui groups that failed only on Windows. The full Windows suite runs on main, on dispatch and with the label `full-ci`.
+      - name: Test (macOS PR subset)
+        if: needs.changes.outputs.rust == 'true' && matrix.os == 'macos-latest' && needs.changes.outputs.full != 'true'
+        run: cargo nextest run --workspace $MAC_SKIP --no-tests=pass
+      # Windows PR subset: the crates with Windows-only history (paths, processes, reserved names, CRLF, tunnels) by
+      # `-p`, so the other crates' test binaries are not even built, and the two sqler-ui groups that failed only on
+      # Windows. The full Windows suite runs on main, on dispatch and with the label `full-ci`.
       - name: Test (Windows PR subset)
         if: needs.changes.outputs.rust == 'true' && matrix.os == 'windows-latest' && needs.changes.outputs.full != 'true'
         shell: bash
         run: |
-          cargo nextest run --workspace --no-tests=pass -E 'package(sqler-plugin-host) | package(sqler-plugin-api) | package(sqler-config) | package(xtask) | package(sqler-acp) | package(sqler-mcp) | package(sqler-cli) | (package(sqler-ui) & (test(/agent_flow/) | binary(guard_suite)))'
+          rc=0
+          cargo nextest run -p sqler-plugin-host -p sqler-plugin-api -p sqler-config -p xtask -p sqler-acp -p sqler-mcp -p sqler-cli -p sqler-tunnel --no-tests=pass || rc=1
+          cargo nextest run -p sqler-ui -E 'test(/agent_flow/) | binary(guard_suite)' --no-tests=pass || rc=1
+          exit $rc
       # The plugin host's runtime and egress layers are off by default (ADR-0057), so the workspace run above skips them.
       - name: Test (plugin host runtime and egress)
         if: needs.changes.outputs.rust == 'true'
@@ -212,8 +232,8 @@ jobs:
       # and a font. No display, Xvfb or compositor: the harness opens no OS window.
       - name: Linux system packages (GPUI build, software Vulkan, fonts)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends \
             pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev \
             mesa-vulkan-drivers libvulkan1 fonts-dejavu-core
@@ -423,8 +443,8 @@ jobs:
       - name: Linux system packages (GPUI build)
         if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends \
             pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
       - name: rustdoc
