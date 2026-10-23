@@ -38,6 +38,16 @@ A host implements:
 - `Approver`: answers an `ApprovalRequest` (SQL, class, reason, stage, zero-based statement index) with `Approve` or `Deny`.
 - `UiHost` (optional): `open_in_editor` and `open_results_tab`. Without it the two tools are not offered and answer `not_available`.
 
+## External tools (plugins)
+
+A host can add tools of its own with `ToolSet::with_external_tools(Arc<dyn ExternalTools>)` (ADR-0062). The desktop app does this for plugins that have the `ai.tool` capability; `sqler-cli mcp` lists none.
+
+- `ExternalTools::tools()` returns `ExternalTool { name, description, input_schema }`. A tool is listed, after the built-ins, only if its name matches `[A-Za-z0-9_-]{1,64}`, contains `__`, is not a built-in name and is not a duplicate, and its schema is an object with `"type":"object"`. The description is clipped to 1024 bytes. The app names plugin tools `<plugin-id>__<tool-name>`.
+- Before the call the arguments are checked against a subset of JSON Schema: an object; `required`; a top-level `properties.<k>.type` and `enum`; `additionalProperties: false`. A failure is `invalid_arguments` and the tool is not called.
+- `ExternalTools::call(name, arguments, ctx)` gets an `ExternalContext` that is valid for that call only. `ctx.connections()` lists what the surface lends, `ctx.use_connection(id)` names a connection by id (it feeds the audit row and the redaction), and `ctx.approve(ExternalApproval)` asks the surface's `Approver`. The approval card shows `tool = "external_tool"`, the exact SQL and the connection. Parameters cannot be shown, so a statement with parameters that needs approval is refused unasked.
+- One denial turns the call into `denied`, and a missing approver into `no_approver`, whatever the tool returns. The wait counts against the call deadline.
+- The result goes through the same exit as a built-in tool: redaction (a `columns` array of plain names or of objects with a `name`), the untrusted-data envelope, the audit row and the cancel guard. A `read_only` connection is enforced by the host's data service, not by the tool set.
+
 ## Safety rules
 
 - A statement that is not classified `Read` (write, DDL, other such as `SET` or transaction control, or unknown) needs an approval. `Read` means no write syntax was found (ADR-0020).

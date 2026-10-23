@@ -52,7 +52,7 @@ Any call may return a `plugin-error`; the export then fails, and no target file 
 
 When a call fails the export ends with a fixed text, for example "the export format `Tab-separated` of plugin
 `my-formats` crashed" (trap), "did not answer in time" (more than 5 s for one call), "ran out of memory", "stopped (the
-plugin was restarted, disabled or its permissions changed)" or "failed: <your message>". Your message is cleaned to one
+plugin was restarted, disabled or its permissions changed)" or "failed: " followed by your message. Your message is cleaned to one
 line and cut at 256 bytes, so keep it short and free of paths and data.
 
 ## Limits

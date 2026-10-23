@@ -318,7 +318,9 @@ impl WorkspaceView {
         let plugin_events = startup.plugins.ui_events.take();
         let key_overrides = startup.keybindings.clone();
         let mut ws = Workspace::new(sidebar)
-            .with_ai_audit(audit_log.clone().map(|log| crate::ai::AiAudit::new(log)))
+            .with_ai_audit(audit_log.clone().map(|log| {
+                crate::ai::AiAudit::new(log).with_external_tools(startup.plugins.ai_tools.clone())
+            }))
             .with_settings(startup.settings)
             .with_drivers(startup.connector.driver_ids())
             .with_workbench(&startup.workbench.load)

@@ -21,6 +21,7 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::too_many_lines,
+    clippy::too_many_arguments,
     clippy::missing_panics_doc,
     clippy::similar_names
 )]
@@ -50,14 +51,16 @@ use sqler_ai_tools::session::{
     ExplorationSession, SessionConfig, ToolCallStatus, TranscriptEntry, TurnOutcome,
 };
 use sqler_ai_tools::{
-    ApprovalStage, AuditEntry, AuditLog, AuditOptions, AuditSink, ConnectionInfo, Decision,
-    MemoryAudit, Surface, ToolSet, unwrap_untrusted,
+    ApprovalReason, ApprovalStage, AuditEntry, AuditLog, AuditOptions, AuditSink, ConnectionInfo,
+    Decision, ExternalApproval, ExternalContext, ExternalTool, ExternalTools, MemoryAudit, Surface,
+    ToolError, ToolSet, unwrap_untrusted,
 };
 use sqler_config::{AiConfig, ConnectionSpec};
 use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId, Environment, Query};
 use sqler_driver_api::{BoxFuture, DriverRegistry, Session, collect};
 use sqler_driver_sqlite::{DRIVER_ID, SqliteDriver};
 use sqler_mcp::{AuthToken, McpServer, ServerOptions};
+use sqler_sql::StatementClass;
 use sqler_ui::ai::agent::{
     AgentAbort, AgentMsg, AgentStart, PermissionAsk, PermissionQueue, start_agent,
 };
@@ -238,6 +241,60 @@ impl Connector for Lite {
     }
 }
 
+/// The SQL the plugin tool asks to run.
+const NOTE: &str = "insert into users values (9, 'note', 'n')";
+/// The model name of the plugin tool.
+const NOTE_TOOL: &str = "fake__write_note";
+
+/// A plugin tool that asks the surface to approve one `INSERT` and runs it only when approved.
+struct NotePlugin {
+    db: String,
+    env: Environment,
+}
+
+impl ExternalTools for NotePlugin {
+    fn tools(&self) -> Vec<ExternalTool> {
+        vec![ExternalTool::new(
+            NOTE_TOOL,
+            "Adds a note row.",
+            json!({"type": "object", "properties": {}}),
+        )]
+    }
+
+    fn call<'a>(
+        &'a self,
+        name: &'a str,
+        _arguments: Value,
+        ctx: ExternalContext,
+    ) -> BoxFuture<'a, Result<Value, ToolError>> {
+        Box::pin(async move {
+            if name != NOTE_TOOL {
+                return Err(ToolError::UnknownTool(name.to_owned()));
+            }
+            let connection = ctx.use_connection(self.env.as_str())?;
+            let mut stages = vec![ApprovalStage::Confirm];
+            if self.env == Environment::Prod {
+                stages.push(ApprovalStage::ProdSecond);
+            }
+            for stage in stages {
+                let request = ExternalApproval::new(
+                    connection.id.clone(),
+                    NOTE,
+                    Vec::new(),
+                    StatementClass::Write,
+                    ApprovalReason::Write,
+                    stage,
+                );
+                if ctx.approve(request).await != Decision::Approve {
+                    return Ok(json!({"inserted": false}));
+                }
+            }
+            run_sql(&self.db, NOTE).await;
+            Ok(json!({"inserted": true}))
+        })
+    }
+}
+
 /// The connection of a scenario: `dev` or `prod`, over the database file.
 fn connection(env: Environment, path: &str) -> (ConnectionInfo, ConnectRequest) {
     let id = env.as_str();
@@ -379,12 +436,32 @@ impl McpClient {
 
     /// Calls `run_query` on a session of its own and returns the JSON-RPC `result`.
     async fn run_query(&self, connection: &str, sql: &str) -> Value {
+        self.call_tool("run_query", json!({"connection": connection, "sql": sql}))
+            .await
+    }
+
+    /// Calls a tool on a session of its own and returns the JSON-RPC `result`.
+    async fn call_tool(&self, name: &str, arguments: Value) -> Value {
         let session = self.session().await;
         let body = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {"name": "run_query", "arguments": {"connection": connection, "sql": sql}}});
+            "params": {"name": name, "arguments": arguments}});
         let reply = self.post(Some(&session), &body).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         Self::response_to(&reply, 2)["result"].clone()
+    }
+
+    /// The names `tools/list` returns, in order.
+    async fn tool_names(&self) -> Vec<String> {
+        let session = self.session().await;
+        let body = json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}});
+        let reply = self.post(Some(&session), &body).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        Self::response_to(&reply, 3)["result"]["tools"]
+            .as_array()
+            .expect("a tool list")
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_owned))
+            .collect()
     }
 }
 
@@ -584,6 +661,8 @@ struct SessionRig {
     provider: Arc<ScriptedProvider>,
     source: Arc<TabSource>,
     calls: usize,
+    /// The names the tool set lists to the model.
+    listed: Vec<String>,
     /// Keeps the host channel open: a closed channel would deny every ask.
     _host: UnboundedReceiver<HostMsg>,
 }
@@ -595,6 +674,7 @@ impl SessionRig {
         audit: Arc<dyn AuditSink>,
         asks: UnboundedSender<ApprovalAsk>,
         secs: u32,
+        plugin: Arc<dyn ExternalTools>,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (tx, mut host) = unbounded_channel::<HostMsg>();
         // Host messages other than asks are dropped; asks go to the user.
@@ -613,9 +693,13 @@ impl SessionRig {
         });
         let source = Arc::new(TabSource::new(info.clone(), request, Arc::new(Lite)));
         let approver = Arc::new(ChannelApprover::new(tx, HostMsg::Ask));
-        let tools = ToolSet::configured(source.clone(), &config(secs))
-            .with_approver(approver)
-            .with_audit(audit, Surface::Session);
+        let tools = AiAudit::new(audit)
+            .with_external_tools(Some(plugin))
+            .attach(
+                ToolSet::configured(source.clone(), &config(secs)).with_approver(approver),
+                Surface::Session,
+            );
+        let listed = tools.definitions().into_iter().map(|d| d.name).collect();
         let provider = Arc::new(
             ScriptedProvider::new("mock")
                 .with_capabilities(Capabilities::new(true, false, false, None)),
@@ -634,6 +718,7 @@ impl SessionRig {
                 provider,
                 source,
                 calls: 0,
+                listed,
                 _host: keep_rx,
             },
             forward,
@@ -641,12 +726,17 @@ impl SessionRig {
     }
 
     async fn run_query(&mut self, info: &ConnectionInfo, sql: &str) -> (Raw, Option<String>) {
+        self.call_tool("run_query", json!({"connection": info.id, "sql": sql}))
+            .await
+    }
+
+    async fn call_tool(&mut self, tool: &str, arguments: Value) -> (Raw, Option<String>) {
         self.calls += 1;
         let id = format!("call-{}", self.calls);
-        let args = json!({"connection": info.id, "sql": sql}).to_string();
+        let args = arguments.to_string();
         let steps: [Vec<Result<ChatEvent, AiError>>; 2] = [
             vec![
-                Ok(ChatEvent::ToolCall(ToolCall::new(&id, "run_query", args))),
+                Ok(ChatEvent::ToolCall(ToolCall::new(&id, tool, args))),
                 Ok(ChatEvent::Usage(Usage::new(1, 1))),
                 Ok(ChatEvent::Done {
                     stop: ModelStop::ToolUse,
@@ -705,10 +795,13 @@ impl McpRig {
         audit: Arc<dyn AuditSink>,
         asks: UnboundedSender<ApprovalAsk>,
         secs: u32,
+        plugin: Arc<dyn ExternalTools>,
     ) -> Self {
         let source = Arc::new(TabSource::new(info.clone(), request, Arc::new(Lite)));
         let approver = Arc::new(ChannelApprover::new(asks, std::convert::identity));
-        let tools = ToolSet::configured(source, &config(secs)).with_approver(approver);
+        let tools = AiAudit::new(audit.clone())
+            .with_external_tools(Some(plugin))
+            .external(ToolSet::configured(source, &config(secs)).with_approver(approver));
         let server = McpServer::new(tools, audit, ServerOptions::default());
         let token = AuthToken::generate().unwrap();
         let auth = format!("Bearer {}", token.expose());
@@ -788,6 +881,7 @@ impl AcpRig {
         cwd: PathBuf,
         asks: UnboundedSender<ApprovalAsk>,
         secs: u32,
+        plugin: Arc<dyn ExternalTools>,
     ) -> Self {
         let (tx, mut host) = unbounded_channel::<AgentMsg>();
         let launch = LaunchOptions {
@@ -800,7 +894,7 @@ impl AcpRig {
             info: info.clone(),
             request,
             config: config(secs),
-            audit: AiAudit::new(audit),
+            audit: AiAudit::new(audit).with_external_tools(Some(plugin)),
             cwd,
             launch,
             tx,
@@ -976,13 +1070,18 @@ impl Rig {
         let (info, request) = connection(env, &db);
         let (asks_tx, asks) = unbounded_channel();
         let audit = Arc::new(MemoryAudit::new());
+        let plugin: Arc<dyn ExternalTools> = Arc::new(NotePlugin {
+            db: db.clone(),
+            env,
+        });
         let inner = match surface {
             Surface::Session => {
-                let (rig, forward) = SessionRig::new(&info, request, audit.clone(), asks_tx, secs);
+                let (rig, forward) =
+                    SessionRig::new(&info, request, audit.clone(), asks_tx, secs, plugin);
                 Inner::Session(Box::new(rig), forward)
             }
             Surface::Mcp => {
-                Inner::Mcp(McpRig::new(&info, request, audit.clone(), asks_tx, secs).await)
+                Inner::Mcp(McpRig::new(&info, request, audit.clone(), asks_tx, secs, plugin).await)
             }
             Surface::Agent => {
                 let file = scratch.0.join("ai-audit.jsonl");
@@ -992,7 +1091,7 @@ impl Rig {
                 });
                 let cwd = scratch.0.join("agent-cwd");
                 Inner::Acp(Box::new(
-                    AcpRig::new(&info, request, sink, file, cwd, asks_tx, secs).await,
+                    AcpRig::new(&info, request, sink, file, cwd, asks_tx, secs, plugin).await,
                 ))
             }
             other => panic!("not a surface of the suite: {other:?}"),
@@ -1021,21 +1120,31 @@ impl Rig {
 
     /// Calls `run_query` with the user's scripted answers and normalises what happened.
     async fn call(&mut self, sql: &str, decisions: &[Decision]) -> Outcome {
+        let args = json!({"connection": self.info.id, "sql": sql});
+        self.call_tool("run_query", args, sql, decisions).await
+    }
+
+    /// Calls `tool` with the user's scripted answers; every ask must carry `sql`.
+    async fn call_tool(
+        &mut self,
+        tool: &str,
+        args: Value,
+        sql: &str,
+        decisions: &[Decision],
+    ) -> Outcome {
         let mut user = User::new(sql, decisions);
         let (raw, code) = {
-            let Self {
-                inner, asks, info, ..
-            } = self;
+            let Self { inner, asks, .. } = self;
             let call = async {
                 match inner {
-                    Inner::Session(rig, _) => rig.run_query(info, sql).await,
+                    Inner::Session(rig, _) => rig.call_tool(tool, args).await,
                     Inner::Mcp(rig) => {
-                        let raw = Raw::from_mcp(&rig.client.run_query(&info.id, sql).await);
+                        let raw = Raw::from_mcp(&rig.client.call_tool(tool, args).await);
                         let code = raw.code();
                         (raw, code)
                     }
                     Inner::Acp(rig) => {
-                        let raw = Raw::from_mcp(&rig.client.run_query(&info.id, sql).await);
+                        let raw = Raw::from_mcp(&rig.client.call_tool(tool, args).await);
                         let code = raw.code();
                         (raw, code)
                     }
@@ -1069,6 +1178,15 @@ impl Rig {
         assert_eq!(entry.surface, self.surface, "the audit surface");
         let table = table(&self.db).await;
         outcome(&raw, code, entry, &user, table)
+    }
+
+    /// The tool names the surface lists, in order.
+    async fn listed(&self) -> Vec<String> {
+        match &self.inner {
+            Inner::Session(rig, _) => rig.listed.clone(),
+            Inner::Mcp(rig) => rig.client.tool_names().await,
+            Inner::Acp(rig) => rig.client.tool_names().await,
+        }
     }
 
     /// The text of the last result, for the checks on what the model or agent saw.
@@ -1410,6 +1528,93 @@ fn s8_every_call_leaves_one_equal_audit_entry() {
             assert_eq!(first.audit_tool, "run_query");
         }
     });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Plugin tools (ADR-0062): the same guards on all three surfaces.
+// ---------------------------------------------------------------------------------------------
+
+/// Runs the plugin tool on every surface and returns the outcomes in [`SURFACES`] order.
+async fn note_on_all(env: Environment, user: &'static [Decision]) -> Vec<Outcome> {
+    let mut outcomes = Vec::new();
+    for surface in SURFACES {
+        let mut rig = Rig::new(surface, env).await;
+        outcomes.push(rig.call_tool(NOTE_TOOL, json!({}), NOTE, user).await);
+        rig.close().await;
+    }
+    outcomes
+}
+
+fn same_everywhere(outcomes: &[Outcome]) -> Outcome {
+    let first = outcomes[0].clone();
+    for (surface, out) in SURFACES.iter().zip(outcomes) {
+        assert_eq!(out, &first, "{surface:?} differs from the session");
+    }
+    first
+}
+
+#[test]
+fn x1_every_surface_lists_the_plugin_tool_after_the_built_ins() {
+    let listed = run(async {
+        let mut listed = Vec::new();
+        for surface in SURFACES {
+            let rig = Rig::new(surface, Environment::Dev).await;
+            listed.push(rig.listed().await);
+            rig.close().await;
+        }
+        listed
+    });
+    for (surface, names) in SURFACES.iter().zip(&listed) {
+        assert_eq!(
+            names.last().map(String::as_str),
+            Some(NOTE_TOOL),
+            "{surface:?}"
+        );
+        assert!(names.iter().any(|n| n == "run_query"), "{surface:?}");
+        assert_eq!(
+            names.iter().filter(|n| *n == NOTE_TOOL).count(),
+            1,
+            "{surface:?}"
+        );
+    }
+}
+
+#[test]
+fn x2_an_approved_plugin_write_runs_and_is_audited() {
+    let out = same_everywhere(&run(note_on_all(Environment::Dev, &[APPROVE])));
+    assert_eq!(out.asked, [ApprovalStage::Confirm]);
+    assert!(!out.is_error, "{out:?}");
+    assert_eq!(out.audit_tool, NOTE_TOOL);
+    assert_eq!(out.audit_approval, "approved");
+    assert_eq!(out.audit_result, "ok");
+    assert_eq!(statement_sql(&out), [NOTE]);
+    assert!(out.audit_statements[0].ran);
+    assert_eq!(names(&out), ["ann", "bob", "cy", "note"]);
+}
+
+#[test]
+fn x3_a_denied_plugin_write_does_not_run_and_is_audited() {
+    let out = same_everywhere(&run(note_on_all(Environment::Dev, &[DENY])));
+    assert_eq!(out.asked, [ApprovalStage::Confirm]);
+    assert!(out.is_error);
+    assert_eq!(out.error_code.as_deref(), Some("denied"));
+    assert_eq!(out.audit_tool, NOTE_TOOL);
+    assert_eq!(out.audit_approval, "denied");
+    assert_eq!(out.audit_result, "error");
+    assert!(out.audit_statements.iter().all(|s| !s.ran));
+    assert_eq!(names(&out), ["ann", "bob", "cy"]);
+}
+
+#[test]
+fn x4_a_prod_plugin_write_needs_two_confirmations() {
+    let out = same_everywhere(&run(note_on_all(Environment::Prod, &[APPROVE, APPROVE])));
+    assert_eq!(
+        out.asked,
+        [ApprovalStage::Confirm, ApprovalStage::ProdSecond]
+    );
+    assert!(!out.is_error, "{out:?}");
+    assert_eq!(out.audit_approval, "approved");
+    assert_eq!(names(&out), ["ann", "bob", "cy", "note"]);
 }
 
 // ---------------------------------------------------------------------------------------------

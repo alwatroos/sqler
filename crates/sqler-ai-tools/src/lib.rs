@@ -50,6 +50,14 @@
 //! size caps, and the SQL of a statement that mentions a listed word has its literals masked;
 //! never cell values or statement error texts.
 //!
+//! # External tools
+//!
+//! A host can add tools with [`ToolSet::with_external_tools`] (plugins use this). They are listed
+//! after the built-in tools, their arguments are checked against a small subset of JSON Schema,
+//! and every call leaves through the same path as a built-in call: redaction, the untrusted
+//! envelope and the audit row apply. A statement that needs approval goes through the surface's
+//! own [`Approver`] ([`ExternalContext::approve`]); one denial, or no approver, fails the call.
+//!
 //! # Exploration sessions
 //!
 //! The [`session`] module holds the headless engine of the in-app exploration chat (ADR-0039):
@@ -64,6 +72,7 @@ mod audit;
 mod catalog_tools;
 mod error;
 mod exec;
+mod external;
 mod guard;
 mod json;
 mod limits;
@@ -89,6 +98,10 @@ pub use audit::{
     MemoryAudit, Surface,
 };
 pub use error::ToolError;
+pub use external::{
+    EXTERNAL_NAME_SEPARATOR, EXTERNAL_TOOL, ExternalApproval, ExternalContext, ExternalTool,
+    ExternalTools, MAX_EXTERNAL_DESCRIPTION_BYTES,
+};
 pub use limits::{Caps, Limits};
 pub use redact::{REDACTED, RedactScope, Redaction, RedactionSummary};
 pub use schema::{definitions, names};

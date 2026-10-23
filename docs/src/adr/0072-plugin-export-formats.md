@@ -75,7 +75,7 @@ ids, labels and extensions loaded in one process; it is not freed. This is cheap
 
 Failures map to fixed texts, with `{f}` the format label and `{p}` the plugin id: "the export format `{f}` of plugin
 `{p}` crashed" (trap), "... did not answer in time", "... ran out of memory", "... stopped (the plugin was restarted,
-disabled or its permissions changed)", "... is not available", and for a guest `plugin-error` "... failed: <message>"
+disabled or its permissions changed)", "... is not available", and for a guest `plugin-error` "... failed:" followed by the message
 with the message cleaned to one line and capped at 256 bytes. A cancel is `ExportError::Cancelled`. No text includes
 engine output, a path or SQL; the guest only sees column names, types and the rows being exported.
 
