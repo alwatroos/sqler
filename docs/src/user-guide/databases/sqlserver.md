@@ -48,8 +48,21 @@ against that name instead of the host you dial. Client certificates and keys are
 - **Cancel closes the connection.** Cancelling a running statement ends the session; the server rolls
   back an open transaction. Run the next statement after reconnecting (the tab says "the SQL Server
   connection was closed by a cancel; connect again").
-- **Production confirmation.** There is no T-SQL dialect yet, so on a production connection every
-  statement asks for confirmation, including a plain `select`.
+- **T-SQL dialect.** The plugin declares the dialect `tsql` ([ADR-0073](../../adr/0073-tsql-dialect-and-manifest-dialect.md)).
+  A batch separator `GO` is recognised only when it is alone on its line (a trailing `--` comment is
+  allowed); `GO 5` is not a separator and stays in the statement, so the server reports it. Identifiers
+  are quoted as `[name]`, and parameters are bound as `@P1`, `@P2`, and so on (other `@x` names are
+  your own variables).
+- **Production confirmation.** On a production connection a plain read (`select`, also with `top`,
+  `with (nolock)` or `option (..)`) runs without asking; every other statement asks for
+  confirmation, twice. The check is deliberately strict: `exec` or `execute` anywhere, `kill`,
+  `checkpoint`, `waitfor` (except a leading `waitfor delay`/`time`), `dbcc`, lock hints such as
+  `updlock` or `holdlock`, `select .. into` and `begin` blocks all ask. A column or alias named
+  `move`, `send`, `receive` or `enable` also asks unless it is written in brackets (`[move]`). A select
+  that uses `apply`, `pivot`, `tablesample` or a table hint in the old form `from t (nolock)` asks too.
+- **Export and AI tools.** Fresh-run export, the SQL `INSERT` export and the AI query tools work
+  (`INSERT` statements hold at most 1000 rows each, text is written as `N'..'`). The AI sampling tool
+  uses `select top (n)`; `explain` is not available on SQL Server, in the editor or for the AI.
 - **Rows affected.** The number of rows changed by `insert`, `update` and `delete` is not shown. For the same reason, inline editing in the results grid cannot be applied on SQL Server until the driver reports a changed-row count: the apply is rolled back and nothing is written.
 - **Result sets.** Only the first result set of a batch is shown.
 - **Types.** `money` arrives as a float; `uniqueidentifier` and `xml` as text; `decimal` keeps its

@@ -25,7 +25,7 @@ is this a plugin or core, what does cancel do, and which TLS stack is in effect.
 - It is a plugin (not a built-in driver) because the default binary must not carry `tiberius` and its TLS tree: the
   `deny` job asserts there is no `tiberius` line in the default app and CLI trees.
 - The cost is real and recorded as API gaps in [Plugin drivers](../plugin-development/drivers.md#sql-server): there is
-  no T-SQL dialect (so the production gate confirms every statement), a host-driver plugin cannot supply catalog SQL,
+  no T-SQL dialect (fixed by [ADR-0073](0073-tsql-dialect-and-manifest-dialect.md); the production gate confirmed every statement), a host-driver plugin cannot supply catalog SQL,
   the connect pipeline injects no keychain password and opens no SSH tunnel for `sqlserver://`, `net` scopes do not
   apply to host engines, and `rows_affected` is `None`. None of them is fixed here. One consequence: inline editing in
   the results grid cannot be applied on SQL Server until the driver reports a changed-row count. The apply path sees
