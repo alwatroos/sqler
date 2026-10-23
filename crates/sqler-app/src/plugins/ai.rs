@@ -558,7 +558,7 @@ mod e2e {
             };
             d.join("ai-probe")
         });
-        let found = probe.filter(|p| p.join("sqler.toml").is_file());
+        let found = probe.filter(|p| p.join("ai-probe.wasm").is_file());
         assert!(
             found.is_some() || !required,
             "SQLER_TEST_REQUIRE_PLUGINS=1 but the ai-probe fixture is not staged"
@@ -692,7 +692,8 @@ mod e2e {
         let text = report.result.content.clone();
         assert!(!report.result.is_error, "{text}");
         assert!(!text.contains("CANARY-PW"), "{text}");
-        assert!(text.contains(REDACTED), "{text}");
+        // The envelope's JSON escapes `<`, so compare the parsed value, not the text.
+        assert_eq!(content(&report)["rows"][0][1], REDACTED, "{text}");
 
         // A write: refused with no approver, run with an approving one.
         set_sql("insert into notes values (2, 'x')");

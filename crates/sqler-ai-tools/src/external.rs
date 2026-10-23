@@ -135,6 +135,15 @@ struct ExtState {
     closed: bool,
 }
 
+/// Closes an [`ExternalContext`] when dropped.
+pub(crate) struct CloseOnDrop(ExternalContext);
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        self.0.state(|s| s.closed = true);
+    }
+}
+
 /// The view of one call that a tool gets: the surface's connections and its approver.
 ///
 /// Cheap to clone and `'static`. It is valid for the one call it was made for.
@@ -165,6 +174,12 @@ impl ExternalContext {
 
     fn state<R>(&self, f: impl FnOnce(&mut ExtState) -> R) -> R {
         f(&mut self.state.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// A guard that closes the context when dropped (the call finished, was cancelled or timed
+    /// out), so a leaked clone cannot approve or lend connections afterwards.
+    pub(crate) fn close_on_drop(&self) -> CloseOnDrop {
+        CloseOnDrop(self.clone())
     }
 
     /// Ends the call: what is decided after the tool returned.
@@ -199,6 +214,9 @@ impl ExternalContext {
     /// # Errors
     /// [`ToolError::UnknownConnection`] if the surface does not lend it.
     pub fn use_connection(&self, id: &str) -> Result<ConnectionInfo, ToolError> {
+        if self.state(|s| s.closed) {
+            return Err(ToolError::NotAvailable("the call has ended".to_owned()));
+        }
         let info = self
             .connections()
             .into_iter()
@@ -271,6 +289,10 @@ impl ExternalContext {
             return Decision::Deny;
         };
         self.record(&info);
+        if info.read_only {
+            self.refuse(&request.sql, request.class);
+            return Decision::Deny;
+        }
         if !request.params.is_empty() {
             self.refuse(&request.sql, request.class);
             return Decision::Deny;

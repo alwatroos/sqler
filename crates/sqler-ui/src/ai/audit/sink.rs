@@ -171,6 +171,12 @@ mod tests {
         let null = ["Null", "Audit"].concat();
         let none = [" audit: ", "None"].concat();
         let with_external = [".with_external_", "tools("].concat();
+        let on_audit = [
+            "AiAudit::new(log)",
+            &with_external,
+            "startup.plugins.ai_tools",
+        ]
+        .concat();
         for file in files {
             let name = norm(&file);
             if name.ends_with("workspace/testing.rs") {
@@ -184,9 +190,19 @@ mod tests {
             if !name.ends_with("ai/audit/sink.rs") {
                 assert!(!prod.contains(&with_audit), "{name} attaches a sink itself");
             }
-            // `workspace/view.rs` calls `AiAudit::with_external_tools` on the audit value; a tool set gets
+            // `workspace/view.rs` calls `AiAudit::with_external_tools` on the audit value, once; a tool set gets
             // plugin tools only through the helper here.
-            if !name.ends_with("ai/audit/sink.rs") && !name.ends_with("workspace/view.rs") {
+            if name.ends_with("workspace/view.rs") {
+                assert_eq!(
+                    prod.matches(&with_external).count(),
+                    1,
+                    "{name} must have exactly one plugin tools call"
+                );
+                assert!(
+                    prod.contains(&on_audit),
+                    "{name}: the plugin tools call is not on the AiAudit value"
+                );
+            } else if !name.ends_with("ai/audit/sink.rs") {
                 assert!(
                     !prod.contains(&with_external),
                     "{name} adds plugin tools to a tool set itself"

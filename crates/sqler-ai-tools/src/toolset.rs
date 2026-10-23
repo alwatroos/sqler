@@ -634,6 +634,7 @@ impl ToolSet {
             .ok_or_else(unknown)?;
         external::check_arguments(&tool.input_schema, &args)?;
         let ctx = ExternalContext::new(Arc::clone(&self.inner), ran.clone());
+        let _close = ctx.close_on_drop();
         let outcome = external.call(name, args, ctx.clone()).await;
         ctx.verdict()?;
         outcome

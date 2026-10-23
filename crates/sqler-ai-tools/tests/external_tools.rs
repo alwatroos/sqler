@@ -42,15 +42,20 @@ fn object_schema(extra: Value) -> Value {
 /// The fake host: a handful of tools that exercise the context.
 struct Fake {
     extra: Vec<ExternalTool>,
+    /// A context a tool kept past its call.
+    leaked: std::sync::Mutex<Option<ExternalContext>>,
 }
 
 impl Fake {
     fn new() -> Arc<Self> {
-        Arc::new(Self { extra: Vec::new() })
+        Self::with(Vec::new())
     }
 
     fn with(extra: Vec<ExternalTool>) -> Arc<Self> {
-        Arc::new(Self { extra })
+        Arc::new(Self {
+            extra,
+            leaked: std::sync::Mutex::default(),
+        })
     }
 }
 
@@ -81,6 +86,7 @@ impl ExternalTools for Fake {
             tool("fake__rows", object_schema(json!({}))),
             tool("fake__hang", object_schema(json!({}))),
             tool("fake__fail", object_schema(json!({}))),
+            tool("fake__leak", object_schema(json!({}))),
             tool(
                 "fake__strict",
                 json!({
@@ -140,11 +146,16 @@ impl ExternalTools for Fake {
                     }))
                 }
                 "fake__hang" => {
+                    *self.leaked.lock().unwrap() = Some(ctx.clone());
                     let _ = ctx.approve(approval(INSERT, ApprovalStage::Confirm)).await;
                     std::future::pending::<()>().await;
                     Ok(json!({}))
                 }
                 "fake__fail" => Err(ToolError::NotFound("nothing here".into())),
+                "fake__leak" => {
+                    *self.leaked.lock().unwrap() = Some(ctx);
+                    Ok(json!({}))
+                }
                 _ => Err(ToolError::UnknownTool(name.to_owned())),
             }
         })
@@ -228,6 +239,7 @@ async fn listed_after_the_built_ins_and_filtered() {
             "fake__rows",
             "fake__hang",
             "fake__fail",
+            "fake__leak",
             "fake__strict",
             "fake__long",
         ]
@@ -447,6 +459,67 @@ async fn a_dropped_call_leaves_a_cancelled_row() {
     assert_eq!(entry.statements[0].approval, ApprovalOutcome::Approved);
     // Approved statements count as sent: the tool may have run it.
     assert!(entry.statements[0].ran);
+}
+
+#[tokio::test]
+async fn a_leaked_context_is_closed_after_the_call() {
+    let approver = ScriptedApprover::always(Decision::Approve);
+    let fake = Fake::new();
+    let rig = rig(None, Some(approver.clone()), fake.clone()).await;
+    let (report, _) = call(&rig.ts, "fake__leak", json!({})).await;
+    assert!(!report.result.is_error);
+    let ctx = fake.leaked.lock().unwrap().take().unwrap();
+    let d = ctx.approve(approval(INSERT, ApprovalStage::Confirm)).await;
+    assert_eq!(d, Decision::Deny);
+    assert!(approver.requests().is_empty());
+    assert!(matches!(
+        ctx.use_connection("db"),
+        Err(ToolError::NotAvailable(_))
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_cancelled_call_closes_its_context() {
+    let fake = Fake::new();
+    let rig = rig(None, None, fake.clone()).await;
+    let call = ToolCall::new("1", "fake__hang", "{}");
+    let timed = tokio::time::timeout(Duration::from_millis(100), rig.ts.call_detailed(&call)).await;
+    assert!(timed.is_err());
+    let ctx = fake.leaked.lock().unwrap().take().unwrap();
+    assert!(matches!(
+        ctx.use_connection("db"),
+        Err(ToolError::NotAvailable(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_read_only_connection_is_refused_before_asking() {
+    use sqler_ai_tools::{ConnectionInfo, SessionSource};
+    struct ReadOnly(Arc<SqliteSource>);
+    impl SessionSource for ReadOnly {
+        fn connections(&self) -> Vec<ConnectionInfo> {
+            vec![self.0.info.clone().with_read_only(true)]
+        }
+        fn catalog(&self, c: &str) -> Option<sqler_catalog::Catalog> {
+            self.0.catalog(c)
+        }
+        fn acquire<'a>(
+            &'a self,
+            c: &'a str,
+        ) -> BoxFuture<'a, Result<Box<dyn sqler_driver_api::Session>, ToolError>> {
+            self.0.acquire(c)
+        }
+    }
+    let inner = SqliteSource::seeded("ro", None, Some(true), common::SEED).await;
+    let approver = ScriptedApprover::always(Decision::Approve);
+    let ts = ToolSet::new(Arc::new(ReadOnly(inner)), limits())
+        .with_approver(approver.clone())
+        .with_external_tools(Fake::new());
+    let (report, content) = call(&ts, "fake__write", json!({})).await;
+    assert!(report.result.is_error);
+    assert_eq!(error_code(&content), "denied");
+    assert!(approver.requests().is_empty());
+    assert!(report.executed.is_empty());
 }
 
 #[tokio::test]
