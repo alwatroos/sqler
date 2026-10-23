@@ -60,7 +60,9 @@ Adopted (each with its number from the baseline):
    reuse the workspace `target/`. `Binary size` builds Linux only on PRs (all OSes on `main`, dispatch and `full-ci`),
    with `timeout-minutes: 45`; the crates table moved to its own `top crates` job (main only). `spike.yml` and
    `plugin-spike.yml` trigger on `push` to `main` only, so a PR branch no longer runs them twice.
-8. apt steps use `Acquire::Retries=3` and an HTTP timeout of 20 s: a mirror stall cost 111 to 477 s in one run
+8. A `workflow_dispatch` input `full` (default true) lets a dispatch run the PR subsets; it is how the warm PR path is
+   measured before a merge, since a PR cannot read caches saved by its own branch.
+9. apt steps use `Acquire::Retries=3` and an HTTP timeout of 20 s: a mirror stall cost 111 to 477 s in one run
    against a 16 s median.
 
 Rejected, with the number:
@@ -85,7 +87,9 @@ Rejected, with the number:
 - Windows clippy is not part of `check (windows-latest)`. If a required-checks rule is added later, require
   `CI result` (or both `check (windows-latest)` and `clippy (windows-latest)`).
 - `sqler-ui::guard_suite::s8_every_call_leaves_one_equal_audit_entry` failed once on Windows in the measurement runs
-  (a 15.9 s test): it is in the Windows PR subset, so a flake shows up on PRs. Recorded as a follow-up.
+  (a 15.9 s test): it is in the Windows PR subset, so a flake shows up on PRs. On Linux,
+  `sqler-ui::workspace::testing::ai_session_flow::cancel_while_a_statement_runs_asks_the_database_to_stop` failed once
+  (run 39909579173, `testing.rs:2789`) and passed on the next run. Neither is caused by this change; both are follow-ups.
 
 ## Rollback
 

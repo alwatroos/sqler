@@ -23,10 +23,12 @@ The rules are in [ADR-0068](adr/0068-ci-pipeline-speed.md). In short:
 - On a pull request, a `changes` job looks at the files you touched. Docs-only changes skip the Rust, database, plugin
   and screenshot work; every check name still reports (skipped counts as passed), and the `CI result` check fails if
   any CI job failed.
-- On a pull request, the Windows job builds everything but runs tests only for the crates with a Windows-specific
-  history. `main` runs the full matrix on all three OSes.
+- On a pull request, the Windows job builds and tests only the crates with a Windows-specific history, and the macOS
+  job skips the platform-agnostic crates (SQL, catalog, completion, drivers, exporters, AI clients). `main` runs the
+  full matrix on all three OSes.
 - To force the full matrix on a pull request, add the label `full-ci` and push again (the label is read when a run
-  starts), or run `gh workflow run ci.yml --ref <your-branch>`.
+  starts), or run `gh workflow run ci.yml --ref <your-branch>` (a dispatch is full; `-f full=false` runs the PR
+  subsets, useful for timing checks).
 - Caches are saved by runs on `main` only. A PR restores them; a PR that changes `Cargo.lock` or the toolchain starts
   cold and is slower.
 - A new push to a PR branch cancels the running CI for that PR. Runs on `main` are never cancelled.
