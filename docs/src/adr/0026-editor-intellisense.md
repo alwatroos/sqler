@@ -40,6 +40,15 @@ Chosen: option 1.
 
 **Reliance on internals.** After a load completes the popup is requested again if the menu is open or the earlier answer was empty. Whether the menu is open is read from `completion_menu_state()`, which is `#[doc(hidden)]` in `gpui-component`. A bump must re-check it; if it disappears, re-request only when the earlier answer was empty.
 
+## Note (P11)
+
+Plugin completion providers (see [Completion providers](../plugin-development/completion.md)) add rows to this popup without changing the decision above.
+
+- **No wait.** `SqlProvider::completions` returns the built-in popup first, as before. The background task that computes it does not touch the plugin backend. A second task calls `PluginsBackend::complete` (it may read the grants file) on the background executor, and each plugin answer lands in a task of its own. An answer is kept in a per-editor cache keyed by (text, cursor); if the place has not moved the popup is asked for again with the existing reopen rule, and the next call merges the cached rows after the built-in rows. A new place drops the old answers, and a late answer for an old ask is refused.
+- **Deadline.** The host's completion deadline applies: 250 ms per call (`Limits::DEFAULT.deadlines.completion`). The UI has no timer of its own. A timeout or a trap is a fault under the three-fault rule.
+- **Merge order.** Built-in rows keep their order and sort text; plugin rows come after them, sorted by plugin id, each plugin in its own order, deduplicated by (label, insert text) and capped at 100. The plugin name is in `detail`.
+- **Load.** At most one completion call per plugin is in flight; a busy plugin is skipped for that ask.
+
 ## Consequences
 
 - Positive: logic is tested without a window; the UI thread does only conversions; refreshes and loads are picked up on the next keystroke or the next diagnose.

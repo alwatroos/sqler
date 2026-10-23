@@ -14,19 +14,20 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use sqler_config::ConfigDir;
 use sqler_driver_api::BoxFuture;
 use sqler_plugin_api::{
-    CapabilitySet, CommandContext, ContributionId, FsRoot, GrantKey, GrantSource, Limits, PluginId,
-    SettingValue, WidgetEvent, WidgetTree,
+    CapabilitySet, CommandContext, CompletionRequest, ContributionId, FsRoot, GrantKey,
+    GrantSource, Limits, PluginId, SettingValue, WidgetEvent, WidgetTree,
 };
 use sqler_plugin_host::net::NetEgressFactory;
 use sqler_plugin_host::{
     DisableReason, DiscoveredPlugin, HostOptions, LoadProblem, PluginHost, PluginSource,
     PluginState, PluginStatus, Services, discover, read_setting,
 };
-use sqler_ui::plugins::backend::PanelRender;
+use sqler_ui::plugins::backend::{PanelRender, PluginCompletions};
 use sqler_ui::plugins::grant::GrantBook;
 use sqler_ui::plugins::status::is_unsafe_char;
 use sqler_ui::plugins::{PluginProblem, PluginRow, PluginSnapshot, PluginsBackend, RowState};
 
+use super::completion::{self, CompletionGate};
 use super::dirs::{ensure_data_dir, plugin_dirs};
 use super::settings::Prefs;
 use super::ui;
@@ -83,6 +84,24 @@ pub(super) struct AppPlugins {
     cache: Arc<Mutex<Cache>>,
     /// What the host lends to plugins (the databases and the write approver).
     services: Services,
+    /// The plugins with a completion call in flight.
+    completion: CompletionGate,
+}
+
+/// Longest plugin display name shown beside its completion rows, in bytes.
+const MAX_SOURCE_BYTES: usize = 64;
+
+/// The display name of a plugin for the completion popup: one line, at most [`MAX_SOURCE_BYTES`].
+fn source_name(name: &str) -> String {
+    let mut line = one_line(name);
+    if line.len() > MAX_SOURCE_BYTES {
+        let mut end = MAX_SOURCE_BYTES;
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        line.truncate(end);
+    }
+    line
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -126,6 +145,7 @@ impl AppPlugins {
             engine: OnceLock::new(),
             cache: Arc::new(Mutex::new(Cache::default())),
             services: Services::new(),
+            completion: CompletionGate::default(),
         }
     }
 
@@ -494,6 +514,31 @@ impl PluginsBackend for AppPlugins {
     ) -> BoxFuture<'static, Result<Option<String>, String>> {
         ui::status(self.built(), id, item)
     }
+
+    fn complete(
+        &self,
+        request: &CompletionRequest,
+    ) -> Vec<BoxFuture<'static, Result<PluginCompletions, String>>> {
+        let Some(host) = self.built() else {
+            return Vec::new();
+        };
+        // The grants file is re-read in `approved`: the UI calls this off its thread.
+        let providers: Vec<(PluginId, String)> = {
+            let cache = lock(&self.cache);
+            host.completion_providers(request.driver.as_deref())
+                .into_iter()
+                .filter(|id| {
+                    !cache.data_errors.contains_key(id) && !self.prefs.is_disabled(id.as_str())
+                })
+                .filter_map(|id| {
+                    let p = cache.discovered.iter().find(|p| p.manifest.id() == &id)?;
+                    self.reloading.approved(&p.key)?;
+                    Some((id, source_name(p.manifest.name())))
+                })
+                .collect()
+        };
+        completion::fan_out(&host, providers, request, &self.completion)
+    }
 }
 
 impl Drop for AppPlugins {
@@ -661,6 +706,32 @@ default = 5
             b.set_setting(&id(), "nope", SettingValue::Integer(1))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn complete_is_empty_without_a_host_or_a_completion_plugin() {
+        let s = Scratch::new("be-complete");
+        install(&s, MANIFEST);
+        let (b, _grants, _dir) = backend(&s);
+        let request = CompletionRequest {
+            driver: Some("sqlite".to_owned()),
+            statement: "SELECT ".to_owned(),
+            cursor: 7,
+        };
+        assert!(b.complete(&request).is_empty(), "before the first refresh");
+        b.refresh();
+        assert!(
+            b.complete(&request).is_empty(),
+            "no plugin declares completion"
+        );
+    }
+
+    #[test]
+    fn a_source_name_is_one_line_of_at_most_64_bytes() {
+        assert_eq!(source_name("My\u{202e}  plugin\n"), "My plugin");
+        let long = "é".repeat(100);
+        let cut = source_name(&long);
+        assert!(cut.len() <= MAX_SOURCE_BYTES && cut.chars().all(|c| c == 'é'));
     }
 
     #[test]

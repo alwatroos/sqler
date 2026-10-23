@@ -321,9 +321,9 @@ mod fake {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{
-        Arc, BoxFuture, CapabilitySet, CommandContext, ComponentDigest, ContributionId, Manifest,
-        PanelRender, PluginId, PluginRow, PluginSnapshot, PluginsBackend, RowState, SettingValue,
-        WidgetEvent, WidgetTree,
+        Arc, BoxFuture, CapabilitySet, CommandContext, CompletionRequest, ComponentDigest,
+        ContributionId, Manifest, PanelRender, PluginCompletions, PluginId, PluginRow,
+        PluginSnapshot, PluginsBackend, RowState, SettingValue, WidgetEvent, WidgetTree,
     };
 
     type Key = (String, String);
@@ -355,6 +355,10 @@ mod fake {
         pub commands: Mutex<Vec<(String, String, CommandContext)>>,
         /// Panel events sent: (plugin, panel, event), in order.
         pub events: Mutex<Vec<(String, String, WidgetEvent)>>,
+        /// What `complete` answers, one future per entry (empty: no plugin asked).
+        pub completions: Mutex<Vec<PluginCompletions>>,
+        /// The requests `complete` saw, in order.
+        pub complete_requests: Mutex<Vec<CompletionRequest>>,
         command_error: Mutex<Option<String>>,
         panels: Mutex<HashMap<Key, PanelRender>>,
         replies: Mutex<HashMap<Key, Result<Option<WidgetTree>, String>>>,
@@ -549,6 +553,20 @@ mod fake {
                 .cloned()
                 .unwrap_or(None);
             Box::pin(async move { Ok(text) })
+        }
+
+        fn complete(
+            &self,
+            request: &CompletionRequest,
+        ) -> Vec<BoxFuture<'static, Result<PluginCompletions, String>>> {
+            self.complete_requests.lock().unwrap().push(request.clone());
+            self.completions
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .map(|answer| Box::pin(async move { Ok(answer) }) as BoxFuture<'static, _>)
+                .collect()
         }
     }
 

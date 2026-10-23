@@ -97,6 +97,7 @@
   - [Manifest](plugin-development/manifest.md)
   - [Capabilities](plugin-development/capabilities.md)
   - [Drivers](plugin-development/drivers.md)
+  - [Completion providers](plugin-development/completion.md)
 - [AI](ai/index.md)
   - [Providers](ai/providers.md)
   - [Tool contract](ai/tool-contract.md)

@@ -281,6 +281,8 @@ impl CompletionProvider for SqlProvider {
         // only come back to be spawned, and their answers reopen the popup when they land.
         let backend = ctx.plugins.clone().filter(|_| ask.is_some());
         let driver = ctx.driver.clone();
+        // The built-in task never touches the backend: the popup does not wait for the grants
+        // file read that `backend.complete` may do.
         let compute = cx.background_executor().spawn(async move {
             let source = rope.to_string();
             let schema = CatalogSchema::new(snapshot, dialect);
@@ -290,36 +292,20 @@ impl CompletionProvider for SqlProvider {
                 end: rope.offset_to_position(popup.replace.end),
             };
             let rows = merge_plugin_items(&popup.items, &cached);
-            // Off the UI thread: the backend may read the grants file.
-            let asks = backend
-                .zip(plugin_request(&source, offset, dialect, driver.as_deref()))
-                .map(|(backend, request)| backend.complete(&request))
-                .unwrap_or_default();
-            (popup, range, rows, asks)
+            let request = plugin_request(&source, offset, dialect, driver.as_deref());
+            (popup, range, rows, request)
         });
         let handle = self.handle.clone();
         let editor = self.editor.clone();
         window.spawn(cx, async move |cx| {
-            let (popup, range, rows, asks) = compute.await;
+            let (popup, range, rows, request) = compute.await;
             handle.borrow_mut().note_empty(seq, popup.items.is_empty());
-            if let Some(ask) = ask {
+            if let (Some(ask), Some(backend), Some(request)) = (ask, backend, request) {
                 let owner = handle.clone();
                 let weak = editor.clone();
+                // Detached: this task does not await it, so the popup below is returned first.
                 cx.update(|window, cx| {
-                    for fut in asks {
-                        let handle = owner.clone();
-                        let editor = weak.clone();
-                        window
-                            .spawn(cx, async move |cx| {
-                                // A failed plugin is skipped: its fault is counted by the host.
-                                if let Ok(answer) = fut.await
-                                    && handle.borrow_mut().accept_plugin(ask, answer)
-                                {
-                                    reopen(&editor, &handle, cx);
-                                }
-                            })
-                            .detach();
-                    }
+                    spawn_plugin_asks(&owner, &weak, backend, request, ask, window, cx);
                 })
                 .ok();
             }
@@ -369,6 +355,47 @@ impl CompletionProvider for SqlProvider {
     fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         is_completion_trigger(new_text)
     }
+}
+
+/// Starts the plugin asks of one place in a task of its own. The backend call (which may read the
+/// grants file) runs on the background executor, each answer in a task of its own; a landed answer
+/// reopens the popup. Nothing here is awaited by the built-in popup.
+fn spawn_plugin_asks(
+    handle: &IntelHandle,
+    editor: &WeakEntity<EditorState>,
+    backend: Arc<dyn PluginsBackend>,
+    request: sqler_plugin_api::CompletionRequest,
+    ask: u64,
+    window: &Window,
+    cx: &App,
+) {
+    let calls = cx
+        .background_executor()
+        .spawn(async move { backend.complete(&request) });
+    let handle = handle.clone();
+    let editor = editor.clone();
+    window
+        .spawn(cx, async move |cx| {
+            let asks = calls.await;
+            cx.update(|window, cx| {
+                for fut in asks {
+                    let handle = handle.clone();
+                    let editor = editor.clone();
+                    window
+                        .spawn(cx, async move |cx| {
+                            // A failed plugin is skipped: its fault is counted by the host.
+                            if let Ok(answer) = fut.await
+                                && handle.borrow_mut().accept_plugin(ask, answer)
+                            {
+                                reopen(&editor, &handle, cx);
+                            }
+                        })
+                        .detach();
+                }
+            })
+            .ok();
+        })
+        .detach();
 }
 
 /// Whether the popup is asked for again once the loads are done: only when it still means the
@@ -774,6 +801,84 @@ mod tests {
             s.plan_plugins(&edited, 14, true),
             PluginPlan::Ask(_)
         ));
+    }
+
+    /// The built-in popup does not wait for the plugins: the first answer at a place has no plugin
+    /// row even though the scripted answer is ready at once. The backend (and its grants read) is
+    /// called once, off the built-in task; the arrived answer shows in the next popup at the same
+    /// place, which asks nobody again.
+    #[gpui::test]
+    fn the_builtin_popup_comes_first_and_the_plugin_rows_follow(cx: &mut gpui::TestAppContext) {
+        use std::sync::Arc;
+
+        use gpui_component::input::{CompletionProvider as _, EditorState};
+        use lsp_types::{CompletionContext, CompletionResponse, CompletionTriggerKind};
+
+        use super::{Context as Ctx, SqlProvider};
+        use crate::plugins::PluginsBackend;
+        use crate::plugins::backend::FakeBackend;
+
+        cx.update(gpui_component::init);
+        let (state, cx) = cx.add_window_view(EditorState::new);
+        let (catalog, _worker, _handle) = synthetic_catalog_with(2, 2);
+        let backend = FakeBackend::new(crate::plugins::PluginSnapshot::default());
+        backend
+            .completions
+            .lock()
+            .expect("lock")
+            .push(answer(&["zz_plugin_row"]));
+        let shared = handle();
+        shared.borrow_mut().ctx = Some(Ctx {
+            catalog,
+            dialect: sqler_sql::Dialect::Postgres,
+            plugins: Some(Arc::clone(&backend) as Arc<dyn PluginsBackend>),
+            driver: Some("sqlite".to_owned()),
+        });
+        let provider = SqlProvider {
+            handle: shared,
+            editor: state.downgrade(),
+        };
+        let text = Rope::from("SELECT * FROM ");
+        let labels = |response: CompletionResponse| match response {
+            CompletionResponse::Array(items) => {
+                items.into_iter().map(|i| i.label).collect::<Vec<_>>()
+            }
+            CompletionResponse::List(l) => l.items.into_iter().map(|i| i.label).collect(),
+        };
+        let ask = |cx: &mut gpui::VisualTestContext| {
+            let task = cx.update(|window, cx| {
+                provider.completions(
+                    &text,
+                    text.len(),
+                    CompletionContext {
+                        trigger_kind: CompletionTriggerKind::INVOKED,
+                        trigger_character: None,
+                    },
+                    window,
+                    cx,
+                )
+            });
+            let got = cx.foreground_executor().block_test(task);
+            labels(got.expect("a popup"))
+        };
+        let first = ask(cx);
+        assert!(!first.iter().any(|l| l == "zz_plugin_row"));
+        cx.run_until_parked();
+        assert_eq!(backend.complete_requests.lock().expect("lock").len(), 1);
+        let second = ask(cx);
+        cx.run_until_parked();
+        assert_eq!(
+            second.iter().filter(|l| *l == "zz_plugin_row").count(),
+            1,
+            "the arrived answer is merged"
+        );
+        assert_eq!(second.len(), first.len() + 1, "after the built-in rows");
+        assert_eq!(second.last().map(String::as_str), Some("zz_plugin_row"));
+        assert_eq!(
+            backend.complete_requests.lock().expect("lock").len(),
+            1,
+            "the same place asks no plugin again"
+        );
     }
 
     const STILL: Still = Still {
