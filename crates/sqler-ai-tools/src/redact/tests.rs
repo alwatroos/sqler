@@ -238,3 +238,13 @@ fn plain_string_columns_of_an_external_tool_are_masked_like_named_ones() {
     assert_eq!(s.columns, vec!["user_password".to_owned()]);
     assert!(!v.to_string().contains("CANARY-CELL"));
 }
+
+#[test]
+fn plain_string_columns_without_rows_are_not_columns() {
+    // `describe_table` foreign keys list column names as plain strings.
+    let mut v = json!({"foreign_keys": [{"columns": ["user_password"], "ref_table": "t"}]});
+    let before = v.clone();
+    let s = Redaction::default().apply(&mut v, scope(true));
+    assert_eq!(v, before);
+    assert_eq!(s.columns, Vec::<String>::new());
+}

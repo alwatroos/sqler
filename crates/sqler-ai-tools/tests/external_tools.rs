@@ -84,6 +84,9 @@ impl ExternalTools for Fake {
             tool("fake__params", object_schema(json!({}))),
             tool("fake__foreign", object_schema(json!({}))),
             tool("fake__rows", object_schema(json!({}))),
+            tool("fake__records", object_schema(json!({}))),
+            tool("fake__row_objects", object_schema(json!({}))),
+            tool("fake__counts", object_schema(json!({}))),
             tool("fake__hang", object_schema(json!({}))),
             tool("fake__fail", object_schema(json!({}))),
             tool("fake__leak", object_schema(json!({}))),
@@ -144,6 +147,20 @@ impl ExternalTools for Fake {
                         "columns": [{"name": "id"}, {"name": "password"}],
                         "rows": [[1, "CANARY-PW"]],
                     }))
+                }
+                "fake__records" => {
+                    ctx.use_connection("db")?;
+                    Ok(
+                        json!({"records": [{"id": 1, "name": "CANARY-NAME", "password": "CANARY-PW"}]}),
+                    )
+                }
+                "fake__row_objects" => {
+                    ctx.use_connection("db")?;
+                    Ok(json!([{"id": 1, "name": "CANARY-NAME", "password": "CANARY-PW"}]))
+                }
+                "fake__counts" => {
+                    ctx.use_connection("db")?;
+                    Ok(json!({"count": 3, "status": "ok"}))
                 }
                 "fake__hang" => {
                     *self.leaked.lock().unwrap() = Some(ctx.clone());
@@ -237,6 +254,9 @@ async fn listed_after_the_built_ins_and_filtered() {
             "fake__params",
             "fake__foreign",
             "fake__rows",
+            "fake__records",
+            "fake__row_objects",
+            "fake__counts",
             "fake__hang",
             "fake__fail",
             "fake__leak",
@@ -319,6 +339,39 @@ async fn row_values_of_listed_columns_are_masked() {
     assert_eq!(content["rows"][0][1], REDACTED);
     assert!(!report.result.content.contains("CANARY-PW"));
     assert_eq!(only(&rig.audit).connection.unwrap().id, "db");
+}
+
+async fn rig_rows(env: Option<Environment>, send_rows: bool) -> ToolSet {
+    let source = SqliteSource::seeded("shapes", env, Some(send_rows), common::SEED).await;
+    ToolSet::new(source, limits()).with_external_tools(Fake::new())
+}
+
+#[tokio::test]
+async fn odd_shapes_on_a_row_withholding_connection_are_withheld() {
+    let ts = rig_rows(Some(Environment::Prod), false).await;
+    for name in ["fake__records", "fake__row_objects"] {
+        let (report, content) = call(&ts, name, json!({})).await;
+        assert!(!report.result.is_error, "{name}");
+        assert!(content["withheld"].is_string(), "{name}: {content}");
+        for canary in ["CANARY-NAME", "CANARY-PW"] {
+            assert!(!report.result.content.contains(canary), "{name}");
+        }
+    }
+    // Counts and flags are not row data.
+    let (_, content) = call(&ts, "fake__counts", json!({})).await;
+    assert_eq!(content["count"], 3);
+}
+
+#[tokio::test]
+async fn odd_shapes_on_a_normal_connection_are_key_masked() {
+    let ts = rig_rows(None, true).await;
+    let (report, content) = call(&ts, "fake__records", json!({})).await;
+    assert_eq!(content["records"][0]["password"], REDACTED);
+    assert_eq!(content["records"][0]["name"], "CANARY-NAME");
+    assert!(!report.result.content.contains("CANARY-PW"));
+    let (report, content) = call(&ts, "fake__row_objects", json!({})).await;
+    assert_eq!(content[0]["password"], REDACTED);
+    assert!(!report.result.content.contains("CANARY-PW"));
 }
 
 #[tokio::test]

@@ -103,8 +103,11 @@ fn object(red: &Redaction, map: &mut Map<String, Value>, scope: RedactScope, acc
         Some(Value::Array(cols)) => cols
             .iter()
             .map(|c| {
-                // A column is an object with a `name` (built-in tools) or a plain name (external tools).
+                // A column is an object with a `name` (built-in tools) or, next to `rows`, a plain
+                // name (external tools). Plain strings elsewhere are not columns
+                // (`foreign_keys[].columns` of `describe_table`).
                 c.as_str()
+                    .filter(|_| has_rows)
                     .or_else(|| c.get("name").and_then(Value::as_str))
                     .map(str::to_owned)
             })

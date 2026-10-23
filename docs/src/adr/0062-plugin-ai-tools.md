@@ -79,7 +79,16 @@ The audit row of a plugin tool call is always written, with the tool name and th
 approval are listed in it (they are marked as approved). Read statements that a plugin ran without approval are not
 listed: the host does not report them to the tool set. Plugins see no catalog on AI calls, because the app has none to
 lend outside a window. A result is redacted by the existing rules; a `columns` array of plain names is understood as well
-as one of objects with a `name`, so a plugin result that lists a `password` column is masked.
+as one of objects with a `name`, so a plugin result that lists a `password` column is masked. The plain-name form
+counts only next to a `rows` array (a foreign key's `columns` in `describe_table` is not a column list).
+
+A plugin may shape its result any way, so the rules above cannot be the only line. Once a call has used a connection,
+its result is contained before the rules run. On a connection that withholds rows (`send_rows` off, the default for
+prod), a result that is not made of recognised parts is replaced as a whole by a note. Recognised parts are numbers,
+booleans and null, strings under message-like keys (`error`, `message`, `status`, `sql`, `code`, `note`, `warning`,
+`reason`), objects of those, and arrays of `columns` plus `rows` tables. So `{"records": [..]}` and an array of row
+objects are withheld. On every connection, a value under an object key that the redaction list names (`password` and
+the like) is replaced by `<redacted>`.
 
 ### Which surfaces list plugin tools
 

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! External tools: how a host adds tools (for example from plugins) to a [`ToolSet`].
+//! External tools: how a host adds tools (for example from plugins) to a [`ToolSet`](crate::ToolSet).
 //!
 //! The host implements [`ExternalTools`]. The tool set lists the tools after its own, checks the
 //! arguments against a small subset of JSON Schema and dispatches the call through the same exit
 //! as every built-in tool, so redaction, the untrusted-data envelope, the audit row and the
 //! cancel guard apply with no extra code. A tool that wants to run a statement that needs
-//! approval asks the surface's own [`Approver`] through [`ExternalContext::approve`]; one denial,
+//! approval asks the surface's own [`Approver`](crate::Approver) through [`ExternalContext::approve`]; one denial,
 //! or the lack of an approver, turns the whole call into an error whatever the tool returns.
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -39,7 +39,7 @@ const MAX_NAME_BYTES: usize = 64;
 /// The longest argument name quoted in an error message.
 const MAX_KEY_IN_MESSAGE: usize = 64;
 
-/// One tool a host adds to a [`ToolSet`].
+/// One tool a host adds to a [`ToolSet`](crate::ToolSet).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ExternalTool {
@@ -67,7 +67,7 @@ impl ExternalTool {
     }
 }
 
-/// A host that supplies extra tools to a [`ToolSet`].
+/// A host that supplies extra tools to a [`ToolSet`](crate::ToolSet).
 pub trait ExternalTools: Send + Sync {
     /// The tools on offer now. The tool set filters them (see [`ExternalTool::name`]).
     fn tools(&self) -> Vec<ExternalTool>;

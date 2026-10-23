@@ -637,7 +637,13 @@ impl ToolSet {
         let _close = ctx.close_on_drop();
         let outcome = external.call(name, args, ctx.clone()).await;
         ctx.verdict()?;
-        outcome
+        let used = ran.with(|s| s.info.as_ref().map(|i| i.send_rows));
+        // A plugin may shape its result any way; once it used a connection, contain what the
+        // columns+rows walk would not recognise.
+        Ok(match (outcome?, used) {
+            (value, Some(send_rows)) => self.inner.redaction.contain_external(value, send_rows),
+            (value, None) => value,
+        })
     }
 
     fn connection(&self, name: &str, ran: &Ran) -> Result<ConnectionInfo, ToolError> {
