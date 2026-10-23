@@ -257,8 +257,9 @@ Each of P5 (`query`, `catalog`), P8 (`ui`), P9 (`driver`), P10 (`export`), P11 (
 stubs apply `sqler_plugin_api::gate` first (a missing capability is `capability-denied`) and otherwise answer `failed`
 "not available in this host". Host traits an item needs go into `Services` (a `TypeId` map). Exports are looked up per
 interface with the generated `GuestIndices` from `Live::pre`, never through a world: a component that lacks an export
-would otherwise fail to instantiate. `PluginHost::call_command` and `call_status` (`#[doc(hidden)]`) are the temporary
-`ui-handler` seam the end-to-end tests use; P8 replaces them.
+would otherwise fail to instantiate. The temporary `ui-handler` seam (`ui_seam`, with `call_command` and `call_status`)
+was removed in P8; the typed `PluginHost::{run_command, render_panel, panel_event, status}` replace it
+([ADR-0060](0060-plugins-in-the-workbench.md), Addendum P8).
 
 ### Lint outcome
 

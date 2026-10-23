@@ -40,7 +40,7 @@ impl<R> PendingCall<R> {
         self.cancel.cancel();
     }
 
-    fn failed(e: CallError) -> Self {
+    pub(crate) fn failed(e: CallError) -> Self {
         let (tx, rx) = oneshot::channel();
         // The receiver is right here; sending cannot fail.
         let _ = tx.send(Err(e));

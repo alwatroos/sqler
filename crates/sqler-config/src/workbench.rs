@@ -39,7 +39,14 @@ pub const MAX_RECENT_CONNECTIONS: usize = 5;
 pub const SIDE_VIEWS: [&str; 4] = ["connections", "saved-queries", "ai", "plugins"];
 
 /// The known views of the bottom panel.
-pub const BOTTOM_VIEWS: [&str; 5] = ["results", "messages", "history", "ai-audit", "assistant"];
+pub const BOTTOM_VIEWS: [&str; 6] = [
+    "results",
+    "messages",
+    "history",
+    "ai-audit",
+    "assistant",
+    "plugin-panels",
+];
 
 const DEFAULT_SIDE_SIZE: f32 = 260.0;
 const DEFAULT_BOTTOM_SIZE: f32 = 380.0;
@@ -493,7 +500,14 @@ mod tests {
                 .view,
             "assistant"
         );
-        assert_eq!(BOTTOM_VIEWS.last(), Some(&"assistant"));
+        assert_eq!(BOTTOM_VIEWS[4], "assistant");
+        assert_eq!(BOTTOM_VIEWS.last(), Some(&"plugin-panels"));
+        assert_eq!(
+            loaded("[bottom_panel]\nview = \"plugin-panels\"")
+                .bottom_panel
+                .view,
+            "plugin-panels"
+        );
         assert_eq!(
             loaded("[bottom_panel]\nview = \"assistants\"")
                 .bottom_panel

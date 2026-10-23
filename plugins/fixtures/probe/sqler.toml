@@ -5,7 +5,7 @@ name = "Probe"
 version = "0.1.0"
 api = "0.1.0"
 description = "Test fixture: misbehaves on command and reports what the sandbox exposes."
-capabilities = ["db.read", "db.write", "fs.read:data", "fs.read:plugin"]
+capabilities = ["db.read", "db.write", "ui.panel", "fs.read:data", "fs.read:plugin"]
 
 [entry]
 component = "probe.wasm"
@@ -38,6 +38,26 @@ title = "Sleep for an hour"
 id = "log-flood"
 title = "Write 1000 log lines"
 
+[[commands]]
+id = "ui-calls"
+title = "Push 100 status texts, 10 notifications and one panel refresh"
+
+[[commands]]
+id = "context"
+title = "Fail with a description of the command context"
+
+[[commands]]
+id = "unknown"
+title = "Declared, but the guest does not know it"
+
+[[panels]]
+id = "tree"
+title = "Tree"
+
+[[panels]]
+id = "bad-tree"
+title = "Bad tree"
+
 [[status-items]]
 id = "env"
 
@@ -49,6 +69,12 @@ id = "read-plugin"
 
 [[status-items]]
 id = "read-escape"
+
+[[status-items]]
+id = "read-link"
+
+[[status-items]]
+id = "read-linkdir"
 
 [[status-items]]
 id = "read-root"

@@ -52,7 +52,7 @@ fn full_fixture_round_trips_all_fields() {
     assert_eq!(c.commands.len(), 1);
     assert_eq!(
         command_id(m.id(), &c.commands[0].id),
-        "plugin:demo-plugin:run"
+        "plugin-demo-plugin:run"
     );
     assert_eq!(c.panels[0].title, "Main");
     assert_eq!(c.status_items[0].tooltip.as_deref(), Some("Plugin state"));

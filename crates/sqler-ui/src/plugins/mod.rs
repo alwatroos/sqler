@@ -6,8 +6,13 @@
 pub mod action;
 pub mod approval;
 pub mod backend;
+pub mod contrib;
 pub mod grant;
 pub mod manager;
+pub mod menu;
+pub mod panel;
+pub mod status;
+pub mod widget;
 
 pub use action::{PluginCommand, register_commands};
 pub use approval::{
@@ -16,5 +21,6 @@ pub use approval::{
 };
 
 pub use backend::{
-    PluginProblem, PluginRow, PluginSnapshot, PluginsBackend, PluginsStartup, RowState,
+    NO_UI, PanelRender, PluginProblem, PluginRow, PluginSnapshot, PluginUiEvent, PluginsBackend,
+    PluginsStartup, RowState, UiInbox, UiSender, ui_channel,
 };
