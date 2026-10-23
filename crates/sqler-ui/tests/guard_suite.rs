@@ -1175,7 +1175,11 @@ impl Rig {
                 never = user.serve(asks) => match never {},
             }
         };
-        assert!(user.decisions.is_empty(), "every scripted answer was used");
+        assert!(
+            user.decisions.is_empty(),
+            "every scripted answer was used: {}",
+            raw.text
+        );
         assert!(user.queue.is_empty(), "no ask is left waiting");
         assert!(
             self.asks.try_recv().is_err(),
@@ -1557,8 +1561,8 @@ fn s8_every_call_leaves_one_equal_audit_entry() {
 
 /// A read in every dialect.
 const TSQL_READ: &str = "select id, name from users order by id";
-/// A lock hint: the T-SQL classifier files it as a write, the `SQLite` one has no such rule.
-const TSQL_HINT: &str = "select id from users with (nolock)";
+/// A locking hint: the T-SQL classifier files it as a write (a plain `nolock` stays a read).
+const TSQL_HINT: &str = "select id from users with (updlock)";
 /// A stored procedure call: never a read.
 const TSQL_EXEC: &str = "exec sp_who";
 
