@@ -1,0 +1,16 @@
+# The host tests (crates/sqler-plugin-host/tests/guests/exporter.rs) drive the format below.
+[plugin]
+id = "exporter-fixture"
+name = "Exporter fixture"
+version = "0.1.0"
+api = "0.1.1"
+description = "Test fixture: a tab-separated export format."
+capabilities = []
+
+[entry]
+component = "exporter.wasm"
+
+[[exporters]]
+id = "tsv"
+label = "Tab-separated"
+extension = "tsv"
