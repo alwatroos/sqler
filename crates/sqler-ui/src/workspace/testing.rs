@@ -5013,3 +5013,28 @@ mod agent_flow {
         desk.finish();
     }
 }
+
+/// `workspace` with a plugin manager that has loaded `rows`.
+#[allow(clippy::expect_used)] // test fixture
+pub(crate) fn with_plugin_rows(
+    workspace: super::Workspace,
+    rows: Vec<crate::plugins::PluginRow>,
+) -> super::Workspace {
+    use crate::plugins::PluginsStartup;
+    use crate::plugins::backend::{FakeBackend, PluginSnapshot};
+    use crate::plugins::grant::GrantBook;
+
+    let book = Arc::new(GrantBook::in_memory());
+    let fake = FakeBackend::new(PluginSnapshot {
+        rows,
+        problems: Vec::new(),
+    });
+    let startup = PluginsStartup::new(Some(fake.clone()), Arc::clone(&book));
+    let mut ws = workspace.with_plugins(&startup);
+    let super::state::Effect::Plugins(load) = ws.plugins_first_frame() else {
+        panic!("expected a load");
+    };
+    let done = load.run_blocking(&*fake, &book);
+    let _ = ws.plugin_finished(done);
+    ws
+}

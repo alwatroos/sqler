@@ -497,7 +497,7 @@ impl Workspace {
     /// grid has no source (the tab is gone, or it is neither a table-data tab nor a result).
     pub fn edit_context(&mut self, key: GridKey) -> Option<(EditContext, Effect)> {
         let driver = self.tabs.get(key.tab)?.connection().driver.clone();
-        let dialect = Dialect::from_driver_id(driver.as_str());
+        let dialect = self.dialect_of(&driver);
         let production = self.production(key.tab);
         let apply_block = self.apply_block(key);
         let catalog = self.editor_catalog(key.tab);
@@ -927,7 +927,7 @@ impl Workspace {
         let Some(dialect) = self
             .tabs
             .get(tab)
-            .and_then(|t| Dialect::from_driver_id(t.connection().driver.as_str()))
+            .and_then(|t| self.dialect_of(&t.connection().driver))
         else {
             return;
         };

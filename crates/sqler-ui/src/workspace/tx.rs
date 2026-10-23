@@ -136,6 +136,9 @@ fn statement_effect(dialect: Dialect, body: &str) -> TxEffect {
     let Some(Tok::Word(first)) = t.first() else {
         return TxEffect::None;
     };
+    if dialect == Dialect::TSql {
+        return tsql_effect(&t);
+    }
     match first.as_str() {
         "BEGIN" | "SAVEPOINT" => TxEffect::Begin,
         "START" if is(&t, 1, "TRANSACTION") => TxEffect::Begin,
@@ -149,6 +152,43 @@ fn statement_effect(dialect: Dialect, body: &str) -> TxEffect {
         "XA" if is(&t, 1, "COMMIT") || is(&t, 1, "ROLLBACK") => TxEffect::End,
         "SET" => set_effect(dialect, &t),
         _ => TxEffect::None,
+    }
+}
+
+/// T-SQL: any leading `BEGIN` (`BEGIN TRAN`, `BEGIN DISTRIBUTED TRAN`, a block) and `SAVE` count as a
+/// transaction, and so does a `BEGIN TRAN[SACTION]` or `BEGIN DISTRIBUTED` anywhere in the statement (inside an
+/// `IF`, say). `COMMIT [TRAN|TRANSACTION|WORK] [name]` and a bare `ROLLBACK [TRAN|TRANSACTION|WORK]` end it; a
+/// `ROLLBACK` with a name goes back to a savepoint (or names the transaction) and leaves the state alone.
+/// `SET IMPLICIT_TRANSACTIONS ON|OFF` switches the autocommit mode.
+fn tsql_effect(t: &[Tok]) -> TxEffect {
+    let Some(Tok::Word(first)) = t.first() else {
+        return TxEffect::None;
+    };
+    let mut rest = 1;
+    if is(t, rest, "WORK") || is(t, rest, "TRANSACTION") || is(t, rest, "TRAN") {
+        rest += 1;
+    }
+    match first.as_str() {
+        "BEGIN" | "SAVE" => TxEffect::Begin,
+        "COMMIT" => TxEffect::End,
+        "ROLLBACK" if t.len() == rest => TxEffect::End,
+        "SET" if is(t, 1, "IMPLICIT_TRANSACTIONS") => match t.get(2) {
+            Some(Tok::Word(v)) if v == "ON" => TxEffect::AutocommitOff,
+            Some(Tok::Word(v)) if v == "OFF" => TxEffect::AutocommitOn,
+            _ => TxEffect::None,
+        },
+        _ => {
+            let begins = t.windows(2).any(|w| {
+                matches!(&w[0], Tok::Word(a) if a == "BEGIN")
+                    && matches!(&w[1], Tok::Word(b)
+                        if matches!(b.as_str(), "TRAN" | "TRANSACTION" | "DISTRIBUTED"))
+            });
+            if begins {
+                TxEffect::Begin
+            } else {
+                TxEffect::None
+            }
+        }
     }
 }
 
@@ -219,6 +259,40 @@ mod tests {
     const LITE: Dialect = Dialect::Sqlite;
 
     use TxEffect::{AutocommitOff, AutocommitOn, Begin, End, None as Nothing};
+
+    #[test]
+    fn table_of_t_sql_statements() {
+        let table: &[(&str, TxEffect)] = &[
+            ("BEGIN", Begin),
+            ("begin tran", Begin),
+            ("BEGIN TRANSACTION t1", Begin),
+            ("BEGIN DISTRIBUTED TRAN", Begin),
+            ("BEGIN TRY select 1 END TRY BEGIN CATCH END CATCH", Begin),
+            ("SAVE TRAN s", Begin),
+            ("if @x = 1 begin tran", Begin),
+            ("COMMIT", End),
+            ("commit tran", End),
+            ("COMMIT TRANSACTION t1", End),
+            ("COMMIT WORK", End),
+            ("ROLLBACK", End),
+            ("rollback tran", End),
+            ("ROLLBACK WORK", End),
+            ("ROLLBACK TRAN s", Nothing),
+            ("ROLLBACK TRANSACTION savepoint1", Nothing),
+            ("ROLLBACK s", Nothing),
+            ("SET IMPLICIT_TRANSACTIONS ON", AutocommitOff),
+            ("set implicit_transactions off", AutocommitOn),
+            ("SET NOCOUNT ON", Nothing),
+            ("SELECT 'BEGIN TRAN'", Nothing),
+            ("SELECT [begin] FROM t", Nothing),
+            ("select 1; begin tran; insert into t values (1)", Begin),
+            ("begin tran; commit", End),
+            ("SET IMPLICIT_TRANSACTIONS ON; commit", AutocommitOff),
+        ];
+        for (sql, expected) in table {
+            assert_eq!(tx_effect(Dialect::TSql, sql), *expected, "{sql}");
+        }
+    }
 
     #[test]
     fn table_of_statements() {

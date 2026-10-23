@@ -142,6 +142,7 @@ impl Workspace {
                 spec.driver.clone(),
                 spec.environment,
             )
+            .with_dialect(self.dialect_of(&spec.driver))
             .with_send_rows(profile.ai_sends_rows()),
         )
     }
