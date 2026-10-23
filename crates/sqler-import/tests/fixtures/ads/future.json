@@ -1,0 +1,21 @@
+{
+  "datasource.connections": [
+    {
+      "options": {
+        "connectionName": "Newer ADS",
+        "server": "db.example.test",
+        "authenticationType": "SqlLogin",
+        "user": "alice",
+        "password": "hunter2-not-a-real-secret",
+        "encrypt": "Strict",
+        "trustServerCertificate": true,
+        "hostNameInCertificate": "sql.example.test",
+        "multiSubnetFailover": false,
+        "futureOption": { "nested": [1, 2, 3] }
+      },
+      "providerName": "MSSQL",
+      "futureKey": 1
+    }
+  ],
+  "datasource.somethingNew": []
+}

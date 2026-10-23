@@ -1,8 +1,13 @@
 # sqler-import
 
-Import of connection profiles from other tools. The first source is pgAdmin `servers.json`.
+Import of connection profiles from other tools. Sources: pgAdmin `servers.json`, the Beekeeper Studio export and the Azure Data Studio user `settings.json`.
 
-Status: M7 (R6): headless core and the pgAdmin source; the import dialog is R9
+Status: M7 (R6, R7): headless core, the pgAdmin source and the Azure Data Studio source; the import dialog is R9
+
+| Source id | Tool | File | Maps to |
+| --------- | ---- | ---- | ------- |
+| `pgadmin` | pgAdmin 4 | exported `servers.json` | `postgres`: host, port, database, user, TLS, colour, group, SSH tunnel |
+| `azure-data-studio` | Azure Data Studio | `User/settings.json` (comments and trailing commas accepted) | `sqlserver` (`MSSQL`) and `postgres` (`PGSQL`), SQL login only: host, port, database, user, `encrypt` to TLS mode, group tree and colour; Windows and Azure AD authentication, other providers and named instances are skipped with a reason |
 
 Layer: L2 (depends on `sqler-core` and `sqler-config`; no driver crate, no `sqler-ui`)
 

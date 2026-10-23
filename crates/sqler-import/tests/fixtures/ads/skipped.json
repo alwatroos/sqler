@@ -1,0 +1,67 @@
+{
+  "datasource.connections": [
+    {
+      "options": {
+        "connectionName": "Windows auth",
+        "server": "win.example.test",
+        "authenticationType": "Integrated"
+      },
+      "providerName": "MSSQL"
+    },
+    {
+      "options": {
+        "connectionName": "Azure MFA",
+        "server": "tenant.example.test",
+        "authenticationType": "AzureMFA",
+        "user": "alice@example.test",
+        "azureAccount": "account-1",
+        "azureTenantId": "tenant-1"
+      },
+      "providerName": "MSSQL"
+    },
+    {
+      "options": {
+        "connectionName": "Kusto",
+        "server": "cluster.example.test",
+        "authenticationType": "AzureMFA"
+      },
+      "providerName": "KUSTO"
+    },
+    {
+      "options": {
+        "connectionName": "Named instance",
+        "server": "host.example.test\\SQLEXPRESS",
+        "authenticationType": "SqlLogin",
+        "user": "alice"
+      },
+      "providerName": "MSSQL"
+    },
+    {
+      "options": {
+        "connectionName": "No user",
+        "server": "host.example.test",
+        "authenticationType": "SqlLogin"
+      },
+      "providerName": "MSSQL"
+    },
+    {
+      "options": {
+        "connectionName": "Bad port",
+        "server": "host.example.test,99999",
+        "authenticationType": "SqlLogin",
+        "user": "alice"
+      },
+      "providerName": "MSSQL"
+    },
+    {
+      "options": {
+        "connectionName": "No provider",
+        "server": "host.example.test",
+        "authenticationType": "SqlLogin",
+        "user": "alice"
+      }
+    },
+    "not an object",
+    { "providerName": "MSSQL" }
+  ]
+}
