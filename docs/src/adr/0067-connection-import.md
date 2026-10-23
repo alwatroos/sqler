@@ -55,7 +55,8 @@ The pgAdmin source maps to the existing `postgres` driver id with the target
 file paths, from `ConnectionParameters` with the legacy top-level keys as fallback), a colour and an SSH tunnel
 (password or key file) are mapped when valid. A value that cannot be mapped adds a note and the field is ignored; a
 missing or invalid required field skips that one entry. Every other foreign key is listed in `unsupported` by name,
-never by value. The pgAdmin group becomes a group path; group paths are capped at 8 levels and deeper levels are
+never by value. An unknown `sslmode`, or certificate paths without an `sslmode`, give `tls: None` and a note; the
+paths are not kept. The pgAdmin group becomes a group path; group paths are capped at 8 levels and deeper levels are
 folded into the last one with a note. `PassFile` and `PasswordExecCommand` are never read or run.
 
 ### Duplicates, name collisions and groups
@@ -80,8 +81,9 @@ No secret value is imported. A foreign file never supplies one: no decryption of
 executed command. A needed secret is reported as a `ProfileSecretKind` (database password, SSH password, SSH key
 passphrase). The user may enter it at apply time (`ProvidedSecret`, whose `Secret` redacts its `Debug`); it is written
 to the `SecretStore` under the reference of the new connection and the keychain flag is set only then. Without an
-entered secret the flag stays false and the item is reported as skipped. When a write fails, the flag is cleared and
-the failure is reported by the error kind name only. The plan, the report and the store hold no secret.
+entered secret (an empty value counts as not entered) the flag stays false and the secret is listed in
+`secrets_skipped`, which covers both "not provided" and "the store refused it". When a write fails, the flag is
+cleared and the failure text holds no secret and no error detail. The plan, the report and the store hold no secret.
 
 ### Caps
 
@@ -94,7 +96,7 @@ the failure is reported by the error kind name only. The plan, the report and th
 
 The file is read through a length limit, so a file that grows during the read is caught. JSON nesting is limited by
 `serde_json` (depth 128) and gives `Malformed`. Error texts never quote file content; `Malformed` carries line,
-column and the parser message only.
+column and a fixed text per `serde_json` error category, never the parser message (it can quote input).
 
 ### Path validation
 
