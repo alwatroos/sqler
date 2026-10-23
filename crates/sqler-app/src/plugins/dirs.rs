@@ -136,11 +136,17 @@ mod tests {
     fn a_dot_dot_in_the_missing_part_gives_no_config_folder() {
         let s = Scratch::new("dirs-dotdot");
         let wanted = s.path().join("missing").join("..").join("plugins");
-        assert!(
-            plugin_dirs(Some(&wanted), &[], None)
-                .config_plugins
-                .is_none()
-        );
+        let got = plugin_dirs(Some(&wanted), &[], None).config_plugins;
+        // Windows folds the `..` away lexically while making the path absolute, so there the answer is a path
+        // without any `..`; elsewhere the `..` survives and the path is refused.
+        if cfg!(windows) {
+            assert!(got.is_none_or(|p| {
+                !p.components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            }));
+        } else {
+            assert!(got.is_none());
+        }
     }
 
     #[test]
