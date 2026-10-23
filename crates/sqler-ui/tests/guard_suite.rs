@@ -60,7 +60,7 @@ use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId, Environment, Quer
 use sqler_driver_api::{BoxFuture, DriverRegistry, Session, collect};
 use sqler_driver_sqlite::{DRIVER_ID, SqliteDriver};
 use sqler_mcp::{AuthToken, McpServer, ServerOptions};
-use sqler_sql::StatementClass;
+use sqler_sql::{Dialect, StatementClass};
 use sqler_ui::ai::agent::{
     AgentAbort, AgentMsg, AgentStart, PermissionAsk, PermissionQueue, start_agent,
 };
@@ -478,11 +478,14 @@ struct User {
     sql: String,
     asked: Rc<RefCell<Vec<ApprovalStage>>>,
     gates: Rc<RefCell<usize>>,
+    /// The dialect of the connection the gate is opened for.
+    dialect: Option<Dialect>,
 }
 
 impl User {
     fn new(sql: &str, decisions: &[Decision]) -> Self {
         Self {
+            dialect: Dialect::from_driver_id(driver().as_str()),
             queue: ApprovalQueue::default(),
             decisions: decisions.iter().copied().collect(),
             sql: sql.to_owned(),
@@ -507,7 +510,7 @@ impl User {
             assert_eq!(sql, self.sql, "the ask carries the exact SQL");
             let mut gate = QueryTab::new();
             if stage == ApprovalStage::ProdSecond {
-                open_prod_gate(&mut gate, &driver(), &sql).expect("the gate opens");
+                open_prod_gate(&mut gate, self.dialect, &sql).expect("the gate opens");
                 let Phase::Confirming(list) = gate.phase() else {
                     panic!("the gate is not confirming: {:?}", gate.phase());
                 };
@@ -1061,13 +1064,28 @@ impl Rig {
     async fn with_time_limit(surface: Surface, env: Environment, secs: u32) -> Self {
         let scratch = Scratch::new(surface.as_str());
         seed(&scratch.db()).await;
-        Self::build(surface, env, scratch, secs).await
+        let dialect = Dialect::from_driver_id(driver().as_str());
+        Self::build(surface, env, scratch, secs, dialect).await
+    }
+
+    /// A rig whose connection declares `dialect`, as a plugin driver does through its manifest.
+    async fn with_dialect(surface: Surface, env: Environment, dialect: Dialect) -> Self {
+        let scratch = Scratch::new(surface.as_str());
+        seed(&scratch.db()).await;
+        Self::build(surface, env, scratch, CALM_LIMIT_SECS, Some(dialect)).await
     }
 
     /// A rig on the database in `scratch`.
-    async fn build(surface: Surface, env: Environment, scratch: Scratch, secs: u32) -> Self {
+    async fn build(
+        surface: Surface,
+        env: Environment,
+        scratch: Scratch,
+        secs: u32,
+        dialect: Option<Dialect>,
+    ) -> Self {
         let db = scratch.db();
         let (info, request) = connection(env, &db);
+        let info = info.with_dialect(dialect);
         let (asks_tx, asks) = unbounded_channel();
         let audit = Arc::new(MemoryAudit::new());
         let plugin: Arc<dyn ExternalTools> = Arc::new(NotePlugin {
@@ -1114,8 +1132,9 @@ impl Rig {
     /// log) on the same database file.
     async fn restart(self) -> Self {
         let (surface, env, secs) = (self.surface, self.env, self.secs);
+        let dialect = self.info.dialect;
         let scratch = self.close().await;
-        Self::build(surface, env, scratch, secs).await
+        Self::build(surface, env, scratch, secs, dialect).await
     }
 
     /// Calls `run_query` with the user's scripted answers and normalises what happened.
@@ -1133,6 +1152,7 @@ impl Rig {
         decisions: &[Decision],
     ) -> Outcome {
         let mut user = User::new(sql, decisions);
+        user.dialect = self.info.dialect;
         let (raw, code) = {
             let Self { inner, asks, .. } = self;
             let call = async {
@@ -1528,6 +1548,68 @@ fn s8_every_call_leaves_one_equal_audit_entry() {
             assert_eq!(first.audit_tool, "run_query");
         }
     });
+}
+
+// ---------------------------------------------------------------------------------------------
+// A connection that declares the T-SQL dialect (a plugin driver such as `sqlserver`, ADR-0073).
+// The database is still the SQLite file: the statements below are only asked about, or denied.
+// ---------------------------------------------------------------------------------------------
+
+/// A read in every dialect.
+const TSQL_READ: &str = "select id, name from users order by id";
+/// A lock hint: the T-SQL classifier files it as a write, the `SQLite` one has no such rule.
+const TSQL_HINT: &str = "select id from users with (nolock)";
+/// A stored procedure call: never a read.
+const TSQL_EXEC: &str = "exec sp_who";
+
+/// Runs one call on every surface on a connection with the T-SQL dialect.
+async fn tsql_on_all(env: Environment, sql: &str, user: &[Decision]) -> Vec<Outcome> {
+    let mut outcomes = Vec::new();
+    for surface in SURFACES {
+        let mut rig = Rig::with_dialect(surface, env, Dialect::TSql).await;
+        outcomes.push(rig.call(sql, user).await);
+        rig.close().await;
+    }
+    outcomes
+}
+
+#[test]
+fn t1_a_tsql_read_runs_without_asking() {
+    let outcomes = run(tsql_on_all(Environment::Prod, TSQL_READ, &[]));
+    let out = same_everywhere(&outcomes);
+    assert_eq!(out.asked, []);
+    assert!(!out.is_error);
+    assert_eq!(out.audit_approval, "not_needed");
+    assert_eq!(out.audit_statements[0].class, "read");
+    assert_eq!(names(&out), ["ann", "bob", "cy"]);
+}
+
+#[test]
+fn t2_a_tsql_write_needs_approval_and_a_denial_stops_it() {
+    for sql in [TSQL_HINT, TSQL_EXEC] {
+        let out = same_everywhere(&run(tsql_on_all(Environment::Dev, sql, &[DENY])));
+        assert_eq!(out.asked, [ApprovalStage::Confirm], "{sql}");
+        assert!(out.is_error, "{sql}");
+        assert_eq!(out.error_code.as_deref(), Some("denied"), "{sql}");
+        assert!(out.audit_statements.iter().all(|s| !s.ran), "{sql}");
+        assert_eq!(names(&out), ["ann", "bob", "cy"], "{sql}");
+    }
+}
+
+#[test]
+fn t3_a_tsql_statement_on_prod_asks_twice_and_the_gate_shows_it() {
+    for sql in [TSQL_HINT, TSQL_EXEC] {
+        let user = [APPROVE, DENY];
+        let out = same_everywhere(&run(tsql_on_all(Environment::Prod, sql, &user)));
+        assert_eq!(
+            out.asked,
+            [ApprovalStage::Confirm, ApprovalStage::ProdSecond],
+            "{sql}"
+        );
+        assert_eq!(out.error_code.as_deref(), Some("denied"), "{sql}");
+        assert!(out.audit_statements.iter().all(|s| !s.ran), "{sql}");
+        assert_eq!(names(&out), ["ann", "bob", "cy"], "{sql}");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -103,39 +103,13 @@ pub(crate) fn lex(text: &str, dialect: Dialect) -> Vec<Token> {
             b'$' if flavor == Flavor::Postgres => dollar(text, i),
             b'$' | b'@' | b'#' if flavor == Flavor::TSql => tsql_sigil(text, i),
             b'0'..=b'9' => (TokKind::Number, number_end(b, i), false),
-            _ => {
-                let Some(ch) = text.get(i..).and_then(|s| s.chars().next()) else {
-                    i += 1;
-                    continue;
-                };
-                if ch.is_whitespace() {
-                    i += ch.len_utf8();
+            _ => match word_or_punct(text, i, flavor) {
+                Ok(token) => token,
+                Err(next) => {
+                    i = next;
                     continue;
                 }
-                if ch.is_alphabetic() || ch == '_' {
-                    let end = if flavor == Flavor::TSql {
-                        tsql_word_end(text, i)
-                    } else {
-                        word_end(text, i)
-                    };
-                    let is_e = flavor == Flavor::Postgres
-                        && end == i + 1
-                        && (c == b'E' || c == b'e')
-                        && b.get(end) == Some(&b'\'');
-                    let is_n = flavor == Flavor::TSql
-                        && end == i + 1
-                        && (c == b'N' || c == b'n')
-                        && b.get(end) == Some(&b'\'');
-                    if is_e || is_n {
-                        let (end, open) = scan_quoted(b, end, b'\'', is_e);
-                        (TokKind::Str, end, open)
-                    } else {
-                        (TokKind::Word, end, false)
-                    }
-                } else {
-                    (TokKind::Punct, i + ch.len_utf8(), false)
-                }
-            }
+            },
         };
         out.push(Token {
             kind,
@@ -146,6 +120,42 @@ pub(crate) fn lex(text: &str, dialect: Dialect) -> Vec<Token> {
         i = end;
     }
     out
+}
+
+/// A word, a prefixed string (`E'..'`, `N'..'`) or one punctuation character at `i`; `Err(next)`
+/// when nothing is lexed there (whitespace, or a position that is not a char boundary) and the
+/// scan continues at `next`.
+fn word_or_punct(text: &str, i: usize, flavor: Flavor) -> Result<(TokKind, usize, bool), usize> {
+    let b = text.as_bytes();
+    let Some(ch) = text.get(i..).and_then(|s| s.chars().next()) else {
+        return Err(i + 1);
+    };
+    if ch.is_whitespace() {
+        return Err(i + ch.len_utf8());
+    }
+    if !(ch.is_alphabetic() || ch == '_') {
+        return Ok((TokKind::Punct, i + ch.len_utf8(), false));
+    }
+    let end = if flavor == Flavor::TSql {
+        tsql_word_end(text, i)
+    } else {
+        word_end(text, i)
+    };
+    let c = b[i];
+    let is_e = flavor == Flavor::Postgres
+        && end == i + 1
+        && (c == b'E' || c == b'e')
+        && b.get(end) == Some(&b'\'');
+    let is_n = flavor == Flavor::TSql
+        && end == i + 1
+        && (c == b'N' || c == b'n')
+        && b.get(end) == Some(&b'\'');
+    if is_e || is_n {
+        let (end, open) = scan_quoted(b, end, b'\'', is_e);
+        Ok((TokKind::Str, end, open))
+    } else {
+        Ok((TokKind::Word, end, false))
+    }
 }
 
 fn line_end(b: &[u8], from: usize) -> usize {
