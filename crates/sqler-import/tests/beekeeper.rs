@@ -120,7 +120,10 @@ fn full_fixture_maps_every_field() {
     let b = &r.entries[1];
     let spec = spec_of(b);
     assert_eq!(spec.driver.as_str(), "mysql");
-    assert_eq!(spec.target, "mysql://maria.example.test:3307/reports?user=bob");
+    assert_eq!(
+        spec.target,
+        "mysql://maria.example.test:3307/reports?user=bob"
+    );
     assert_eq!(spec.color.as_deref(), Some("#aa3300"));
     assert_eq!(spec.tls.as_ref().unwrap().mode, TlsMode::Require);
     assert_eq!(b.group, vec!["Shop".to_owned()]);

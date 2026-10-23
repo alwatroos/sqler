@@ -264,6 +264,13 @@ impl SidebarModel {
         self.collapsed.retain(|id| groups.contains(id));
     }
 
+    /// Runs `f` on the store (an import adds connections and groups), then rebuilds the entries.
+    pub(crate) fn import_with<R>(&mut self, f: impl FnOnce(&mut ConnectionStore) -> R) -> R {
+        let result = f(&mut self.store);
+        self.refresh();
+        result
+    }
+
     /// The connection store.
     #[must_use]
     pub fn store(&self) -> &ConnectionStore {

@@ -22,6 +22,7 @@ mod edit;
 mod editor;
 mod export;
 mod history;
+mod import;
 mod plugins;
 mod query;
 mod state;
