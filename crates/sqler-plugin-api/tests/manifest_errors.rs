@@ -36,7 +36,9 @@ fn full_fixture_round_trips_all_fields() {
     assert_eq!(m.id().as_str(), "demo-plugin");
     assert_eq!(m.name(), "Demo plugin");
     assert_eq!(m.version().to_string(), "1.2.3");
-    assert_eq!(m.api(), API_VERSION);
+    // The fixture asks for `0.1`: a minimum, which the shipped 0.1.1 satisfies.
+    assert_eq!(m.api(), ApiVersion::new(0, 1, 0));
+    assert!(m.api().host_supports(API_VERSION));
     assert_eq!(m.description(), Some("Exercises every key."));
     assert_eq!(m.authors(), ["Ada", "Grace"]);
     assert_eq!(m.license(), Some("Apache-2.0"));

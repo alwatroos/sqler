@@ -13,8 +13,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// A database backend. Registered once, opens any number of sessions.
 pub trait Driver: Send + Sync {
-    /// The driver id. Must satisfy [`sqler_core::DriverId::new`].
-    fn id(&self) -> &'static str;
+    /// The driver id. Must satisfy [`sqler_core::DriverId::new`]. Built-in drivers return a
+    /// `&'static str`; a plugin driver may return an id it owns.
+    fn id(&self) -> &str;
 
     /// Opens a session for `config`.
     fn connect<'a>(

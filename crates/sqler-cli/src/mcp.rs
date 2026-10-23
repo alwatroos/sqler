@@ -64,7 +64,7 @@ impl SessionSource for CliSource {
             self.registry
                 .connect(&entry.config)
                 .await
-                .map_err(|e| ToolError::NotAvailable(driver_message(&e).to_owned()))
+                .map_err(|e| ToolError::NotAvailable(driver_message(&e).into_owned()))
         })
     }
 }

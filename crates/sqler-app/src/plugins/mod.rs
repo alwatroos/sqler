@@ -11,6 +11,7 @@ mod approver;
 mod backend;
 mod data;
 mod dirs;
+pub(crate) mod drivers;
 mod settings;
 
 #[cfg(test)]

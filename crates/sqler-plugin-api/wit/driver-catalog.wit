@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// Optional introspection of a guest driver (added in 0.1.1). Needs `driver.guest`, the same gate as `driver`.
+interface driver-catalog {
+    use driver.{session};
+    use types.{object-kind, object-path, db-object, data-type, plugin-error};
+
+    /// A column of a table.
+    record table-column {
+        name: string,
+        data-type: data-type,
+        type-name: string,
+        nullable: bool,
+        default: option<string>,
+    }
+
+    /// The object kinds the driver can list.
+    supported-kinds: func(s: borrow<session>) -> list<object-kind>;
+
+    /// The children of `parent` of one kind.
+    %list: func(s: borrow<session>, parent: object-path, kind: object-kind) -> result<list<db-object>, plugin-error>;
+
+    /// The columns of a table; `none` when the driver has no column data for it.
+    columns: func(s: borrow<session>, table: db-object) -> result<option<list<table-column>>, plugin-error>;
+
+    /// The definition (DDL) of an object; `none` when there is none.
+    definition: func(s: borrow<session>, object: db-object) -> result<option<string>, plugin-error>;
+}

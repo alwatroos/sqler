@@ -736,6 +736,7 @@ fn hostile_driver_errors() -> Vec<DriverError> {
         DriverError::Protocol(t.into()),
         DriverError::UnknownDriver(t.into()),
         DriverError::DuplicateDriver(t.into()),
+        DriverError::Unavailable(t.into()),
         DriverError::Backend(Box::new(std::io::Error::other(t))),
         DriverError::Core(sqler_driver_api::sqler_core::CoreError::InvalidDriverId(
             t.into(),
@@ -757,6 +758,8 @@ fn only_query_text_of_a_driver_error_passes() {
     }
     let q = super::exec::driver_error(&DriverError::Query("syntax error near x".into()));
     assert_eq!(q.message, "syntax error near x");
+    let u = super::exec::driver_error(&DriverError::Unavailable("x".into()));
+    assert_eq!(u.message, "the database driver is not available");
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -215,6 +215,9 @@ jobs:
       - name: Test sqler-app with plugin support
         if: needs.changes.outputs.rust == 'true' && (matrix.os != 'windows-latest' || needs.changes.outputs.full == 'true')
         run: cargo nextest run -p sqler-app --features plugins --no-tests=fail
+      - name: Test sqler-cli with plugin support
+        if: needs.changes.outputs.rust == 'true' && (matrix.os != 'windows-latest' || needs.changes.outputs.full == 'true')
+        run: cargo nextest run -p sqler-cli --features plugins --no-tests=fail
       - name: Check sqler-export feature sets
         if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         run: |
