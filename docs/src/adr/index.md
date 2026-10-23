@@ -70,5 +70,6 @@ consequences. SQLer uses the MADR format.
 | [0061](0061-plugin-drivers.md) | Plugin drivers: `DriverSource` overlay on the registry, host-engine vs guest drivers, what a guest sees, `driver.guest` wording, unavailable texts, WIT 0.1.1, guard parity, DuckDB licence stop | accepted |
 | [0068](0068-ci-pipeline-speed.md) | CI pipeline speed: what runs where, path gating with always-reporting names, caches saved on `main` only, Windows PR subset, `CI result` aggregate, rollback | accepted |
 | [0069](0069-binary-size-budget-70-mb.md) | Binary size budget raised from 60 MB to 70 MB (owner decision); the plugin host stays off by default | accepted |
+| [0072](0072-plugin-export-formats.md) | Plugin export formats: `FormatSource` overlay on the export registry, `plugin-<id>:<fmt>` ids and cleaned labels, blocking wait on the host runtime, interned strings, fixed failure texts, CLI for `plugin-` ids | accepted |
 
 ADR number 0039 is reserved for M5.

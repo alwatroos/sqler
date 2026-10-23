@@ -16,6 +16,7 @@ capabilities it asks for. The user approves the capabilities; the default is den
 - [Capabilities](capabilities.md): the grammar, what each capability gates, grant keys,
   re-prompts and limits.
 - [Drivers](drivers.md): guest and host drivers, what a driver receives, streaming, cancel and the error texts.
+- [Exporters](exporters.md): file formats for the export dialog and `sqler-cli export`, ids, labels, limits and error texts.
 
 ## Choosing a world
 
