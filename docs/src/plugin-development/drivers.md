@@ -126,7 +126,7 @@ plugins switched off, and never asks.
 
 > **Not in 1.0.** `DuckDB` is out of version 1.0 (ADR-0070, amendment 2). The code below stays in the repository,
 > disabled: the feature `driver-duckdb` is off by default, is never part of a release artifact, installer or update
-> manifest, and is built in CI only by the separate `duckdb` job. It may return after 1.0 as a separate download.
+> manifest, and is built in CI only by the separate, manually dispatched `duckdb` job. It may return after 1.0 as a separate download.
 
 `DuckDB` is the first host driver in the repository (ADR-0070). It has no guest: the plugin `plugins/duckdb` is a manifest only (`kind = "host"`, `engine = "duckdb"`, capability
 `driver.host:duckdb`, no `[entry]`), and the engine is the crate `sqler-driver-duckdb`, a native driver on the
@@ -177,9 +177,10 @@ with it is outside the size budget by design. The default build does not change 
 is not in the default `sqler-app` or `sqler-cli` tree).
 
 The bundled C++ engine also adds build time: about 490 s of CPU for an uncached debug build (64 s wall on a 14-core
-laptop). The `duckdb` CI job is informational, path-filtered and non-blocking: it runs only for pull requests that
-touch the DuckDB paths, is not required for merge and does not affect `CI result`. It builds the engine once
-(about 11 to 15 minutes on a cold cache). See
+laptop). The `duckdb` CI job is manual-only: it runs only when dispatched
+(`gh workflow run ci.yml --ref <branch>`), never on pull requests or on `main`, is not required for merge and does
+not affect `CI result`. Dispatch it before changing the engine. It builds the engine once (about 11 to 15 minutes on
+a cold cache). See
 [ADR-0070](../adr/0070-duckdb-engine-and-licence.md), amendment 2.
 
 ## SQL Server

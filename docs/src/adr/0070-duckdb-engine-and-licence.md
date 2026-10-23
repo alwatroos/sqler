@@ -124,11 +124,13 @@ saying it is build-time only. Never an advisory ignore, never the `rsa` crate.
     `deny` job checks that the list names every workspace feature except `driver-duckdb`, so a new feature cannot be
     forgotten.
   - The tests of `sqler-app` and `sqler-cli` with the feature `plugins` no longer add `driver-duckdb`.
-  - A separate job `duckdb` (Linux only, 120 minute limit) is informational, path-filtered and non-blocking: it is
-    not in the `needs` of `CI result`, so a running, failed or skipped `duckdb` job never affects `CI result` or the
-    mergeability of a pull request, and it must never be made a required check. It runs on `workflow_dispatch` or on a
-    pull request that changes `crates/sqler-driver-duckdb/**` or `plugins/duckdb/**`. Not on pushes to `main` and not
-    through the label `full-ci`. It compiles the bundled C++ engine once: one `cargo clippy` and one `cargo nextest
+  - A separate job `duckdb` (Linux only, 120 minute limit) is manual-only and non-blocking: it is
+    not in the `needs` of `CI result`, and it must never be made a required check. It runs only on `workflow_dispatch`
+    (`gh workflow run ci.yml --ref <branch>`), never on pull requests, never on pushes to `main` and not through the
+    label `full-ci`. (An earlier revision started it on pull requests that touched the DuckDB paths; the merge tooling
+    treats any pending or cancelled check as blocking, so a one-hour informational job made such a pull request
+    unmergeable.) A maintainer or reviewer dispatches it before touching the engine; it was verified green once on the
+    pull request that introduced it. It compiles the bundled C++ engine once: one `cargo clippy` and one `cargo nextest
     run` over `sqler-driver-duckdb`, `sqler-app` and `sqler-cli` with the same feature set (`driver-duckdb`), in one
     target directory. Expected cost is one cold engine build of about 11 to 15 minutes (the earlier four-step layout
     rebuilt it four times, about an hour); job names and the cache policy of

@@ -34,7 +34,7 @@ env:
   # DuckDB is out of v1.0 (ADR-0070, amendment 2): no workspace job compiles its bundled C++ engine. Every workspace-wide
   # cargo command uses `$WS` (the exclude) and, for clippy, `$WS_FEATURES` instead of `--all-features`, which would turn
   # on `driver-duckdb`. The `deny` job asserts WS_FEATURES lists every feature except `driver-duckdb`, so a new
-  # feature cannot be forgotten. The `duckdb` job builds and tests the engine on its own paths.
+  # feature cannot be forgotten. The `duckdb` job builds and tests the engine on a manual dispatch only.
   WS: --workspace --exclude sqler-driver-duckdb
   WS_FEATURES: >-
     sqler-ai-api/test-support,
@@ -68,7 +68,6 @@ jobs:
       rust: ${{ steps.out.outputs.rust }}
       ui: ${{ steps.out.outputs.ui }}
       plugins: ${{ steps.out.outputs.plugins }}
-      duckdb: ${{ steps.out.outputs.duckdb }}
     steps:
       # On pull_request the filter reads the changed files through the API: no checkout needed.
       - uses: dorny/paths-filter@v4
@@ -127,10 +126,6 @@ jobs:
               - 'deny.toml'
               - 'docs/src/plugin-development/wit-reference.md'
               - '.github/workflows/ci.yml'
-            # DuckDB is out of v1.0 (ADR-0070, amendment 2): its engine is built only when its own code changes.
-            duckdb:
-              - 'crates/sqler-driver-duckdb/**'
-              - 'plugins/duckdb/**'
       - name: Resolve outputs
         id: out
         shell: bash
@@ -141,7 +136,6 @@ jobs:
           F_RUST: ${{ steps.filter.outputs.rust }}
           F_UI: ${{ steps.filter.outputs.ui }}
           F_PLUGINS: ${{ steps.filter.outputs.plugins }}
-          F_DUCKDB: ${{ steps.filter.outputs.duckdb }}
         run: |
           # Full matrix: main, a dispatch (unless `full` is unticked, which runs the PR subsets for a timing check), the label.
           full=true
@@ -154,8 +148,6 @@ jobs:
             echo "rust=$(pick "$F_RUST")"
             echo "ui=$(pick "$F_UI")"
             echo "plugins=$(pick "$F_PLUGINS")"
-            # DuckDB: a dispatch, or a PR whose paths match. Never on main pushes, never through the `full-ci` label.
-            if [ "$EVENT" = workflow_dispatch ] || { [ "$EVENT" = pull_request ] && [ "$F_DUCKDB" = true ]; }; then echo "duckdb=true"; else echo "duckdb=false"; fi
           } >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
@@ -589,13 +581,12 @@ jobs:
         run: mdbook build docs
 
   # The only job that compiles the bundled DuckDB C++ engine (ADR-0070, amendment 2: DuckDB is out of v1.0). It runs on
-  # a dispatch or when the engine or its plugin entry changes. INFORMATIONAL: it is not in `needs` of `CI result`, so a
-  # running, failed or skipped `duckdb` job never affects the result or the mergeability; it must never be a required
-  # check. One C++ engine build (one clippy and one test run on one feature set). Linux only.
+  # a manual dispatch only (never on pull_request or push, so it cannot block a merge). It is not in `needs` of
+  # `CI result` and must never be a required check. One C++ engine build (one clippy and one test run on one feature
+  # set). Linux only.
   duckdb:
     name: duckdb
-    needs: changes
-    if: needs.changes.outputs.duckdb == 'true'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
