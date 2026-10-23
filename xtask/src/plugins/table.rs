@@ -36,6 +36,11 @@ pub const PLUGINS: &[PluginRow] = &[
         package: Some("sqler-fixture-driver"),
     },
     PluginRow {
+        name: "duckdb",
+        dir: "plugins/duckdb",
+        package: None,
+    },
+    PluginRow {
         name: "sqlserver",
         dir: "plugins/sqlserver",
         package: None,

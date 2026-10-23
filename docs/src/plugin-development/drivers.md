@@ -124,7 +124,64 @@ plugins switched off, and never asks.
 
 ## DuckDB
 
-Reserved for the DuckDB host-engine plugin (P15).
+> **Not in 1.0.** `DuckDB` is out of version 1.0 (ADR-0070, amendment 2). The code below stays in the repository,
+> disabled: the feature `driver-duckdb` is off by default, is never part of a release artifact, installer or update
+> manifest, and is built in CI only by the separate, manually dispatched `duckdb` job. It may return after 1.0 as a separate download.
+
+`DuckDB` is the first host driver in the repository (ADR-0070). It has no guest: the plugin `plugins/duckdb` is a manifest only (`kind = "host"`, `engine = "duckdb"`, capability
+`driver.host:duckdb`, no `[entry]`), and the engine is the crate `sqler-driver-duckdb`, a native driver on the
+`duckdb` crate with the `bundled` feature.
+
+### How the shell maps to the engine
+
+- The binary registers the engine under the id `duckdb` only when it is built with the feature `driver-duckdb` of
+  `sqler-app` or `sqler-cli` (off by default; it implies `plugins`). Without it the driver is listed as unavailable
+  with the "Engine not in this build" text.
+- The plugin must be installed (copy `plugins/duckdb/sqler.toml` to `<config>/plugins/duckdb/`) and
+  `driver.host:duckdb` approved.
+- The target is `:memory:` (private to its session) or a file path (created if missing). The engine ignores
+  `config.driver`. One `DuckDB` instance is shared per file inside the process, so the object browser, a query tab
+  and an export can use one file at once.
+- Sandbox, set when the database opens and then locked: external file access off, extension autoinstall and
+  autoload off, community extensions off. `read_csv` of a file, `INSTALL` and `SET enable_external_access = true`
+  fail. This is engine configuration, not a grant, so the grant dialog does not show it.
+- Errors never carry the database path: connect errors use two fixed texts, and query errors have the path replaced
+  by `<database>`.
+
+### API gaps
+
+What the plugin API could not express for this driver, as found while building it.
+
+| ID | Gap |
+| - | - |
+| G1 | The manifest `dialect` key has no consumer. `Dialect` covers only the built-in driver ids, so a `duckdb` connection gets no statement splitting, no placeholders and the `Unknown` statement class: every run on a `prod` connection asks for confirmation, even a `SELECT`. Fresh-run export, the SQL INSERT export and the AI query tools refuse the driver. Run one statement or a selection; a multi-statement text fails with the `DuckDB` error. |
+| G2 | A host-engine plugin is purely declarative. Catalog SQL, type mapping and the sandbox live in the engine crate, so the plugin API validates registration and grants only. |
+| G3 | There is no session read-only statement for `DuckDB` (`read_only_statement`). |
+| G4 | `sqler-core` has no nested, interval or UUID `Value`. Lists, structs, maps, unions, intervals, enums and UUIDs arrive as text with `DataType::Other`. |
+| G5 | `fs.*` scopes do not apply to host engines. Sandboxing is engine specific and invisible in the grant dialog. |
+| G6 | An engine has to build its own per-file instance sharing across sessions; the driver API offers none. |
+| G7 | Size and build cost of a native engine: see "Size and build cost". |
+
+### Size and build cost
+
+Measured on macOS (aarch64), `cargo build --release -p sqler-app --locked`:
+
+| Features | Bytes | MiB |
+| -------- | ----- | --- |
+| `plugins` | 49,757,680 | 47.5 |
+| `plugins,driver-duckdb` | 95,180,224 | 90.8 |
+
+The engine adds 45,422,544 bytes (43.3 MiB). With it the binary is 21,779,904 bytes over the 73,400,320 byte budget
+([ADR-0069](../adr/0069-binary-size-budget-70-mb.md)), so `driver-duckdb` stays off in the default build and a build
+with it is outside the size budget by design. The default build does not change (the `deny` job asserts that `duckdb`
+is not in the default `sqler-app` or `sqler-cli` tree).
+
+The bundled C++ engine also adds build time: about 490 s of CPU for an uncached debug build (64 s wall on a 14-core
+laptop). The `duckdb` CI job is manual-only: it runs only when dispatched
+(`gh workflow run ci.yml --ref <branch>`), never on pull requests or on `main`, is not required for merge and does
+not affect `CI result`. Dispatch it before changing the engine. It builds the engine once (about 11 to 15 minutes on
+a cold cache). See
+[ADR-0070](../adr/0070-duckdb-engine-and-licence.md), amendment 2.
 
 ## SQL Server
 

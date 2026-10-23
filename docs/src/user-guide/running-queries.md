@@ -49,7 +49,6 @@ Object tabs (DDL, properties) and data tabs show breadcrumbs too: the connection
 | -------- | --------- |
 | `PostgreSQL`, `MySQL`, `MariaDB` | `EXPLAIN <statement>` |
 | `SQLite` | `EXPLAIN QUERY PLAN <statement>` |
-| `DuckDB` | `EXPLAIN <statement>` |
 | `SQL Server` and other drivers | not available: a notice says so and nothing runs |
 
 Explain never adds `ANALYZE`, so the statement is planned, not executed. It always uses the statement at the cursor and ignores a selection. If the statement already starts with `EXPLAIN`, the server rejects the doubled keyword. The plan comes back as an ordinary result. Explain goes through the same run path as Run, so on a `prod` connection `EXPLAIN` of a write (for example `EXPLAIN DELETE ...`) still asks for confirmation. `query:explain` has no default shortcut; bind one in `keybindings.toml` (see [Keybindings](keybindings.md)).

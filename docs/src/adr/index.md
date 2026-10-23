@@ -71,6 +71,7 @@ consequences. SQLer uses the MADR format.
 | [0062](0062-plugin-ai-tools.md) | Plugin AI tools through the tool contract: `ExternalTools` seam in `sqler-ai-tools`, `<plugin-id>__<tool>` names, schema subset, approval through the surface's approver, per-call data and approver swap, audit scope, surfaces, no tools in `sqler-cli mcp` | accepted |
 | [0068](0068-ci-pipeline-speed.md) | CI pipeline speed: what runs where, path gating with always-reporting names, caches saved on `main` only, Windows PR subset, `CI result` aggregate, rollback | accepted |
 | [0069](0069-binary-size-budget-70-mb.md) | Binary size budget raised from 60 MB to 70 MB (owner decision); the plugin host stays off by default | accepted |
+| [0070](0070-duckdb-engine-and-licence.md) | DuckDB native engine, sandbox and the `webpki-roots` licence question: `duckdb` 1.20000.0 has no `webpki-roots` in the graph (no exception), worker thread per session, Arrow streaming, interrupt cancel, external access and extensions off, one instance per file | accepted |
 | [0071](0071-sql-server-plugin.md) | SQL Server as an in-repo plugin with a host-provided engine: plugin vs core, cancel closes the connection, ring installed beside aws-lc-rs, API gaps | accepted |
 | [0072](0072-plugin-export-formats.md) | Plugin export formats: `FormatSource` overlay on the export registry, `plugin-<id>:<fmt>` ids and cleaned labels, blocking wait on the host runtime, interned strings, fixed failure texts, CLI for `plugin-` ids | accepted |
 

@@ -146,6 +146,9 @@ The native DuckDB driver (`sqler-driver-duckdb`) pulls `libduckdb-sys`, which br
 CDLA-Permissive-2.0. That licence is not in the allow list of `deny.toml`. P15 must stop and ask the owner before adding
 the dependency. No exception is added by this ADR or anywhere else.
 
+Settled on 2026-10-23 by [ADR-0070](0070-duckdb-engine-and-licence.md): `duckdb` 1.20000.0 has no `webpki-roots` in its
+dependency graph, so no exception is needed.
+
 ## Consequences
 
 - Positive: built-in drivers and registry callers are untouched; plugin drivers come and go without hooks; one guard

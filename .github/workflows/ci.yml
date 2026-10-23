@@ -28,9 +28,23 @@ env:
   MAC_SKIP: >-
     --exclude sqler-sql --exclude sqler-catalog --exclude sqler-completion --exclude sqler-driver-api
     --exclude sqler-driver-sqlite --exclude sqler-driver-mysql --exclude sqler-driver-postgres
-    --exclude sqler-driver-mssql --exclude sqler-driver-duckdb --exclude sqler-export
+    --exclude sqler-driver-mssql --exclude sqler-export
     --exclude sqler-ai-api --exclude sqler-ai-anthropic --exclude sqler-ai-mistral
     --exclude sqler-ai-ollama --exclude sqler-ai-openai
+  # DuckDB is out of v1.0 (ADR-0070, amendment 2): no workspace job compiles its bundled C++ engine. Every workspace-wide
+  # cargo command uses `$WS` (the exclude) and, for clippy, `$WS_FEATURES` instead of `--all-features`, which would turn
+  # on `driver-duckdb`. The `deny` job asserts WS_FEATURES lists every feature except `driver-duckdb`, so a new
+  # feature cannot be forgotten. The `duckdb` job builds and tests the engine on a manual dispatch only.
+  WS: --workspace --exclude sqler-driver-duckdb
+  WS_FEATURES: >-
+    sqler-ai-api/test-support,
+    sqler-app/driver-sqlite,sqler-app/driver-postgres,sqler-app/driver-mysql,
+    sqler-app/export-xlsx,sqler-app/export-parquet,
+    sqler-app/ai-ollama,sqler-app/ai-anthropic,sqler-app/ai-openai,sqler-app/ai-mistral,sqler-app/plugins,sqler-app/driver-mssql,
+    sqler-cli/driver-sqlite,sqler-cli/driver-postgres,sqler-cli/driver-mysql,sqler-cli/plugins,sqler-cli/driver-mssql,
+    sqler-export/parquet,sqler-export/xlsx,
+    sqler-plugin-host/runtime,sqler-plugin-host/cl,sqler-plugin-host/pulley-rt,sqler-plugin-host/net,
+    sqler-ui/gui,sqler-ui/screenshots
 
 # Gating rules (ADR-0068):
 # - `changes` always runs and decides what is relevant. On main, on dispatch and on a PR with the label `full-ci`
@@ -182,20 +196,21 @@ jobs:
       # clients; Linux covers them). Main, dispatch and the label `full-ci` run everything.
       - name: Clippy
         if: needs.changes.outputs.rust == 'true' && matrix.os != 'windows-latest' && (matrix.os != 'macos-latest' || needs.changes.outputs.full == 'true')
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy $WS --all-targets --features "$WS_FEATURES" -- -D warnings
       - name: Clippy (macOS PR subset)
         if: needs.changes.outputs.rust == 'true' && matrix.os == 'macos-latest' && needs.changes.outputs.full != 'true'
-        run: cargo clippy --workspace $MAC_SKIP --all-targets --all-features -- -D warnings
+        run: cargo clippy $WS $MAC_SKIP --all-targets --features "$WS_FEATURES" -- -D warnings
       - uses: taiki-e/install-action@v2
         if: needs.changes.outputs.rust == 'true'
         with:
           tool: cargo-nextest@0.9.148
       - name: Test
         if: needs.changes.outputs.rust == 'true' && (matrix.os == 'ubuntu-latest' || needs.changes.outputs.full == 'true')
-        run: cargo nextest run --workspace --no-tests=pass
+        shell: bash
+        run: cargo nextest run $WS --no-tests=pass
       - name: Test (macOS PR subset)
         if: needs.changes.outputs.rust == 'true' && matrix.os == 'macos-latest' && needs.changes.outputs.full != 'true'
-        run: cargo nextest run --workspace $MAC_SKIP --no-tests=pass
+        run: cargo nextest run $WS $MAC_SKIP --no-tests=pass
       # Windows PR subset: the crates with Windows-only history (paths, processes, reserved names, CRLF, tunnels) by
       # `-p`, so the other crates' test binaries are not even built, and the two sqler-ui groups that failed only on
       # Windows. The full Windows suite runs on main, on dispatch and with the label `full-ci`.
@@ -213,6 +228,8 @@ jobs:
         run: cargo nextest run -p sqler-plugin-host --features cl,net --no-tests=fail
       # The `plugins` feature of the app is off by default (ADR-0060), so the workspace run skips its code. A second
       # invocation, not `--workspace --features plugins`, which would also turn the feature on for other crates.
+      # `driver-duckdb` is not tested here: DuckDB is out of v1.0 and its bundled C++ engine is built only by the
+      # separate `duckdb` job (ADR-0070, amendment 2).
       - name: Test sqler-app with plugin support
         if: needs.changes.outputs.rust == 'true' && (matrix.os != 'windows-latest' || needs.changes.outputs.full == 'true')
         run: cargo nextest run -p sqler-app --features plugins --no-tests=fail
@@ -251,7 +268,8 @@ jobs:
           shared-key: clippy
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        shell: bash
+        run: cargo clippy $WS --all-targets --features "$WS_FEATURES" -- -D warnings
 
   screenshots:
     name: screenshots (linux)
@@ -389,8 +407,21 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.20.2
+      # deny.toml sets `all-features = true`, so the graph includes the DuckDB tree (licences, advisories) without compiling it.
       - name: Licenses, bans, sources, advisories
         run: cargo deny check
+      # `$WS_FEATURES` replaces `--all-features` in the workspace jobs; it must list every feature but `driver-duckdb`.
+      - name: Workspace feature list is complete
+        env:
+          WANT: ${{ env.WS_FEATURES }}
+        run: |
+          have=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.source == null) | .name as $n | .features | keys[] | select(. != "default" and . != "driver-duckdb") | "\($n)/\(.)"' | sort)
+          want=$(printf '%s\n' "$WANT" | tr ', ' '\n\n' | grep . | sort)
+          if [ "$have" != "$want" ]; then
+            echo "WS_FEATURES in ci.yml differs from the workspace features (driver-duckdb excluded on purpose):"
+            diff <(printf '%s\n' "$have") <(printf '%s\n' "$want") || true
+            exit 1
+          fi
       - name: Dependency rules
         run: |
           # Only sqler-app may depend on sqler-ui.
@@ -406,6 +437,13 @@ jobs:
           # With the `plugins` feature the host must really be wired in.
           tree=$(cargo tree -p sqler-app -e normal --prefix none --features plugins) || { echo "cargo tree failed"; exit 1; }
           if ! printf '%s\n' "$tree" | grep -q '^wasmtime '; then echo "wasmtime is missing with --features plugins"; exit 1; fi
+          # The DuckDB engine (a bundled C++ build) is opt-in: neither default tree has it, the feature brings it in (ADR-0070).
+          for pkg in sqler-app sqler-cli; do
+            tree=$(cargo tree -p "$pkg" -e normal --prefix none) || { echo "cargo tree failed"; exit 1; }
+            if printf '%s\n' "$tree" | grep -q '^duckdb '; then echo "duckdb is in the default $pkg tree"; exit 1; fi
+          done
+          tree=$(cargo tree -p sqler-app -e normal --prefix none --features driver-duckdb) || { echo "cargo tree failed"; exit 1; }
+          if ! printf '%s\n' "$tree" | grep -q '^duckdb '; then echo "duckdb is missing with --features driver-duckdb"; exit 1; fi
           # SQL Server is opt-in (ADR-0071): the default app and CLI trees do not carry tiberius.
           for pkg in sqler-app sqler-cli; do
             tree=$(cargo tree -p "$pkg" -e normal --prefix none) || { echo "cargo tree failed"; exit 1; }
@@ -535,12 +573,46 @@ jobs:
         if: needs.changes.outputs.rust == 'true'
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps --document-private-items
+        run: cargo doc $WS --no-deps --document-private-items
       - uses: taiki-e/install-action@v2
         with:
           tool: mdbook@0.5.4
       - name: mdBook
         run: mdbook build docs
+
+  # The only job that compiles the bundled DuckDB C++ engine (ADR-0070, amendment 2: DuckDB is out of v1.0). It runs on
+  # a manual dispatch only (never on pull_request or push, so it cannot block a merge). It is not in `needs` of
+  # `CI result` and must never be a required check. One C++ engine build (one clippy and one test run on one feature
+  # set). Linux only.
+  duckdb:
+    name: duckdb
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          shared-key: duckdb
+          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+      - name: Linux system packages (GPUI build)
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends \
+            pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
+      # One feature set for every step, so the bundled C++ engine is compiled once and reused by the test build.
+      - name: Clippy (engine, app and cli with driver-duckdb)
+        run: cargo clippy -p sqler-driver-duckdb -p sqler-app -p sqler-cli --all-targets --features sqler-app/driver-duckdb,sqler-cli/driver-duckdb -- -D warnings
+      - name: Tests (engine, app and cli with driver-duckdb)
+        run: cargo nextest run -p sqler-driver-duckdb -p sqler-app -p sqler-cli --features sqler-app/driver-duckdb,sqler-cli/driver-duckdb --no-tests=fail
 
   spdx:
     name: spdx
