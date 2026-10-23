@@ -1,0 +1,84 @@
+// Fictional Azure Data Studio user settings (example data only).
+{
+  "workbench.colorTheme": "Default Dark+",
+  "editor.fontSize": 13, // keep
+  /* saved connections */
+  "datasource.connectionGroups": [
+    {
+      "name": "ROOT",
+      "id": "g-root",
+      "color": "#1e1e1e",
+    },
+    {
+      "name": "Shop",
+      "id": "g-shop",
+      "parentId": "g-root",
+      "color": "#AA3300",
+      "description": "shop databases",
+    },
+    {
+      "name": "Staging",
+      "id": "g-staging",
+      "parentId": "g-shop",
+    },
+  ],
+  "datasource.connections": [
+    {
+      "options": {
+        "connectionName": "Orders primary",
+        "server": "db.example.test,14330",
+        "database": "orders",
+        "authenticationType": "SqlLogin",
+        "user": "alice",
+        "password": "",
+        "applicationName": "azdata",
+        "groupId": "g-shop",
+        "encrypt": "Mandatory",
+        "trustServerCertificate": false,
+        "connectTimeout": 30,
+      },
+      "groupId": "g-shop",
+      "providerName": "MSSQL",
+      "savedProfile": true,
+      "id": "c-1",
+    },
+    {
+      "options": {
+        "server": "tcp:staging.example.test",
+        "database": "",
+        "authenticationType": "SqlLogin",
+        "user": "bob",
+        "encrypt": true,
+        "trustServerCertificate": true,
+        "groupId": "g-staging"
+      },
+      "groupId": "g-staging",
+      "providerName": "MSSQL",
+      "id": "c-2"
+    },
+    {
+      "options": {
+        "connectionName": "Reporting (PostgreSQL)",
+        "server": "pg.example.test",
+        "port": "5433",
+        "database": "reports",
+        "authenticationType": "SqlLogin",
+        "user": "carol",
+        "groupId": "g-root"
+      },
+      "groupId": "g-root",
+      "providerName": "PGSQL",
+      "id": "c-3"
+    },
+    {
+      "options": {
+        "connectionName": "Ungrouped",
+        "server": "[2001:db8::1],1444",
+        "authenticationType": "SqlLogin",
+        "user": "dave"
+      },
+      "providerName": "MSSQL",
+      "id": "c-4"
+    }
+  ]
+}

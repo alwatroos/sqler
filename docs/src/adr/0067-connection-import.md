@@ -128,3 +128,28 @@ database of pgAdmin. The user guide page is R10.
 - The crate joins the Windows PR test subset of `ci.yml` ([ADR-0068](0068-ci-pipeline-speed.md)) because path
   semantics differ per OS.
 - R9 links the crate into the app and measures the binary size effect.
+
+## Amendment 1 (2026-10-23): the Azure Data Studio source (R7)
+
+`crates/sqler-import/src/ads` adds the source `azure-data-studio`: the user `settings.json` of Azure Data Studio
+(`datasource.connections` and `datasource.connectionGroups`). The file is JSON with comments, so a small bounded
+reader first blanks `//` and `/* */` comments and trailing commas (strings are tracked; line and column numbers are
+kept) and then uses `serde_json`. No new dependency. A file with neither key is `UnrecognisedFormat`; an empty list is
+a valid empty report. Default locations: `<user data>/User/settings.json` with `azuredatastudio` and
+`azuredatastudio-insiders` under `%APPDATA%` (Windows), `~/Library/Application Support` (macOS) or `~/.config`.
+
+| ADS field | SQLer |
+| --------- | ----- |
+| `providerName` `MSSQL` | driver `sqlserver`, target `sqlserver://<host>:<port>[/<db>]?user=<user>`, default port 1433 (the connect pipeline moves `?user=` into the user info, S5; the engine accepts no query key) |
+| `providerName` `PGSQL` | driver `postgres`, target `postgres://<host>:<port>/<db>?user=<user>` (options `server`, `port`, `database`), default port 5432, database `postgres` |
+| other providers | skipped: "only SQL Server and PostgreSQL connections are imported" |
+| `options.server` | `host`, `host,port`, `tcp:host,port`, `[v6],port`, `.` and `(local)` (localhost); `host\instance` is skipped (named instances need the SQL Browser) |
+| `options.authenticationType` | `SqlLogin` (or none, with a user) is imported; `Integrated` and the Azure AD types (`AzureMFA` and others) are skipped with a reason (SQL login only, ADR-0071); the user is required |
+| `options.encrypt`, `trustServerCertificate` (SQL Server only) | `true`/`Mandatory`: `verify-full`, or `require` when the certificate is trusted; `Strict`: `verify-full`; `false`/`Optional`: `prefer` (note); not set: no TLS profile (driver default `prefer`); unknown value: ignored with a note. `hostNameInCertificate` is listed as unsupported |
+| `options.password` | never read; a non-empty value only adds the note "a stored password was not imported". A `DbPassword` secret is offered for the user to enter |
+| `connectionName` | the name (else the `server` text, else `Azure Data Studio connection N`) |
+| `groupId` and the group tree | the group path from `parentId` links; the invisible `ROOT` group is not a level; the nearest group `color` (`#rrggbb`) becomes the connection colour (the report has no group colour); an unknown group id imports at the top with a note; a cycle imports at the top with a note; deeper than 8 levels is folded into the 8th |
+| every other key | listed by name (`options.<key>` for options), never by value |
+
+Caps are those of the core: 4 MiB file, 5,000 connections and 5,000 groups, 4,096 characters per field. Whether
+`sqlserver` is available is decided by the caller's driver list (`DriverUnavailable`), as for every driver.

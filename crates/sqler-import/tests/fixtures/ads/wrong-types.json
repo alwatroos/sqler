@@ -1,0 +1,28 @@
+{
+  "datasource.connections": [
+    {
+      "options": {
+        "connectionName": 42,
+        "server": ["a.example.test"],
+        "authenticationType": 1,
+        "user": "alice"
+      },
+      "providerName": "MSSQL"
+    },
+    {
+      "options": {
+        "connectionName": null,
+        "server": "b.example.test",
+        "database": 7,
+        "authenticationType": "SqlLogin",
+        "user": "alice",
+        "encrypt": {},
+        "port": "x"
+      },
+      "providerName": ["MSSQL"],
+      "groupId": 5
+    },
+    { "options": [], "providerName": "MSSQL" },
+    { "options": { "server": "c.example.test", "authenticationType": "SqlLogin", "user": "alice" }, "providerName": "PGSQL", "groupId": null }
+  ]
+}
