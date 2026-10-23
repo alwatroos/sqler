@@ -1,0 +1,16 @@
+# Example plugin: see README.md. The format id the app derives is `plugin-exporter-markdown:markdown`.
+[plugin]
+id = "exporter-markdown"
+name = "Exporter Markdown"
+version = "0.1.0"
+api = "0.1.1"
+description = "Example plugin: a Markdown table with right-aligned number columns."
+capabilities = []
+
+[entry]
+component = "exporter-markdown.wasm"
+
+[[exporters]]
+id = "markdown"
+label = "Markdown table"
+extension = "md"

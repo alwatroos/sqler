@@ -269,6 +269,16 @@ pub(crate) fn scene_startup(scene: &str) -> crate::plugins::PluginsStartup {
                 problems: Vec::new(),
             }
         }
+        "plugins-hello-panel" => {
+            let mut hello = row(hello_panel());
+            hello.state = RowState::Live;
+            decide(&hello, GrantCommand::Approve);
+            hello.effective = caps(&hello);
+            PluginSnapshot {
+                rows: vec![hello],
+                problems: Vec::new(),
+            }
+        }
         _ => return PluginsStartup::unavailable(),
     };
     let fake = FakeBackend::new(snapshot);
@@ -281,6 +291,10 @@ pub(crate) fn scene_startup(scene: &str) -> crate::plugins::PluginsStartup {
             "overview",
             Err("The plugin ran out of time while drawing the panel.".to_owned()),
         ),
+        "plugins-hello-panel" => {
+            fake.script_panel("hello-panel", "hello", Ok(hello_panel_tree(3)));
+            fake.script_status("hello-panel", "clicks", Some("Clicks: 3".to_owned()));
+        }
         _ => {}
     }
     if scene.starts_with("plugins-panel") {
@@ -323,6 +337,63 @@ pub(crate) fn contributing(id: &str, name: &str) -> Manifest {
          [[panels]]\nid = \"overview\"\ntitle = \"Overview\"\n\
          [[status-items]]\nid = \"env\"\ntooltip = \"Warehouse environment\"\nalignment = \"left\"\n",
     )
+}
+
+/// The manifest of the `hello-panel` example plugin (`plugins/hello-panel/sqler.toml`): a command, a panel and a
+/// status item on the left, asking for `ui.panel`.
+#[must_use]
+pub(crate) fn hello_panel() -> Manifest {
+    named_with(
+        "hello-panel",
+        "Hello Panel",
+        &["ui.panel"],
+        "[[commands]]\nid = \"say-hello\"\ntitle = \"Say hello\"\n\
+         [[panels]]\nid = \"hello\"\ntitle = \"Hello\"\n\
+         [[status-items]]\nid = \"clicks\"\ntooltip = \"Clicks in the Hello panel\"\nalignment = \"left\"\n",
+    )
+}
+
+/// The tree the `hello-panel` guest (`plugins/hello-panel/src/lib.rs`) draws after `n` clicks. The UI cannot run
+/// wasm, so this is a copy of that tree.
+#[must_use]
+#[allow(clippy::expect_used)] // fixed fixture tree
+pub(crate) fn hello_panel_tree(n: u32) -> sqler_plugin_api::WidgetTree {
+    use sqler_plugin_api::{
+        Button, ButtonStyle, Direction, Gap, Stack, Text, TextStyle, Widget, WidgetNode, WidgetTree,
+    };
+    let node = |widget: Widget, children: &[u32]| WidgetNode {
+        widget,
+        children: children.to_vec(),
+    };
+    let text = |content: String, style: TextStyle| Widget::Text(Text { content, style });
+    let count = match n {
+        0 => "Nobody has clicked yet.".to_owned(),
+        1 => "Clicked once.".to_owned(),
+        n => format!("Clicked {n} times."),
+    };
+    WidgetTree::new(vec![
+        node(
+            Widget::Stack(Stack {
+                direction: Direction::Vertical,
+                gap: Gap::Medium,
+            }),
+            &[1, 2, 3],
+        ),
+        node(
+            text("Hello from a plugin".to_owned(), TextStyle::Heading),
+            &[],
+        ),
+        node(text(count, TextStyle::Body), &[]),
+        node(
+            Widget::Button(Button {
+                id: "click".to_owned(),
+                label: "Click me".to_owned(),
+                style: ButtonStyle::Primary,
+            }),
+            &[],
+        ),
+    ])
+    .expect("fixture tree is valid")
 }
 
 /// The tree of the `overview` panel: a heading, a line of text, a table, a filter, a checkbox and two buttons.
