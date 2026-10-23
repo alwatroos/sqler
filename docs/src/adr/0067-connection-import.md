@@ -125,9 +125,9 @@ never looks up `password`, `sshPassword`, `sshKeyfilePassword` or any URL field,
 | Beekeeper `connectionType` | Result |
 | -------------------------- | ------ |
 | `postgresql` | driver `postgres`, target `postgres://host:port/db?user=...` (port 5432, database `postgres`) |
-| `mysql`, `mariadb` | driver `mysql`, target `mysql://user@host:port/db` (port 3306) |
+| `mysql`, `mariadb` | driver `mysql`, target `mysql://host:port/db?user=user` (port 3306) |
 | `sqlite` | driver `sqlite`, target is the absolute file path of `defaultDatabase` (or `databaseFile`) |
-| `sqlserver` | driver `sqlserver`, target `sqlserver://user@host:port/db` (port 1433), consistent with ADR-0071 |
+| `sqlserver` | driver `sqlserver`, target `sqlserver://host:port/db?user=user` (port 1433), consistent with ADR-0071 |
 | `duckdb` | skipped: "DuckDB is not in SQLer 1.0" (ADR-0070) |
 | `cockroachdb`, `redshift`, `oracle`, `mongodb`, ... and unknown types | skipped as unsupported, with the engine name for the known ones |
 

@@ -370,14 +370,14 @@ fn build(
             } else {
                 "sqlserver"
             };
-            let at = if user.is_empty() {
-                String::new()
-            } else {
-                format!("{}@", encode(&user))
-            };
-            let mut t = format!("{scheme}://{at}{host}:{port}");
+            // The store refuses user info in a target; the user goes in `?user=` like the form
+            // writes it (the connect pipeline moves it into the user info).
+            let mut t = format!("{scheme}://{host}:{port}");
             if let Some(db) = db {
                 let _ = write!(t, "/{}", encode(&db));
+            }
+            if !user.is_empty() {
+                let _ = write!(t, "?user={}", encode(&user));
             }
             t
         }

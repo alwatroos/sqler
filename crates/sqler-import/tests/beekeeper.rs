@@ -120,7 +120,7 @@ fn full_fixture_maps_every_field() {
     let b = &r.entries[1];
     let spec = spec_of(b);
     assert_eq!(spec.driver.as_str(), "mysql");
-    assert_eq!(spec.target, "mysql://bob@maria.example.test:3307/reports");
+    assert_eq!(spec.target, "mysql://maria.example.test:3307/reports?user=bob");
     assert_eq!(spec.color.as_deref(), Some("#aa3300"));
     assert_eq!(spec.tls.as_ref().unwrap().mode, TlsMode::Require);
     assert_eq!(b.group, vec!["Shop".to_owned()]);
@@ -140,7 +140,7 @@ fn full_fixture_maps_every_field() {
     assert_eq!(spec.driver.as_str(), "sqlserver");
     assert_eq!(
         spec.target,
-        "sqlserver://sa_alice@mssql.example.test:1433/ledger"
+        "sqlserver://mssql.example.test:1433/ledger?user=sa_alice"
     );
     assert!(!spec.target.contains("fake"));
     assert_eq!(spec.ssh.as_ref().unwrap().auth, SshAuth::Password);
@@ -243,7 +243,7 @@ fn array_form_and_folder_name() {
     assert_eq!(r.entries[0].group, vec!["Team".to_owned()]);
     assert_eq!(
         spec_of(&r.entries[0]).target,
-        "mysql://alice@mysql.example.test:3306"
+        "mysql://mysql.example.test:3306?user=alice"
     );
     assert!(spec_of(&r.entries[0]).tls.is_none());
 }
