@@ -1,0 +1,5 @@
+{
+  "datasource.connections": [
+    { "options": { "server": "a.example.test" "user": "alice" } }
+  ]
+}
