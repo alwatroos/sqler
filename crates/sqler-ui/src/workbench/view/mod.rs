@@ -32,6 +32,7 @@ const HINT_COMMANDS: &[&str] = &[
     "workbench:show-connections",
     "workbench:show-saved-queries",
     "workbench:show-ai",
+    "workbench:show-plugins",
     "history:open",
     "settings:open",
     "workbench:toggle-side-panel",

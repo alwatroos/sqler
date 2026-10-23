@@ -17,6 +17,8 @@ pub enum ActivityItem {
     SavedQueries,
     /// The query history (in the bottom panel).
     History,
+    /// The plugin manager (at the bottom of the bar, above AI).
+    Plugins,
     /// The AI view (at the bottom of the bar, above Settings).
     Ai,
     /// The settings tab (at the bottom of the bar).
@@ -28,10 +30,10 @@ impl ActivityItem {
     pub const TOP: [ActivityItem; 3] = [Self::Connections, Self::SavedQueries, Self::History];
 
     /// The items below the divider, in order.
-    pub const BOTTOM: [ActivityItem; 2] = [Self::Ai, Self::Settings];
+    pub const BOTTOM: [ActivityItem; 3] = [Self::Plugins, Self::Ai, Self::Settings];
 
     /// How many items there are (one focus handle each; `Settings` is the last index).
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 6;
 
     /// The tooltip title and accessible label.
     #[must_use]
@@ -40,6 +42,7 @@ impl ActivityItem {
             Self::Connections => "Connections",
             Self::SavedQueries => "Saved Queries",
             Self::History => "History",
+            Self::Plugins => "Plugins",
             Self::Ai => "AI",
             Self::Settings => "Settings",
         }
@@ -52,6 +55,7 @@ impl ActivityItem {
             Self::Connections => "database",
             Self::SavedQueries => "bookmark",
             Self::History => "clock",
+            Self::Plugins => "plug",
             Self::Ai => "sparkles",
             Self::Settings => "settings",
         }
@@ -64,6 +68,7 @@ impl ActivityItem {
             Self::Connections => "workbench:show-connections",
             Self::SavedQueries => "workbench:show-saved-queries",
             Self::History => "history:open",
+            Self::Plugins => "workbench:show-plugins",
             Self::Ai => "workbench:show-ai",
             Self::Settings => "settings:open",
         }
@@ -81,6 +86,7 @@ impl ActivityItem {
                 layout.side_visible() && layout.side_view() == SideView::SavedQueries
             }
             Self::History => layout.panel_visible() && layout.panel_view() == PanelView::History,
+            Self::Plugins => layout.side_visible() && layout.side_view() == SideView::Plugins,
             Self::Ai => layout.side_visible() && layout.side_view() == SideView::Ai,
             Self::Settings => false,
         }
@@ -93,7 +99,9 @@ impl ActivityItem {
             return self.command();
         }
         match self {
-            Self::Connections | Self::SavedQueries | Self::Ai => "workbench:toggle-side-panel",
+            Self::Connections | Self::SavedQueries | Self::Plugins | Self::Ai => {
+                "workbench:toggle-side-panel"
+            }
             Self::History => "workbench:toggle-bottom-panel",
             Self::Settings => self.command(),
         }
@@ -130,10 +138,28 @@ mod tests {
     }
 
     #[test]
-    fn ai_item_sits_above_settings() {
+    fn plugins_and_ai_sit_above_settings() {
         assert_eq!(
             ActivityItem::BOTTOM,
-            [ActivityItem::Ai, ActivityItem::Settings]
+            [
+                ActivityItem::Plugins,
+                ActivityItem::Ai,
+                ActivityItem::Settings
+            ]
+        );
+        assert_eq!(ActivityItem::Plugins.title(), "Plugins");
+        assert_eq!(ActivityItem::Plugins.icon_name(), "plug");
+        assert_eq!(ActivityItem::Plugins.command(), "workbench:show-plugins");
+        let plugins = layout(&[A::ShowSideView(SideView::Plugins)]);
+        assert!(ActivityItem::Plugins.is_active(&plugins));
+        assert!(!ActivityItem::Ai.is_active(&plugins));
+        assert_eq!(
+            ActivityItem::Plugins.click_command(&plugins),
+            "workbench:toggle-side-panel"
+        );
+        assert_eq!(
+            ActivityItem::Plugins.click_command(&WorkbenchLayout::default()),
+            "workbench:show-plugins"
         );
         assert_eq!(
             ActivityItem::COUNT,

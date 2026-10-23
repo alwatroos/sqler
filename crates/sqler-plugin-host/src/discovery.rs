@@ -172,7 +172,7 @@ impl Run<'_> {
     fn one(&mut self, dir: &Path, source: PluginSource, name_must_match_id: bool) {
         match load_one(dir, source, name_must_match_id, self.dirs) {
             Ok(p) => {
-                let id = p.manifest.id.clone();
+                let id = p.manifest.id().clone();
                 if let Some(first) = self.seen.get(&id) {
                     let first = first.clone();
                     self.problem(dir, Some(id), LoadError::Duplicate { first });
@@ -200,12 +200,12 @@ fn load_one(
     let bytes =
         read_capped(&manifest_path, max).map_err(|e| (None, io_error(&manifest_path, &e)))?;
     let manifest = Manifest::parse_bytes(&bytes).map_err(|e| (None, LoadError::Manifest(e)))?;
-    let id = manifest.id.clone();
+    let id = manifest.id().clone();
     let fail = |e: LoadError| (Some(id.clone()), e);
 
     if name_must_match_id {
         let name = dir.file_name().map(|n| n.to_string_lossy().into_owned());
-        if name.as_deref() != Some(manifest.id.as_str()) {
+        if name.as_deref() != Some(manifest.id().as_str()) {
             return Err(fail(LoadError::DirName {
                 dir_name: name.unwrap_or_default().chars().take(64).collect(),
             }));
@@ -215,7 +215,7 @@ fn load_one(
         .check_api(API_VERSION)
         .map_err(|e| fail(LoadError::Incompatible(e)))?;
 
-    let component = match &manifest.entry {
+    let component = match manifest.entry() {
         Some(entry) => Some(load_component(&canonical, &entry.component).map_err(fail)?),
         None => None,
     };
@@ -229,7 +229,7 @@ fn load_one(
         })?;
     let roots = FsRoots {
         plugin_dir: canonical.clone(),
-        data_dir: dirs.data_dir(manifest.id.as_str(), &canonical),
+        data_dir: dirs.data_dir(manifest.id().as_str(), &canonical),
         home_dir: dirs.home.clone(),
     };
     Ok(DiscoveredPlugin {

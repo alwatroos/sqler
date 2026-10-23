@@ -77,7 +77,8 @@ implements the trait and returns `Some` only for an approved exact key.
 ### Dialog
 
 Title "Allow plugin {name}?". One row per capability. Every capability needs attention (is prominent: warning row, listed
-first, repeated as a chip in the always-visible block) except a defined calm set: `db.read` and `ui.panel`. So every
+first, repeated as a chip in the always-visible block) except a defined calm set: `ui.panel` only (a plugin that can read your databases may leak what it reads, so
+`db.read` is flagged, a decision of the dev team in P7). So `db.read`, every
 `net.http` host, every `fs.read` scope, `db.write`, `ai.tool` and every `driver.*` is prominent whatever its argument;
 a kind added later is prominent until it is classified as calm. Warnings: punycode hosts are shown encoded, never decoded; wildcards say they include
 every subdomain; `localhost` says it is the user's own computer; `home/Library` and `home/AppData` say they hold other

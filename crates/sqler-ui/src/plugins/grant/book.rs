@@ -114,6 +114,31 @@ impl GrantBook {
         }
     }
 
+    /// Re-reads `plugin-grants.toml`, so a decision or revoke made by another instance applies now. `true` when what
+    /// the book answers changed. A damaged or newer file locks the book (nothing is granted); a file that is valid
+    /// again unlocks it. Blocking file I/O: call it off the UI thread. A book without a file never changes.
+    pub fn reload(&self) -> bool {
+        let Some(dir) = &self.dir else {
+            return false;
+        };
+        let (grants, locked) = match dir.load_plugin_grants() {
+            GrantsLoad::Missing => (PluginGrants::new(), None),
+            GrantsLoad::Loaded(g) => (g, None),
+            GrantsLoad::Invalid(why) => (PluginGrants::new(), Some(why)),
+            GrantsLoad::Newer(n) => (
+                PluginGrants::new(),
+                Some(format!("written by a newer version of SQLer (format {n})")),
+            ),
+        };
+        let Ok(mut state) = self.state.write() else {
+            return false;
+        };
+        let changed = state.grants != grants || state.locked != locked;
+        state.grants = grants;
+        state.locked = locked;
+        changed
+    }
+
     /// What the book says about `key`.
     #[must_use]
     pub fn status(&self, key: &GrantKey) -> GrantStatus {
@@ -403,13 +428,13 @@ mod tests {
         let book = GrantBook::open(dir.clone());
         let m = manifest("1.0.0", &["db.read"]);
         let key = fixture_key(&m);
-        assert!(!book.revoke(&m.id).unwrap());
+        assert!(!book.revoke(m.id()).unwrap());
         book.decide(&prompt(&m, &book), GrantCommand::Approve)
             .unwrap();
-        assert!(book.revoke(&m.id).unwrap());
+        assert!(book.revoke(m.id()).unwrap());
         assert_eq!(book.status(&key), GrantStatus::Denied);
         assert_eq!(GrantBook::open(dir).status(&key), GrantStatus::Denied);
-        assert!(!book.revoke(&m.id).unwrap());
+        assert!(!book.revoke(m.id()).unwrap());
     }
 
     #[test]
@@ -432,7 +457,7 @@ mod tests {
             ));
         }
         assert!(matches!(
-            book.revoke(&m.id),
+            book.revoke(m.id()),
             Err(GrantBookError::Unavailable(_))
         ));
         assert_eq!(
@@ -506,7 +531,7 @@ mod tests {
             GrantStatus::Approved(_)
         ));
         // Instance two revokes the first plugin; instance one, still holding it as approved, approves another.
-        assert!(two.revoke(&first.id).unwrap());
+        assert!(two.revoke(first.id()).unwrap());
         one.decide(&prompt(&second, &one), GrantCommand::Approve)
             .unwrap();
         let again = GrantBook::open(dir.clone());
@@ -581,7 +606,7 @@ mod tests {
         let two = GrantBook::open(dir);
         let reprompt = prompt(&v2, &one);
         assert!(reprompt.is_reprompt());
-        assert!(two.revoke(&v1.id).unwrap());
+        assert!(two.revoke(v1.id()).unwrap());
         for command in [GrantCommand::Approve, GrantCommand::Deny] {
             assert!(matches!(
                 one.decide(&reprompt, command),
@@ -628,5 +653,49 @@ mod tests {
         let text = std::fs::read_to_string(dir.plugin_grants_path()).unwrap();
         assert!(text.contains(&fixture_key(&m).to_string()), "{text}");
         assert!(text.contains("net.http:example.com"), "{text}");
+    }
+
+    #[test]
+    fn reload_sees_another_instances_revoke_and_damage() {
+        let (_s, dir) = scratch();
+        let book = GrantBook::open(dir.clone());
+        let other = GrantBook::open(dir.clone());
+        let m = manifest("1.0.0", &["db.read"]);
+        let key = fixture_key(&m);
+        book.decide(&prompt(&m, &book), GrantCommand::Approve)
+            .unwrap();
+        assert!(!book.reload(), "nothing changed on disk");
+        assert!(other.reload(), "the approval is new to the other instance");
+        assert!(other.approved(&key).is_some());
+        assert!(book.revoke(m.id()).unwrap());
+        assert!(
+            other.approved(&key).is_some(),
+            "answers from memory until reload"
+        );
+        assert!(other.reload());
+        assert_eq!(other.approved(&key), None);
+        assert_eq!(other.status(&key), GrantStatus::Denied);
+        assert!(!other.reload());
+        std::fs::write(dir.plugin_grants_path(), "not = [toml").unwrap();
+        assert!(other.reload());
+        assert!(matches!(
+            other.status(&key),
+            GrantStatus::Unavailable { .. }
+        ));
+        assert_eq!(
+            std::fs::read_to_string(dir.plugin_grants_path()).unwrap(),
+            "not = [toml"
+        );
+        std::fs::write(dir.plugin_grants_path(), "version = 1\n").unwrap();
+        assert!(other.reload(), "a valid file unlocks the book");
+        assert!(matches!(
+            other.status(&key),
+            GrantStatus::NeedsPrompt { .. }
+        ));
+    }
+
+    #[test]
+    fn an_in_memory_book_never_reloads() {
+        assert!(!GrantBook::in_memory().reload());
     }
 }

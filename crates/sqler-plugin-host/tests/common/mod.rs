@@ -97,7 +97,7 @@ impl Grants {
     /// Approves everything each discovered plugin declares.
     pub fn approve_declared(&self, d: &Discovery) {
         for p in &d.plugins {
-            self.approve(&p.key, p.manifest.capabilities.clone());
+            self.approve(&p.key, p.manifest.capabilities().clone());
         }
     }
 

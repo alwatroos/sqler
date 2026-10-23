@@ -658,7 +658,7 @@ pub mod wasm {
             let grants = Approve(Mutex::new(
                 d.plugins
                     .iter()
-                    .map(|p| (p.key.clone(), p.manifest.capabilities.clone()))
+                    .map(|p| (p.key.clone(), p.manifest.capabilities().clone()))
                     .collect(),
             ));
             let mut services = Services::new();

@@ -27,25 +27,25 @@ pub struct Entry {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Manifest {
     /// Plugin id.
-    pub id: PluginId,
+    id: PluginId,
     /// Display name.
-    pub name: String,
+    name: String,
     /// Plugin version.
-    pub version: semver::Version,
+    version: semver::Version,
     /// Required ABI version.
-    pub api: ApiVersion,
+    api: ApiVersion,
     /// Description.
-    pub description: Option<String>,
+    description: Option<String>,
     /// Authors.
-    pub authors: Vec<String>,
+    authors: Vec<String>,
     /// SPDX license text.
-    pub license: Option<String>,
+    license: Option<String>,
     /// Requested capabilities (default deny until approved).
-    pub capabilities: CapabilitySet,
+    capabilities: CapabilitySet,
     /// The component; `None` for a declarative-only plugin.
-    pub entry: Option<Entry>,
+    entry: Option<Entry>,
     /// Contributions.
-    pub contributes: Contributions,
+    contributes: Contributions,
     hash: ManifestHash,
 }
 
@@ -161,6 +161,75 @@ impl Manifest {
             });
         }
         Self::parse(std::str::from_utf8(bytes).map_err(|_| ManifestError::NotUtf8)?)
+    }
+
+    /// Plugin id.
+    #[must_use]
+    pub fn id(&self) -> &PluginId {
+        &self.id
+    }
+
+    /// Display name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Plugin version.
+    #[must_use]
+    pub fn version(&self) -> &semver::Version {
+        &self.version
+    }
+
+    /// Required ABI version.
+    #[must_use]
+    pub fn api(&self) -> ApiVersion {
+        self.api
+    }
+
+    /// Description.
+    #[must_use]
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    /// Authors.
+    #[must_use]
+    pub fn authors(&self) -> &[String] {
+        &self.authors
+    }
+
+    /// SPDX license text.
+    #[must_use]
+    pub fn license(&self) -> Option<&str> {
+        self.license.as_deref()
+    }
+
+    /// Requested capabilities (default deny until approved).
+    ///
+    /// The fields are private, so a parsed manifest cannot be changed behind the hash it carries:
+    ///
+    /// ```compile_fail,E0616
+    /// # use sqler_plugin_api::{Manifest, CapabilitySet};
+    /// # fn f(mut m: Manifest) {
+    /// m.capabilities = CapabilitySet::default();
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn capabilities(&self) -> &CapabilitySet {
+        &self.capabilities
+    }
+
+    /// The component; `None` for a declarative-only plugin.
+    #[must_use]
+    pub fn entry(&self) -> Option<&Entry> {
+        self.entry.as_ref()
+    }
+
+    /// Contributions.
+    #[must_use]
+    pub fn contributes(&self) -> &Contributions {
+        &self.contributes
     }
 
     /// The hash of the whole manifest document.

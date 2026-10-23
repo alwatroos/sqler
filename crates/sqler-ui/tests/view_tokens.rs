@@ -39,6 +39,10 @@ const SCANNED: &[(&str, &str)] = &[
     ("workspace/view/agent.rs", ""),
     ("workspace/view/shell/agent.rs", ""),
     ("plugins/grant/view.rs", ""),
+    ("plugins/manager/view.rs", ""),
+    ("workspace/view/plugins.rs", ""),
+    ("plugins/approval/view.rs", ""),
+    ("workspace/view/plugin_writes.rs", ""),
 ];
 
 /// Spacing helper prefixes: `.p_2()`, `.gap_1()` and friends.

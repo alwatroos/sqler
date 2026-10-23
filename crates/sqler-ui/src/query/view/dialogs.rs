@@ -11,7 +11,7 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
-use gpui_component::{ActiveTheme as _, Sizable as _};
+use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use sqler_driver_api::sqler_core::Environment;
 
 use crate::query::{BoundStatement, ParamForm, ParamKind, Phase};
@@ -161,13 +161,50 @@ fn params_dialog(
         .into_any_element()
 }
 
-#[allow(clippy::too_many_lines)] // one declarative element tree
 fn confirm_dialog(
     view: &WorkspaceView,
     tab: TabId,
     connection: &str,
     statements: &[BoundStatement],
     cx: &mut Context<WorkspaceView>,
+) -> AnyElement {
+    let cancel = cx.listener(move |view, _: &ClickEvent, _, cx| {
+        view.query_dismiss(tab, cx);
+    });
+    let confirm = cx.listener(move |view, event: &ClickEvent, _, cx| {
+        if event.click_count() == 1 {
+            view.query_confirm(tab, cx);
+        }
+    });
+    confirm_panel(
+        connection,
+        statements,
+        None,
+        view.queries.confirm_focus(),
+        false,
+        true,
+        cancel,
+        confirm,
+        cx,
+    )
+}
+
+/// The production confirmation as a dialog: the look of a run on a production connection. Shared with the approval
+/// of plugin writes, whose second confirmation goes through the same gate. `intro` goes before the question; `focus`
+/// is the handle of the Cancel wrapper (a stray Enter never confirms). With `pointer_only` the Run button is no tab
+/// stop (the caller's handler must also refuse keyboard clicks); the query editor's own gate keeps it in the tab
+/// order. With `run_enabled` false the Run button is drawn disabled (the approval dialog's arming window).
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // one declarative element tree
+pub(crate) fn confirm_panel(
+    connection: &str,
+    statements: &[BoundStatement],
+    intro: Option<String>,
+    focus: Option<&gpui::FocusHandle>,
+    pointer_only: bool,
+    run_enabled: bool,
+    on_cancel: impl Fn(&ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+    on_confirm: impl Fn(&ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+    cx: &gpui::App,
 ) -> AnyElement {
     let scale = ui_scale(cx);
     let theme = cx.theme();
@@ -231,34 +268,36 @@ fn confirm_dialog(
     if reads > 0 {
         body = format!("{body} {reads} read-only statement(s) run with them.");
     }
+    if let Some(intro) = intro {
+        body = format!("{intro} {body}");
+    }
     // The wrapper holds the default focus (Cancel), so a stray Enter never confirms.
     let mut cancel = div().child(
         Button::new("confirm-cancel")
             .label("Cancel")
             .outline()
             .small()
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.query_dismiss(tab, cx);
-            })),
+            .on_click(on_cancel),
     );
-    if let Some(focus) = view.queries.confirm_focus() {
+    if let Some(focus) = focus {
         cancel = cancel.track_focus(focus);
     }
-    let confirm = Button::new("confirm-run")
+    let mut confirm = Button::new("confirm-run")
         .label("Run")
         .primary()
         .danger()
         .small()
-        .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
-            if event.click_count() == 1 {
-                view.query_confirm(tab, cx);
-            }
-        }));
+        .disabled(!run_enabled)
+        .on_click(on_confirm);
+    if pointer_only {
+        confirm = confirm.tab_stop(false);
+    }
     let title = dialog_title(Some(AppIcon::TriangleAlert), "Run on production?", cx)
         .child(env_chip(Environment::Prod, cx));
     scrim("confirm-scrim", cx)
         .child(
             dialog_panel("confirm-dialog", DIALOG_W_LG, cx)
+                .debug_selector(|| "confirm-dialog".to_owned())
                 .child(title)
                 .child(div().text_size(px(scale.sm)).text_color(muted).child(body))
                 .child(list)

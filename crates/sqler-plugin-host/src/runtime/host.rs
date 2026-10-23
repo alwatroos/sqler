@@ -251,7 +251,7 @@ impl PluginHost {
         {
             let mut reg = lock(&self.inner.registry);
             for p in d.plugins {
-                let id = p.manifest.id.clone();
+                let id = p.manifest.id().clone();
                 if next.map.contains_key(&id) {
                     continue;
                 }
@@ -309,9 +309,9 @@ impl PluginHost {
                 };
                 let approved = self.inner.opts.grants.approved(&e.plugin.key);
                 PluginStatus {
-                    id: m.id.clone(),
+                    id: m.id().clone(),
                     state,
-                    effective: effective(&m.capabilities, approved.as_ref()),
+                    effective: effective(m.capabilities(), approved.as_ref()),
                     key: e.plugin.key.clone(),
                     scope_issues,
                 }

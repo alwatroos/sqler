@@ -66,11 +66,11 @@ fn run() -> Result<(), String> {
         return Err(format!("{}: {}", p.dir.display(), p.error));
     }
     let plugin = d.plugins.first().ok_or("no plugin found")?;
-    let id = plugin.manifest.id.clone();
+    let id = plugin.manifest.id().clone();
     let grants = DeclaredGrants(
         d.plugins
             .iter()
-            .map(|p| (p.key.clone(), p.manifest.capabilities.clone()))
+            .map(|p| (p.key.clone(), p.manifest.capabilities().clone()))
             .collect(),
     );
     let rt = tokio::runtime::Builder::new_current_thread()

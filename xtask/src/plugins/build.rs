@@ -112,7 +112,7 @@ fn display_rel(root: &Path, path: &Path) -> String {
 fn validate_manifest(row: &PluginRow, bytes: &[u8]) -> Result<Manifest, String> {
     let manifest = Manifest::parse_bytes(bytes)
         .map_err(|e| format!("{}: invalid sqler.toml: {e}", row.name))?;
-    match (&manifest.entry, row.package) {
+    match (manifest.entry(), row.package) {
         (None, Some(_)) => Err(format!(
             "{}: sqler.toml has no [entry] but the table row has a package",
             row.name
@@ -132,7 +132,7 @@ fn stage(
     manifest_bytes: &[u8],
     wasm: Option<&[u8]>,
 ) -> Result<Option<PathBuf>, String> {
-    let dir = out.join(manifest.id.as_str());
+    let dir = out.join(manifest.id().as_str());
     if dir.exists() {
         std::fs::remove_dir_all(&dir)
             .map_err(|e| format!("cannot remove {}: {e}", dir.display()))?;
@@ -140,7 +140,7 @@ fn stage(
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     std::fs::write(dir.join("sqler.toml"), manifest_bytes)
         .map_err(|e| format!("cannot write sqler.toml: {e}"))?;
-    let (Some(entry), Some(wasm)) = (&manifest.entry, wasm) else {
+    let (Some(entry), Some(wasm)) = (manifest.entry(), wasm) else {
         return Ok(None);
     };
     let dest = entry.component.split('/').fold(dir, |p, c| p.join(c));
@@ -220,7 +220,7 @@ pub fn build(
                 w,
                 "plugin={} id={} profile={profile} wasm={} bytes={} sha256={}",
                 row.name,
-                manifest.id.as_str(),
+                manifest.id().as_str(),
                 display_rel(root, &path),
                 bytes.len(),
                 ComponentDigest::of(bytes)
@@ -231,7 +231,7 @@ pub fn build(
                 w,
                 "plugin={} id={} profile={profile} wasm=- bytes=0 sha256=-",
                 row.name,
-                manifest.id.as_str()
+                manifest.id().as_str()
             )
             .map_err(|e| write_error(&e))?;
         }

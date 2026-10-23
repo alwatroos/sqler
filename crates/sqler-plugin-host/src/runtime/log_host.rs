@@ -57,6 +57,6 @@ fn level(l: wit_log::Level) -> LogLevel {
 
 impl wit_log::Host for HostState {
     async fn write(&mut self, l: wit_log::Level, message: String) {
-        write_limited(&self.log, &self.plugin.manifest.id, level(l), &message);
+        write_limited(&self.log, self.plugin.manifest.id(), level(l), &message);
     }
 }

@@ -154,8 +154,8 @@ pub(crate) async fn approve(
     }
     for stage in stages {
         let request = WriteRequest {
-            plugin: plugin.manifest.id.clone(),
-            plugin_name: plugin.manifest.name.clone(),
+            plugin: plugin.manifest.id().clone(),
+            plugin_name: plugin.manifest.name().to_owned(),
             connection: conn.clone(),
             sql: planned.sql.clone(),
             params: params.to_vec(),

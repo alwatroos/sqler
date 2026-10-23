@@ -1,11 +1,59 @@
 # Plugins
 
+A plugin is a WebAssembly component with a manifest (`sqler.toml`) that runs in a sandbox and can do only what you
+allow. See [Plugin development](../plugin-development/index.md) to write one.
+
+## What exists
+
+- **Plugin support is a build option.** The download you get by default has no plugin support (it would not fit the
+  size budget, [ADR-0060](../adr/0060-plugins-in-the-workbench.md)). A build with the `plugins` feature
+  (`cargo build --release -p sqler-app --features plugins`) has it. In a build without it the **Plugins** view says
+  "This build has no plugin support" and `--plugin-dir` is refused.
+- **Where plugins are found.** Each folder below `plugins/` in the [configuration directory](settings.md) is a
+  plugin, named after its id and holding `sqler.toml` and the component. For development, `--plugin-dir <PATH>`
+  (repeatable) adds a folder that holds `sqler.toml` (one plugin) or whose children are plugins. These paths are the
+  only extra places SQLer looks; it never searches a build output folder such as `target/plugins`. A development
+  plugin with the id of an installed one replaces it.
+- **Nothing runs at start.** The window appears first. Only then SQLer scans the folders; a plugin is compiled and
+  started only when it is switched on and you have allowed it. Plugins run on their own threads, apart from your
+  database work.
+
+## The Plugins view
+
+The **Plugins** item in the activity bar (the plug icon, near Settings, or the command **View: Show Plugins**) opens
+the list: name, version, state, the permissions it asks for and whether you allowed them. A dot on the icon means a
+plugin needs your decision or has failed.
+
+![The Plugins view in the dark theme](../screenshots/after/plugins-manager-dark.png)
+
+![The Plugins view in the light theme](../screenshots/after/plugins-manager-light.png)
+
+Select a plugin to see its details: the permissions it asks for and which are allowed, its last error, folders it
+asked for but did not get (missing, or a link that leaves its folder) and its settings.
+
+| Action | What it does |
+| ------ | ------------ |
+| **Enable** / **Disable** (`plugins:enable`, `plugins:disable`) | Switches the plugin on or off. The choice is kept in `plugin-prefs.toml` and survives a restart. A disabled plugin is never started. |
+| **Review permissions** (`plugins:review-permissions`) | Opens the permission dialog for the plugin, also when you answered before. |
+| **Revoke** (`plugins:revoke`) | Withdraws your approval. The plugin stops at once (a call in progress is cancelled) and SQLer does not ask again until the plugin changes or you choose **Review permissions**. |
+| **Rescan** (`plugins:refresh`) | Looks at the folders again. |
+
+A plugin that fails three times in a row is stopped and shown as failed with its last error; **Enable** starts it
+again. A folder that could not be loaded (no valid manifest, a component that does not match, a name that is not the
+plugin's id) is listed under "Could not load" with the reason; the other plugins are not affected.
+
+Settings a plugin declares appear in its details with an editor by type (switch, number, text) and are kept in
+`plugin-prefs.toml`. A plugin reads them but never writes them.
+
+SQLer shows the permission dialog the first time it meets a plugin that is switched on, and again when the plugin
+changed ([When SQLer asks again](#when-sqler-asks-again)). It re-reads `plugin-grants.toml` when the plugins load,
+whenever the dialog opens, on every Plugins command and when the window becomes active, and before each call a plugin
+makes, so a revoke made in another SQLer window takes effect for the next call.
+
 ## Permissions (grants)
 
-A plugin can do nothing until you allow it. This build has the permission store and the permission dialog as a
-component; plugins cannot be installed or run yet, and the plugin manager that shows the dialog and offers revoking
-(P7) is not part of it. Once it is, SQLer shows the dialog, titled **Allow plugin {name}?** with one row per permission
-the plugin asks for, when it first meets a plugin or a changed one.
+A plugin can do nothing until you allow it. SQLer shows the dialog, titled **Allow plugin {name}?** with one row per
+permission the plugin asks for, when it first meets a plugin or a changed one.
 
 ![The permission dialog in the dark theme](../screenshots/after/plugins-grant-dark.png)
 
@@ -15,7 +63,7 @@ the plugin asks for, when it first meets a plugin or a changed one.
 
 | Permission | Text | Extra |
 | ---------- | ---- | ----- |
-| `db.read` | Read the catalog and run read-only queries on your connections | |
+| `db.read` | Read the catalog and run read-only queries on your connections | Highlighted. |
 | `db.write` | Ask to change data or schema on your connections | Highlighted. Every change goes through the same confirmation as your own statements. |
 | `ui.panel` | Show its own panels | |
 | `ai.tool` | Offer tools to the AI assistant | Highlighted. |
@@ -25,7 +73,7 @@ the plugin asks for, when it first meets a plugin or a changed one.
 | `fs.read:plugin`, `fs.read:data...` | Read files in its own install folder or its own data folder | Highlighted, with the folder scope. |
 | `fs.read:home/...` | Read files in your home folder | Highlighted, with the folder scope. |
 
-Only `db.read` and `ui.panel` are shown quietly. Every other permission is highlighted, whatever host or folder it names.
+Only `ui.panel` is shown quietly. Every other permission is highlighted, whatever host or folder it names.
 
 Warnings you should read:
 
@@ -43,7 +91,7 @@ characters, invisible format characters and line separators are replaced and lon
 
 ### Data leaving your machine
 
-`db.read` is shown quietly, but a plugin that has `db.read` can read what your connections hold. If it also has
+`db.read` is highlighted because a plugin that has it can read what your connections hold. If it also has
 `net.http`, it can send what it read to the hosts you approved. Grant the two together only to a plugin you trust with
 that data. A database error text that reaches a plugin has account names, hosts, addresses and file paths removed (a permission failure is reduced to "the database denied the request"), so it can name only tables, columns and constraints, which a plugin with `db.read` can read anyway. Plugin output is not filtered the way data sent to an AI model is. A plugin never learns the host, user or
 password of a connection, and it cannot run a statement that changes data (`db.write`, or any statement SQLer does not
@@ -53,16 +101,18 @@ recognise as a plain read) without your explicit confirmation, and on a `prod` c
 
 - **Approve** allows exactly the permissions listed. There is no partial approval. It answers only to a mouse (or
   touch) click: no key is bound to it, it is skipped by Tab, and Enter or Space on it does nothing.
-- **Deny** (or **Escape**, pressed anywhere in the dialog) allows nothing. The answer is remembered and the plugin still loads without permissions.
-
-Known limitation: with the keyboard alone you can read the dialog and Deny, but you cannot Approve. A keyboard way to
-confirm (typing the plugin id) is planned before the dialog is reachable.
+- **Deny** (or **Escape**, pressed anywhere in the dialog, also in the text field) allows nothing. The answer is
+  remembered and the plugin still loads without permissions.
+- **Keyboard and screen readers.** Focus starts in the dialog; the first Tab stop is **Deny**, the second the
+  confirmation field, labelled "Type the plugin id {id} to approve". Type the plugin id exactly as shown and press
+  **Enter**: that approves the same permissions the Approve button would. Enter with anything else typed, or with the
+  field empty, does nothing. Pressing Enter on Deny denies. Nothing else in the dialog approves.
 
 If another SQLer window denied or revoked the same plugin while the dialog was open, your answer is not saved and the
 dialog is shown again with the current state.
 
-The commands are `plugins:approve-grant` ("Approve Plugin Permissions") and `plugins:deny-grant` ("Deny Plugin
-Permissions").
+The command **Deny Plugin Permissions** (`plugins:deny-grant`) is in the command palette. There is no command that
+approves, and a key cannot be bound to one: approving takes the button or the typed id in the dialog.
 
 ### When SQLer asks again
 
@@ -72,14 +122,37 @@ replaced component, means a new question. Only the latest answer per plugin is k
 
 ### Revoking
 
-The store can revoke an approval, which turns it into a denial for the plugin's current version, so SQLer does not
-ask again at the next start. There is no screen for this in this build; the plugin manager (P7) will add the revoke
-action and a way to be asked again.
+**Revoke** in the Plugins view turns an approval into a denial for the plugin's current version, so SQLer does not ask
+again at the next start. To be asked again, select the plugin and choose **Review permissions**.
 
-### The file
+### Plugin writes
+
+A plugin with `db.write` can ask to run a statement that changes data. SQLer opens its own connection for each
+statement (never one of your tabs, so it never touches a transaction you hold), and closes it afterwards. Before the
+statement runs, a dialog shows the plugin (name and id), the connection and the exact SQL, and nothing runs until you
+press **Approve** with the mouse. Approve ignores clicks for about half a second after the dialog appears, so a click
+meant for the grid or the editor cannot approve it. **Deny** has the focus, **Escape** denies, and a plugin call that is cancelled removes its
+dialog. If several plugins ask, the dialogs come one after the other. On a connection labelled `prod` a second
+dialog, the same "Run on production?" confirmation as for your own statements, follows; denying either one stops the
+statement. A statement that cannot be shown in that confirmation (for example one with named parameters) is refused.
+
+![The approval of a plugin's statement in the light theme](../screenshots/after/plugins-write-light.png)
+
+![The second confirmation on a production connection in the dark theme](../screenshots/after/plugins-write-prod-dark.png)
+
+### The files
 
 Answers are stored in `plugin-grants.toml` in the [configuration directory](settings.md) (version 1, one `[[grant]]` per
 plugin with `key`, `decision` and `capabilities`). On Unix it is written with mode 0600.
+
+Your other plugin choices, which plugins you switched off and their setting values, are in `plugin-prefs.toml` next to
+it (version 1, a `disabled` list and `[settings.<plugin id>]` tables, mode 0600 on Unix). It is not security relevant,
+but it is handled the same way: a damaged, newer, too large or (on Unix) other-writable file is ignored with a message
+in the Plugins view and never overwritten.
+
+A plugin that may read `data` gets the folder `plugins/<id>/data` in the configuration directory, which SQLer creates
+as an ordinary folder. If a link is already there, SQLer does not follow it, does not start the plugin and says so as
+its last error; remove the link to continue.
 
 If the file cannot be trusted, SQLer denies everything and does not rewrite it. This applies when it is not valid TOML,
 has unknown fields, is larger than 1 MiB, has more than 1024 records, comes from a newer SQLer, cannot be read, or (on
