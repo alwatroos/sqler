@@ -39,3 +39,21 @@ There is no size threshold in `xtask` or in another test; the only machine-read 
 - Trimming the binary (`opt-level = "s"` for non-hot dependencies, `zbus`/`accesskit_unix`, the `wgpu`/`naga`
   backends) is not done here and stays an option when the new budget tightens.
 - The lightweight goals other than size (cold start < 500 ms, idle RSS < 150 MB with three connections) are unchanged.
+
+## Amendment 1 (2026-10-23): budget 80 MB
+
+The owner raised the budget again (owner decision 12 of the 1.0 plan, on top of the decision above), to
+**80 MB = 83,886,080 bytes** (80 x 1,048,576). The text above records the 70 MB state and is not rewritten.
+
+- Why: the 1.0 release artifact ships the plugin host (`plugins`) and SQL Server
+  ([ADR-0071](0071-sql-server-plugin.md)). With the host the Linux binary was 79,908,200 bytes at the M6 close, which is
+  over 70 MB and cannot be trimmed enough in one release without dropping features.
+- New figures: budget 83,886,080 bytes; the `plugins` limit (budget minus the 1 MiB reserve) is **82,837,504 bytes**.
+- Everything that carried the 70 MB figure now carries the new one: `AGENTS.md` (sections 1, 3, 9, the plugin size
+  rule), `.github/workflows/size.yml` (`budget=83886080`, still report only, still printing the default and the
+  `plugins` build per OS), `docs/src/benchmarks.md` (target row, method text), the DuckDB size paragraph of
+  `docs/src/plugin-development/drivers.md` (the DuckDB build is still over the budget, by 11,294,144 bytes) and the
+  dated status lines of ADR-0001, 0009, 0029, 0032, 0054, 0057 and 0060.
+- `default` features are not flipped by this amendment: the plugin host and SQL Server in the release artifact are the
+  business of the release build item of the 1.0 plan, which is measured against this budget.
+- Still no size threshold in `xtask` or another test; the only machine-read value is `budget` in `size.yml`.
