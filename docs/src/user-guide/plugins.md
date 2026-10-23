@@ -23,16 +23,19 @@ allow. See [Plugin development](../plugin-development/index.md) to write one.
 A plugin that is switched on, started and allowed can add the following to SQLer. Each item is named in the plugin's
 manifest; none is added for a plugin that is off, has failed or whose permissions you denied.
 
-- **Palette commands.** In the command palette (**Mod+Shift+P**) a command appears as `<plugin name>: <title>`. Running
+- **Palette commands.** In the command palette (**Mod+Shift+P**) a command appears as `<plugin name> (plugin): <title>`. Running
   it calls the plugin. If the call fails, a notification says so and SQLer carries on.
 - **Object menu.** Open the object menu on the selected object with **Shift+F10** (or the Menu key); plugin entries
   are listed with the plugin name. An entry that does not apply to the selected kind says so. Entries for the editor
   and the results grid are in the command palette (`Editor: ...`, `Results: ...`); they need an open editor or result.
-- **Status bar.** A plugin can show a short text on the left or right of the status bar. It is not focusable, the
-  tooltip is the plugin's tooltip or its name, texts are shortened to 64 characters and at most 8 plugin items show.
+  An editor or results command sends the SQL you selected (up to 256 KiB) to that plugin when you run it, without any
+  permission, so run such a command only for a plugin you trust with that text.
+- **Status bar.** A plugin can show a short text on the left or right of the status bar. It is not focusable and is drawn with a plug mark;
+  the tooltip always names the plugin (after the plugin's own tooltip, if any), so it cannot pass as a SQLer item. Texts are shortened to 64 characters and at most 8 plugin items show.
 - **Plugins bottom tab.** A plugin with the `ui.panel` permission can add panels. The bottom panel then has a **Plugins**
   tab (command **View: Show Plugin Panels**, and `View: Show <panel> (<plugin>)` per panel). If a panel cannot be shown,
-  the tab says why and has a **Reload** button.
+  the tab says why and has a **Reload** button. A panel shows the plugin name above its content. A table is drawn up to a
+  fixed number of cells; the rest shows as "N more rows not shown".
 
 ![A plugin panel in the bottom panel, light theme](../screenshots/after/plugins-panel-light.png)
 

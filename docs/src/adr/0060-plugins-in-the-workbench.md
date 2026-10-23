@@ -178,7 +178,7 @@ window turns them into registrations and the host answers the plugin's `ui` impo
 
 Every id passes `CommandId::new` and is rebindable in `keybindings.toml`. The form is `plugin-<plugin>:<command>`
 (one `:` only, which `CommandId` allows), not `plugin:<id>:<action>`. The categories are `plugin-` (palette,
-`<plugin name>: <title>`, called with no context), `object-plugin-`, `editor-plugin-` and `results-plugin-` (menu
+`<plugin name> (plugin): <title>` so a title never equals a built-in one, called with no context), `object-plugin-`, `editor-plugin-` and `results-plugin-` (menu
 entries, each called with its location's context), `panel-plugin-` (show a panel) and the built-in
 `workbench:show-plugin-panels`. The prefixes differ, so categories cannot collide with each other or with a built-in id.
 The UI builds the registrations from the `PluginRow`s the manager loads, validates and namespaces every id, refuses
@@ -194,7 +194,7 @@ Palette commands appear in the command palette. Object entries are in the object
 `object:show-menu`), editor entries and results entries only in the palette; pointer context menus of the grid and the
 editor are not extended. Status items fill in once the row turns `Live` (through `ui-handler.status`) and then from
 `set-status` events. A `left` item goes at the end of the left group of the status bar and a `right` item between the
-timing and the panel toggles; they are not focusable, and the tooltip is the manifest tooltip, else the plugin name.
+timing and the panel toggles; they are not focusable. Each carries a plug mark, and its tooltip is always the plugin name, preceded by the manifest tooltip when there is one (`<tooltip> - <plugin name>`). Neither is the plugin's to change, so a status text cannot pass as one of SQLer's own items.
 
 ### Panel host
 
@@ -216,9 +216,18 @@ to the workspace, as for writes. The host's typed calls replace the removed `ui_
   512. Notifications are prefixed with the plugin name, which guards against spoofing.
 - Window: a status shows at most 64 characters with "…" and at most 8 plugin items; an empty text hides the item. A
   panel renders at most 10 times a second (100 ms apart); an editor selection passed to a command is capped at 256 KiB.
-  Tree size uses the existing widget limits.
+  Tree size uses the existing widget limits. Drawing is capped on top of that: at most 5,000 table cells (headings
+  included) per tree are drawn, in tree order; a table that does not fit in what is left shows "N more rows not shown"
+  (or a short "not shown" line when not even its headings fit), and each table has its own scroll state. The window
+  compares trees by identity and diffs a new one once, so a frame that changes nothing copies nothing.
+- Text pulled with `ui-handler.status` gets the same one-line cleaning as pushed text (control characters, bidi
+  overrides and isolates, U+2028/2029 removed, 256 bytes), and so does plugin error text shown in a notification. A
+  panel always shows a one-line header with the plugin name, and the palette title carries "(plugin)".
+- An editor or results command sends the selected SQL (up to 256 KiB) to the plugin, with no permission: the user
+  starts it by choosing the command. A panel event runs with the command deadline of 30 s, so a hanging handler blocks
+  that panel's queue for that long, not the window.
 
 ### Not done
 
-No tracing subscriber is installed (the `debug!` lines go nowhere): it would be a new dependency in a default build with
-about 400 KB of headroom under the size budget. This is a follow-up.
+No tracing subscriber is installed (the `debug!` lines go nowhere): it would be a new dependency in a default build;
+the size budget is 70 MB now, so room is not the reason; it is left out of this change to keep the default build's dependencies as they are. This is a follow-up.

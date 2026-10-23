@@ -25,8 +25,16 @@ pub struct Shown {
     pub key: String,
     /// The text, one line, at most [`MAX_CHARS`] characters.
     pub text: String,
-    /// The tooltip: the manifest tooltip, else the plugin name.
+    /// The tooltip: the manifest tooltip if any, always followed by the plugin name, which the plugin cannot change.
     pub tooltip: String,
+}
+
+/// A character plugin text must not carry: a control character, a line or paragraph separator, or a bidirectional
+/// override or isolate (it could reorder the text around it).
+#[must_use]
+pub fn is_unsafe_char(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
 /// One line without control characters, at most [`MAX_CHARS`] characters; empty when nothing visible is left.
@@ -34,7 +42,7 @@ pub struct Shown {
 pub fn display_text(raw: &str) -> String {
     let flat: String = raw
         .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| if is_unsafe_char(c) { ' ' } else { c })
         .collect();
     let flat = flat.trim();
     if flat.chars().count() <= MAX_CHARS {
@@ -130,7 +138,10 @@ impl StatusModel {
             .map(|(i, text)| Shown {
                 key: format!("{}-{}", i.plugin, i.item),
                 text: text.clone(),
-                tooltip: i.tooltip.clone().unwrap_or_else(|| i.plugin_name.clone()),
+                tooltip: match &i.tooltip {
+                    Some(tip) => format!("{tip} - {}", i.plugin_name),
+                    None => i.plugin_name.clone(),
+                },
             })
             .collect()
     }
@@ -207,7 +218,7 @@ mod tests {
         let shown = m.shown(Alignment::Left);
         assert_eq!(shown.len(), 1);
         assert_eq!(shown[0].text, "prod");
-        assert_eq!(shown[0].tooltip, "Where");
+        assert_eq!(shown[0].tooltip, "Where - acme-sync name");
         assert_eq!(m.shown(Alignment::Right).len(), 0);
         assert!(m.set(&p, &i, "dev"));
         assert_eq!(m.shown(Alignment::Left)[0].text, "dev");
@@ -224,11 +235,16 @@ mod tests {
     }
 
     #[test]
-    fn the_tooltip_falls_back_to_the_plugin_name() {
+    fn the_tooltip_is_just_the_plugin_name_without_a_manifest_one() {
         let mut m = StatusModel::default();
         m.sync(&[reg("acme-sync", "a", Alignment::Right, None)], &live(&[]));
         m.set(&"acme-sync".parse().unwrap(), &"a".parse().unwrap(), "t");
         assert_eq!(m.shown(Alignment::Right)[0].tooltip, "acme-sync name");
+    }
+
+    #[test]
+    fn bidi_overrides_and_separators_are_dropped() {
+        assert_eq!(display_text("a\u{202e}b\u{2028}c"), "a b c");
     }
 
     #[test]

@@ -49,7 +49,7 @@ fn item(id: impl Into<gpui::ElementId>, colors: Colors) -> Stateful<gpui::Div> {
         .hover(move |s| s.bg(hover))
 }
 
-/// An item a plugin contributed: its text, and the tooltip of the manifest (else the plugin name).
+/// An item a plugin contributed: a plug mark, its text, and a tooltip that always ends in the plugin name.
 fn plugin_item(shown: Shown, colors: Colors) -> Stateful<gpui::Div> {
     let tip = SharedString::from(shown.tooltip);
     item(
@@ -57,6 +57,13 @@ fn plugin_item(shown: Shown, colors: Colors) -> Stateful<gpui::Div> {
         colors,
     )
     .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+    // The plug mark and the tooltip name the plugin; neither is the plugin's to choose, so its text cannot pass as one of
+    // SQLer's own items.
+    .child(
+        Icon::new(AppIcon::Plug)
+            .size(px(12.))
+            .text_color(colors.text),
+    )
     .child(shown.text)
 }
 

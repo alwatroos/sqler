@@ -232,7 +232,7 @@ impl Registrations {
             if let Some(id) = claim(command_id(plugin, &command.id), refusals) {
                 self.commands.push(Registration {
                     id,
-                    title: format!("{name}: {}", command.title),
+                    title: format!("{name} (plugin): {}", command.title),
                     plugin: plugin.clone(),
                     plugin_name: name.to_owned(),
                     action: Action::Run {
@@ -395,7 +395,7 @@ mod tests {
             ]
         );
         let titles: Vec<&str> = regs.commands().iter().map(|r| r.title.as_str()).collect();
-        assert_eq!(titles[0], "Acme Sync: Run it");
+        assert_eq!(titles[0], "Acme Sync (plugin): Run it");
         assert_eq!(titles[2], "Object: Scan (Acme Sync)");
         assert_eq!(titles[3], "Editor: Run it (Acme Sync)");
         assert_eq!(titles[4], "Results: Run it (Acme Sync)");
@@ -407,6 +407,51 @@ mod tests {
         regs.register(&mut registry).unwrap();
         assert_eq!(registry.len(), 6);
         assert!(registry.iter().all(|c| is_plugin_category(c.category())));
+    }
+
+    /// Every built-in command list the window registers, in one registry.
+    fn built_in_registry() -> CommandRegistry {
+        let mut r = CommandRegistry::new();
+        crate::ai::register_commands(&mut r).unwrap();
+        crate::browser::register_commands(&mut r).unwrap();
+        crate::connections::register_commands(&mut r).unwrap();
+        crate::editor::register_commands(&mut r).unwrap();
+        crate::export::register_commands(&mut r).unwrap();
+        crate::history::register_commands(&mut r).unwrap();
+        crate::palette::register_commands(&mut r).unwrap();
+        crate::plugins::action::register_commands(&mut r).unwrap();
+        crate::query::register_commands(&mut r).unwrap();
+        crate::workbench::register_commands(&mut r).unwrap();
+        crate::workbench::register_pane_commands(&mut r).unwrap();
+        crate::workspace::register_commands(&mut r).unwrap();
+        r
+    }
+
+    #[test]
+    fn no_built_in_category_looks_like_a_plugin_one() {
+        let built_in = built_in_registry();
+        assert!(built_in.len() > 50, "the lists were registered");
+        for command in built_in.iter() {
+            assert!(
+                !is_plugin_category(command.category()),
+                "{} would be dropped as a plugin command",
+                command.id().as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn a_plugin_title_never_equals_a_built_in_title() {
+        let built_in = built_in_registry();
+        let titles: HashSet<&str> = built_in.iter().map(Command::title).collect();
+        // The worst plugin name: one that makes the old "<name>: <title>" form equal "Query: Run All".
+        let hostile = "[[commands]]\nid = \"run\"\ntitle = \"Run All\"\n";
+        let rows = [with_panel(manifest("query", "Query", hostile))];
+        let (regs, _) = Registrations::from_rows(&rows, &none);
+        for reg in regs.commands() {
+            assert!(!titles.contains(reg.title.as_str()), "{}", reg.title);
+        }
+        assert!(titles.iter().all(|t| !t.contains("(plugin)")));
     }
 
     #[test]

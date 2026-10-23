@@ -13,6 +13,7 @@
 //! - a panel renders only while it is shown; a refresh while hidden marks it stale and the next show renders.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sqler_plugin_api::{WidgetEvent, WidgetTree};
@@ -30,7 +31,7 @@ pub enum SlotView {
     /// Nothing yet.
     Loading,
     /// The tree the plugin drew.
-    Tree(WidgetTree),
+    Tree(Arc<WidgetTree>),
     /// The reason the panel cannot be shown.
     Failed(String),
 }
@@ -101,6 +102,15 @@ impl PanelSlot {
     #[must_use]
     pub fn tree(&self) -> Option<&WidgetTree> {
         match &self.view {
+            SlotView::Tree(t) => Some(t.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// The tree on screen as a shared handle: cheap to keep and to compare by identity.
+    #[must_use]
+    pub fn tree_arc(&self) -> Option<&Arc<WidgetTree>> {
+        match &self.view {
             SlotView::Tree(t) => Some(t),
             _ => None,
         }
@@ -167,7 +177,7 @@ impl PanelSlot {
         self.view = match result {
             Ok(tree) => {
                 self.stale = false;
-                SlotView::Tree(tree)
+                SlotView::Tree(Arc::new(tree))
             }
             Err(reason) => SlotView::Failed(reason),
         };
@@ -186,7 +196,7 @@ impl PanelSlot {
         self.in_flight = false;
         let failed = result.is_err();
         match result {
-            Ok(Some(tree)) => self.view = SlotView::Tree(tree),
+            Ok(Some(tree)) => self.view = SlotView::Tree(Arc::new(tree)),
             Ok(None) => {}
             Err(reason) => self.view = SlotView::Failed(reason),
         }

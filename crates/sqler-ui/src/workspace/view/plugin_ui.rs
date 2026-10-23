@@ -10,12 +10,13 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Entity, Focusable as _,
     InteractiveElement as _, IntoElement as _, ParentElement as _, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window, div, prelude::FluentBuilder as _, px,
+    Styled as _, Subscription, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{InputEvent, InputState};
@@ -51,7 +52,7 @@ struct PanelInput {
 #[derive(Default)]
 pub(crate) struct PluginUiViews {
     /// The panel the editors belong to, and the tree they were last matched with.
-    synced: Option<(PluginId, ContributionId, WidgetTree)>,
+    synced: Option<(PluginId, ContributionId, Arc<WidgetTree>)>,
     inputs: HashMap<String, PanelInput>,
 }
 
@@ -308,8 +309,13 @@ impl WorkspaceView {
             self.ws
                 .plugin_ui()
                 .selected()
-                .zip(self.ws.plugin_ui().selected_slot().and_then(|s| s.tree()))
-                .map(|(reg, tree)| (reg.plugin.clone(), reg.panel.clone(), tree.clone()))
+                .zip(
+                    self.ws
+                        .plugin_ui()
+                        .selected_slot()
+                        .and_then(|s| s.tree_arc()),
+                )
+                .map(|(reg, tree)| (reg.plugin.clone(), reg.panel.clone(), Arc::clone(tree)))
         } else {
             None
         };
@@ -317,13 +323,15 @@ impl WorkspaceView {
             return;
         };
         let old = match &self.plugin_ui_views.synced {
-            Some((p, q, t)) if *p == plugin && *q == panel => Some(t.clone()),
+            // The very tree already matched: nothing to compare, nothing to copy.
+            Some((p, q, t)) if *p == plugin && *q == panel && Arc::ptr_eq(t, &tree) => return,
+            Some((p, q, t)) if *p == plugin && *q == panel => Some(Arc::clone(t)),
             _ => {
                 self.plugin_ui_views.inputs.clear();
                 None
             }
         };
-        let changes = diff(old.as_ref(), &tree);
+        let changes = diff(old.as_deref(), &tree);
         if changes.same {
             return;
         }
@@ -503,7 +511,20 @@ impl WorkspaceView {
             .size_full()
             .flex()
             .flex_col()
-            .when(show_chips, |el| el.child(chips))
+            .child(if show_chips {
+                chips.into_any_element()
+            } else {
+                // One panel: no chips, but its content is still named after the plugin it comes from.
+                div()
+                    .id("plugin-panel-header")
+                    .flex_none()
+                    .px(px(SPACE[3]))
+                    .py(px(SPACE[1]))
+                    .text_size(px(ui_scale(cx).sm))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("{} - {}", selected.title, selected.plugin_name))
+                    .into_any_element()
+            })
             .child(div().flex_1().min_h_0().child(content))
             .into_any_element()
     }

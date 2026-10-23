@@ -10,6 +10,7 @@ use sqler_plugin_api::{
 };
 
 use super::convert::{context_to_wit, event_to_wit, tree_from_wit};
+use super::limits::{STATUS_MAX_BYTES, one_line};
 use crate::error::{CallError, ErrorCode, GuestError};
 use crate::runtime::ui_handler::GuestIndices;
 use crate::runtime::{CallFn, Live, PendingCall, PluginHost};
@@ -170,7 +171,11 @@ impl PluginHost {
             Box::pin(async move {
                 let indices = GuestIndices::new(&live.pre).map_err(|_| missing())?;
                 let guest = indices.load(&mut live.store, &live.instance)?;
-                guest.call_status(&mut live.store, &item).await
+                let text = guest.call_status(&mut live.store, &item).await?;
+                // Plugin text is one plain line, like the text it pushes with `set-status`.
+                Ok(text
+                    .map(|t| one_line(&t, STATUS_MAX_BYTES))
+                    .filter(|t| !t.is_empty()))
             })
         });
         self.run(id, CallKind::Status, f)

@@ -3,7 +3,7 @@
 
 //! Per-plugin rate limits for the `ui` import and the sanitising of the text a plugin pushes to the window.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Status text cap in bytes.
 pub(crate) const STATUS_MAX_BYTES: usize = 256;
@@ -36,16 +36,20 @@ impl Bucket {
 
     /// Takes one token at `now`; `false` means the call is over its rate.
     pub(crate) fn take(&mut self, now: Instant) -> bool {
-        if let Some(last) = self.last {
-            let ms =
-                u64::try_from(now.saturating_duration_since(last).as_millis()).unwrap_or(u64::MAX);
-            self.micro_tokens = self
-                .micro_tokens
-                .saturating_add(ms.saturating_mul(self.refill_per_ms))
-                .min(self.capacity);
-        }
-        if self.last.is_none_or(|l| now > l) {
-            self.last = Some(now);
+        match self.last {
+            Some(last) => {
+                let ms = u64::try_from(now.saturating_duration_since(last).as_millis())
+                    .unwrap_or(u64::MAX);
+                if ms > 0 {
+                    self.micro_tokens = self
+                        .micro_tokens
+                        .saturating_add(ms.saturating_mul(self.refill_per_ms))
+                        .min(self.capacity);
+                    // Move on by the whole milliseconds credited only, so the remainder is not lost.
+                    self.last = Some(last.checked_add(Duration::from_millis(ms)).unwrap_or(now));
+                }
+            }
+            None => self.last = Some(now),
         }
         if self.micro_tokens >= MICRO {
             self.micro_tokens -= MICRO;
@@ -122,6 +126,21 @@ mod tests {
             assert!(b.take(later));
         }
         assert!(!b.take(later));
+    }
+
+    #[test]
+    fn calls_closer_than_a_millisecond_still_refill() {
+        let t0 = Instant::now();
+        // 1000 tokens per second: one per millisecond.
+        let mut b = Bucket::new(1, 1_000_000);
+        assert!(b.take(t0));
+        assert!(!b.take(t0));
+        // 20 calls 100 microseconds apart: 2 ms pass in all, so a token is back.
+        let mut got = false;
+        for i in 1..=20u32 {
+            got |= b.take(t0 + Duration::from_micros(100) * i);
+        }
+        assert!(got);
     }
 
     #[test]

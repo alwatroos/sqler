@@ -7,6 +7,7 @@
 //! a text input, which sends `Changed` on Enter or when it loses the focus (the host wires that through the input
 //! entities it hands in).
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -31,6 +32,8 @@ pub(crate) type Emit = Rc<dyn Fn(WidgetEvent, &mut Window, &mut App)>;
 
 /// The width of a table column.
 const CELL_WIDTH: f32 = 140.;
+/// The most table cells (headings included) drawn for one tree.
+pub(crate) const MAX_DRAWN_CELLS: usize = 5_000;
 /// The tallest a table grows before it scrolls.
 const TABLE_MAX_HEIGHT: f32 = 320.;
 
@@ -56,7 +59,8 @@ pub(crate) fn render_tree(
     emit: &Emit,
     cx: &App,
 ) -> AnyElement {
-    node(tree, 0, inputs, emit, cx)
+    let budget = Cell::new(MAX_DRAWN_CELLS);
+    node(tree, 0, inputs, emit, &budget, cx)
 }
 
 #[allow(clippy::too_many_lines)] // one arm per widget
@@ -65,6 +69,7 @@ fn node(
     index: usize,
     inputs: &HashMap<String, Entity<InputState>>,
     emit: &Emit,
+    budget: &Cell<usize>,
     cx: &App,
 ) -> AnyElement {
     let Some(n) = tree.nodes().get(index) else {
@@ -83,7 +88,7 @@ fn node(
                 el = el.gap(px(gap));
             }
             for child in &n.children {
-                el = el.child(node(tree, *child as usize, inputs, emit, cx));
+                el = el.child(node(tree, *child as usize, inputs, emit, budget, cx));
             }
             el.into_any_element()
         }
@@ -181,7 +186,7 @@ fn node(
             }
             row.into_any_element()
         }
-        Widget::Table(table) => table_view(table, cx),
+        Widget::Table(table) => table_view(table, index, budget, cx),
         Widget::Divider => div()
             .w_full()
             .border_t_1()
@@ -190,10 +195,30 @@ fn node(
     }
 }
 
-/// A read-only table in a scroll container.
-fn table_view(table: &Table, cx: &App) -> AnyElement {
+/// How many rows of a table fit in what is left of the budget, and so are drawn. Every column heading and every cell
+/// costs one; the headings are always drawn.
+fn rows_within(columns: usize, rows: usize, left: usize) -> usize {
+    let after_head = left.saturating_sub(columns);
+    after_head
+        .checked_div(columns)
+        .map_or(0, |fit| rows.min(fit))
+}
+
+/// A read-only table in a scroll container. At most what is left of `budget` in cells is drawn, the rest is named in
+/// one muted line, so a huge table cannot stall a frame.
+fn table_view(table: &Table, index: usize, budget: &Cell<usize>, cx: &App) -> AnyElement {
+    let columns = table.columns.len();
     let theme = cx.theme();
     let (border, muted) = (theme.border, theme.muted_foreground);
+    if columns > budget.get() {
+        return div()
+            .text_color(muted)
+            .child("Table not shown: the panel has too many cells")
+            .into_any_element();
+    }
+    let shown = rows_within(columns, table.rows.len(), budget.get());
+    budget.set(budget.get().saturating_sub(columns * (shown + 1)));
+    let hidden = table.rows.len() - shown;
     let size = ui_scale(cx).sm;
     let cell = |text: &str| {
         div()
@@ -217,7 +242,7 @@ fn table_view(table: &Table, cx: &App) -> AnyElement {
         head = head.child(cell(column));
     }
     let mut body = div()
-        .id("plugin-widget-table")
+        .id(element_id("table", &index.to_string()))
         .role(Role::Table)
         .max_h(px(TABLE_MAX_HEIGHT))
         .overflow_scroll()
@@ -228,12 +253,56 @@ fn table_view(table: &Table, cx: &App) -> AnyElement {
         .rounded(cx.theme().radius)
         .text_size(px(size))
         .child(head);
-    for row in &table.rows {
+    for row in table.rows.iter().take(shown) {
         let mut line = div().flex().flex_row();
         for text in row {
             line = line.child(cell(text));
         }
         body = body.child(line);
     }
+    if hidden > 0 {
+        body = body.child(
+            div()
+                .px(px(SPACE[3]))
+                .py(px(SPACE[1]))
+                .text_color(muted)
+                .child(format!("{hidden} more rows not shown")),
+        );
+    }
     body.into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_tables_are_drawn_whole() {
+        assert_eq!(rows_within(3, 10, MAX_DRAWN_CELLS), 10);
+        assert_eq!(rows_within(0, 10, MAX_DRAWN_CELLS), 0);
+    }
+
+    #[test]
+    fn the_worst_legal_table_is_cut_to_the_budget() {
+        // 1000 rows by 50 columns is 50 000 cells.
+        let shown = rows_within(50, 1000, MAX_DRAWN_CELLS);
+        assert!(shown < 1000);
+        assert!((shown + 1) * 50 <= MAX_DRAWN_CELLS);
+    }
+
+    #[test]
+    fn many_tables_share_one_budget() {
+        // 2000 tables of 1000 x 50: the budget runs out, and later tables are not drawn at all.
+        let budget = Cell::new(MAX_DRAWN_CELLS);
+        let mut drawn = 0;
+        for _ in 0..2000 {
+            if 50 > budget.get() {
+                continue;
+            }
+            let shown = rows_within(50, 1000, budget.get());
+            drawn += 50 * (shown + 1);
+            budget.set(budget.get().saturating_sub(50 * (shown + 1)));
+        }
+        assert!(drawn <= MAX_DRAWN_CELLS);
+    }
 }

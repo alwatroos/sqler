@@ -24,6 +24,7 @@ use sqler_plugin_host::{
 };
 use sqler_ui::plugins::backend::PanelRender;
 use sqler_ui::plugins::grant::GrantBook;
+use sqler_ui::plugins::status::is_unsafe_char;
 use sqler_ui::plugins::{PluginProblem, PluginRow, PluginSnapshot, PluginsBackend, RowState};
 
 use super::dirs::{ensure_data_dir, plugin_dirs};
@@ -92,7 +93,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub(super) fn one_line(text: &str) -> String {
     let flat: String = text
         .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| if is_unsafe_char(c) { ' ' } else { c })
         .collect();
     let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= MAX_LINE {
@@ -806,6 +807,7 @@ default = 5
     #[test]
     fn one_line_flattens_and_cuts() {
         assert_eq!(one_line("a\nb\t c"), "a b c");
+        assert_eq!(one_line("a\u{202e}b\u{2028}c"), "a b c");
         let long = "x".repeat(1000);
         assert_eq!(one_line(&long).chars().count(), MAX_LINE);
     }
