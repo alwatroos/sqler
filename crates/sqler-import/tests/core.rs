@@ -241,7 +241,16 @@ fn full_report() -> SourceReport {
             .join("full.json"),
     )
     .unwrap();
-    PgAdmin.parse(&bytes).unwrap()
+    // The fixture's `/home/alice/` paths become absolute paths of this OS.
+    let text = String::from_utf8(bytes).unwrap();
+    let home = if cfg!(windows) {
+        "C:\\\\Users\\\\alice\\\\"
+    } else {
+        "/home/alice/"
+    };
+    PgAdmin
+        .parse(text.replace("/home/alice/", home).as_bytes())
+        .unwrap()
 }
 
 fn store_with_existing() -> ConnectionStore {
@@ -329,21 +338,18 @@ fn plan_then_apply_adds_only_new_things() {
     let (_, id2) = report.added.iter().find(|(i, _)| *i == 2).unwrap();
     let new2 = store.connection(id2).unwrap();
     assert!(!new2.spec().password_in_keychain);
-    #[cfg(unix)]
-    {
-        assert!(matches!(
-            new2.spec().ssh.as_ref().unwrap().auth,
-            SshAuth::KeyFile {
-                passphrase_in_keychain: true,
-                ..
-            }
-        ));
-        assert!(
-            report
-                .secrets_stored
-                .contains(&(2, ProfileSecretKind::SshPassphrase))
-        );
-    }
+    assert!(matches!(
+        new2.spec().ssh.as_ref().unwrap().auth,
+        SshAuth::KeyFile {
+            passphrase_in_keychain: true,
+            ..
+        }
+    ));
+    assert!(
+        report
+            .secrets_stored
+            .contains(&(2, ProfileSecretKind::SshPassphrase))
+    );
     assert!(
         report
             .secrets_skipped
@@ -359,8 +365,8 @@ fn plan_then_apply_adds_only_new_things() {
     assert!(!report.added.iter().any(|(i, _)| *i == 1));
     let r_ssh = SecretRef::new(id0.as_str(), SecretKind::SshPassword).unwrap();
     assert!(secrets.get(&r_ssh).unwrap().is_none());
-    // Exactly the stored secrets are in the store (the key-file passphrase only where paths are absolute).
-    assert_eq!(report.secrets_stored.len(), if cfg!(unix) { 2 } else { 1 });
+    // Exactly the stored secrets are in the store.
+    assert_eq!(report.secrets_stored.len(), 2);
 
     // Entry 3: ssh password listed but not provided: flag stays absent, reported as skipped.
     assert!(
