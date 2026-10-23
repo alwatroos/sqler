@@ -63,7 +63,9 @@ grew the binary (see the comment on `[profile.release]` in `Cargo.toml`).
 The features of the release build are **one line**, `features = [...]` in `dist-workspace.toml`. It is **pending the
 owner's decision; default features assumed** (`features = []`): whether the `plugins` feature, and with it SQL Server,
 ships in 1.0 is not decided (with the plugin host the Linux binary is 79.9 MB against the 83,886,080-byte budget). To
-change the set, edit that line only. The same line drives the SBOM (`cargo cyclonedx --features`). The DuckDB guard
+change the set, edit that line only. The guard also reads `features` and `all-features` under `[package.metadata.dist]`
+in `crates/sqler-app/Cargo.toml` (cargo-dist accepts them there) and rejects `driver-duckdb` or `all-features = true`
+in either place. The same line drives the SBOM (`cargo cyclonedx --features`). The DuckDB guard
 below does not depend on the value of the line. `driver-duckdb` never belongs in it.
 
 ### Triggers and the publish guard
@@ -150,6 +152,11 @@ All five targets stay under the budget (largest: Linux x86_64 at 63,279,336 byte
 build job printed `sqler 0.1.0` from the smoke run and `release-guard: build-dir ok`, `binary ok (4 markers absent ...)`
 and `artifacts ok`; the global job printed `release-guard: artifacts ok (25 files, 18 text artifacts checked)`. The
 macOS x86_64 build ran on the native Intel runner and took about 30 minutes, the longest job by a wide margin.
+
+## Signing secrets
+
+When signing lands (R2 for Apple, R5 for the update manifest), the secrets must live in a GitHub environment whose
+deployment rules limit it to `v*` tag runs. Repository-wide secrets would be readable by any workflow run on a branch.
 
 ## Rollback
 

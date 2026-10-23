@@ -4,7 +4,7 @@
 #
 # The release guard (ADR-0064, ADR-0070): no 1.0 download may contain the DuckDB engine.
 #
-#   release-guard.sh features            dist config and the resolved dependency tree of the release build
+#   release-guard.sh features            dist config (dist-workspace.toml and [package.metadata.dist] of sqler-app) and the resolved dependency tree of the release build
 #   release-guard.sh binary <file>       the binary holds no DuckDB engine marker
 #   release-guard.sh build-dir <dir>     the cargo build dir holds no libduckdb-sys build output
 #   release-guard.sh artifacts <dir>     no DuckDB file name, no DuckDB text in a text artifact
@@ -16,6 +16,7 @@
 set -eu
 
 config=dist-workspace.toml
+app_manifest=crates/sqler-app/Cargo.toml
 
 # Strings of the DuckDB C++ engine only (verified absent from the default sqler binary). A plain `duckdb` is wrong:
 # the UI text of the default binary names DuckDB. One marker per line (a marker may hold spaces).
@@ -73,6 +74,26 @@ mode_features() {
         esac
         list=$(printf '%s' "$line" | sed 's/^[^[]*\[//; s/\].*$//' | tr -d '" ' | tr ',' ' ')
         source_of="$config"
+    fi
+
+    # cargo-dist also accepts `features` and `all-features` under [package.metadata.dist] of the package manifest.
+    if [ -f "$app_manifest" ]; then
+        meta=$(awk '/^[[:space:]]*\[/ { s = ($0 ~ /^[[:space:]]*\[package\.metadata\.dist\]/) } s' "$app_manifest" | tr -d '\r' | sed 's/#.*//')
+        if printf '%s\n' "$meta" | grep -E '^[[:space:]]*all-features[[:space:]]*=[[:space:]]*true' >/dev/null; then
+            fail "$app_manifest sets all-features = true under [package.metadata.dist]"
+        fi
+        if printf '%s\n' "$meta" | grep -E '^[[:space:]]*features[[:space:]]*=' >/dev/null; then
+            mline=$(printf '%s\n' "$meta" | grep -E '^[[:space:]]*features[[:space:]]*=')
+            case $mline in
+            *\[*\]*) ;;
+            *)
+                echo "release-guard: the features list in $app_manifest must open and close on one line" >&2
+                exit 2
+                ;;
+            esac
+            list="$list $(printf '%s' "$mline" | sed 's/^[^[]*\[//; s/\].*$//' | tr -d '" ' | tr ',' ' ')"
+            source_of="$source_of and $app_manifest"
+        fi
     fi
 
     csv=''

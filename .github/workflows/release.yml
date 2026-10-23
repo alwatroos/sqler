@@ -54,7 +54,7 @@ jobs:
       PUBLISHING: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
       FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Install toolchain from rust-toolchain.toml
@@ -71,7 +71,7 @@ jobs:
           cargo install --locked --version "$ver" --root "$RUNNER_TEMP/dist" cargo-dist
           echo "$RUNNER_TEMP/dist/bin" >> "$GITHUB_PATH"
       - name: Cache dist for the Linux jobs
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: cargo-dist-cache
           path: ${{ runner.temp }}/dist/bin/dist
@@ -103,7 +103,7 @@ jobs:
             echo "manifest=$(jq -c '.ci.github.artifacts_matrix.include |= map(select(.targets | index("x86_64-unknown-linux-gnu")))' plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
           fi
       - name: Upload dist-manifest.json
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: artifacts-plan-dist-manifest
           path: plan-dist-manifest.json
@@ -115,7 +115,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Install toolchain from rust-toolchain.toml
@@ -151,7 +151,7 @@ jobs:
         run: |
           git config --global core.autocrlf false
           git config --global core.longpaths true
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Install toolchain from rust-toolchain.toml
@@ -172,7 +172,7 @@ jobs:
         run: xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
       - name: Fetch the dist built by the plan job
         if: matrix.runner == 'ubuntu-22.04'
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: cargo-dist-cache
           path: ${{ runner.temp }}/dist-cache
@@ -279,7 +279,7 @@ jobs:
         shell: bash
         run: sh .github/scripts/release-guard.sh artifacts target/distrib
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: artifacts-build-local-${{ join(matrix.targets, '_') }}
           path: |
@@ -301,14 +301,14 @@ jobs:
       TAG_FLAG: ${{ needs.plan.outputs.tag-flag }}
       BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install
       - name: Fetch the dist built by the plan job
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: cargo-dist-cache
           path: ${{ runner.temp }}/dist-cache
@@ -317,12 +317,12 @@ jobs:
         run: |
           chmod +x "$RUNNER_TEMP/dist-cache/dist"
           echo "$RUNNER_TEMP/dist-cache" >> "$GITHUB_PATH"
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2
         with:
           tool: cargo-cyclonedx@0.5.9
       # The local artifacts are needed for the checksums.
       - name: Fetch local artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: artifacts-*
           path: target/distrib/
@@ -362,7 +362,7 @@ jobs:
         shell: bash
         run: sh .github/scripts/release-guard.sh artifacts target/distrib
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: artifacts-build-global
           path: |
@@ -390,11 +390,11 @@ jobs:
     outputs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Fetch the dist built by the plan job
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: cargo-dist-cache
           path: ${{ runner.temp }}/dist-cache
@@ -404,12 +404,14 @@ jobs:
           chmod +x "$RUNNER_TEMP/dist-cache/dist"
           echo "$RUNNER_TEMP/dist-cache" >> "$GITHUB_PATH"
       - name: Fetch artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: artifacts-*
           path: target/distrib/
           merge-multiple: true
       # R5 adds the update manifest signing here (an `environment:` with the key, and the signing step).
+      # R2 and R5: every signing secret (Apple certificate, update key) must live in a GitHub environment whose
+      # deployment rules limit it to `v*` tag runs, never in repository-wide secrets (ADR-0064).
       - name: Update manifest signing (R5)
         shell: bash
         env:
@@ -432,14 +434,14 @@ jobs:
           cat dist-manifest.json
           echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
       - name: Upload dist-manifest.json
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           # Overwrite the previous copy.
           name: artifacts-dist-manifest
           path: dist-manifest.json
           retention-days: 7
       - name: Download GitHub artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: artifacts-*
           path: artifacts
@@ -475,8 +477,8 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false

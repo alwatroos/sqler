@@ -27,13 +27,13 @@ Targets: macOS (Apple silicon and Intel), Windows (x86_64) and Linux (x86_64 and
 
 ## macOS and Linux
 
-Shell installer. It puts the binary in `~/.sqler/bin` and does not touch other directories:
+Shell installer. It puts the binary in `~/.sqler/bin` and writes an `env` script next to it. By default it also appends a line to your shell profile files (for example `.profile`, `.bashrc` and `.bash_profile`) so that `~/.sqler/bin` is on your `PATH`:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/alwatroos/sqler/releases/latest/download/sqler-app-installer.sh | sh
 ```
 
-Add `~/.sqler/bin` to your `PATH` if the installer did not. To uninstall, delete `~/.sqler`.
+To leave your shell profiles alone, set `CARGO_DIST_NO_MODIFY_PATH=1` for the installer (`... | CARGO_DIST_NO_MODIFY_PATH=1 sh`) and add `~/.sqler/bin` to your `PATH` yourself. To uninstall, delete `~/.sqler` and remove the profile line the installer added.
 
 Archive: download `sqler-app-<target>.tar.xz`, unpack it with `tar -xJf` and run the `sqler` binary inside.
 
