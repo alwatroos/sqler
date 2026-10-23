@@ -58,7 +58,9 @@ must be `"sqler"`.
 
 The `platforms` entries are information for a later installer. 1.0 shows the notes link; the client returns the entry
 for its own target (`current_target()`, one of the five release triples) or none. A newer manifest without an entry
-for this platform is still offered, with the notes link only.
+for this platform is still offered, with the notes link only. The five triples are `aarch64-apple-darwin`,
+`x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`, `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`; the
+release work items (R1, R5) may adjust the list in `current_target()` to the artifacts they actually build.
 
 ### Signature scheme and keys
 
