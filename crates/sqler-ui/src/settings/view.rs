@@ -8,7 +8,9 @@ use gpui::{
     ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
 };
+use gpui_component::Disableable as _;
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
 use sqler_config::{FONT_SIZE_RANGE, ThemePreference};
 
@@ -16,6 +18,7 @@ use crate::ai::settings::view::ai_section;
 use crate::theme::SPACE;
 use crate::theme::icons::AppIcon;
 use crate::theme::widgets::{icon_button, section_header};
+use crate::update::{Availability, UpdateCommand};
 use crate::workspace::chrome::{ICON_SM, field_row, ui_scale};
 use crate::workspace::{Workspace, WorkspaceAction, WorkspaceView};
 
@@ -97,7 +100,82 @@ pub(crate) fn strip_end(
     )
 }
 
+/// The Updates section (ADR-0066): the switch for the automatic check, the manual check and the
+/// last result. A build without update checks shows one line of text instead.
+fn update_section(
+    view: &WorkspaceView,
+    cx: &mut Context<WorkspaceView>,
+) -> impl IntoElement + use<> {
+    let ws = view.workspace();
+    let muted = cx.theme().muted_foreground;
+    let small = ui_scale(cx).sm;
+    let note = |text: &'static str| div().text_size(px(small)).text_color(muted).child(text);
+    let mut section = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE[4]))
+        .child(section_header("Updates", cx).px(gpui::Pixels::ZERO));
+    let model = ws.update();
+    match model.availability() {
+        Availability::Unavailable => {
+            return section.child(note("Update checks are not part of this build."));
+        }
+        Availability::NotConfigured => {
+            return section.child(note("Update checks are not configured in this build."));
+        }
+        Availability::Ready => {}
+    }
+    let on = ws.settings().settings().check_for_updates;
+    let weak = cx.weak_entity();
+    let switch = Switch::new("updates-enabled")
+        .checked(on)
+        .accessibility_label("Check for updates")
+        .on_click(move |_, _, cx| {
+            weak.update(cx, |view, cx| {
+                view.run_update_command(UpdateCommand::SetEnabled(!on), cx);
+            })
+            .ok();
+        });
+    section = section.child(field_row(
+        "Check for updates",
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE[2]))
+            .child(switch)
+            .child(note(
+                "Asks GitHub Releases for a signed version file about once a day. Nothing is downloaded or installed; no personal data is sent.",
+            )),
+        cx,
+    ));
+    let check = Button::new("updates-check-now")
+        .label("Check now")
+        .small()
+        .outline()
+        .disabled(!on || model.checking())
+        .on_click(cx.listener(|view, _, _, cx| {
+            view.run_update_command(UpdateCommand::CheckNow, cx);
+        }));
+    section.child(field_row(
+        "Status",
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(SPACE[3]))
+            .child(check)
+            .child(
+                div()
+                    .text_size(px(small))
+                    .text_color(muted)
+                    .child(model.status_line()),
+            ),
+        cx,
+    ))
+}
+
 /// The settings page, shown instead of the tab body while the settings tab is active.
+#[allow(clippy::too_many_lines)] // one declarative page
 pub(crate) fn page(
     view: &WorkspaceView,
     cx: &mut Context<WorkspaceView>,
@@ -196,7 +274,8 @@ pub(crate) fn page(
             .child(div().text_color(muted).text_size(px(scale.sm)).child(
                 "Saved to settings.toml in the config directory (see User guide > Settings).",
             ))
-            .child(ai_section(view, cx));
+            .child(ai_section(view, cx))
+            .child(update_section(view, cx));
     div()
         .id("settings-page")
         .flex_1()

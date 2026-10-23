@@ -88,6 +88,7 @@ mod plugin_writes;
 mod plugins;
 #[cfg(feature = "screenshots")]
 pub mod scene;
+mod update;
 
 /// How long quitting waits for open sessions to close.
 const CLOSE_LIMIT: Duration = Duration::from_secs(2);
@@ -123,6 +124,8 @@ pub struct Startup {
     pub plugins: crate::plugins::PluginsStartup,
     /// Sources of run-time export formats (plugin exporters); empty in a build without plugins.
     pub export_sources: Vec<Arc<dyn crate::export::FormatSource>>,
+    /// The update check service and its events; `UpdateStartup::unavailable()` in a build without update checks.
+    pub update: crate::update::UpdateStartup,
 }
 
 impl std::fmt::Debug for Startup {
@@ -136,6 +139,7 @@ impl std::fmt::Debug for Startup {
             .field("history_dir", &self.history_dir)
             .field("ai", &self.ai)
             .field("plugins", &self.plugins)
+            .field("update", &self.update)
             .field("export_sources", &self.export_sources.len())
             .finish_non_exhaustive()
     }
@@ -262,6 +266,8 @@ pub(crate) struct WorkspaceView {
     plugin_writes_ui: WriteUi,
     /// The text editors of the plugin panel on screen.
     plugin_ui_views: PluginUiViews,
+    /// The update service, if the build has one (ADR-0066); called only through [`Effect::Update`].
+    update_service: Option<Arc<dyn crate::update::UpdateService>>,
     /// The keybinding overrides as loaded; the key dispatcher is rebuilt from them when plugin commands change.
     key_overrides: Result<KeybindingOverrides, String>,
     /// The resizable split of the side panel and the rest, and of the editors and the bottom panel.
@@ -302,7 +308,7 @@ pub(crate) struct WorkspaceView {
 
 impl WorkspaceView {
     #[allow(clippy::too_many_lines)] // registers every command set and builds the state
-    fn new(startup: Startup, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(mut startup: Startup, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = match startup.connections {
             Ok(store) => SidebarModel::from_store(store, startup.config_dir),
             Err(message) => SidebarModel::with_load_error(message),
@@ -317,6 +323,8 @@ impl WorkspaceView {
             .map(|dir| Arc::new(sqler_ai_tools::AuditLog::open(dir)));
         let plugin_writes = startup.plugins.writes.take();
         let plugin_events = startup.plugins.ui_events.take();
+        let update_events = startup.update.events.take();
+        let update_service = startup.update.service.clone();
         let key_overrides = startup.keybindings.clone();
         let mut ws = Workspace::new(sidebar)
             .with_ai_audit(audit_log.clone().map(|log| {
@@ -327,6 +335,7 @@ impl WorkspaceView {
             .with_workbench(&startup.workbench.load)
             .with_ai(crate::ai::AiState::from_startup(&startup.ai))
             .with_plugins(&startup.plugins)
+            .with_update(&startup.update)
             .with_export_sources(startup.export_sources);
         ws.set_system_appearance(appearance_of(window.appearance()));
         apply(ws.appearance(), ws.settings().settings().ui_font_size, cx);
@@ -381,6 +390,9 @@ impl WorkspaceView {
         }
         if let Err(err) = crate::plugins::register_commands(&mut commands) {
             eprintln!("sqler: could not register the plugin commands: {err}");
+        }
+        if let Err(err) = crate::update::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the update commands: {err}");
         }
         if let Err(err) = workbench::register_commands(&mut commands) {
             eprintln!("sqler: could not register the workbench commands: {err}");
@@ -503,6 +515,7 @@ impl WorkspaceView {
             plugins_ui: PluginsUi::new(window, cx),
             plugin_writes_ui: WriteUi::new(cx),
             plugin_ui_views: PluginUiViews::default(),
+            update_service,
             key_overrides,
             side_split,
             panel_split,
@@ -537,6 +550,12 @@ impl WorkspaceView {
         }
         if let Some(inbox) = plugin_events {
             Self::drain_plugin_ui(inbox, cx);
+        }
+        if let Some(inbox) = update_events {
+            Self::drain_update_events(inbox, cx);
+        }
+        if view.ws.update().availability() == crate::update::Availability::Ready {
+            Self::schedule_update(window, cx);
         }
         view.bind_splits(cx);
         view.sync_sidebar();
@@ -908,6 +927,11 @@ impl WorkspaceView {
             if !self.run_plugin_contribution(id, window, cx) {
                 window.push_notification("This plugin command is not available any more.", cx);
             }
+        } else if let Some(command) =
+            crate::update::action_for(id, self.ws.settings().settings().check_for_updates)
+        {
+            self.palette.close();
+            self.run_update_command(command, cx);
         } else if let Some(action) = crate::ai::action_for(id, &self.ws) {
             self.palette.close();
             self.dispatch_ai(action, cx);
@@ -1341,6 +1365,7 @@ impl WorkspaceView {
             Effect::LoadAgentProfiles | Effect::StartAgent { .. } => self.apply_agent(effect, cx),
             Effect::Plugins(work) => self.apply_plugins(work, cx),
             Effect::PluginUi(work) => self.apply_plugin_ui(work, cx),
+            Effect::Update(work) => self.apply_update(work, cx),
             edit @ Effect::EditorEdit { .. } => self.assist_edits.push(edit),
             Effect::RunAssist(job) => self.run_assist_effect(job, cx),
             Effect::CancelAssist(id) => self.cancel_assist_effect(id),

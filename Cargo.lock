@@ -8288,6 +8288,9 @@ dependencies = [
 name = "sqler-app"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "ring",
+ "semver",
  "serde_json",
  "sqler-ai-anthropic",
  "sqler-ai-api",
@@ -8309,6 +8312,7 @@ dependencies = [
  "sqler-sql",
  "sqler-tunnel",
  "sqler-ui",
+ "sqler-update",
  "tokio",
 ]
 

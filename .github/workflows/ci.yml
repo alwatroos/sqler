@@ -40,7 +40,7 @@ env:
     sqler-ai-api/test-support,
     sqler-app/driver-sqlite,sqler-app/driver-postgres,sqler-app/driver-mysql,
     sqler-app/export-xlsx,sqler-app/export-parquet,
-    sqler-app/ai-ollama,sqler-app/ai-anthropic,sqler-app/ai-openai,sqler-app/ai-mistral,sqler-app/plugins,sqler-app/driver-mssql,
+    sqler-app/ai-ollama,sqler-app/ai-anthropic,sqler-app/ai-openai,sqler-app/ai-mistral,sqler-app/plugins,sqler-app/driver-mssql,sqler-app/update,
     sqler-cli/driver-sqlite,sqler-cli/driver-postgres,sqler-cli/driver-mysql,sqler-cli/plugins,sqler-cli/driver-mssql,
     sqler-export/parquet,sqler-export/xlsx,
     sqler-plugin-host/runtime,sqler-plugin-host/cl,sqler-plugin-host/pulley-rt,sqler-plugin-host/net,

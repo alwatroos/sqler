@@ -29,6 +29,7 @@ mod state;
 #[cfg(test)]
 pub(crate) mod testing;
 mod tx;
+mod update;
 #[cfg(feature = "gui")]
 mod view;
 
