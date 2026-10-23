@@ -26,6 +26,12 @@ mod wasi;
 #[cfg(all(test, feature = "cl"))]
 mod tests;
 
+// The `ai-tools` call. It lives under `src/ai/` but is compiled as a child of this module, because it reads the
+// host's registry and grant source, which are private to `runtime`.
+#[path = "../ai/mod.rs"]
+mod ai;
+
+pub use ai::{MAX_AI_ARGUMENT_BYTES, MAX_AI_RESULT_BYTES, PluginAiTool};
 pub use call::PendingCall;
 pub use host::{HostOptions, PluginHost};
 pub use services::Services;

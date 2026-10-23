@@ -68,6 +68,9 @@ pub use query::{
     WriteRequest,
 };
 #[cfg(feature = "runtime")]
-pub use runtime::{HostOptions, PendingCall, PluginHost, Services};
+pub use runtime::{
+    HostOptions, MAX_AI_ARGUMENT_BYTES, MAX_AI_RESULT_BYTES, PendingCall, PluginAiTool, PluginHost,
+    Services,
+};
 #[cfg(feature = "runtime")]
 pub use ui::{PluginUi, UiSink};

@@ -172,7 +172,7 @@ impl AppPlugins {
     }
 
     /// The host if a refresh built it; never builds.
-    fn built(&self) -> Option<PluginHost> {
+    pub(super) fn built(&self) -> Option<PluginHost> {
         match self.engine.get() {
             Some(Ok(e)) => Some(e.host.clone()),
             _ => None,
