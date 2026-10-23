@@ -250,10 +250,22 @@ impl EditFlow {
             }
             // T-SQL counts nested `BEGIN TRAN`s like `@@TRANCOUNT`: a `COMMIT` ends the
             // transaction only at the outermost level, a bare `ROLLBACK` always.
-            TxEffect::Tran { reset, delta } if (delta > 0 && sent) || (delta <= 0 && ended) => {
+            // A change of nothing (`BEGIN TRAN; COMMIT`) leaves the state as it is: when unsure,
+            // the transaction stays open.
+            TxEffect::Tran {
+                reset: false,
+                delta: 0,
+                floor: 0,
+            } => false,
+            TxEffect::Tran {
+                reset,
+                delta,
+                floor,
+            } if ((delta > 0 || floor > 0) && sent) || (delta <= 0 && ended) => {
                 let depth = self.tran_depth.get(&tab).copied().unwrap_or(0);
                 let base = if reset { 0 } else { depth };
-                let next = base.saturating_add_signed(delta);
+                // The count is clamped at zero at every statement: `floor` is what that leaves.
+                let next = base.saturating_add_signed(delta).max(floor);
                 if next > 0 {
                     self.tran_depth.insert(tab, next);
                     self.in_tx.insert(tab) || next != depth

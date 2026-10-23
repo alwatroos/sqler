@@ -107,6 +107,18 @@ that plugin's own connections, as a wrong built-in driver would. A plugin with a
 - Editing is allowed by the dialect (`NoDialect` no longer applies). The apply still rolls back, because
   `rows_affected` is `None`, until S4 reports the changed-row count.
 
+### The transaction model (ADR-0033 flag)
+
+- `tx_effect` follows `@@TRANCOUNT` for `sqlserver`: `BEGIN TRAN` adds a level, `COMMIT` takes one off (only the
+  outermost ends the transaction), a bare `ROLLBACK` ends all of them, `ROLLBACK name` leaves the state alone. The count
+  is clamped at zero at every statement of a script (`commit; commit; begin tran` from depth 1 ends at 1).
+- `SAVE TRAN` does not change `@@TRANCOUNT`: after a `BEGIN TRAN` in the same script it leaves the count as it is, and
+  alone it counts as an open transaction. When the model is unsure it errs toward "a transaction is open".
+- Known limitation (all dialects, older than this ADR): an error in the middle of a script that is net zero
+  (`BEGIN TRAN; <failing statement>; COMMIT`) can leave the transaction open on the server unless `XACT_ABORT` is on,
+  while the model, reading the text, says nothing is open. Treating a failed run as open needs the per-statement result
+  of the run to be fed back into the reading; this is not done here.
+
 ## Consequences
 
 - Gap G1 of [ADR-0063](0063-plugin-or-core-per-engine.md) and the dialect gap of [ADR-0071](0071-sql-server-plugin.md)

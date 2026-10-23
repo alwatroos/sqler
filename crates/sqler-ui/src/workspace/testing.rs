@@ -959,6 +959,7 @@ mod flow {
         let nest = |delta| Tran {
             reset: false,
             delta,
+            floor: 0,
         };
         let mut f = Flow::new(None);
         let tab = f.open();
@@ -975,12 +976,47 @@ mod flow {
         let all = Tran {
             reset: true,
             delta: 0,
+            floor: 0,
         };
         assert!(f.w.edit.follow(tab, all, true, true, true));
         assert!(!f.w.in_transaction(tab));
         // A `COMMIT` with nothing open (or a `BEGIN TRY` that never counted) stays out.
         assert!(!f.w.edit.follow(tab, nest(-1), true, true, true));
         assert!(!f.w.in_transaction(tab));
+    }
+
+    /// Runs `sql` as T-SQL statements through the same path the run flow uses.
+    fn follow_script(f: &mut Flow, tab: TabId, sql: &str) {
+        let effect = super::super::tx::tx_effect(sqler_sql::Dialect::TSql, sql);
+        f.w.edit.follow(tab, effect, true, true, true);
+    }
+
+    #[test]
+    fn t_sql_save_tran_never_loses_the_nesting_count() {
+        let mut f = Flow::new(None);
+        let tab = f.open();
+        // Two levels and a savepoint: `@@TRANCOUNT` is 2, and one `COMMIT` leaves it open.
+        follow_script(&mut f, tab, "begin tran; begin tran; save tran s");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "commit");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "commit");
+        assert!(!f.w.in_transaction(tab));
+        // A named rollback leaves the state alone; a bare one resets it.
+        follow_script(&mut f, tab, "begin tran; save tran s; rollback tran s");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "rollback");
+        assert!(!f.w.in_transaction(tab));
+        // A `COMMIT` with nothing open stops at zero: `commit; commit; begin tran` from depth 1
+        // ends at depth 1.
+        follow_script(&mut f, tab, "begin tran");
+        follow_script(&mut f, tab, "commit; commit; begin tran");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "commit");
+        assert!(!f.w.in_transaction(tab));
+        // A lone `SAVE TRAN` is taken for an open transaction.
+        follow_script(&mut f, tab, "save tran s");
+        assert!(f.w.in_transaction(tab));
     }
 
     #[test]

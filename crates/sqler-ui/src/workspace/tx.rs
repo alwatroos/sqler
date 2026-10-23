@@ -33,11 +33,16 @@ pub(crate) enum TxEffect {
     End,
     /// T-SQL only: the change of the transaction nesting count (`@@TRANCOUNT`). `BEGIN TRAN` adds
     /// one, `COMMIT` takes one off, and a bare `ROLLBACK` sets the count to zero first (`reset`).
+    /// The count never goes below zero at any statement, so the whole change from a count `x` is
+    /// `max(x + delta, floor)` (`reset`: the count `delta`).
     Tran {
         /// The count goes to zero before `delta` is added.
         reset: bool,
         /// The net change after the reset, if any.
         delta: i32,
+        /// The least count the statements leave (a `COMMIT` with nothing open stops at zero, a
+        /// `BEGIN TRAN` after it adds one to that); ignored with `reset`.
+        floor: u32,
     },
     /// `SET autocommit = 0` (or a value that cannot be read) on `MySQL`: the session is inside a
     /// transaction now, and the next one starts as soon as this one ends.
@@ -67,7 +72,7 @@ pub(crate) fn tx_effect(dialect: Dialect, sql: &str) -> TxEffect {
     let mut off = false;
     let mut any = false;
     // T-SQL nesting, folded over the statements of the script.
-    let (mut reset, mut delta) = (false, 0i32);
+    let (mut reset, mut delta, mut floor) = (false, 0i32, 0u32);
     for segment in split(dialect, sql) {
         if segment.kind != SegmentKind::Statement {
             continue;
@@ -82,13 +87,36 @@ pub(crate) fn tx_effect(dialect: Dialect, sql: &str) -> TxEffect {
                     TxEffect::AutocommitOn => off = false,
                     _ => {}
                 }
-                result = if let TxEffect::Tran { reset: r, delta: d } = effect {
+                result = if let TxEffect::Tran {
+                    reset: r, delta: d, ..
+                } = effect
+                {
                     if r {
                         reset = true;
                         delta = 0;
+                        floor = 0;
                     }
-                    delta = delta.saturating_add(d);
-                    TxEffect::Tran { reset, delta }
+                    // The count is clamped at zero at every statement.
+                    if reset {
+                        delta = delta.saturating_add(d).max(0);
+                    } else {
+                        delta = delta.saturating_add(d);
+                        floor = floor.saturating_add_signed(d);
+                    }
+                    // A floor at or under the change is no limit for a count of zero or more.
+                    let shown = if i64::from(floor) > i64::from(delta) {
+                        floor
+                    } else {
+                        0
+                    };
+                    TxEffect::Tran {
+                        reset,
+                        delta,
+                        floor: shown,
+                    }
+                } else if effect == TxEffect::Begin && matches!(result, TxEffect::Tran { .. }) {
+                    // `SAVE TRAN` leaves `@@TRANCOUNT` alone: it must not replace the count.
+                    result
                 } else {
                     effect
                 };
@@ -205,10 +233,12 @@ fn tsql_effect(t: &[Tok]) -> TxEffect {
         "COMMIT" => TxEffect::Tran {
             reset: false,
             delta: begins - 1,
+            floor: 0,
         },
         "ROLLBACK" if t.len() == rest => TxEffect::Tran {
             reset: true,
             delta: begins,
+            floor: 0,
         },
         "SET" if is(t, 1, "IMPLICIT_TRANSACTIONS") => match t.get(2) {
             Some(Tok::Word(v)) if v == "ON" => TxEffect::AutocommitOff,
@@ -218,6 +248,7 @@ fn tsql_effect(t: &[Tok]) -> TxEffect {
         _ if begins > 0 => TxEffect::Tran {
             reset: false,
             delta: begins,
+            floor: 0,
         },
         _ => TxEffect::None,
     }
@@ -296,10 +327,17 @@ mod tests {
         let nest = |delta| Tran {
             reset: false,
             delta,
+            floor: 0,
+        };
+        let floored = |delta, floor| Tran {
+            reset: false,
+            delta,
+            floor,
         };
         let all = Tran {
             reset: true,
             delta: 0,
+            floor: 0,
         };
         let table: &[(&str, TxEffect)] = &[
             ("BEGIN", Nothing),
@@ -327,6 +365,27 @@ mod tests {
                 Tran {
                     reset: true,
                     delta: 1,
+                    floor: 0,
+                },
+            ),
+            // `SAVE TRAN` leaves the count alone, in a script too.
+            ("begin tran; begin tran; save tran s", nest(2)),
+            ("begin tran; save tran s; rollback tran s", nest(1)),
+            ("save tran s; begin tran", nest(1)),
+            ("begin tran; save tran s; commit", nest(0)),
+            ("begin tran; rollback", all),
+            ("begin tran; save tran s; rollback", all),
+            // A `COMMIT` with nothing open stops at zero, whatever follows.
+            ("commit; commit; begin tran", floored(-1, 1)),
+            ("commit; begin tran", floored(0, 1)),
+            ("commit; commit", nest(-2)),
+            ("begin tran; commit; commit", nest(-1)),
+            (
+                "rollback; commit; begin tran",
+                Tran {
+                    reset: true,
+                    delta: 1,
+                    floor: 0,
                 },
             ),
             ("ROLLBACK", all),
