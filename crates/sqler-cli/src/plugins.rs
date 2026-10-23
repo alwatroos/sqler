@@ -125,10 +125,16 @@ fn host_in(dir: &ConfigDir, runtime: tokio::runtime::Handle) -> Option<PluginHos
     Some(host)
 }
 
-/// The native engines this build links: `driver-mssql` adds SQL Server (ADR-0071).
+/// The native engines this build links: `driver-mssql` adds SQL Server (ADR-0071), `driver-duckdb` adds `DuckDB`
+/// (ADR-0070; not in 1.0, off by default).
 fn engines() -> HostEngines {
     #[allow(unused_mut)]
     let mut engines = HostEngines::new();
+    #[cfg(feature = "driver-duckdb")]
+    if let Ok(id) = sqler_driver_duckdb::ENGINE_ID.parse::<sqler_plugin_api::EngineId>() {
+        // A duplicate cannot happen in a fresh table.
+        let _ = engines.register(id, Arc::new(sqler_driver_duckdb::DuckDbDriver::new()));
+    }
     #[cfg(feature = "driver-mssql")]
     {
         use sqler_driver_mssql::{ENGINE_ID, MssqlDriver, install_ring_provider};
@@ -294,6 +300,76 @@ mod tests {
         assert_eq!(
             crate::driver_message(&err),
             "driver `nothing-db` needs the `nothing` engine, which this build does not include"
+        );
+    }
+
+    /// The shipped `DuckDB` shell, copied into the scratch config.
+    #[cfg(feature = "driver-duckdb")]
+    fn write_duckdb_plugin(config: &std::path::Path) -> PathBuf {
+        let dir = config.join("plugins").join("duckdb");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("sqler.toml"),
+            include_str!("../../../plugins/duckdb/sqler.toml"),
+        )
+        .unwrap();
+        dir
+    }
+
+    #[cfg(feature = "driver-duckdb")]
+    #[tokio::test]
+    async fn the_duckdb_plugin_connects_through_the_registry_once_approved() {
+        use sqler_driver_api::sqler_core::Query;
+
+        let s = Scratch::new("duckdb");
+        let dir = ConfigDir::new(&s.0);
+        let plugin = write_duckdb_plugin(&s.0);
+
+        // Without the grant the driver is unavailable with the fixed text.
+        let mut registry = DriverRegistry::new();
+        registry.add_source(driver_source_in(&dir).unwrap());
+        let err = registry.connect(&config("duckdb")).await.err().unwrap();
+        assert!(
+            matches!(&err, sqler_driver_api::DriverError::Unavailable(t)
+                if t.contains("needs the permission `driver.host:duckdb`") && t.contains("not approved")),
+            "{err:?}"
+        );
+
+        let found = discover(&PluginDirs {
+            dev: vec![plugin],
+            ..PluginDirs::default()
+        });
+        let mut grants = PluginGrants::new();
+        grants.record(
+            GrantRecord::approved(
+                found.plugins[0].key.to_string(),
+                vec!["driver.host:duckdb".to_owned()],
+            )
+            .unwrap(),
+        );
+        dir.save_plugin_grants(&grants).unwrap();
+
+        let mut registry = DriverRegistry::new();
+        registry.add_source(driver_source_in(&dir).unwrap());
+        assert!(
+            registry
+                .available_ids()
+                .contains(&DriverId::new("duckdb").unwrap())
+        );
+        let mut session = registry
+            .connect(&sqler_driver_api::sqler_core::ConnectionConfig::new(
+                "t",
+                DriverId::new("duckdb").unwrap(),
+                ":memory:",
+            ))
+            .await
+            .unwrap();
+        let q = Query::new("select 41 + 1");
+        let mut stream = session.execute(&q).await.unwrap();
+        let rs = sqler_driver_api::collect(&mut *stream).await.unwrap();
+        assert_eq!(
+            rs.rows()[0].get(0),
+            Some(&sqler_driver_api::sqler_core::Value::Int(42))
         );
     }
 

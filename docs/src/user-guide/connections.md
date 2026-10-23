@@ -159,6 +159,13 @@ database user in the `user` parameter. A target with a user part, `password=` or
 is rejected, and the message points to the password field. An SSH tunnel and a database password need
 a URL target.
 
+### Supported databases
+
+Version 1.0 connects to `SQLite`, `PostgreSQL` and `MySQL`/`MariaDB`.
+
+**Not in 1.0:** `DuckDB`. Its code is in the repository but switched off; no release, installer or update contains it
+([ADR-0070](../adr/0070-duckdb-engine-and-licence.md), amendment 2). It may return after 1.0 as a separate download.
+
 ### Passwords
 
 The database password, the SSH password and the key passphrase have their own masked fields. They go

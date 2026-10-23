@@ -95,6 +95,7 @@
   - [ADR-0061: Plugin drivers](adr/0061-plugin-drivers.md)
   - [ADR-0062: Plugin AI tools](adr/0062-plugin-ai-tools.md)
   - [ADR-0068: CI pipeline speed](adr/0068-ci-pipeline-speed.md)
+  - [ADR-0070: DuckDB native engine and licence](adr/0070-duckdb-engine-and-licence.md)
   - [ADR-0071: SQL Server plugin](adr/0071-sql-server-plugin.md)
   - [ADR-0072: Plugin export formats](adr/0072-plugin-export-formats.md)
 - [Plugin development](plugin-development/index.md)

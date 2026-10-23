@@ -1,0 +1,16 @@
+# Declarative shell around the native DuckDB engine (crates/sqler-driver-duckdb, ADR-0070).
+# No [entry]: there is no guest. The engine is linked only into builds with `driver-duckdb`.
+[plugin]
+id = "duckdb"
+name = "DuckDB"
+version = "0.1.0"
+api = "0.1.1"
+description = "DuckDB databases (a file or in memory) through the native engine of the build."
+capabilities = ["driver.host:duckdb"]
+
+[[drivers]]
+id = "duckdb"
+name = "DuckDB"
+kind = "host"
+engine = "duckdb"
+dialect = "duckdb"

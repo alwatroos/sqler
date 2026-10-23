@@ -40,7 +40,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-driver-mysql` | L2 | `MySQL` and `MariaDB` driver (sqlx) |
 | `sqler-driver-sqlite` | L2 | `SQLite` driver |
 | `sqler-driver-mssql` | L2 | SQL Server driver (tiberius) |
-| `sqler-driver-duckdb` | L2 | `DuckDB` driver |
+| `sqler-driver-duckdb` | L2 | `DuckDB` native engine (bundled C++), linked only with the feature `driver-duckdb` (ADR-0070) |
 | `sqler-ai-ollama` | L2 | Ollama provider |
 | `sqler-ai-anthropic` | L2 | Anthropic provider |
 | `sqler-ai-openai` | L2 | OpenAI and any OpenAI-compatible endpoint |
@@ -83,12 +83,14 @@ Rules:
 ## 3. Commands
 
 ```sh
-cargo build --workspace
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+# WS = --workspace --exclude sqler-driver-duckdb: DuckDB is out of v1.0, its C++ engine is built only by the manually dispatched `duckdb` CI job.
+# WS_FEATURES is the `WS_FEATURES` list in .github/workflows/ci.yml: every feature except `driver-duckdb` (not `--all-features`).
+cargo build $WS
+cargo clippy $WS --all-targets --features "$WS_FEATURES" -- -D warnings
 cargo fmt --all --check
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
-cargo test --workspace
-cargo nextest run --workspace --no-tests=pass
+RUSTDOCFLAGS="-D warnings" cargo doc $WS --no-deps --document-private-items
+cargo test $WS
+cargo nextest run $WS --no-tests=pass
 cargo deny check
 mdbook build docs
 sh .github/scripts/check-spdx.sh
@@ -108,6 +110,9 @@ cargo run -p xtask -- plugins list
 cargo run -p xtask -- plugins clean
 cargo build --release -p sqler-app --features plugins --locked
 cargo test -p sqler-app --features plugins
+cargo test -p sqler-app --features driver-duckdb
+cargo test -p sqler-cli --features driver-duckdb
+cargo test -p sqler-driver-duckdb
 cargo tree -p sqler-app -e normal --prefix none | grep '^wasmtime '
 target/release/sqler --plugin-dir <PATH> --exit-after-first-frame
 cargo bench -p sqler-ui --bench grid_viewport
@@ -132,6 +137,7 @@ cargo bench -p sqler-export --bench export_throughput
 - `.github/workflows/bench.yml` runs the grid viewport, grid sort, catalog tree, catalog index, browser tree and completion benchmarks on Linux for pull requests (base vs PR in one job).
 - `.github/workflows/size.yml` reports the release `sqler` size on Linux/macOS/Windows (main, `workflow_dispatch`, PRs touching `crates/**`, `Cargo.toml`, `Cargo.lock`, `vendor/**`); report only, budget 70 MB (73,400,320 bytes, ADR-0069).
 - Plugins in the app (ADR-0060): feature `plugins` of `sqler-app` is OFF by default (ADR-0054 size rule: on only if every OS stays below 73,400,320 minus a 1 MiB reserve (ADR-0069); the figures are in the ADR). `cargo tree -p sqler-app -e normal --prefix none | grep '^wasmtime '` prints nothing by default and a line with `--features plugins`; `cargo tree -p sqler-ui -i wasmtime` prints nothing. `--plugin-dir <PATH>` (repeatable, plugins builds only) is the only source of development plugin paths; `target/plugins` is never searched. Plugin choices are in `plugin-prefs.toml`, grants in `plugin-grants.toml`.
+- `DuckDB` (ADR-0070, amendment 2): OUT of v1.0. The code stays, disabled; the feature is never part of a release artifact, installer or update manifest, and no document may promise it in 1.0. The engine `sqler-driver-duckdb` compiles the bundled C++ `DuckDB` (about 8 CPU-minutes uncached), so no PR job builds it: workspace jobs use `--workspace --exclude sqler-driver-duckdb` and the explicit feature list `WS_FEATURES` of `ci.yml` instead of `--all-features` (the `deny` job asserts the list is complete), and the separate `duckdb` job (manual `workflow_dispatch` only, never on PRs or main, Linux; run `gh workflow run ci.yml --ref <branch>` and dispatch it before touching the engine) builds and tests it. The feature `driver-duckdb` of `sqler-app` and `sqler-cli` implies `plugins`, is OFF by default and adds about 43 MiB to the release binary (over the 70 MB budget by design); `cargo tree -p sqler-app -e normal --prefix none | grep "^duckdb "` prints nothing by default. A `duckdb` bump must re-run `cargo tree -i webpki-roots` and `cargo deny check`.
 - Plugin AI tools (ADR-0062): `sqler-ai-tools` owns the `ExternalTools` seam and never depends on `sqler-plugin-host`; the adapter is `sqler-app/src/plugins/ai.rs` (feature `plugins`). A plugin tool is listed only on a surface that has an `AiAudit` (so `ToolSet::with_external_tools` is called only from `ai/audit/sink.rs`), every plugin statement is approved through the surface's approver (`ExternalContext::approve`), and `sqler-cli mcp` lists no plugin tools. Guest tests of the `ai-probe` fixture need `wasm32-wasip2` and run in the CI plugins job (`SQLER_TEST_REQUIRE_PLUGINS=1`).
 - `.github/workflows/pages.yml` publishes the book (`target/book/`) to GitHub Pages on push to `main`.
 - Bench: `cargo bench -p sqler-ui --bench grid_viewport -- [--rows N --columns N --batch N --viewport N --samples N --save PATH --compare PATH --threshold-pct P --slack-ns S --budget-p95-ns B]`. Also `--reps N` and a repeatable `--compare`; `--pr FILE` (repeatable) judges saved runs. Rule: p95 more than 25 % + 100 ns (cells p95: 25 % + 500 ns) above the base branch, taken as the minimum over interleaved base and PR rounds, or p95 above 1 ms, fails `bench.yml`. Method and results: `docs/src/benchmarks.md`. The release CLI is still measured by hand as described there.
@@ -194,7 +200,7 @@ A task is done only when:
 1. **Plan**: read this file and the roadmap; pick the next milestone items; write them as GitHub issues or tasks with acceptance criteria.
 2. **Decide**: a new dependency, crate, public API or cross-cutting change needs an ADR first.
 3. **Build**: small PRs; tests alongside code; docs alongside tests.
-4. **Verify**: `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo nextest run --workspace`, `cargo deny check`, warning-free `cargo doc`, plugin build, benchmarks not regressed. Run on all three OSes when the change touches platform code.
+4. **Verify**: `cargo fmt --check`, `cargo clippy $WS --all-targets --features "$WS_FEATURES" -- -D warnings`, `cargo nextest run $WS`, `cargo deny check`, warning-free `cargo doc`, plugin build, benchmarks not regressed. Run on all three OSes when the change touches platform code.
 5. **Document**: user guide, architecture page, CHANGELOG, this file (commands, gotchas, roadmap status).
 6. **Report** (template below).
 7. **Reflect**: anything that cost time twice goes into the Gotchas section.
@@ -292,6 +298,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0059](docs/src/adr/0059-plugin-capability-grants.md) | Plugin capability grants: `plugin-grants.toml`, all-or-nothing approval, re-prompt rules, damaged-file lock | accepted |
 | [0061](docs/src/adr/0061-plugin-drivers.md) | Plugin drivers: `DriverSource` overlay on the registry, host-engine vs guest drivers, what a guest sees, `driver.guest` wording, unavailable texts, WIT 0.1.1, guard parity, DuckDB licence stop | accepted |
 | [0068](docs/src/adr/0068-ci-pipeline-speed.md) | CI pipeline speed: path gating with always-reporting names, caches saved on `main` only, Windows PR subset, `CI result` aggregate, rollback | accepted |
+| [0070](docs/src/adr/0070-duckdb-engine-and-licence.md) | `DuckDB` native engine behind the plugin shell: worker thread per session, Arrow streaming, sandbox (no external access or extensions), one instance per file, no `webpki-roots` licence exception needed, feature `driver-duckdb` (+45 MB, outside the size budget, off by default), CI cost; amendment 2: out of v1.0, CI isolation | accepted |
 | [0071](docs/src/adr/0071-sql-server-plugin.md) | SQL Server as an in-repo plugin with a host-provided engine: plugin vs core, cancel closes the connection, ring installed beside aws-lc-rs, API gaps | accepted |
 | [0072](docs/src/adr/0072-plugin-export-formats.md) | Plugin export formats: `FormatSource` overlay on the export registry, `plugin-<id>:<fmt>` ids and cleaned labels, blocking wait on the host runtime, interned strings, fixed failure texts, CLI for `plugin-` ids | accepted |
 

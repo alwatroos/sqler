@@ -11,3 +11,11 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-driver-api.workspace = true
+duckdb.workspace = true
+tokio = { workspace = true, features = ["sync", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "time"] }

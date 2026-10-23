@@ -20,11 +20,16 @@ pub(crate) fn source() -> Arc<PluginDrivers> {
 
 /// The native engines this build links, for plugins that declare `driver.host:<engine>`.
 ///
-/// Each engine sits behind its own feature: `driver-mssql` links SQL Server (ADR-0071). The `DuckDB` plugin adds its
-/// engine here the same way.
+/// Each engine sits behind its own feature: `driver-mssql` links SQL Server (ADR-0071), `driver-duckdb` links `DuckDB`
+/// (ADR-0070; not in 1.0, off by default).
 fn engines() -> HostEngines {
     #[allow(unused_mut)]
     let mut engines = HostEngines::new();
+    #[cfg(feature = "driver-duckdb")]
+    if let Ok(id) = sqler_driver_duckdb::ENGINE_ID.parse::<sqler_plugin_api::EngineId>() {
+        // A duplicate cannot happen in a fresh table.
+        let _ = engines.register(id, Arc::new(sqler_driver_duckdb::DuckDbDriver::new()));
+    }
     #[cfg(feature = "driver-mssql")]
     {
         use sqler_driver_mssql::{ENGINE_ID, MssqlDriver, install_ring_provider};
@@ -58,5 +63,65 @@ mod tests {
             s.lookup(&DriverId::new("anything").unwrap()),
             SourceLookup::Unknown
         ));
+    }
+
+    #[cfg(feature = "driver-duckdb")]
+    #[test]
+    fn the_duckdb_engine_is_registered() {
+        assert!(format!("{:?}", engines()).contains("duckdb"));
+    }
+
+    /// The production gate on a `DuckDB` connection (ADR-0070, gap G1): no dialect, so every statement is `Unknown`
+    /// and a `prod` run asks first; a dismissed confirmation writes nothing, a confirmed one writes the row.
+    #[cfg(feature = "driver-duckdb")]
+    #[tokio::test]
+    async fn prod_gate_confirms_a_duckdb_write() {
+        use sqler_driver_api::sqler_core::{ConnectionConfig, Query, Value};
+        use sqler_driver_api::{Driver as _, collect};
+        use sqler_driver_duckdb::{DRIVER_ID, DuckDbDriver};
+        use sqler_sql::Dialect;
+        use sqler_ui::query::{BufferSnapshot, QueryTab, RunMode, Step, plan};
+
+        assert!(Dialect::from_driver_id(DRIVER_ID).is_none());
+        let path =
+            std::env::temp_dir().join(format!("sqler-app-prod-gate-{}.duckdb", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let config = ConnectionConfig::new(
+            "t",
+            DriverId::new(DRIVER_ID).unwrap(),
+            path.to_str().unwrap(),
+        );
+        let driver = DuckDbDriver::new();
+        let mut session = driver.connect(&config).await.unwrap();
+        let mut run = async |sql: &str| {
+            let q = Query::new(sql);
+            let mut stream = session.execute(&q).await.unwrap();
+            collect(&mut *stream).await.unwrap()
+        };
+        run("create table t (a integer)").await;
+
+        let buffer = BufferSnapshot::at_cursor("insert into t values (1)", 0);
+        let mut tab = QueryTab::new();
+        let p = plan(None, &buffer, RunMode::All).unwrap();
+        assert_eq!(tab.request(None, p, true), Ok(Step::Confirm));
+        tab.dismiss();
+        assert_eq!(
+            run("select count(*) from t").await.rows()[0].get(0),
+            Some(&Value::Int(0))
+        );
+
+        let p = plan(None, &buffer, RunMode::All).unwrap();
+        assert_eq!(tab.request(None, p, true), Ok(Step::Confirm));
+        let bound = tab.confirm().unwrap();
+        assert_eq!(bound.len(), 1);
+        run(&bound[0].query.sql).await;
+        assert_eq!(
+            run("select count(*) from t").await.rows()[0].get(0),
+            Some(&Value::Int(1))
+        );
+
+        drop(session);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("duckdb.wal"));
     }
 }
