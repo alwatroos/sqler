@@ -92,7 +92,9 @@ pub(super) fn parse(bytes: &[u8]) -> Result<SourceReport, ImportError> {
             notices = o
                 .keys()
                 .filter(|k| {
-                    !CONNECTION_KEYS.contains(&k.as_str()) && !FOLDER_KEYS.contains(&k.as_str())
+                    !CONNECTION_KEYS.contains(&k.as_str())
+                        && !FOLDER_KEYS.contains(&k.as_str())
+                        && !map::is_secret_key(k)
                 })
                 .map(|k| format!("unknown top-level key {}", map::safe_name(k)))
                 .collect();

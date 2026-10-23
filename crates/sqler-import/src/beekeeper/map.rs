@@ -110,7 +110,7 @@ fn encode(s: &str) -> String {
 }
 
 /// Keys whose name says they hold a secret; they are skipped without a mention.
-fn is_secret_key(key: &str) -> bool {
+pub(super) fn is_secret_key(key: &str) -> bool {
     let k = key.to_ascii_lowercase();
     ["password", "passphrase", "secret", "token", "url", "uri"]
         .iter()

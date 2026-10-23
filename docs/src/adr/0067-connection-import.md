@@ -138,12 +138,13 @@ key is dropped; SQL Server client certificates are dropped with a note). `sshEna
 key path are not mapped and skip the entry. `labelColor` names map to a fixed palette, `#rrggbb` is kept.
 Folders become the group path (parents followed with a cycle and depth guard). Secrets to enter: the database password
 (not for SQLite) and the SSH password or key passphrase. SQL Server has no keychain password in 1.0 (ADR-0071), so
-that entry carries a note instead. A SQL Server entry is a normal import; the planner marks it "not available in this
+that entry carries a note instead; R9 will push the `DbPassword` for `sqlserver` entries after ADR-0071 Amendment 1
+(S5) lands. A SQL Server entry is a normal import; the planner marks it "not available in this
 build" only when the caller's driver list lacks `sqlserver`. The crate needs no SQLite access and no new dependency.
 
 ### Out of scope
 
-The import wizard and its dialogs (R9), Azure Data Studio (R7), Beekeeper Studio (R8) and reading the `pgadmin4.db`
+The import wizard and its dialogs (R9), Azure Data Studio (R7) and reading the `pgadmin4.db`
 database of pgAdmin. The user guide page is R10.
 
 ## Consequences

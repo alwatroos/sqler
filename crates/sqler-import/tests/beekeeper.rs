@@ -332,6 +332,16 @@ fn broken_files_give_typed_errors() {
 }
 
 #[test]
+fn secret_like_top_level_keys_are_not_listed() {
+    let json = br#"{"connections":[],"apiToken":"x","dbPassword":"y","version":2}"#;
+    let r = Beekeeper.parse(json).unwrap();
+    assert_eq!(r.notices.len(), 1);
+    assert!(r.notices[0].contains("version"));
+    let all = r.notices.join(" ").to_ascii_lowercase();
+    assert!(!all.contains("token") && !all.contains("password"));
+}
+
+#[test]
 fn bom_and_crlf_are_accepted() {
     let mut bytes = b"\xEF\xBB\xBF".to_vec();
     let text = String::from_utf8(portable(&fixture("array.json"))).unwrap();
