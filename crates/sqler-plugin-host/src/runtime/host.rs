@@ -298,6 +298,19 @@ impl PluginHost {
             .collect()
     }
 
+    /// The registered plugins in load order whose manifest declares at least one exporter, with whether each is
+    /// disabled now. Grants are not read: the `exporter` interface needs no capability.
+    pub(crate) fn exporter_plugins(&self) -> Vec<(Arc<DiscoveredPlugin>, bool)> {
+        self.entries()
+            .iter()
+            .filter(|e| !e.plugin.manifest.contributes().exporters.is_empty())
+            .map(|e| {
+                let disabled = lock(&e.state).disabled.is_some();
+                (Arc::clone(&e.plugin), disabled)
+            })
+            .collect()
+    }
+
     /// The discovered plugin and its effective capabilities now, for the typed calls that check a declaration before
     /// they reach the guest.
     pub(crate) fn plugin_view(

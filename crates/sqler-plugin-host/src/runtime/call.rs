@@ -78,6 +78,26 @@ impl<R> Done<R> {
 }
 
 impl PluginHost {
+    /// Blocks the calling thread until `call` has finished and returns its result. The call is awaited by a task on the
+    /// host's runtime, so the caller needs no runtime of its own.
+    ///
+    /// Must never be called on a thread of the host's runtime: the thread would wait for work that it has to run
+    /// itself. Use it from a plain thread, such as the blocking pool of another runtime.
+    ///
+    /// # Errors
+    /// The call's own error, or the shut-down error when the runtime ended before it answered.
+    pub(crate) fn wait_blocking<R: Send + 'static>(
+        &self,
+        call: PendingCall<R>,
+    ) -> Result<R, CallError> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.inner.opts.runtime.spawn(async move {
+            // The receiver waits below; a send can only fail when the caller is gone.
+            let _ = tx.send(call.await);
+        });
+        rx.recv().unwrap_or_else(|_| Err(shut_down_error()))
+    }
+
     /// Runs `f` on the live instance of `id`, instantiating it first when needed.
     pub(crate) fn run<R: Send + 'static>(
         &self,

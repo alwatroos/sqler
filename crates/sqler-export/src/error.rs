@@ -51,6 +51,9 @@ pub enum ExportError {
     /// The encoder failed (`Parquet`).
     #[error("encoding failed: {0}")]
     Encode(String),
+    /// A plugin format failed. The text is already safe to show to the user.
+    #[error("{0}")]
+    Plugin(String),
     /// An identifier could not be quoted.
     #[error(transparent)]
     Sql(#[from] DdlError),
