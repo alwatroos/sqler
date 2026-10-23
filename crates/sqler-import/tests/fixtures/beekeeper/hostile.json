@@ -1,0 +1,26 @@
+{
+  "version": 99,
+  "connection_folders": [
+    { "id": "a", "name": "Loop A", "parentId": "b" },
+    { "id": "b", "name": "Loop B", "parentId": "a" }
+  ],
+  "connections": [
+    42,
+    {},
+    { "connectionType": 7, "name": 5 },
+    { "connectionType": "postgresql", "name": "Bad port", "host": "h.example.test", "port": 70000 },
+    { "connectionType": "postgresql", "name": "Bad host", "host": "h.example.test/../x" },
+    { "connectionType": "postgresql", "name": "Looped", "host": "h.example.test", "connectionFolderId": "a" },
+    { "connectionType": "postgresql", "name": "Socket", "host": "h.example.test", "socketPathEnabled": true },
+    { "connectionType": "postgresql", "name": "Bastion", "host": "h.example.test", "sshEnabled": true, "sshHost": "b.example.test", "sshUsername": "t", "sshBastionHost": "c.example.test" },
+    { "connectionType": "postgresql", "name": "No ssh user", "host": "h.example.test", "sshEnabled": true, "sshHost": "b.example.test" },
+    { "connectionType": "postgresql", "name": "Bad mode", "host": "h.example.test", "sshEnabled": true, "sshHost": "b.example.test", "sshUsername": "t", "sshMode": "magic" },
+    { "connectionType": "postgresql", "name": "Relative key", "host": "h.example.test", "sshEnabled": true, "sshHost": "b.example.test", "sshUsername": "t", "sshMode": "keyfile", "sshKeyfile": "~/id_rsa" },
+    { "connectionType": "sqlite", "name": "Relative db", "defaultDatabase": "notes.db" },
+    { "connectionType": "sqlite", "name": "Device db", "defaultDatabase": "/dev/con" },
+    { "connectionType": "mysql", "name": "Half pair", "host": "h.example.test", "ssl": true, "sslCertFile": "/home/alice/c.pem" },
+    { "connectionType": "mysql", "name": "Bad paths", "host": "h.example.test", "ssl": true, "sslCaFile": "relative/ca.pem", "labelColor": "chartreuse" },
+    { "connectionType": "sqlserver", "name": "Mssql pair", "host": "h.example.test", "ssl": true, "sslCertFile": "/home/alice/c.pem", "sslKeyFile": "/home/alice/c.key" },
+    { "connectionType": "", "name": "No type" }
+  ]
+}
