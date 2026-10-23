@@ -1,6 +1,6 @@
 name: Binary size
 
-# Reports the release `sqler` size per OS next to the 60 MB budget. Report only, never a gate.
+# Reports the release `sqler` size per OS next to the 70 MB budget (ADR-0069). Report only, never a gate.
 on:
   push:
     branches: [main]
@@ -82,17 +82,17 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then bin=target/release/sqler.exe; fi
           off=$(wc -c < "$RUNNER_TEMP/sqler-default" | tr -d ' ')
           on=$(wc -c < "$bin" | tr -d ' ')
-          budget=62914560
+          budget=73400320
           reserve=1048576
           limit=$((budget - reserve))
           delta=$((on - off))
           mib() { awk -v b="$1" 'BEGIN { printf "%.1f", b / 1048576 }'; }
-          line="sqler release binary on $RUNNER_OS: default $off bytes = $(mib $off) MiB; with --features plugins $on bytes = $(mib $on) MiB; delta $delta bytes (budget 60 MB = $budget; plugins default needs the with-plugins size below $limit)"
+          line="sqler release binary on $RUNNER_OS: default $off bytes = $(mib $off) MiB; with --features plugins $on bytes = $(mib $on) MiB; delta $delta bytes (budget 70 MB = $budget; plugins default needs the with-plugins size below $limit)"
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
           echo "plugins_size_ok_$RUNNER_OS=$([ "$on" -lt "$limit" ] && echo yes || echo no)" >> "$GITHUB_STEP_SUMMARY"
           if [ "$off" -gt "$budget" ]; then
-            echo "::warning title=Binary size::sqler on $RUNNER_OS is $off bytes ($(mib $off) MiB), over the 60 MB budget"
+            echo "::warning title=Binary size::sqler on $RUNNER_OS is $off bytes ($(mib $off) MiB), over the 70 MB budget"
           fi
           if [ "$on" -ge "$limit" ]; then
             echo "::notice title=Plugins feature::with --features plugins sqler on $RUNNER_OS is $on bytes: plugins stay off by default (ADR-0060 rule: every OS below $limit)"

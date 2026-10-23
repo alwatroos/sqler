@@ -6,7 +6,7 @@ Targets for every release build:
 | ------ | ------ | ------ |
 | Cold start | < 500 ms | prompt §2.2 / AGENTS.md §1 |
 | Idle RSS with three connections open | < 150 MB | prompt §2.2 / AGENTS.md §1 |
-| Release binary size | < 60 MB per platform | prompt §2.2 / AGENTS.md §1 |
+| Release binary size | < 70 MB per platform (raised from 60 MB, ADR-0069) | prompt §2.2 / AGENTS.md §1 |
 
 These are tracked numbers with dates and commit hashes, not aspirations.
 
@@ -37,7 +37,7 @@ Run from the repository root on the commit being recorded:
 Run from the repository root on the commit being recorded:
 
 1. `cargo build --release -p sqler-app --locked`
-2. Binary size: `stat -f %z target/release/sqler` (bytes), MB = bytes / 1048576 (30,928,816 bytes = 29.5 MB at `1f206e6`). Per OS in CI: the `Binary size` workflow (`size.yml`) prints the bytes for Linux, macOS and Windows next to the 60 MB budget (report only, not a gate).
+2. Binary size: `stat -f %z target/release/sqler` (bytes), MB = bytes / 1048576 (30,928,816 bytes = 29.5 MB at `1f206e6`). Per OS in CI: the `Binary size` workflow (`size.yml`) prints the bytes for Linux, macOS and Windows next to the 70 MB budget (report only, not a gate).
 3. Isolate the config: on macOS set `HOME` to an empty directory that holds `Library/Application Support/SQLer/connections.toml` with three `sqlite` `:memory:` entries (on Linux set `XDG_CONFIG_HOME`).
 4. Cold start: `hyperfine -w 3 -r 20 'target/release/sqler --exit-after-first-frame'`. This is the whole process until the first frame is presented, so it needs a display. Without one, record "not measured: no interactive display".
 5. Idle RSS: start `target/release/sqler`, wait 6 s, read `ps -o rss= -p <pid>` (KiB), read again after 10 s, stop it. Repeat three times.
