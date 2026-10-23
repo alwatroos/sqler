@@ -79,9 +79,20 @@ impl UiLimits {
     }
 }
 
+/// Same definition as `sqler_ui::plugins::status::is_unsafe_char`: controls, line and paragraph separators, the
+/// invisible bidi marks (U+200E, U+200F, U+061C), and the bidi overrides and isolates.
 fn is_unsafe_char(c: char) -> bool {
     c.is_control()
-        || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        || matches!(
+            c,
+            '\u{200e}'
+                | '\u{200f}'
+                | '\u{061c}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
 }
 
 /// One line of text with no control characters (line breaks and tabs become spaces, other controls and bidi
@@ -169,6 +180,15 @@ mod tests {
         assert_eq!(one_line("x\u{1b}[31my\u{202e}z\0", 100), "x[31myz");
         assert_eq!(one_line("  padded  ", 100), "padded");
         assert_eq!(one_line("\n\n", 100), "");
+    }
+
+    #[test]
+    fn invisible_bidi_marks_are_dropped() {
+        assert_eq!(one_line("a\u{200e}b\u{200f}c\u{061c}d", 100), "abcd");
+        assert!(
+            is_unsafe_char('\u{200e}') && is_unsafe_char('\u{200f}') && is_unsafe_char('\u{061c}')
+        );
+        assert!(!is_unsafe_char('a'));
     }
 
     #[test]

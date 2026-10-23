@@ -279,9 +279,13 @@ fn world(label: &str, fixtures: &Path, name: &str, opts: &Opts) -> World {
 }
 
 impl World {
+    /// The status text, or `None` when the guest has nothing to show (an empty text counts as nothing).
+    fn status_opt(&self, item: &str) -> Option<String> {
+        block_on(&self.rt, self.host.status(&self.id, &cid(item))).unwrap()
+    }
+
     fn status(&self, item: &str) -> String {
-        block_on(&self.rt, self.host.status(&self.id, &cid(item)))
-            .unwrap()
+        self.status_opt(item)
             .unwrap_or_else(|| panic!("no status for {item}"))
     }
 
@@ -515,7 +519,8 @@ fn settings_reach_the_guest_read_only() {
         return;
     };
     let w = world("setting", &fx, "probe", &Opts::default());
-    assert_eq!(w.status("setting"), "");
+    // An unset setting reads as empty text, which the host reports as nothing to show.
+    assert_eq!(w.status_opt("setting"), None);
     w.host
         .set_setting(&w.id, "url", SettingValue::Text("http://x/".to_owned()))
         .unwrap();

@@ -29,12 +29,22 @@ pub struct Shown {
     pub tooltip: String,
 }
 
-/// A character plugin text must not carry: a control character, a line or paragraph separator, or a bidirectional
-/// override or isolate (it could reorder the text around it).
+/// A character plugin text must not carry: a control character, a line or paragraph separator, an invisible bidi
+/// mark (U+200E, U+200F, U+061C), or a bidirectional override or isolate (it could reorder the text around it).
+/// The host's `ui/limits.rs` keeps the same definition.
 #[must_use]
 pub fn is_unsafe_char(c: char) -> bool {
     c.is_control()
-        || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        || matches!(
+            c,
+            '\u{200e}'
+                | '\u{200f}'
+                | '\u{061c}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
 }
 
 /// One line without control characters, at most [`MAX_CHARS`] characters; empty when nothing visible is left.
@@ -245,6 +255,14 @@ mod tests {
     #[test]
     fn bidi_overrides_and_separators_are_dropped() {
         assert_eq!(display_text("a\u{202e}b\u{2028}c"), "a b c");
+    }
+
+    #[test]
+    fn invisible_bidi_marks_are_dropped() {
+        assert_eq!(display_text("a\u{200e}b\u{200f}c\u{061c}d"), "a b c d");
+        assert!(
+            is_unsafe_char('\u{200e}') && is_unsafe_char('\u{200f}') && is_unsafe_char('\u{061c}')
+        );
     }
 
     #[test]
