@@ -248,3 +248,69 @@ fn plain_string_columns_without_rows_are_not_columns() {
     assert_eq!(v, before);
     assert_eq!(s.columns, Vec::<String>::new());
 }
+
+fn contained(v: Value, send_rows: bool) -> String {
+    Redaction::default()
+        .contain_external(v, send_rows)
+        .to_string()
+}
+
+#[test]
+fn external_object_rows_are_masked_when_rows_are_sent() {
+    let out = contained(
+        json!({"rows": [{"Password": "CANARY", "name": "ann"}, {"API_KEY": "CANARY"}]}),
+        true,
+    );
+    assert!(!out.contains("CANARY"), "{out}");
+    assert!(out.contains("ann"));
+}
+
+#[test]
+fn external_object_rows_are_withheld_when_rows_are_not_sent() {
+    let out = contained(
+        json!({"rows": [{"password": "CANARY", "name": "ann"}]}),
+        false,
+    );
+    assert!(!out.contains("CANARY") && !out.contains("ann"), "{out}");
+    assert!(out.contains("withheld"));
+}
+
+#[test]
+fn external_parallel_records_are_masked_by_listed_columns() {
+    let v =
+        json!({"columns": ["name", "PassWord"], "records": [["ann", "CANARY"], ["bob", "CANARY"]]});
+    let out = contained(v.clone(), true);
+    assert!(!out.contains("CANARY"), "{out}");
+    assert!(out.contains("ann") && out.contains("bob"));
+    let v2 =
+        json!({"columns": [{"name": "name"}, {"name": "password"}], "records": [["a", "CANARY"]]});
+    assert!(!contained(v2, true).contains("CANARY"));
+    let out = contained(v, false);
+    assert!(!out.contains("CANARY") && out.contains("withheld"), "{out}");
+}
+
+#[test]
+fn external_array_rows_under_rows_key_are_masked_by_column() {
+    let v = json!({"columns": ["name", "password"], "rows": [["ann", "CANARY"]]});
+    assert!(!contained(v.clone(), true).contains("CANARY"));
+    assert!(!contained(v, false).contains("CANARY"));
+}
+
+#[test]
+fn external_deep_nesting_is_withheld_on_both_kinds_of_connection() {
+    let mut v = json!({"password": "CANARY", "x": "CANARY"});
+    for _ in 0..200 {
+        v = json!({"n": v});
+    }
+    for send_rows in [true, false] {
+        let out = contained(v.clone(), send_rows);
+        assert!(!out.contains("CANARY") && out.contains("withheld"), "{out}");
+    }
+}
+
+#[test]
+fn external_nested_listed_keys_are_masked_in_mixed_case() {
+    let v =
+        json!({"data": {"items": [{"Token": "CANARY"}, {"inner": {"userPassword": "CANARY"}}]}});
+    assert!(!contained(v, true).contains("CANARY"));
+}

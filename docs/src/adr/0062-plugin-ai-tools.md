@@ -88,7 +88,9 @@ prod), a result that is not made of recognised parts is replaced as a whole by a
 booleans and null, strings under message-like keys (`error`, `message`, `status`, `sql`, `code`, `note`, `warning`,
 `reason`), objects of those, and arrays of `columns` plus `rows` tables. So `{"records": [..]}` and an array of row
 objects are withheld. On every connection, a value under an object key that the redaction list names (`password` and
-the like) is replaced by `<redacted>`.
+the like) is replaced by `<redacted>`, including the keys of object rows under `rows`. Next to a `columns` array, every
+array of arrays is read as rows whatever its key (`records`, `data`), and the cells of listed columns are replaced. A
+result nested deeper than 64 levels is withheld as a whole on every connection.
 
 ### Which surfaces list plugin tools
 
