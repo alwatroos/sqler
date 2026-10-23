@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: The SQLer Authors
 
 //! The `GPUI` side of plugin write approvals (AC6): drains the asks the app's approver sends, keeps the Deny button
-//! focused while a dialog is up and routes the answers to the [`WriteQueue`](crate::plugins::WriteQueue).
+//! focused while a dialog is up and routes the answers to the [`WriteQueue`].
 
 use std::time::{Duration, Instant};
 
