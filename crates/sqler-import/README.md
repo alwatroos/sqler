@@ -16,6 +16,13 @@ API (pure, no async; `apply` blocks on the keychain, so async callers use `spawn
 - `foreign_path` validates a path read from a foreign file (absolute only, no device names or `\\?\` prefixes) without opening it.
 - Caps: `MAX_FILE_BYTES` (4 MiB), `MAX_ENTRIES` (5,000), `MAX_FIELD_CHARS` (4,096), `MAX_GROUP_DEPTH` (8). `ImportError` texts never quote file content.
 
+Sources:
+
+| Id | Tool | File | Maps |
+| -- | ---- | ---- | ---- |
+| `pgadmin` | pgAdmin 4 | `servers.json` export | PostgreSQL |
+| `beekeeper` | Beekeeper Studio | JSON connection export | PostgreSQL, MySQL/MariaDB, SQLite, SQL Server; other engines are skipped and listed |
+
 Foreign files never supply secret values. No stored password is decrypted, no passfile is read and no command is run.
 
 See [ADR-0067](../../docs/src/adr/0067-connection-import.md).

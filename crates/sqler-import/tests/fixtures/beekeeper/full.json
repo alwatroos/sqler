@@ -1,0 +1,90 @@
+{
+  "connection_folders": [
+    { "id": 1, "name": "Shop" },
+    { "id": 2, "name": "Staging", "parentId": 1 }
+  ],
+  "connections": [
+    {
+      "id": 1,
+      "connectionType": "postgresql",
+      "name": "Orders primary",
+      "host": "db.example.test",
+      "port": 5433,
+      "defaultDatabase": "orders",
+      "username": "alice",
+      "password": "fake-pw-123",
+      "ssl": true,
+      "sslCaFile": "/home/alice/certs/ca.pem",
+      "sslCertFile": "/home/alice/certs/client.pem",
+      "sslKeyFile": "/home/alice/certs/client.key",
+      "sslRejectUnauthorized": true,
+      "sshEnabled": true,
+      "sshHost": "bastion.example.test",
+      "sshPort": 2222,
+      "sshUsername": "tunnel",
+      "sshMode": "keyfile",
+      "sshKeyfile": "/home/alice/.ssh/id_test",
+      "sshKeyfilePassword": "fake-passphrase-789",
+      "connectionFolderId": 2,
+      "labelColor": "blue",
+      "readOnlyMode": true,
+      "connectionUrl": "postgres://alice:fake-pw-123@db.example.test/orders"
+    },
+    {
+      "id": 2,
+      "connectionType": "mariadb",
+      "name": "Reports",
+      "host": "maria.example.test",
+      "port": "3307",
+      "defaultDatabase": "reports",
+      "username": "bob",
+      "password": "fake-pw-123",
+      "ssl": true,
+      "sslRejectUnauthorized": false,
+      "labelColor": "#AA3300",
+      "connectionFolderId": 1
+    },
+    {
+      "id": 3,
+      "connectionType": "sqlite",
+      "name": "Local notes",
+      "defaultDatabase": "/home/alice/data/notes.sqlite3",
+      "labelColor": "green"
+    },
+    {
+      "id": 4,
+      "connectionType": "sqlserver",
+      "name": "Ledger",
+      "host": "mssql.example.test",
+      "defaultDatabase": "ledger",
+      "username": "sa_alice",
+      "password": "fake-pw-123",
+      "sshEnabled": true,
+      "sshHost": "bastion.example.test",
+      "sshUsername": "tunnel",
+      "sshMode": "userpass",
+      "sshPassword": "fake-ssh-pw-456"
+    },
+    {
+      "id": 5,
+      "connectionType": "duckdb",
+      "name": "Analytics file",
+      "defaultDatabase": "/home/alice/data/analytics.duckdb"
+    },
+    { "id": 6, "connectionType": "mongodb", "name": "Docs", "host": "mongo.example.test" },
+    { "id": 7, "connectionType": "cockroachdb", "name": "Edge", "host": "crdb.example.test" },
+    { "id": 8, "connectionType": "quantumdb", "name": "Future", "host": "q.example.test" },
+    {
+      "id": 9,
+      "connectionType": "postgres",
+      "name": "Agent tunnel",
+      "host": "::1",
+      "username": "carol",
+      "ssl": false,
+      "sshEnabled": true,
+      "sshHost": "bastion.example.test",
+      "sshUsername": "tunnel",
+      "sshMode": "agent"
+    }
+  ]
+}
