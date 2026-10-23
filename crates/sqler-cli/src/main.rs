@@ -9,7 +9,10 @@ mod args;
 mod export;
 mod mcp;
 mod output;
+#[cfg(feature = "plugins")]
+mod plugins;
 
+use std::borrow::Cow;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
@@ -93,6 +96,12 @@ pub(crate) fn registry() -> Result<DriverRegistry> {
     registry.register(Box::new(sqler_driver_postgres::PostgresDriver::new()))?;
     #[cfg(feature = "driver-mysql")]
     registry.register(Box::new(sqler_driver_mysql::MySqlDriver::new()))?;
+    // Drivers of approved plugins in `<config>/plugins`, asked after the built-in ones. `registry()` always runs
+    // inside the command's tokio runtime, which the plugin host uses.
+    #[cfg(feature = "plugins")]
+    if let Some(source) = plugins::driver_source() {
+        registry.add_source(source);
+    }
     Ok(registry)
 }
 
@@ -121,9 +130,11 @@ pub(crate) fn driver_id(driver: &str) -> Result<DriverId> {
 }
 
 /// The text printed for a driver or registry error. Fixed per kind: the texts of the driver layer
-/// can carry the target (host, user, parts of a URL) or the argument that was rejected.
-pub(crate) fn driver_message(err: &DriverError) -> &'static str {
-    match err {
+/// can carry the target (host, user, parts of a URL) or the argument that was rejected. The one
+/// exception is [`DriverError::Unavailable`]: a driver source writes its text from ids only (which
+/// plugin, which driver, what is missing), never from the target.
+pub(crate) fn driver_message(err: &DriverError) -> Cow<'static, str> {
+    Cow::Borrowed(match err {
         DriverError::Cancelled => "cancelled",
         DriverError::Connection(_) => {
             "connection failed (details are withheld: they can contain the target)"
@@ -131,16 +142,26 @@ pub(crate) fn driver_message(err: &DriverError) -> &'static str {
         DriverError::Query(_) => "query failed (details are withheld: they can echo the input)",
         DriverError::Unsupported(_) => "the driver does not support this request",
         DriverError::UnknownDriver(_) => UNKNOWN_DRIVER,
+        DriverError::Unavailable(text) => return Cow::Owned(text.clone()),
         _ => "database error (details are withheld: they can contain the target)",
-    }
+    })
 }
 
 fn driver_error(err: &DriverError) -> anyhow::Error {
-    anyhow!(driver_message(err))
+    anyhow!("{}", driver_message(err))
 }
 
 async fn run_query(driver: &str, target: &str, sql: &str) -> Result<()> {
     let registry = registry()?;
+    query_with(&registry, driver, target, sql).await
+}
+
+async fn query_with(
+    registry: &DriverRegistry,
+    driver: &str,
+    target: &str,
+    sql: &str,
+) -> Result<()> {
     let config = connection_config(driver, target)?;
     let mut session = registry
         .connect(&config)

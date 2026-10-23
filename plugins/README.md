@@ -12,6 +12,7 @@ would join every host build and the root `Cargo.lock`. Built `.wasm` files are n
 - `Cargo.toml`: guest workspace (`members`, package defaults, `wit-bindgen`, lints, profile).
 - `fixtures/smoke`: the smoke fixture (`sqler-fixture-smoke`, plugin id `smoke`): the `base` world, `init` logs one line.
 - `fixtures/probe`: the probe fixture (`sqler-fixture-probe`, plugin id `probe`, world `ui-plugin`): commands that panic, trap, run out of memory, spin, sleep and flood the log, and status items that report what the sandbox exposes (environment, scoped and escaping file reads, HTTP). Driven by `crates/sqler-plugin-host/tests/guests.rs`; `wasip2` provides the wasi:http client types.
+- `fixtures/driver`: the driver fixture (`sqler-fixture-driver`, plugin id `driver-fixture`, driver id `fixture-db`, world `driver-catalog-plugin`): a guest driver over a fake in-memory database whose statement text picks the behaviour (streams, affected rows, a spinning batch, a trap in the second batch, malformed batches, catalog). Driven by `crates/sqler-plugin-host/tests/guests/driver.rs`.
 - Each plugin directory holds a `sqler.toml` manifest and, for a code plugin, a `cdylib` crate.
 
 ## Toolchain

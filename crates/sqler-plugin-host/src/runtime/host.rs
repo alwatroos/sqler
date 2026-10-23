@@ -285,37 +285,16 @@ impl PluginHost {
     /// The registered plugins in load order.
     #[must_use]
     pub fn plugins(&self) -> Vec<PluginStatus> {
-        let entries: Vec<_> = {
-            let reg = lock(&self.inner.registry);
-            reg.order
-                .iter()
-                .filter_map(|id| reg.map.get(id).cloned())
-                .collect()
-        };
-        entries
+        self.entries().iter().map(|e| self.status_of(e)).collect()
+    }
+
+    /// The registered plugins in load order, with their status, for those whose manifest contributes at least one
+    /// driver. Manifests without drivers are skipped before their grants are read.
+    pub(crate) fn driver_plugins(&self) -> Vec<(Arc<DiscoveredPlugin>, PluginStatus)> {
+        self.entries()
             .iter()
-            .map(|e| {
-                let m = &e.plugin.manifest;
-                let (state, scope_issues) = {
-                    let st = lock(&e.state);
-                    let state = match &st.disabled {
-                        Some(reason) => PluginState::Disabled {
-                            reason: reason.clone(),
-                        },
-                        None if st.live => PluginState::Live,
-                        None => PluginState::Idle,
-                    };
-                    (state, st.scope_issues.clone())
-                };
-                let approved = self.inner.opts.grants.approved(&e.plugin.key);
-                PluginStatus {
-                    id: m.id().clone(),
-                    state,
-                    effective: effective(m.capabilities(), approved.as_ref()),
-                    key: e.plugin.key.clone(),
-                    scope_issues,
-                }
-            })
+            .filter(|e| !e.plugin.manifest.contributes().drivers.is_empty())
+            .map(|e| (Arc::clone(&e.plugin), self.status_of(e)))
             .collect()
     }
 
@@ -329,6 +308,37 @@ impl PluginHost {
         let approved = self.inner.opts.grants.approved(&entry.plugin.key);
         let caps = effective(entry.plugin.manifest.capabilities(), approved.as_ref());
         Some((Arc::clone(&entry.plugin), caps))
+    }
+
+    fn entries(&self) -> Vec<Arc<PluginEntry>> {
+        let reg = lock(&self.inner.registry);
+        reg.order
+            .iter()
+            .filter_map(|id| reg.map.get(id).cloned())
+            .collect()
+    }
+
+    fn status_of(&self, e: &Arc<PluginEntry>) -> PluginStatus {
+        let m = &e.plugin.manifest;
+        let (state, scope_issues) = {
+            let st = lock(&e.state);
+            let state = match &st.disabled {
+                Some(reason) => PluginState::Disabled {
+                    reason: reason.clone(),
+                },
+                None if st.live => PluginState::Live,
+                None => PluginState::Idle,
+            };
+            (state, st.scope_issues.clone())
+        };
+        let approved = self.inner.opts.grants.approved(&e.plugin.key);
+        PluginStatus {
+            id: m.id().clone(),
+            state,
+            effective: effective(m.capabilities(), approved.as_ref()),
+            key: e.plugin.key.clone(),
+            scope_issues,
+        }
     }
 
     /// Instantiates the plugin if needed (which runs `lifecycle.init`). A no-op for a live plugin.

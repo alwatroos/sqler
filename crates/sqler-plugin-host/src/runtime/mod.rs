@@ -32,6 +32,7 @@ pub use services::Services;
 
 // The generated bindings and the error constructor, for the host interfaces that live outside this module (query,
 // catalog, ...).
+pub(crate) use bindings::exports::sqler::plugin as wit_exports;
 pub(crate) use bindings::exports::sqler::plugin::ui_handler;
 pub(crate) use bindings::sqler::plugin as wit;
 pub(crate) use convert::plugin_error;

@@ -15,12 +15,14 @@ capabilities it asks for. The user approves the capabilities; the default is den
 - [Manifest](manifest.md): every key of `sqler.toml`, an example and the error list.
 - [Capabilities](capabilities.md): the grammar, what each capability gates, grant keys,
   re-prompts and limits.
+- [Drivers](drivers.md): guest and host drivers, what a driver receives, streaming, cancel and the error texts.
 
 ## Choosing a world
 
 A plugin picks the feature worlds it needs (they use `include`), so a panel plugin does not
 stub exporter functions. Worlds: `base` (lifecycle only), `ui-plugin`, `ai-tool-plugin`,
-`exporter-plugin`, `completion-plugin`, `driver-plugin` and `full`. Every world imports the
+`exporter-plugin`, `completion-plugin`, `driver-plugin`, `driver-catalog-plugin` (a driver
+that also lets the app browse its schema, package 0.1.1) and `full`. Every world imports the
 five host interfaces `log`, `settings`, `catalog`, `query` and `ui`. The host always links
 them; an ungranted call returns `error-code::capability-denied` at runtime, so a denied
 plugin still loads.

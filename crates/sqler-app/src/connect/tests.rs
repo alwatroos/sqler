@@ -11,7 +11,9 @@ use sqler_config::{
     MemoryStore, SecretRef, SshAuth, SshProfile, TlsMode as ProfileTlsMode, TlsProfile,
 };
 use sqler_driver_api::sqler_core::{Environment, Query, TlsMode};
-use sqler_driver_api::{CancelFlag, CancelHandle, Driver, DriverError, QueryStream};
+use sqler_driver_api::{
+    CancelFlag, CancelHandle, Driver, DriverError, DriverSource, QueryStream, SourceLookup,
+};
 use sqler_tunnel::TunnelError;
 
 use super::tunnel::fake::FakeTunnels;
@@ -178,6 +180,100 @@ async fn wait_for(counter: &AtomicUsize, expected: usize) {
 #[tokio::test]
 async fn driver_ids_are_listed() {
     assert_eq!(Rig::ok().pipeline.driver_ids(), vec![driver()]);
+}
+
+/// A source with one driver that is available (`plug-ok`, a recording `Probe`) and one that is not (`plug-off`).
+struct FakeSource {
+    configs: Arc<Mutex<Vec<ConnectionConfig>>>,
+    closed: Arc<AtomicUsize>,
+}
+
+const OFF_TEXT: &str = "driver `plug-off` comes from plugin `p`, which is disabled";
+
+impl DriverSource for FakeSource {
+    fn ids(&self) -> Vec<DriverId> {
+        vec![DriverId::new("plug-ok").unwrap()]
+    }
+
+    fn lookup(&self, id: &DriverId) -> SourceLookup {
+        match id.as_str() {
+            "plug-ok" => SourceLookup::Available(Arc::new(Probe {
+                configs: Arc::clone(&self.configs),
+                session_closed: Arc::clone(&self.closed),
+                fail: false,
+                hang: false,
+            })),
+            "plug-off" => SourceLookup::Unavailable(OFF_TEXT.to_owned()),
+            _ => SourceLookup::Unknown,
+        }
+    }
+}
+
+fn with_source() -> (Pipeline, Arc<Mutex<Vec<ConnectionConfig>>>) {
+    let configs = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = DriverRegistry::new();
+    registry.add_source(Arc::new(FakeSource {
+        configs: Arc::clone(&configs),
+        closed: Arc::new(AtomicUsize::new(0)),
+    }));
+    let pipeline = Pipeline::new(
+        Arc::new(registry),
+        Arc::new(MemoryStore::new()) as Arc<dyn SecretStore>,
+        Arc::new(FakeTunnels::new(40_001)) as Arc<dyn TunnelOpener>,
+        None,
+        Handle::current(),
+    );
+    (pipeline, configs)
+}
+
+#[tokio::test]
+async fn driver_ids_include_the_drivers_of_sources() {
+    let (pipeline, _) = with_source();
+    assert_eq!(
+        pipeline.driver_ids(),
+        vec![DriverId::new("plug-ok").unwrap()]
+    );
+}
+
+#[tokio::test]
+async fn a_source_driver_connects_through_the_pipeline() {
+    let (pipeline, configs) = with_source();
+    let spec = ConnectionSpec::new(
+        "Plug",
+        DriverId::new("plug-ok").unwrap(),
+        "postgres://u@h/db",
+    );
+    pipeline
+        .connect(request(spec, value("secret"), SecretSource::None))
+        .await
+        .unwrap();
+    let configs = configs.lock().unwrap();
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].driver.as_str(), "plug-ok");
+    // The pipeline put the password into the target, as for a built-in driver.
+    assert_eq!(configs[0].target, "postgres://u:secret@h/db");
+}
+
+#[tokio::test]
+async fn an_unavailable_source_driver_is_the_connect_failure() {
+    let (pipeline, configs) = with_source();
+    let spec = ConnectionSpec::new(
+        "Plug",
+        DriverId::new("plug-off").unwrap(),
+        "postgres://u@h/db",
+    );
+    let Err(failure) = pipeline
+        .connect(request(spec, SecretSource::None, SecretSource::None))
+        .await
+    else {
+        panic!("expected a failure");
+    };
+    assert!(
+        matches!(&failure, ConnectFailure::Driver(DriverError::Unavailable(t)) if t == OFF_TEXT),
+        "{failure:?}"
+    );
+    assert!(failure.to_string().contains(OFF_TEXT));
+    assert!(configs.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

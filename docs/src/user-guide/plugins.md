@@ -110,7 +110,7 @@ permission the plugin asks for, when it first meets a plugin or a changed one.
 | `db.write` | Ask to change data or schema on your connections | Highlighted. Every change goes through the same confirmation as your own statements. |
 | `ui.panel` | Show its own panels | |
 | `ai.tool` | Offer tools to the AI assistant | Highlighted. |
-| `driver.guest` | Provide a database driver that runs inside the plugin | Highlighted. |
+| `driver.guest` | Provide a database driver that runs inside the plugin. The plugin receives the host, username and password of every connection that uses its driver | Highlighted. Only approve it for a plugin you trust with those connections. |
 | `driver.host:<engine>` | Use a built-in database engine | Highlighted, with the engine name. |
 | `net.http:<host>` | Connect to a web host | Highlighted. The host pattern exactly as declared, with its port ("ports 80 and 443" or "port N"). |
 | `fs.read:plugin`, `fs.read:data...` | Read files in its own install folder or its own data folder | Highlighted, with the folder scope. |

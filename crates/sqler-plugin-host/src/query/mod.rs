@@ -29,9 +29,11 @@ pub(crate) mod support;
 mod tests;
 
 pub(crate) use convert::{
-    clip, data_type_to_wit, environment_to_wit, kind_to_wit, path_from_wit, path_to_wit, type_name,
+    cell_cost, clip, data_type_to_wit, environment_to_wit, kind_to_wit, path_from_wit, path_to_wit,
+    type_name, value_from_wit, value_to_wit,
 };
 pub(crate) use exec::NOT_AVAILABLE;
+pub(crate) use scrub::{DENIED, query_text};
 pub use service::{
     ApprovalStage, DataError, DataService, Decision, MAX_CATALOG_ITEMS, MAX_PARAMS,
     MAX_RESULT_BYTES, MAX_SQL_BYTES, PluginConnection, PluginData, QueryApprover, WriteReason,

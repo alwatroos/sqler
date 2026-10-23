@@ -25,6 +25,11 @@ pub const PLUGINS: &[PluginRow] = &[
         dir: "plugins/fixtures/probe",
         package: Some("sqler-fixture-probe"),
     },
+    PluginRow {
+        name: "driver",
+        dir: "plugins/fixtures/driver",
+        package: Some("sqler-fixture-driver"),
+    },
 ];
 
 #[cfg(test)]

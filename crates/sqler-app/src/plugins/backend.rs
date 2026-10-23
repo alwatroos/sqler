@@ -174,6 +174,8 @@ impl AppPlugins {
             limits: Limits::DEFAULT,
             services: self.services.clone(),
         });
+        // From now on the drivers of plugins are visible to the registry (ADR-0061).
+        super::drivers::source().attach(&host);
         Ok(Engine { runtime, host })
     }
 
