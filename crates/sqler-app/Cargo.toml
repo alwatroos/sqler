@@ -8,6 +8,17 @@ license.workspace = true
 authors.workspace = true
 publish.workspace = true
 readme = "README.md"
+repository = "https://github.com/alwatroos/sqler"
+
+# ADR-0064: cargo-dist ships this package only (`publish = false` packages are skipped unless `dist = true`).
+[package.metadata.dist]
+dist = true
+
+[package.metadata.wix]
+upgrade-guid = "4FA55639-5F51-404D-BFA5-92C365E9AF82"
+path-guid = "55BC8E55-35A1-499A-9287-D304C7A5D5F9"
+license = false
+eula = false
 
 [[bin]]
 name = "sqler"

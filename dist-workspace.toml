@@ -1,0 +1,25 @@
+[workspace]
+members = ["cargo:."]
+
+# Release pipeline (ADR-0064). cargo-dist builds, packages and, on a `v*` tag only, publishes `sqler-app`.
+# `.github/workflows/release.yml` is maintained by hand (allow-dirty); see the ADR before re-running `dist generate`.
+[dist]
+cargo-dist-version = "0.32.0"
+ci = "github"
+hosting = "github"
+create-release = true
+installers = ["shell", "powershell", "msi"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+checksum = "sha256"
+# Build `--package sqler-app` only; a workspace build would compile the DuckDB C++ engine (ADR-0070).
+precise-builds = true
+pr-run-mode = "upload"
+# release.yml is hand-maintained (path-gated PR trigger, DuckDB guard steps, GPUI setup); do not regenerate it blindly.
+allow-dirty = ["ci"]
+install-path = "~/.sqler/bin"
+install-updater = false
+cargo-cyclonedx = true
+github-attestations = false
+# THE release feature set, one line. PENDING THE OWNER'S DECISION (ADR-0064): default features of sqler-app are
+# assumed. `.github/scripts/release-guard.sh features` rejects `driver-duckdb` in this list whatever else it holds.
+features = []
