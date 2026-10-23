@@ -121,7 +121,7 @@ saying it is build-time only. Never an advisory ignore, never the `rsa` crate.
     `deny` job checks that the list names every workspace feature except `driver-duckdb`, so a new feature cannot be
     forgotten.
   - The tests of `sqler-app` and `sqler-cli` with the feature `plugins` no longer add `driver-duckdb`.
-  - A separate job `duckdb` (Linux only, 90 minute limit) runs clippy and the tests of `sqler-driver-duckdb`, and
+  - A separate job `duckdb` (Linux only, 120 minute limit) runs clippy and the tests of `sqler-driver-duckdb`, and
     clippy and the tests of `sqler-app` and `sqler-cli` with `driver-duckdb`. It runs on `workflow_dispatch` or on a
     pull request that changes `crates/sqler-driver-duckdb/**`, `plugins/**duckdb**`, the `Cargo.toml` of `sqler-app` or
     `sqler-cli`, or their plugin driver wiring (`sqler-app/src/plugins/drivers.rs`, `sqler-cli/src/plugins.rs`). Not on
