@@ -1,7 +1,7 @@
 # 0029 Parquet and XLSX writers: own streaming zip, low-level Parquet API, two cargo features
 
 - Status: accepted
-- Superseded in part by [ADR-0069](0069-binary-size-budget-70-mb.md) (2026-10-23): the binary size budget is now 70 MB (73,400,320 bytes); the 60 MB figures below are the budget at the time of writing.
+- Superseded in part by [ADR-0069](0069-binary-size-budget-70-mb.md) (2026-10-23): the binary size budget is now 80 MB (83,886,080 bytes, amendment of ADR-0069, decision of 2026-10-23); the 60 MB figures below are the budget at the time of writing.
 - Date: 2026-10-21
 
 ## Context and problem statement
