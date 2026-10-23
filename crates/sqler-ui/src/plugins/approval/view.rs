@@ -14,7 +14,7 @@ use gpui::{
     ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::{ActiveTheme as _, Sizable as _};
+use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use sqler_driver_api::sqler_core::Environment;
 
 use super::{WriteQueue, WriteStage, asker, card_title};
@@ -56,15 +56,17 @@ pub(crate) fn write_overlay(
         view.workspace().plugin_writes(),
         &on_answer,
         view.plugin_write_focus(),
+        view.plugin_write_armed(),
         cx,
     )
 }
 
-/// The dialog for the current ask of `queue`, with Deny focused through `focus`.
+/// The dialog for the current ask of `queue`, with Deny focused through `focus`. Approve is drawn disabled until `armed`.
 pub(crate) fn write_dialog(
     queue: &WriteQueue,
     on_answer: &AnswerFn,
     focus: &FocusHandle,
+    armed: bool,
     cx: &App,
 ) -> Option<AnyElement> {
     let ask = queue.current()?;
@@ -88,12 +90,13 @@ pub(crate) fn write_dialog(
                 Some(intro),
                 Some(focus),
                 true,
+                armed,
                 cancel,
                 confirm,
                 cx,
             ))
         }
-        _ => Some(first_dialog(id, request, on_answer, focus, cx)),
+        _ => Some(first_dialog(id, request, on_answer, focus, armed, cx)),
     }
 }
 
@@ -102,6 +105,7 @@ fn first_dialog(
     request: &super::PluginWriteRequest,
     on_answer: &AnswerFn,
     focus: &FocusHandle,
+    armed: bool,
     cx: &App,
 ) -> AnyElement {
     let scale = ui_scale(cx);
@@ -146,6 +150,7 @@ fn first_dialog(
         .primary()
         .small()
         .tab_stop(false)
+        .disabled(!armed)
         .on_click(move |event: &ClickEvent, window, cx| {
             if pointer_click(event) {
                 on_approve(id, WriteStage::First, true, window, cx);
@@ -198,7 +203,7 @@ mod tests {
             let on_answer: AnswerFn = Rc::new(move |_, stage, approve, _, _| {
                 seen.borrow_mut().push((stage, approve));
             });
-            let dialog = write_dialog(&self.queue, &on_answer, &self.focus, cx);
+            let dialog = write_dialog(&self.queue, &on_answer, &self.focus, true, cx);
             div().tab_group().size_full().children(dialog)
         }
     }

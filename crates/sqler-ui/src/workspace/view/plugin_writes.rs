@@ -11,7 +11,7 @@ use sqler_config::{KeyChord, Modifiers};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::WorkspaceView;
-use crate::plugins::{PluginWriteAsk, WriteStage};
+use crate::plugins::{PluginWriteAsk, WriteQueue, WriteStage};
 
 /// What the approval dialog owns on the `GPUI` side.
 pub(crate) struct WriteUi {
@@ -42,6 +42,13 @@ impl WriteUi {
     }
 }
 
+/// Moves the notice of `queue`, if any, to `notices`.
+fn drain_notice(queue: &mut WriteQueue, notices: &mut Vec<String>) {
+    if let Some(notice) = queue.take_notice() {
+        notices.push(notice);
+    }
+}
+
 fn is_armed(
     shown: Option<(u64, WriteStage, Instant)>,
     id: u64,
@@ -63,9 +70,7 @@ impl WorkspaceView {
             while let Some(ask) = inbox.recv().await {
                 let alive = this.update(cx, |view, cx| {
                     view.ws.plugin_writes_mut().push(ask);
-                    if let Some(notice) = view.ws.plugin_writes_mut().take_notice() {
-                        view.notices.push(notice);
-                    }
+                    view.drain_write_notice();
                     cx.notify();
                 });
                 if alive.is_err() {
@@ -79,6 +84,19 @@ impl WorkspaceView {
     /// The handle of the Deny wrapper of the approval dialog.
     pub(crate) fn plugin_write_focus(&self) -> &FocusHandle {
         &self.plugin_writes_ui.focus
+    }
+
+    /// Whether Approve of the dialog on screen counts yet (the button is drawn disabled until then).
+    pub(crate) fn plugin_write_armed(&self) -> bool {
+        self.ws.plugin_writes().current().is_some_and(|p| {
+            self.plugin_writes_ui
+                .armed(p.id, p.request.stage, Instant::now())
+        })
+    }
+
+    /// Moves the reason of an ask the queue refused without showing it to the notices.
+    fn drain_write_notice(&mut self) {
+        drain_notice(self.ws.plugin_writes_mut(), &mut self.notices);
     }
 
     /// Whether an approval dialog is on screen.
@@ -118,6 +136,7 @@ impl WorkspaceView {
     /// when the last one closes).
     pub(super) fn sync_plugin_writes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.ws.plugin_writes_mut().prune_closed();
+        self.drain_write_notice();
         let now = self
             .ws
             .plugin_writes()
@@ -130,6 +149,12 @@ impl WorkspaceView {
         self.plugin_writes_ui.shown = now.map(|(id, stage)| (id, stage, Instant::now()));
         if now.is_some() {
             window.focus(&self.plugin_writes_ui.focus, cx);
+            // Approve is drawn disabled until armed: draw it again when the delay is over.
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(ARMING_DELAY).await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            })
+            .detach();
         } else {
             window.focus(&self.focus, cx);
         }
@@ -139,6 +164,40 @@ impl WorkspaceView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::PluginWriteRequest;
+
+    fn ask(sql: &str, stage: WriteStage) -> (PluginWriteAsk, tokio::sync::oneshot::Receiver<bool>) {
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        let request = PluginWriteRequest::new(
+            "acme-sync".parse().unwrap(),
+            "Acme Sync",
+            "Orders",
+            sqler_driver_api::sqler_core::DriverId::new("sqlite").unwrap(),
+            true,
+            sql,
+            stage,
+        );
+        (PluginWriteAsk { request, reply }, rx)
+    }
+
+    #[test]
+    fn a_queued_ask_denied_by_the_gate_leaves_a_notice() {
+        let mut queue = WriteQueue::default();
+        let (first, _r1) = ask("update t set a = 1", WriteStage::First);
+        let (second, mut r2) = ask("select 1", WriteStage::ProdSecond);
+        let id = queue.push(first);
+        queue.push(second);
+        let mut notices = Vec::new();
+        drain_notice(&mut queue, &mut notices);
+        assert_eq!(notices.len(), 0);
+        // Answering the first brings the second to the front, where the gate refuses it.
+        assert!(queue.answer(id, WriteStage::First, false));
+        assert_eq!(r2.try_recv(), Ok(false));
+        drain_notice(&mut queue, &mut notices);
+        assert_eq!(notices.len(), 1);
+        drain_notice(&mut queue, &mut notices);
+        assert_eq!(notices.len(), 1);
+    }
 
     #[test]
     fn approve_waits_for_the_arming_delay() {

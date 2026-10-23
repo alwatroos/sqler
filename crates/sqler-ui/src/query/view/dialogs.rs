@@ -11,7 +11,7 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
-use gpui_component::{ActiveTheme as _, Sizable as _};
+use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use sqler_driver_api::sqler_core::Environment;
 
 use crate::query::{BoundStatement, ParamForm, ParamKind, Phase};
@@ -182,6 +182,7 @@ fn confirm_dialog(
         None,
         view.queries.confirm_focus(),
         false,
+        true,
         cancel,
         confirm,
         cx,
@@ -192,7 +193,7 @@ fn confirm_dialog(
 /// of plugin writes, whose second confirmation goes through the same gate. `intro` goes before the question; `focus`
 /// is the handle of the Cancel wrapper (a stray Enter never confirms). With `pointer_only` the Run button is no tab
 /// stop (the caller's handler must also refuse keyboard clicks); the query editor's own gate keeps it in the tab
-/// order.
+/// order. With `run_enabled` false the Run button is drawn disabled (the approval dialog's arming window).
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // one declarative element tree
 pub(crate) fn confirm_panel(
     connection: &str,
@@ -200,6 +201,7 @@ pub(crate) fn confirm_panel(
     intro: Option<String>,
     focus: Option<&gpui::FocusHandle>,
     pointer_only: bool,
+    run_enabled: bool,
     on_cancel: impl Fn(&ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
     on_confirm: impl Fn(&ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
     cx: &gpui::App,
@@ -285,6 +287,7 @@ pub(crate) fn confirm_panel(
         .primary()
         .danger()
         .small()
+        .disabled(!run_enabled)
         .on_click(on_confirm);
     if pointer_only {
         confirm = confirm.tab_stop(false);
