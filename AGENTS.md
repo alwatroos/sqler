@@ -36,6 +36,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-plugin-api` | L1 | WIT package, manifest and capability model; wasmtime-free (host bindings live in `sqler-plugin-host`) |
 | `sqler-config` | L1 | Settings, keybindings, connection store, keychain |
 | `sqler-tunnel` | L1 | SSH session and local port forward (russh); drivers connect to a local address |
+| `sqler-update` | L1 | Check-only update client: fetches one Ed25519-signed manifest from the GitHub Releases `latest/download` asset (`ring`, `reqwest`), reports a newer version, never downloads a binary; no trusted key until R17 (ADR-0066) |
 | `sqler-driver-postgres` | L2 | `PostgreSQL` driver (sqlx / tokio-postgres) |
 | `sqler-driver-mysql` | L2 | `MySQL` and `MariaDB` driver (sqlx) |
 | `sqler-driver-sqlite` | L2 | `SQLite` driver |
@@ -61,7 +62,7 @@ Layering: a crate may depend only on crates in lower layers.
 
 ```
 L0 core
-L1 driver-api, ai-api, sql, plugin-api, config, tunnel
+L1 driver-api, ai-api, sql, plugin-api, config, tunnel, update
 L2 driver-*, ai-ollama/anthropic/openai/mistral, catalog, completion, export
 L3 ai-tools, plugin-host
 L4 mcp
@@ -299,6 +300,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0059](docs/src/adr/0059-plugin-capability-grants.md) | Plugin capability grants: `plugin-grants.toml`, all-or-nothing approval, re-prompt rules, damaged-file lock | accepted |
 | [0061](docs/src/adr/0061-plugin-drivers.md) | Plugin drivers: `DriverSource` overlay on the registry, host-engine vs guest drivers, what a guest sees, `driver.guest` wording, unavailable texts, WIT 0.1.1, guard parity, DuckDB licence stop | accepted |
 | [0063](docs/src/adr/0063-plugin-or-core-per-engine.md) | Plugin or core crate, per engine: SQL Server and `DuckDB` both stay plugins over host-provided engines, the API gaps, what a promotion would need, `DuckDB` out of 1.0 | accepted |
+| [0066](docs/src/adr/0066-update-check-and-signed-manifest.md) | Update check and signed manifest: `sqler-update` check-only client, one signed envelope asset on GitHub Releases `latest/download`, Ed25519 via `ring`, compiled-in keys in `crates/sqler-update/keys/` (none until R17), rotation, opt-in check policy, request contents, redirect policy, replay limits | accepted |
 | [0068](docs/src/adr/0068-ci-pipeline-speed.md) | CI pipeline speed: path gating with always-reporting names, caches saved on `main` only, Windows PR subset, `CI result` aggregate, rollback | accepted |
 | [0070](docs/src/adr/0070-duckdb-engine-and-licence.md) | `DuckDB` native engine behind the plugin shell: worker thread per session, Arrow streaming, sandbox (no external access or extensions), one instance per file, no `webpki-roots` licence exception needed, feature `driver-duckdb` (+45 MB, outside the size budget, off by default), CI cost; amendment 2: out of v1.0, CI isolation | accepted |
 | [0071](docs/src/adr/0071-sql-server-plugin.md) | SQL Server as an in-repo plugin with a host-provided engine: plugin vs core, cancel closes the connection, ring installed beside aws-lc-rs, API gaps | accepted |
