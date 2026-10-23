@@ -440,7 +440,7 @@ fn line(capability: &Capability, previous: Option<&CapabilitySet>) -> Capability
         Capability::DriverGuest => plain(
             CapabilityKind::DriverGuest,
             capability,
-            "Provide a database driver that runs inside the plugin",
+            "Provide a database driver that runs inside the plugin. The plugin receives the host, username and password of every connection that uses its driver",
         ),
         Capability::DriverHost(engine) => {
             let mut l = plain(
@@ -635,6 +635,17 @@ mod tests {
         assert!(only("db.write").prominent);
         assert!(only("db.read").prominent);
         assert!(!only("ui.panel").prominent);
+    }
+
+    #[test]
+    fn a_guest_driver_line_says_the_plugin_receives_the_credentials() {
+        let l = only("driver.guest");
+        assert!(l.prominent);
+        for word in ["host", "username", "password", "every connection"] {
+            assert!(l.summary.contains(word), "{word}: {}", l.summary);
+        }
+        // The built-in engine line is about the host's own engine and promises nothing about credentials.
+        assert!(!only("driver.host:duckdb").summary.contains("password"));
     }
 
     #[test]

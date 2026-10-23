@@ -83,6 +83,9 @@ pub(crate) fn driver_error(e: &DriverError) -> PluginError {
             ErrorCode::Failed,
             "the connection failed while the statement ran",
         ),
+        DriverError::Unavailable(_) => {
+            plugin_error(ErrorCode::Failed, "the database driver is not available")
+        }
         _ => plugin_error(ErrorCode::Failed, "the database reported an error"),
     }
 }

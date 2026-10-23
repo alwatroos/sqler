@@ -22,6 +22,6 @@ pub use cancel::{CancelFlag, CancelHandle, Canceller};
 pub use driver::{BoxFuture, Driver, Session};
 pub use error::DriverError;
 pub use introspect::Introspect;
-pub use registry::DriverRegistry;
+pub use registry::{DriverRegistry, DriverSource, SourceLookup};
 pub use sqler_core;
 pub use stream::{QueryEvent, QueryStream, collect};

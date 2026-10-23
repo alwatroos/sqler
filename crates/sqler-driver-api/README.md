@@ -11,7 +11,7 @@ Stream protocol: one `Columns` (empty for statements without rows), zero or more
 `Done`, then `None`. An `Err` ends the stream. `collect` gathers a stream into a `ResultSet` and
 enforces this. Cancellation: take `Session::cancel_handle` before `execute`; after a cancel the
 stream yields `Err(DriverError::Cancelled)` and then `None`. `CancelFlag` is the cooperative
-building block for drivers such as `SQLite`. `DriverRegistry` maps driver ids to drivers.
+building block for drivers such as `SQLite`. `DriverRegistry` maps driver ids to drivers; a `DriverSource` adds run-time drivers (plugins) after the built-ins.
 
 Layer: L1
 

@@ -14,6 +14,8 @@
 mod common;
 #[path = "guests/data.rs"]
 mod data;
+#[path = "guests/driver.rs"]
+mod driver;
 
 use std::convert::Infallible;
 use std::fs;

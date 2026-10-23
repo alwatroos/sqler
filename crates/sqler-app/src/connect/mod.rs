@@ -76,7 +76,9 @@ impl Pipeline {
 
 impl Connector for Pipeline {
     fn driver_ids(&self) -> Vec<DriverId> {
-        self.registry.ids().cloned().collect()
+        // Built-in drivers plus the drivers of plugins that are available now. A plugin source may read files:
+        // the callers run this off the UI thread (after the first frame).
+        self.registry.available_ids()
     }
 
     fn connect(

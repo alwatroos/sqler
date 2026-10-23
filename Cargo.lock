@@ -7974,6 +7974,8 @@ dependencies = [
  "sqler-driver-sqlite",
  "sqler-export",
  "sqler-mcp",
+ "sqler-plugin-api",
+ "sqler-plugin-host",
  "sqler-sql",
  "tokio",
 ]

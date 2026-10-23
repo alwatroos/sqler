@@ -1,0 +1,16 @@
+# The host tests (crates/sqler-plugin-host/tests/guests/driver.rs) drive every statement below.
+[plugin]
+id = "driver-fixture"
+name = "Driver fixture"
+version = "0.1.0"
+api = "0.1.1"
+description = "Test fixture: a guest driver over an in-memory fake database."
+capabilities = ["driver.guest"]
+
+[entry]
+component = "driver.wasm"
+
+[[drivers]]
+id = "fixture-db"
+name = "Fixture DB"
+kind = "guest"
