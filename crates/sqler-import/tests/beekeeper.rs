@@ -144,8 +144,14 @@ fn full_fixture_maps_every_field() {
     );
     assert!(!spec.target.contains("fake"));
     assert_eq!(spec.ssh.as_ref().unwrap().auth, SshAuth::Password);
-    assert_eq!(d.secrets, vec![ProfileSecretKind::SshPassword]);
-    assert!(d.notes.iter().any(|n| n.contains("password")));
+    assert_eq!(
+        d.secrets,
+        vec![
+            ProfileSecretKind::DbPassword,
+            ProfileSecretKind::SshPassword
+        ]
+    );
+    assert!(!d.notes.iter().any(|n| n.contains("keychain password yet")));
 
     // DuckDB and the other engines are skipped.
     assert_eq!(

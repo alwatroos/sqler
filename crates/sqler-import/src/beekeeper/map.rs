@@ -389,14 +389,7 @@ fn build(
 
     let mut secrets = Vec::new();
     if !user.is_empty() {
-        if engine == Engine::SqlServer {
-            ctx.notes.push(
-                "SQL Server does not use a keychain password yet; the password has to be added to the connection after the import"
-                    .to_owned(),
-            );
-        } else {
-            secrets.push(ProfileSecretKind::DbPassword);
-        }
+        secrets.push(ProfileSecretKind::DbPassword);
     }
     if ctx.flag("sshEnabled") == Some(true) {
         let (ssh, kind) = ssh(ctx)?;
