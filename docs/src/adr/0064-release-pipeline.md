@@ -150,7 +150,7 @@ Release feature set, S2 dry run (filled in from the `full-ci` run of the S2 pull
 | ----------- | ------------ | ------------- | ------ | -------- |
 | macOS arm64 | TBD | TBD | 83,886,080 | TBD |
 | macOS x86_64 | TBD | TBD | 83,886,080 | TBD |
-| Linux x86_64 | TBD | TBD | 83,886,080 | TBD |
+| Linux x86_64 | 80,988,136 | 20,674,952 | 83,886,080 | 2,897,944 |
 | Linux aarch64 | TBD | TBD | 83,886,080 | TBD |
 | Windows x86_64 | TBD | TBD | 83,886,080 | TBD |
 
