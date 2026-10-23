@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
@@ -26,16 +27,24 @@ use sqler_catalog::{CacheKey, Catalog};
 use sqler_completion::{ItemKind, Severity, diagnose};
 use sqler_sql::Dialect;
 
-use crate::editor::intellisense::{
-    CatalogSchema, PREFETCH_LIMIT, TabIntel, code_name, complete_popup, hover_markdown,
-    is_completion_trigger, load, prefetch_keys_skipping,
-};
+use sqler_plugin_api::CompletionKind;
 
-/// What the providers of one editor read: the connection's catalog and dialect.
+use crate::editor::intellisense::{
+    CatalogSchema, PREFETCH_LIMIT, PluginAnswers, TabIntel, code_name, complete_popup,
+    hover_markdown, is_completion_trigger, load, merge_plugin_items, plugin_request,
+    prefetch_keys_skipping,
+};
+use crate::plugins::PluginsBackend;
+use crate::plugins::backend::PluginCompletions;
+
+/// What the providers of one editor read: the connection's catalog and dialect, and the plugin
+/// backend with the connection's driver id when completion plugins may add rows.
 #[derive(Clone)]
 pub(super) struct Context {
     pub(super) catalog: Catalog,
     pub(super) dialect: Dialect,
+    pub(super) plugins: Option<Arc<dyn PluginsBackend>>,
+    pub(super) driver: Option<String>,
 }
 
 /// The state shared by the providers, the diagnose task and the view of one editor.
@@ -45,6 +54,27 @@ pub(super) struct IntelState {
     pub(super) ctx: Option<Context>,
     /// The latest completion request, whatever load it waits for.
     request: Option<Request>,
+    /// The plugin ask for the latest place, with the answers that arrived for it.
+    plugin: Option<PluginAsk>,
+    /// The number of the last plugin ask.
+    next_ask: u64,
+}
+
+/// The plugins asked for one place, and what they answered. A new place replaces it.
+struct PluginAsk {
+    text: Rope,
+    offset: usize,
+    answers: PluginAnswers,
+}
+
+/// What the popup does about plugins at one place.
+enum PluginPlan {
+    /// No backend: built-in rows only.
+    Off,
+    /// This place was asked already: merge what arrived, ask nobody.
+    Cached(Vec<PluginCompletions>),
+    /// A new place: ask the plugins as ask number `n`.
+    Ask(u64),
 }
 
 /// A completion request: the text and cursor it was made for, and whether it answered nothing.
@@ -66,6 +96,36 @@ impl IntelState {
             empty: false,
         });
         seq
+    }
+
+    /// Decides what the popup at (`text`, `offset`) does about plugins. A new place starts a new
+    /// ask and drops the answers of the old one.
+    fn plan_plugins(&mut self, text: &Rope, offset: usize, has_backend: bool) -> PluginPlan {
+        if !has_backend {
+            return PluginPlan::Off;
+        }
+        if let Some(p) = self
+            .plugin
+            .as_ref()
+            .filter(|p| p.offset == offset && p.text.len() == text.len() && p.text == *text)
+        {
+            return PluginPlan::Cached(p.answers.answers().to_vec());
+        }
+        self.next_ask += 1;
+        let ask = self.next_ask;
+        self.plugin = Some(PluginAsk {
+            text: text.clone(),
+            offset,
+            answers: PluginAnswers::new(ask),
+        });
+        PluginPlan::Ask(ask)
+    }
+
+    /// Keeps a plugin's answer to ask `ask`, unless a newer ask replaced it. Whether it was kept.
+    fn accept_plugin(&mut self, ask: u64, answer: PluginCompletions) -> bool {
+        self.plugin
+            .as_mut()
+            .is_some_and(|p| p.answers.accept(ask, answer))
     }
 
     /// Notes that request `seq` was answered with no items, unless a newer one took over.
@@ -204,7 +264,23 @@ impl CompletionProvider for SqlProvider {
         let rope = text.clone();
         let snapshot = ctx.catalog.snapshot();
         let dialect = ctx.dialect;
-        let seq = self.handle.borrow_mut().note_request(rope.clone(), offset);
+        let (seq, plan) = {
+            let mut state = self.handle.borrow_mut();
+            let seq = state.note_request(rope.clone(), offset);
+            (
+                seq,
+                state.plan_plugins(&rope, offset, ctx.plugins.is_some()),
+            )
+        };
+        let (cached, ask) = match plan {
+            PluginPlan::Off => (Vec::new(), None),
+            PluginPlan::Cached(answers) => (answers, None),
+            PluginPlan::Ask(n) => (Vec::new(), Some(n)),
+        };
+        // The plugins are never awaited here: the built-in popup is computed alone, the futures
+        // only come back to be spawned, and their answers reopen the popup when they land.
+        let backend = ctx.plugins.clone().filter(|_| ask.is_some());
+        let driver = ctx.driver.clone();
         let compute = cx.background_executor().spawn(async move {
             let source = rope.to_string();
             let schema = CatalogSchema::new(snapshot, dialect);
@@ -213,14 +289,51 @@ impl CompletionProvider for SqlProvider {
                 start: rope.offset_to_position(popup.replace.start),
                 end: rope.offset_to_position(popup.replace.end),
             };
-            (popup, range)
+            let rows = merge_plugin_items(&popup.items, &cached);
+            // Off the UI thread: the backend may read the grants file.
+            let asks = backend
+                .zip(plugin_request(&source, offset, dialect, driver.as_deref()))
+                .map(|(backend, request)| backend.complete(&request))
+                .unwrap_or_default();
+            (popup, range, rows, asks)
         });
         let handle = self.handle.clone();
         let editor = self.editor.clone();
         window.spawn(cx, async move |cx| {
-            let (popup, range) = compute.await;
+            let (popup, range, rows, asks) = compute.await;
             handle.borrow_mut().note_empty(seq, popup.items.is_empty());
-            let items: Vec<CompletionItem> = popup
+            if let Some(ask) = ask {
+                let owner = handle.clone();
+                let weak = editor.clone();
+                cx.update(|window, cx| {
+                    for fut in asks {
+                        let handle = owner.clone();
+                        let editor = weak.clone();
+                        window
+                            .spawn(cx, async move |cx| {
+                                // A failed plugin is skipped: its fault is counted by the host.
+                                if let Ok(answer) = fut.await
+                                    && handle.borrow_mut().accept_plugin(ask, answer)
+                                {
+                                    reopen(&editor, &handle, cx);
+                                }
+                            })
+                            .detach();
+                    }
+                })
+                .ok();
+            }
+            let plugin_items = rows.into_iter().map(|row| CompletionItem {
+                kind: Some(plugin_kind(row.kind)),
+                detail: Some(row.detail),
+                sort_text: Some(row.sort_text),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range,
+                    new_text: row.insert_text,
+                })),
+                ..CompletionItem::new_simple(row.label, String::new())
+            });
+            let mut items: Vec<CompletionItem> = popup
                 .items
                 .into_iter()
                 .map(|item| CompletionItem {
@@ -234,6 +347,7 @@ impl CompletionProvider for SqlProvider {
                     ..CompletionItem::new_simple(item.label, String::new())
                 })
                 .collect();
+            items.extend(plugin_items);
             let loads = handle.borrow_mut().intel.fresh(popup.loads);
             if !loads.is_empty() {
                 // The reopen looks at the latest request, not this one: a key typed during the
@@ -303,6 +417,17 @@ fn reopen(editor: &WeakEntity<EditorState>, handle: &IntelHandle, cx: &mut Async
             state.show_completions(window, cx);
         })
         .ok();
+}
+
+fn plugin_kind(kind: CompletionKind) -> CompletionItemKind {
+    match kind {
+        CompletionKind::Keyword => CompletionItemKind::KEYWORD,
+        CompletionKind::Table => CompletionItemKind::STRUCT,
+        CompletionKind::Column => CompletionItemKind::FIELD,
+        CompletionKind::Function => CompletionItemKind::FUNCTION,
+        CompletionKind::Snippet => CompletionItemKind::SNIPPET,
+        _ => CompletionItemKind::TEXT,
+    }
 }
 
 fn item_kind(kind: ItemKind) -> CompletionItemKind {
@@ -498,7 +623,10 @@ mod tests {
     use sqler_catalog::{CacheKey, NodeKey};
     use sqler_driver_api::sqler_core::{ObjectKind, ObjectPath};
 
-    use super::{IntelHandle, IntelState, Still, guarded, owned_load, should_reopen};
+    use super::{
+        IntelHandle, IntelState, PluginCompletions, PluginPlan, Still, guarded, owned_load,
+        should_reopen,
+    };
     use crate::editor::intellisense::synthetic::synthetic_catalog_with;
 
     fn keys() -> Vec<CacheKey> {
@@ -579,6 +707,73 @@ mod tests {
         assert_eq!(r.text, Rope::from("SELECT u.i FROM users u"));
         s.note_empty(second, true);
         assert!(s.request.as_ref().is_some_and(|r| r.empty));
+    }
+
+    fn answer(items: &[&str]) -> PluginCompletions {
+        PluginCompletions {
+            plugin: "alpha".parse().expect("id"),
+            source: "Alpha".to_owned(),
+            items: items
+                .iter()
+                .map(|l| sqler_plugin_api::CompletionItem {
+                    label: (*l).to_owned(),
+                    kind: sqler_plugin_api::CompletionKind::Table,
+                    insert_text: (*l).to_owned(),
+                    detail: None,
+                })
+                .collect(),
+        }
+    }
+
+    /// Without a backend nobody is asked.
+    #[test]
+    fn no_backend_means_no_plugin_ask() {
+        let mut s = IntelState::default();
+        assert!(matches!(
+            s.plan_plugins(&Rope::from("SELECT "), 7, false),
+            PluginPlan::Off
+        ));
+    }
+
+    /// The same text and cursor read the cache and ask no more plugins.
+    #[test]
+    fn a_cache_hit_asks_no_more_plugins() {
+        let mut s = IntelState::default();
+        let text = Rope::from("SELECT * FROM u");
+        let PluginPlan::Ask(ask) = s.plan_plugins(&text, 15, true) else {
+            panic!("the first pass asks");
+        };
+        assert!(s.accept_plugin(ask, answer(&["users"])));
+        let PluginPlan::Cached(got) = s.plan_plugins(&text, 15, true) else {
+            panic!("the same place is cached");
+        };
+        assert_eq!(got, vec![answer(&["users"])]);
+    }
+
+    /// A moved cursor or changed text starts a new ask and drops the old answers; a late answer
+    /// of the old ask is refused.
+    #[test]
+    fn a_new_place_asks_again_and_drops_the_old_answers() {
+        let mut s = IntelState::default();
+        let text = Rope::from("SELECT * FROM u");
+        let PluginPlan::Ask(first) = s.plan_plugins(&text, 15, true) else {
+            panic!("ask");
+        };
+        assert!(s.accept_plugin(first, answer(&["users"])));
+        let PluginPlan::Ask(second) = s.plan_plugins(&text, 14, true) else {
+            panic!("a moved cursor asks");
+        };
+        assert!(second > first);
+        assert!(!s.accept_plugin(first, answer(&["late"])));
+        assert!(matches!(
+            s.plan_plugins(&text, 14, true),
+            PluginPlan::Cached(a) if a.is_empty()
+        ));
+        let edited = Rope::from("SELECT * FROM us");
+        assert!(matches!(
+            s.plan_plugins(&edited, 14, true),
+            PluginPlan::Ask(_)
+        ));
     }
 
     const STILL: Still = Still {
