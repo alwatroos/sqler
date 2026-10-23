@@ -240,6 +240,42 @@ pub(crate) fn status_bar(
     {
         right = right.child(plugin_item(shown, colors));
     }
+    // The announced version: a dismissible item, version and release-notes link only.
+    if let Some(notice) = view.workspace().update().notice() {
+        let (version, tip) = (
+            format!("Update {}", notice.version),
+            format!(
+                "SQLer {} is available. Open the release notes.",
+                notice.version
+            ),
+        );
+        right = right
+            .child(
+                action_item(
+                    "status-update",
+                    colors,
+                    None,
+                    "app:open-release-notes",
+                    version.clone(),
+                    Some(tip.into()),
+                    cx,
+                )
+                .child(Icon::new(AppIcon::Info).size(px(12.)).text_color(text))
+                .child(version),
+            )
+            .child(
+                action_item(
+                    "status-update-dismiss",
+                    colors,
+                    None,
+                    "app:dismiss-update-notice",
+                    "Dismiss update notice",
+                    None,
+                    cx,
+                )
+                .child(Icon::new(AppIcon::X).size(px(12.)).text_color(text)),
+            );
+    }
     let layout = view.workspace().layout();
     for (id, icon, command, label, open) in [
         (

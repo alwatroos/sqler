@@ -28,6 +28,8 @@ result_page_rows = 100000
 | `ui_font_size` | whole points, 8 to 48 | `14` |
 | `result_page_rows` | whole rows per result page, 1000 to 10000000 | `100000` |
 
+| `check_for_updates` | `true`, `false` (see [Updates](#updates)) | `false` |
+
 `result_page_rows` is how many rows a query result loads before it pauses and offers **Fetch more** (see [Results grid](results-grid.md)). It is set in this file only; the Settings tab has no control for it.
 
 Unknown keys and values outside the range are errors.
@@ -174,6 +176,21 @@ connection tabs stay open behind it.
 ### AI
 
 The page ends with the **AI** section (providers, models, redaction, limits), described in [AI](ai.md#settings--ai). The page scrolls.
+
+### Updates
+
+The **Updates** section follows the AI section. It is off until you turn it on.
+
+- **Check for updates**: the switch. It stores `check_for_updates` in `settings.toml`. The text under it reads "Asks GitHub Releases for a signed version file about once a day. Nothing is downloaded or installed; no personal data is sent."
+- **Status** with a **Check now** button: checks once, at once. The line next to it says "Not checked yet", "Checking…", "Up to date (latest X)", "SQLer X is available" or "Last check failed: …". The button is disabled while the switch is off or a check is running.
+
+What a check sends: one `GET` of the signed version file on GitHub Releases, with the header `User-Agent: SQLer/<version> (update-check)` and nothing else. No query, no identifier, no hostname, no OS detail. The answer is verified with a public key built into SQLer. SQLer never downloads or installs a new version in 1.0; it only tells you.
+
+When: with the switch on, the first check runs about 30 seconds after SQLer has drawn its first window, then about once a day. After a failure it retries after 1 hour, doubling up to 24 hours. Being offline is silent. While the switch is off, SQLer makes no request at all, and **Check now** and the command `app:check-for-updates` only show a hint.
+
+When a newer version exists, the status bar shows **Update X**. Click it to open the release notes in your browser, or use the dismiss button next to it (`app:dismiss-update-notice`). A dismissed version is not shown again by the automatic check, also after a restart. The file `update-state.toml` in the config directory keeps: the time of the last attempt, the number of failures in a row and the dismissed version, nothing else.
+
+To turn it off, switch **Check for updates** off, set `check_for_updates = false`, or run `settings:toggle-update-checks` ("Toggle Automatic Update Checks"). Turning it off also stops a check that is running. A build made without the `update` feature has no update client, and the section says so.
 
 ### Theme
 

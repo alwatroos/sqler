@@ -5,7 +5,7 @@
 //! the platform configuration directory.
 //!
 //! The query history (`history.jsonl`), saved queries (`queries.toml`) and the AI settings
-//! (`ai.toml`) and the plugin permission grants (`plugin-grants.toml`) and preferences (`plugin-prefs.toml`) live next to them.
+//! (`ai.toml`) and the plugin permission grants (`plugin-grants.toml`) and preferences (`plugin-prefs.toml`) and the update-check state (`update-state.toml`) live next to them.
 //!
 //! Secrets (passwords, passphrases, AI provider API keys) live in the OS keychain through [`SecretStore`]; never in these files.
 
@@ -22,6 +22,7 @@ mod plugins;
 mod saved_queries;
 mod secrets;
 mod settings;
+mod update_state;
 mod workbench;
 
 pub use ai::{
@@ -60,6 +61,7 @@ pub use secrets::{
 pub use settings::{
     DEFAULT_RESULT_PAGE_ROWS, FONT_SIZE_RANGE, RESULT_PAGE_ROWS_RANGE, Settings, ThemePreference,
 };
+pub use update_state::{MAX_DISMISSED_VERSION_LEN, UpdateState};
 pub use workbench::{
     BOTTOM_PANEL_SIZE_RANGE, BOTTOM_VIEWS, MAX_RECENT_COMMANDS, MAX_RECENT_CONNECTIONS, PanelState,
     SIDE_PANEL_SIZE_RANGE, SIDE_VIEWS, WINDOW_SIZE_RANGE, WORKBENCH_VERSION, WindowState,
