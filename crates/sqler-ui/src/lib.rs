@@ -24,5 +24,6 @@ pub mod settings;
 pub mod sidebar;
 pub mod tabs;
 pub mod theme;
+pub mod update;
 pub mod workbench;
 pub mod workspace;
