@@ -543,6 +543,30 @@ mod tests {
     }
 
     #[test]
+    fn the_hello_panel_example_registers_only_when_approved() {
+        let live = || {
+            row_with(crate::plugins::manager::fixture::hello_panel(), |r| {
+                r.effective = r.manifest.capabilities().clone();
+                r.state = RowState::Live;
+            })
+        };
+        let (regs, refused) = Registrations::from_approved(&[live()], &none, &|_| true);
+        assert!(refused.is_empty(), "{refused:?}");
+        let ids: Vec<&str> = regs.commands().iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "plugin-hello-panel:say-hello",
+                "panel-plugin-hello-panel:hello"
+            ]
+        );
+        assert_eq!(regs.statuses().len(), 1);
+        assert_eq!(regs.statuses()[0].alignment, Alignment::Left);
+        let (regs, _) = Registrations::from_approved(&[live()], &none, &|_| false);
+        assert!(regs.is_empty());
+    }
+
+    #[test]
     fn load_order_then_manifest_order() {
         let a =
             "[[commands]]\nid = \"b\"\ntitle = \"B\"\n[[commands]]\nid = \"a\"\ntitle = \"A\"\n";

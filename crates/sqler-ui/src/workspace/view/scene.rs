@@ -211,6 +211,10 @@ pub const SCENES: &[Scene] = &[
         name: "plugins-export-dialog",
         pending: None,
     },
+    Scene {
+        name: "plugins-hello-panel",
+        pending: None,
+    },
 ];
 
 /// The window size of every scene, in logical pixels.
@@ -488,6 +492,15 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::StartPlugins,
             Step::Wait(Wait::PluginsLoaded),
             Step::Command("panel-plugin-acme-sync:overview"),
+            Step::Wait(Wait::PluginPanel),
+            Step::Pause(3),
+        ],
+        "plugins-hello-panel" => vec![
+            open_step("dev", "select * from customers order by id;"),
+            Step::Wait(Wait::Editors(1)),
+            Step::StartPlugins,
+            Step::Wait(Wait::PluginsLoaded),
+            Step::Command("panel-plugin-hello-panel:hello"),
             Step::Wait(Wait::PluginPanel),
             Step::Pause(3),
         ],
