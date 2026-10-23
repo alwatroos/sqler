@@ -181,4 +181,68 @@ laptop), so a few minutes on a CI runner. See [ADR-0070](../adr/0070-duckdb-engi
 
 ## SQL Server
 
-Reserved for the SQL Server host-engine plugin (P16).
+The in-repo plugin `plugins/sqlserver` is a host-driver shell around the native engine `mssql`
+(`crates/sqler-driver-mssql`, `tiberius` with `rustls`). It is the worked example of a host
+driver; the decisions are in [ADR-0071](../adr/0071-sql-server-plugin.md).
+
+**Build.** The engine is linked only when `sqler-app` or `sqler-cli` is built with the feature
+`driver-mssql` (default off; it implies `plugins`). The plugin itself is staged by
+`cargo run -p xtask -- plugins build` as `target/plugins/<profile>/sqlserver/sqler.toml` (no
+component). Copy that folder to `<config>/plugins/sqlserver/` and approve `driver.host:mssql`.
+Without the feature the driver is listed as unavailable with the fixed "engine, which this build
+does not include" text.
+
+**Manifest.**
+
+```toml
+[plugin]
+id = "sqlserver"
+name = "SQL Server"
+version = "0.1.0"
+api = "0.1"
+capabilities = ["driver.host:mssql"]
+
+[[drivers]]
+id = "sqlserver"
+name = "SQL Server"
+kind = "host"
+engine = "mssql"
+dialect = "tsql"
+```
+
+**Target and login.** `sqlserver://[user[:password]@]host[:port][/database]` (alias `mssql://`),
+SQL login only, no query keys.
+
+**TLS.** `ConnectionConfig::tls` maps as follows; none means `prefer`.
+
+| Mode | Result |
+| ---- | ------ |
+| `disable` | no encryption (a server that forces encryption refuses) |
+| `prefer` | encrypted, certificate not checked |
+| `require` | encrypted, certificate not checked |
+| `verify-ca` | `Unsupported` ("use verify-full or require") |
+| `verify-full` | chain checked against the CA file, else the OS roots; the host name is checked. With `server_name` set, that name is checked instead of the dial host (this works with `tiberius` 0.13) |
+| client certificate or key | `Unsupported` |
+
+**Cancel.** A cancel closes the connection (the server rolls back an open transaction); the next
+statement of that session fails with "the SQL Server connection was closed by a cancel; connect
+again".
+
+**API gaps** (none is fixed by this item).
+
+- No T-SQL dialect exists, so `Dialect::from_driver_id("sqlserver")` is `None`: every statement
+  counts as not read-only, a production connection asks for confirmation of every statement
+  (including `select 1`), and the manifest `dialect` is not used.
+- A host-driver plugin cannot supply catalog SQL; the engine implements introspection itself from
+  `sys.*` and browses only the current database.
+- The connect pipeline injects no keychain password and opens no SSH tunnel for `sqlserver://`: the
+  password must be in the target, and a tunnel cannot be used.
+- `net` scopes do not apply to host engines; the engine opens its own socket.
+- `rows_affected` is `None`: the statement stream does not expose the `DONE` counts.
+- Cancel ends the session (see above), unlike the other drivers.
+- `money` arrives as a float (lossy); the first result set of a batch is returned and later ones
+  are dropped.
+
+**Pending (maintainer).** A run against a real SQL Server instance (not only the CI container,
+SQL Server 2022 Developer edition): connect with SQL login, TLS modes against the server's own
+certificate, the object browser, a cancel, and an Azure SQL or older server for the TLS handshake.

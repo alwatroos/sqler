@@ -41,6 +41,11 @@ pub const PLUGINS: &[PluginRow] = &[
         package: None,
     },
     PluginRow {
+        name: "sqlserver",
+        dir: "plugins/sqlserver",
+        package: None,
+    },
+    PluginRow {
         name: "completer",
         dir: "plugins/fixtures/completer",
         package: Some("sqler-fixture-completer"),

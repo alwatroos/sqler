@@ -6,6 +6,7 @@ describe one driver each.
 - [SQLite](sqlite.md)
 - [PostgreSQL](postgresql.md)
 - [MySQL and MariaDB](mysql.md)
+- [SQL Server](sqlserver.md) (a plugin driver in builds with the `driver-mssql` feature)
 
 ## Object kinds
 

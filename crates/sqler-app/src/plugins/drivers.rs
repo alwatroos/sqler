@@ -20,14 +20,24 @@ pub(crate) fn source() -> Arc<PluginDrivers> {
 
 /// The native engines this build links, for plugins that declare `driver.host:<engine>`.
 ///
-/// `DuckDB` with the feature `driver-duckdb` (ADR-0070); the SQL Server plugin adds its engine here the same way.
+/// Each engine sits behind its own feature: `driver-mssql` links SQL Server (ADR-0071), `driver-duckdb` links `DuckDB`
+/// (ADR-0070; not in 1.0, off by default).
 fn engines() -> HostEngines {
-    #[cfg_attr(not(feature = "driver-duckdb"), allow(unused_mut))]
+    #[allow(unused_mut)]
     let mut engines = HostEngines::new();
     #[cfg(feature = "driver-duckdb")]
     if let Ok(id) = sqler_driver_duckdb::ENGINE_ID.parse::<sqler_plugin_api::EngineId>() {
         // A duplicate cannot happen in a fresh table.
         let _ = engines.register(id, Arc::new(sqler_driver_duckdb::DuckDbDriver::new()));
+    }
+    #[cfg(feature = "driver-mssql")]
+    {
+        use sqler_driver_mssql::{ENGINE_ID, MssqlDriver, install_ring_provider};
+        // rustls has both providers compiled in (tiberius pulls aws-lc-rs); ring is the one in effect.
+        install_ring_provider();
+        if let Ok(id) = ENGINE_ID.parse::<sqler_plugin_api::EngineId>() {
+            let _ = engines.register(id, Arc::new(MssqlDriver::new()));
+        }
     }
     engines
 }
@@ -37,6 +47,12 @@ mod tests {
     use super::*;
     use sqler_driver_api::sqler_core::DriverId;
     use sqler_driver_api::{DriverSource, SourceLookup};
+
+    #[cfg(feature = "driver-mssql")]
+    #[test]
+    fn the_sql_server_engine_is_linked_under_the_feature() {
+        assert!(format!("{:?}", engines()).contains("mssql"));
+    }
 
     #[test]
     fn the_source_is_shared_and_offers_nothing_without_a_host() {

@@ -42,6 +42,8 @@ ai-mistral = ["dep:sqler-ai-mistral"]
 plugins = ["dep:sqler-plugin-api", "dep:sqler-plugin-host", "dep:sqler-catalog", "dep:sqler-ai-tools", "dep:serde_json", "sqler-plugin-host/cl", "sqler-plugin-host/net"]
 # The native `DuckDB` engine behind the host-kind plugin `duckdb` (ADR-0070; off by default: it compiles the bundled C++ engine).
 driver-duckdb = ["plugins", "dep:sqler-driver-duckdb"]
+# SQL Server (ADR-0071; off by default): the native engine behind the `sqlserver` plugin (`driver.host:mssql`).
+driver-mssql = ["plugins", "dep:sqler-driver-mssql"]
 
 [dependencies]
 sqler-ui = { workspace = true, features = ["gui"] }
@@ -53,6 +55,7 @@ sqler-driver-sqlite = { workspace = true, optional = true }
 sqler-driver-postgres = { workspace = true, optional = true }
 sqler-driver-mysql = { workspace = true, optional = true }
 sqler-driver-duckdb = { workspace = true, optional = true }
+sqler-driver-mssql = { workspace = true, optional = true }
 sqler-export = { workspace = true, optional = true }
 sqler-ai-ollama = { workspace = true, optional = true }
 sqler-ai-anthropic = { workspace = true, optional = true }

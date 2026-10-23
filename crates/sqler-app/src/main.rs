@@ -29,6 +29,10 @@ use crate::args::{Command, USAGE, UsageError};
 use crate::connect::{Pipeline, SshTunnels};
 
 fn main() -> ExitCode {
+    // With SQL Server linked, rustls has two providers compiled in and an implicit one would panic (sqlx verify-ca):
+    // ring is installed before anything connects (ADR-0071).
+    #[cfg(feature = "driver-mssql")]
+    sqler_driver_mssql::install_ring_provider();
     match args::parse(std::env::args().skip(1)) {
         Ok(Command::Help) => {
             print!("{USAGE}");

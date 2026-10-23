@@ -40,8 +40,8 @@ env:
     sqler-ai-api/test-support,
     sqler-app/driver-sqlite,sqler-app/driver-postgres,sqler-app/driver-mysql,
     sqler-app/export-xlsx,sqler-app/export-parquet,
-    sqler-app/ai-ollama,sqler-app/ai-anthropic,sqler-app/ai-openai,sqler-app/ai-mistral,sqler-app/plugins,
-    sqler-cli/driver-sqlite,sqler-cli/driver-postgres,sqler-cli/driver-mysql,sqler-cli/plugins,
+    sqler-app/ai-ollama,sqler-app/ai-anthropic,sqler-app/ai-openai,sqler-app/ai-mistral,sqler-app/plugins,sqler-app/driver-mssql,
+    sqler-cli/driver-sqlite,sqler-cli/driver-postgres,sqler-cli/driver-mysql,sqler-cli/plugins,sqler-cli/driver-mssql,
     sqler-export/parquet,sqler-export/xlsx,
     sqler-plugin-host/runtime,sqler-plugin-host/cl,sqler-plugin-host/pulley-rt,sqler-plugin-host/net,
     sqler-ui/gui,sqler-ui/screenshots
@@ -247,6 +247,9 @@ jobs:
       - name: Test sqler-cli with plugin support
         if: needs.changes.outputs.rust == 'true' && (matrix.os != 'windows-latest' || needs.changes.outputs.full == 'true')
         run: cargo nextest run -p sqler-cli --features plugins --no-tests=fail
+      - name: Test sqler-cli with the SQL Server engine
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
+        run: cargo nextest run -p sqler-cli --features plugins,driver-mssql --no-tests=fail
       - name: Check sqler-export feature sets
         if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         run: |
@@ -354,7 +357,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SQLER_TEST_REQUIRE_DB: postgres,mysql,ssh
+      SQLER_TEST_REQUIRE_DB: postgres,mysql,ssh,mssql
     steps:
       - uses: actions/checkout@v7
       - name: Install toolchain from rust-toolchain.toml
@@ -392,6 +395,14 @@ jobs:
         run: cargo nextest run -p sqler-tunnel --no-tests=fail
       - name: CLI smoke test (PostgreSQL)
         run: cargo run -p sqler-cli -- run --driver postgres "$SQLER_TEST_POSTGRES_URL" "select 1" | grep -qx 1
+      # The image is about 1.5 GB and starts in 30-60 s (ADR-0071).
+      - name: Start SQL Server 2022 (TLS forced)
+        run: sh crates/sqler-driver-mssql/tests/docker/start-mssql.sh "$RUNNER_TEMP/mssql" >> "$GITHUB_ENV"
+      - name: Database tests (SQL Server)
+        run: cargo nextest run -p sqler-driver-mssql --no-tests=fail
+      - name: Remove SQL Server container
+        if: always()
+        run: docker rm -f sqler-test-mssql
 
   # No rust-cache here: `cargo deny` and `cargo tree` compile nothing, the cache was 214 MiB of restore and save for no gain.
   deny:
@@ -444,6 +455,11 @@ jobs:
           done
           tree=$(cargo tree -p sqler-app -e normal --prefix none --features driver-duckdb) || { echo "cargo tree failed"; exit 1; }
           if ! printf '%s\n' "$tree" | grep -q '^duckdb '; then echo "duckdb is missing with --features driver-duckdb"; exit 1; fi
+          # SQL Server is opt-in (ADR-0071): the default app and CLI trees do not carry tiberius.
+          for pkg in sqler-app sqler-cli; do
+            tree=$(cargo tree -p "$pkg" -e normal --prefix none) || { echo "cargo tree failed"; exit 1; }
+            if printf '%s\n' "$tree" | grep -q '^tiberius '; then echo "tiberius is in the default $pkg tree"; exit 1; fi
+          done
           # sqler-ui must stay wasmtime-free whatever the app enables.
           if cargo tree -p sqler-ui -i wasmtime 2>/dev/null; then echo "wasmtime is in the sqler-ui tree"; exit 1; fi
 
@@ -484,7 +500,7 @@ jobs:
       - name: Staged files exist
         if: needs.changes.outputs.plugins == 'true'
         shell: bash
-        run: test -f target/plugins/release/smoke/smoke.wasm && test -f target/plugins/release/smoke/sqler.toml
+        run: test -f target/plugins/release/smoke/smoke.wasm && test -f target/plugins/release/smoke/sqler.toml && test -f target/plugins/release/sqlserver/sqler.toml
       # End-to-end: the host runs the staged debug guests. A missing fixture is a failure here, not a skip.
       - name: Guest tests (plugin host)
         if: needs.changes.outputs.plugins == 'true'

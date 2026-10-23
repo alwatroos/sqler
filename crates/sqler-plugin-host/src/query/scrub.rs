@@ -23,6 +23,7 @@ const DENIAL_MARKERS: &[&str] = &[
     "command denied",
     "permission denied",
     "denied to user",
+    "was denied",
     "not permitted",
     "authentication",
     "password",
@@ -34,10 +35,30 @@ const DENIAL_MARKERS: &[&str] = &[
 ];
 
 /// Words after which a quoted string names an account or a host.
-const IDENTITY_WORDS: &[&str] = &["user", "host", "hostname", "role", "account", "login"];
+const IDENTITY_WORDS: &[&str] = &[
+    "user",
+    "host",
+    "hostname",
+    "role",
+    "account",
+    "login",
+    "principal",
+];
+
+/// How many characters of a message are looked at; the rest is dropped before the scrub (the result is clipped
+/// far below this anyway).
+const INPUT_LIMIT: usize = 4096;
 
 /// The text of a `DriverError::Query` as the guest may see it.
 pub(crate) fn query_text(text: &str) -> String {
+    let bounded: String;
+    let text = match text.char_indices().nth(INPUT_LIMIT) {
+        Some((end, _)) => {
+            bounded = text[..end].to_owned();
+            bounded.as_str()
+        }
+        None => text,
+    };
     let lower = text.to_lowercase();
     if DENIAL_MARKERS.iter().any(|m| lower.contains(m)) {
         return DENIED.to_owned();
@@ -249,6 +270,28 @@ mod tests {
     #[test]
     fn mssql_login_failures_become_the_fixed_text() {
         assert_eq!(query_text("Login failed for user 'sa'"), DENIED);
+    }
+
+    #[test]
+    fn mssql_principals_and_denials() {
+        assert_clean(
+            "The server principal \"app\" is not able to access the database \"sales\" under the current security context.",
+            &["app"],
+        );
+        assert_eq!(
+            query_text(
+                "The SELECT permission was denied on the object 'orders', database 'sales', schema 'dbo'."
+            ),
+            DENIED
+        );
+    }
+
+    #[test]
+    fn a_huge_input_is_bounded() {
+        let big = "x ".repeat(512 * 1024);
+        assert!(query_text(&big).chars().count() <= 512);
+        let tail = format!("{} 10.0.3.7", "a".repeat(5000));
+        assert!(query_text(&tail).chars().count() <= 512);
     }
 
     #[test]

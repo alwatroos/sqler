@@ -11,3 +11,14 @@ readme = "README.md"
 
 [lints]
 workspace = true
+
+[dependencies]
+sqler-driver-api.workspace = true
+futures-core.workspace = true
+tiberius.workspace = true
+rustls.workspace = true
+tokio = { workspace = true, features = ["net", "time", "rt", "macros", "sync"] }
+tokio-util.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "time", "net", "macros", "sync"] }
