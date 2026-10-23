@@ -26,8 +26,6 @@ pub(crate) struct HostState {
     pub plugin: Arc<DiscoveredPlugin>,
     /// Declared and approved at the time of instantiation.
     pub effective: CapabilitySet,
-    // Read by the host interfaces later items add (P5 query, P8 ui, ...).
-    #[allow(dead_code)]
     pub services: Services,
     pub settings: Arc<dyn SettingsStore>,
     pub limiter: PluginLimiter,

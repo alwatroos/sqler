@@ -12,6 +12,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
+#[path = "guests/data.rs"]
+mod data;
 
 use std::convert::Infallible;
 use std::fs;
@@ -22,8 +24,8 @@ use std::time::Duration;
 
 use sqler_plugin_api::{Capability, CapabilitySet, PluginId, SettingValue};
 use sqler_plugin_host::{
-    CallError, EgressFactory, ErrorCode, GrantSource, HostOptions, MemorySettings, PluginDirs,
-    PluginHost, PluginState, Services, discover,
+    CallError, DataService, EgressFactory, ErrorCode, GrantSource, HostOptions, MemorySettings,
+    PluginData, PluginDirs, PluginHost, PluginState, QueryApprover, Services, discover,
 };
 
 use common::{Grants, Scratch, block_on, capture, plugin_lines, runtime};
@@ -71,6 +73,14 @@ struct Opts {
     /// A local HTTP server; its port is granted as `net.http:localhost:<port>` and the `url` setting points at it.
     server: bool,
     command: Duration,
+    /// Deadline of a status call (30 s unless a test wants the host to drop a call that waits on the database).
+    status: Duration,
+    /// Services the host starts with; `data` adds the database on top.
+    services: Services,
+    /// A SQLite database lent to the probe through `DataService`, with a scripted approver.
+    data: Option<data::DataOpts>,
+    /// Overrides the default timeout of a `query.run` without `timeout-ms`.
+    query_timeout: Option<Duration>,
 }
 
 impl Default for Opts {
@@ -79,6 +89,10 @@ impl Default for Opts {
             approve: Approve::Declared,
             server: false,
             command: Duration::from_secs(30),
+            status: Duration::from_secs(30),
+            services: Services::new(),
+            data: None,
+            query_timeout: None,
         }
     }
 }
@@ -94,6 +108,10 @@ struct World {
     /// Whether the escaping symlinks inside `data` could be created (not everywhere, for example Windows without
     /// the privilege).
     links: bool,
+    grants: Arc<Grants>,
+    key: sqler_plugin_api::GrantKey,
+    /// The database lent to the probe, when `Opts.data` asked for one.
+    data: Option<Arc<data::Sqlite>>,
 }
 
 #[cfg(unix)]
@@ -194,6 +212,17 @@ fn world(label: &str, fixtures: &Path, name: &str, opts: &Opts) -> World {
     let plugin = &d.plugins[0];
     let id = plugin.manifest.id.clone();
     let grants = Arc::new(Grants::default());
+    let key = plugin.key.clone();
+    let mut services = opts.services.clone();
+    let data = opts.data.as_ref().map(|d| {
+        let sqlite = block_on(&rt, data::Sqlite::new(label, d));
+        let mut lent = PluginData::new(Arc::clone(&sqlite) as Arc<dyn DataService>);
+        if let Some(approver) = &d.approver {
+            lent = lent.with_approver(Arc::clone(approver) as Arc<dyn QueryApprover>);
+        }
+        services.insert(Arc::new(lent));
+        sqlite
+    });
     match &opts.approve {
         Approve::Declared => grants.approve_declared(&d),
         Approve::Nothing => {}
@@ -207,15 +236,18 @@ fn world(label: &str, fixtures: &Path, name: &str, opts: &Opts) -> World {
     }
 
     let mut limits = common::test_limits(Duration::from_secs(30));
-    limits.deadlines.status = Duration::from_secs(30);
+    limits.deadlines.status = opts.status;
+    if let Some(t) = opts.query_timeout {
+        limits.query.timeout_default = t;
+    }
     limits.deadlines.command = opts.command;
     let host = PluginHost::new(HostOptions {
         runtime: rt.handle().clone(),
-        grants: grants as Arc<dyn GrantSource>,
+        grants: Arc::clone(&grants) as Arc<dyn GrantSource>,
         settings: Arc::new(MemorySettings::default()),
         egress: egress(),
         limits,
-        services: Services::new(),
+        services,
     });
     let problems = host.load(d);
     assert_eq!(problems.len(), 0, "{problems:?}");
@@ -234,6 +266,9 @@ fn world(label: &str, fixtures: &Path, name: &str, opts: &Opts) -> World {
         id,
         hits,
         links,
+        grants,
+        key,
+        data,
     }
 }
 
@@ -246,6 +281,12 @@ impl World {
 
     fn command(&self, command: &str) -> Result<(), CallError> {
         block_on(&self.rt, self.host.call_command(&self.id, command))
+    }
+
+    fn set(&self, key: &str, value: &str) {
+        self.host
+            .set_setting(&self.id, key, SettingValue::Text(value.to_owned()))
+            .unwrap();
     }
 
     fn done(self) {

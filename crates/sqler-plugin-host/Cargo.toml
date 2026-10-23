@@ -23,6 +23,9 @@ runtime = [
     "dep:tokio",
     "dep:tokio-util",
     "dep:http-body-util",
+    "dep:sqler-sql",
+    "dep:sqler-catalog",
+    "dep:sqler-driver-api",
     "tokio/rt",
     "tokio/time",
     "tokio/sync",
@@ -55,8 +58,14 @@ tokio-util = { workspace = true, optional = true }
 # Bodies of the wasi-http send hook (buffered request, boxed response).
 http-body-util = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+# Query and catalog host interfaces (runtime only): classification, the catalog cache, sessions and core types.
+sqler-sql = { workspace = true, optional = true }
+sqler-catalog = { workspace = true, optional = true }
+sqler-driver-api = { workspace = true, optional = true }
 
 [dev-dependencies]
+sqler-driver-sqlite.workspace = true
+proptest.workspace = true
 wat.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true

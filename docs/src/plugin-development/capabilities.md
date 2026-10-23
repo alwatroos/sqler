@@ -84,6 +84,24 @@ quoting style do not change it; array order does. Any manifest change, so any ca
 change, gives a new key and the user is asked again. The prompt shows the difference from the
 last approved set (added and removed capabilities). Approvals are stored per key.
 
+## Queries and the catalog
+
+`catalog` (`db.read`) lists connections, objects and columns. `query.run` runs **one** statement on a connection the
+host shows to plugins. Details and the threat model: [ADR-0058](../adr/0058-plugin-query-and-catalog.md).
+
+- A plain read (no write syntax found) needs `db.read` and runs without asking.
+- Anything else needs `db.write`, and the user must approve the exact SQL and parameters in a dialog the host owns,
+  twice on a `prod` connection. No approver, a read-only connection or a "no" gives the error `declined`; nothing runs.
+  An unknown statement counts as a write, and so does `EXPLAIN ANALYZE`.
+- The wait for the user counts against the time of your call (a command has 30 s), so do writes from commands, not from
+  status or render hooks.
+- Limits: 1 MiB of SQL, 1000 parameters, 8 MiB of result, rows and time as in the table below. When a cap is reached,
+  `truncated` is true. There is no streaming or cursor: page with `LIMIT` and `OFFSET`.
+- A timeout returns the error `timeout` and no rows.
+- "Read" means that no write syntax was found. The statement is not run in a read-only transaction.
+- Query results are not redacted. With `db.read` and `net.http` together a plugin may send your data to that host; the
+  grant dialog shows both.
+
 ## Limits
 
 | Area | Limit |

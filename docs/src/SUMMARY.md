@@ -88,6 +88,7 @@
   - [ADR-0055: Plugin ABI](adr/0055-plugin-abi-wit.md)
   - [ADR-0056: Plugin sandbox and capabilities](adr/0056-plugin-sandbox-and-capabilities.md)
   - [ADR-0057: Plugin host runtime](adr/0057-plugin-host-runtime.md)
+  - [ADR-0058: Plugin query and catalog](adr/0058-plugin-query-and-catalog.md)
   - [ADR-0059: Plugin capability grants](adr/0059-plugin-capability-grants.md)
   - [ADR-0068: CI pipeline speed](adr/0068-ci-pipeline-speed.md)
 - [Plugin development](plugin-development/index.md)

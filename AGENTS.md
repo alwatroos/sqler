@@ -49,7 +49,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-completion` | L2 | Intellisense engine: scope analysis, alias resolution, ranking; pure functions, heavily tested |
 | `sqler-export` | L2 | CSV, JSON, SQL `INSERT`, Markdown, Parquet and XLSX writers behind a push-style `RowWriter` API and a format registry (ADR-0028); Parquet and XLSX sit behind the cargo features `parquet` and `xlsx` (ADR-0029) |
 | `sqler-ai-tools` | L3 | Tool set exposed to models: catalog tools, `run_query`, `sample_rows`, `explain_query` (guarded by classification, approval and limits), `search_data`; host traits `SessionSource`, `Approver`, `UiHost` (ADR-0036) |
-| `sqler-plugin-host` | L3 | Plugin loading, sandboxing, capability grants, lifecycle (ADR-0057): engine-free core by default, wasmtime runtime behind `cl` / `pulley-rt`, `NetEgress` behind `net`; off in `sqler-app` |
+| `sqler-plugin-host` | L3 | Plugin loading, sandboxing, capability grants, lifecycle (ADR-0057): engine-free core by default, wasmtime runtime behind `cl` / `pulley-rt`, `NetEgress` behind `net`; off in `sqler-app`; data access through `DataService`/`QueryApprover` (ADR-0058) |
 | `sqler-mcp` | L4 | MCP server (in-crate JSON-RPC layer; `rmcp` was measured and not adopted, ADR-0040) exposing `sqler-ai-tools` to external agents |
 | `sqler-acp` | L5 | ACP client: spawn and host Claude Code, Codex CLI, Gemini CLI and others inside SQLer |
 | `sqler-ui` | L6 | GPUI app: workspace, tabs, panels, grid, editor, palette, themes |
@@ -281,6 +281,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0055](docs/src/adr/0055-plugin-abi-wit.md) | Plugin ABI: the `sqler:plugin` WIT package, version rule, worlds, interfaces, WASI set | accepted |
 | [0056](docs/src/adr/0056-plugin-sandbox-and-capabilities.md) | Plugin sandbox and capabilities: grammar, gates, default deny, grant key, query rule, limits | accepted |
 | [0057](docs/src/adr/0057-plugin-host-runtime.md) | Plugin host runtime: two layers and features, wasmtime 50 engine configuration, epoch deadlines, limits and the three-fault rule, WASI scope (clocks and random stay linked), egress rules, extension protocol | accepted |
+| [0058](docs/src/adr/0058-plugin-query-and-catalog.md) | Plugin query and catalog: `DataService`/`QueryApprover` traits, order of checks, write approval (twice on prod), limits, session lease, catalog behaviour, threat model | accepted |
 | [0059](docs/src/adr/0059-plugin-capability-grants.md) | Plugin capability grants: `plugin-grants.toml`, all-or-nothing approval, re-prompt rules, damaged-file lock | accepted |
 | [0068](docs/src/adr/0068-ci-pipeline-speed.md) | CI pipeline speed: path gating with always-reporting names, caches saved on `main` only, Windows PR subset, `CI result` aggregate, rollback | accepted |
 
