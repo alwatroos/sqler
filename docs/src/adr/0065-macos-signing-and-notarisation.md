@@ -93,10 +93,22 @@ the install page is the mitigation. Linux downloads carry checksums only. `githu
 code generator of the plugin host (`plugins` feature, owner decision 12), which writes machine code to memory at run
 time, so the question is which entitlements the hardened runtime needs for that.
 
-PLACEHOLDER (to be completed by the integration step from the entitlements test of work package W1): the committed
-entitlement set, the outcome of the three test variants (no entitlements; `com.apple.security.cs.allow-jit`; that
-plus `com.apple.security.cs.allow-unsigned-executable-memory`) on a Cranelift test binary signed ad hoc with the
-hardened runtime, and the commands used.
+The committed set is a single key: `com.apple.security.cs.allow-unsigned-executable-memory`.
+
+Method: the plugin host test binary (`cargo test -p sqler-plugin-host --features cl --lib --no-run`) was signed ad hoc
+with the hardened runtime (`codesign --force --options runtime --sign - --entitlements <plist> <binary>`) once per
+entitlement set, and run with the filter `runtime::` (38 tests that instantiate WebAssembly modules and so generate
+machine code at run time). Results on macOS:
+
+| Entitlements | Outcome |
+| ------------ | ------- |
+| none | killed by the system (SIGKILL, exit 137) partway through the tests |
+| `allow-jit` only | killed, exit 137 |
+| `allow-jit` and `allow-unsigned-executable-memory` | 38 passed |
+| `allow-unsigned-executable-memory` only | 38 passed |
+
+`allow-jit` alone is not enough, and with `allow-unsigned-executable-memory` present `allow-jit` adds nothing, so the
+smaller set is committed.
 
 ### Cost
 
@@ -122,7 +134,20 @@ is in the owner guide, section "Test the script locally".
 
 ## Measurements
 
-Filled in by the integration step with the results of the local test.
+Local test on macOS with a throwaway self-signed identity and a small stub binary named `sqler`:
+
+- Positive: exit 0, last line `sign-macos: ok (..., notarised: no)`. On the extracted binary `codesign --verify --strict`
+  passes, the flags are `0x10000(runtime)`, the entitlements show the single key above, the binary runs, the sidecar
+  `shasum -a 256 -c` passes, the manifest digest equals the new hash and the tar entries are unchanged.
+- Negative: a wrong certificate password exits 1 and leaves the archive and manifest byte-identical; a file that is
+  not an archive exits 1; a missing tool exits 1; a missing `APPLE_CERTIFICATE` or no arguments exit 2. The captured
+  output contains neither the password nor the certificate.
+- Cleanup: no temporary directory, keychain entry or identity is left behind.
+
+Not testable without Apple credentials: real notarisation, the secure timestamp and the Developer ID chain.
+
+The environment `release` is restricted to `v*` tags (deployment rule of type tag, verified through the GitHub API), so
+a run on a branch or a pull request cannot read the Apple secrets even if a workflow names the environment.
 
 ## Rollback
 

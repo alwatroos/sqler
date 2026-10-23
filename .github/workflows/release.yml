@@ -21,6 +21,8 @@ on:
       - "dist-workspace.toml"
       - ".github/workflows/release.yml"
       - ".github/scripts/release-guard.sh"
+      - ".github/scripts/sign-macos.sh"
+      - "packaging/macos/**"
       - "crates/sqler-app/Cargo.toml"
       - "crates/sqler-app/wix/**"
   workflow_dispatch:

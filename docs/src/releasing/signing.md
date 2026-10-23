@@ -37,8 +37,9 @@ time) and carries that cost. The team does not enrol on the owner's behalf. Once
 
    With the command line, give the value from a file, never on the command line:
    `gh secret set APPLE_CERTIFICATE --env release < DeveloperID.p12.b64`.
-6. Check that the environment `release` has a deployment rule limiting it to the tag pattern `v*`. Without it, a run
-   on a branch that names the environment could read the secrets.
+6. The environment `release` is already limited to the tag pattern `v*` (deployment rule of type tag), so a run on a
+   branch cannot read the secrets. Anyone adding the Apple secrets must put them in this environment and must not
+   remove that rule.
 7. Delete the local `.b64` and `.p8` files, or keep them in the owner's password manager. GitHub cannot show a secret
    again.
 
@@ -69,10 +70,28 @@ The script `.github/scripts/sign-macos.sh` can be tried on a Mac without Apple c
 self-signed certificate, no secure timestamp and no notarisation. Work in a scratch directory and delete it
 afterwards.
 
-PLACEHOLDER (to be completed by the integration step with the exact commands from the local test of work package W1):
-create the self-signed code signing identity with `/usr/bin/openssl`, export it as a `.p12`, build a test archive in
-the layout of the release archive, run `SQLER_SIGN_LOCAL_TEST=1 sh .github/scripts/sign-macos.sh <archive>`, and the
-positive and negative checks.
+From the repository root, with a release build of `sqler` (or any Mach-O file named `sqler`):
+
+```sh
+d=$(mktemp -d); mkdir "$d/in"
+printf '[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=SQLer local test\n[ext]\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\n' > "$d/openssl.cnf"
+/usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 1 -config "$d/openssl.cnf" -extensions ext -keyout "$d/k.pem" -out "$d/c.pem"
+/usr/bin/openssl pkcs12 -export -inkey "$d/k.pem" -in "$d/c.pem" -out "$d/id.p12" -passout pass:test
+mkdir "$d/in/sqler-app-aarch64-apple-darwin"; cp target/release/sqler "$d/in/sqler-app-aarch64-apple-darwin/"
+tar -cJf "$d/sqler-app-aarch64-apple-darwin.tar.xz" -C "$d/in" sqler-app-aarch64-apple-darwin
+( cd "$d" && shasum -a 256 sqler-app-aarch64-apple-darwin.tar.xz > sqler-app-aarch64-apple-darwin.tar.xz.sha256 )
+SQLER_SIGN_LOCAL_TEST=1 APPLE_CERTIFICATE=$(base64 < "$d/id.p12") APPLE_CERTIFICATE_PASSWORD=test \
+  sh .github/scripts/sign-macos.sh "$d/sqler-app-aarch64-apple-darwin.tar.xz"
+```
+
+Expected: exit 0 and a last line `sign-macos: ok (..., notarised: no)`. Then check the result: extract the archive,
+run `codesign --verify --strict --verbose=2` and `codesign -dvv` (the flags show `0x10000(runtime)`) on the binary,
+`codesign -d --entitlements - <binary>` (one key), and `( cd "$d" && shasum -a 256 -c *.sha256 )`.
+
+Negative check: with `APPLE_CERTIFICATE_PASSWORD=wrong` the script must exit 1 with `cannot import the certificate`
+and leave the archive byte-identical. Without `APPLE_CERTIFICATE` it exits 2.
+
+Delete the scratch directory when done (`rm -r "$d"`). The script removes its temporary keychain by itself.
 
 ## After signing is on
 
