@@ -32,8 +32,29 @@ fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(fixture_path(name)).unwrap()
 }
 
+/// The directory prefix the fixtures use for absolute paths, and its form on this OS.
+const FIXTURE_HOME: &str = "/home/alice/";
+#[cfg(unix)]
+const HOME: &str = "/home/alice/";
+#[cfg(windows)]
+const HOME: &str = "C:\\Users\\alice\\";
+
+/// The path a fixture path becomes on this OS (`/home/alice/x` is absolute on unix only).
+fn native(tail: &str) -> PathBuf {
+    PathBuf::from(format!("{HOME}{tail}"))
+}
+
+/// Fixture bytes with every `/home/alice/` path rewritten to an absolute path of this OS, so the
+/// same fixture asserts the full mapping on unix and on Windows.
+fn portable(bytes: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    // JSON text: a backslash is written twice.
+    text.replace(FIXTURE_HOME, &HOME.replace('\\', "\\\\"))
+        .into_bytes()
+}
+
 fn report(name: &str) -> SourceReport {
-    PgAdmin.parse(&fixture(name)).unwrap()
+    PgAdmin.parse(&portable(&fixture(name))).unwrap()
 }
 
 fn spec_of(entry: &SourceEntry) -> &sqler_config::ConnectionSpec {
@@ -79,14 +100,9 @@ fn full_fixture_maps_every_field() {
     assert!(!spec.password_in_keychain);
     let tls = spec.tls.as_ref().unwrap();
     assert_eq!(tls.mode, TlsMode::VerifyFull);
-    #[cfg(unix)]
-    {
-        assert_eq!(
-            tls.ca_cert.as_deref(),
-            Some(std::path::Path::new("/home/alice/certs/ca.pem"))
-        );
-        assert!(tls.client_cert.is_some() && tls.client_key.is_some());
-    }
+    assert_eq!(tls.ca_cert, Some(native("certs/ca.pem")));
+    assert_eq!(tls.client_cert, Some(native("certs/client.pem")));
+    assert_eq!(tls.client_key, Some(native("certs/client.key")));
     assert_eq!(a.secrets, vec![ProfileSecretKind::DbPassword]);
     for name in [
         "\"FGColor\"",
@@ -118,13 +134,17 @@ fn full_fixture_maps_every_field() {
         (ssh.host.as_str(), ssh.port, ssh.user.as_str()),
         ("bastion.example.test", 2222, "tunnel")
     );
-    #[cfg(unix)]
+    assert_eq!(
+        b.tls.as_ref().unwrap().ca_cert,
+        Some(native("certs/ca.pem"))
+    );
     assert!(matches!(
         &ssh.auth,
         SshAuth::KeyFile {
+            path,
             passphrase_in_keychain: false,
             ..
-        }
+        } if *path == native(".ssh/id_test")
     ));
     assert_eq!(
         c.secrets,
@@ -291,6 +311,30 @@ fn bad_paths_are_dropped_with_notes() {
     assert!(e[4].notes.iter().any(|n| n.contains("pair")));
     assert_eq!(
         skip_of(&e[6]),
+        &SkipReason::Invalid("SSH key path not usable".to_owned())
+    );
+}
+
+#[test]
+fn paths_of_the_other_os_are_dropped_with_notes() {
+    // Absolute on the other OS only: a `C:\` path on unix, a `/home/...` path on Windows.
+    #[cfg(unix)]
+    let foreign = r"C:\\Users\\alice\\certs\\ca.pem";
+    #[cfg(windows)]
+    let foreign = "/home/alice/certs/ca.pem";
+    let json = format!(
+        r#"{{"Servers":{{
+            "1":{{"Name":"tls","Host":"h","SSLMode":"verify-ca","SSLRootCert":"{foreign}"}},
+            "2":{{"Name":"ssh","Host":"h","UseSSHTunnel":1,"TunnelHost":"b","TunnelUsername":"t",
+                  "TunnelAuthentication":1,"TunnelIdentityFile":"{foreign}"}}
+        }}}}"#
+    );
+    let r = PgAdmin.parse(json.as_bytes()).unwrap();
+    let tls = spec_of(&r.entries[0]).tls.as_ref().unwrap();
+    assert!(tls.ca_cert.is_none());
+    assert!(r.entries[0].notes.iter().any(|n| n.contains("dropped")));
+    assert_eq!(
+        skip_of(&r.entries[1]),
         &SkipReason::Invalid("SSH key path not usable".to_owned())
     );
 }

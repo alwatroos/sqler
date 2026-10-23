@@ -123,6 +123,8 @@ database of pgAdmin. The user guide page is R10.
 - A foreign secret can never reach the repository, a log or `connections.toml` through this crate.
 - The default locations of pgAdmin are an assumption (pgAdmin does not write `servers.json` by itself); the explicit
   path is the primary input.
+- A repeated key under `Servers` (the same number twice) is collapsed by the JSON reader: only the last object is
+  imported and the earlier one is lost without a note. pgAdmin never writes such a file.
 - The crate joins the Windows PR test subset of `ci.yml` ([ADR-0068](0068-ci-pipeline-speed.md)) because path
   semantics differ per OS.
 - R9 links the crate into the app and measures the binary size effect.
