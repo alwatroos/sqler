@@ -263,6 +263,8 @@ pub struct PluginsState {
     /// The last start error per plugin, for a backend that does not report it.
     errors: HashMap<PluginId, String>,
     notice: Option<String>,
+    /// Counts the loads that came back; what the plugins contribute is rebuilt when it changes.
+    generation: u64,
 }
 
 impl std::fmt::Debug for PluginsState {
@@ -300,7 +302,23 @@ impl PluginsState {
             declined: HashSet::new(),
             errors: HashMap::new(),
             notice: None,
+            generation: 0,
         }
+    }
+
+    /// Counts the loads that came back (0 before the first). A change means the rows may differ.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Lists the plugins again, so a state change the host made (a fault after a failed call) shows up. Nothing
+    /// while the manager has not started or a load is already in flight.
+    pub fn reload(&mut self) -> Vec<PluginEffect> {
+        if self.backend.is_none() || self.phase == Phase::Waiting || self.loads > 0 {
+            return Vec::new();
+        }
+        vec![self.load(false, None)]
     }
 
     /// Whether this build has a plugin host.
@@ -575,6 +593,7 @@ impl PluginsState {
     fn loaded(&mut self, snapshot: PluginSnapshot, review: Option<PluginId>) -> Vec<PluginEffect> {
         self.loads = self.loads.saturating_sub(1);
         self.phase = Phase::Ready;
+        self.generation += 1;
         self.snapshot = snapshot;
         let rows = &self.snapshot.rows;
         self.errors
@@ -815,6 +834,29 @@ mod tests {
         assert!(rig.state.loading());
         assert!(rig.state.rows().is_empty());
         assert!(rig.state.dialog().is_none());
+    }
+
+    #[test]
+    fn reload_lists_the_plugins_again_once_and_counts_the_loads() {
+        let mut rig = rig(vec![row(manifest("acme-sync", &["db.read"]))]);
+        assert!(rig.state.reload().is_empty(), "not before the first frame");
+        assert_eq!(rig.state.generation(), 0);
+        let effects = rig.state.first_frame();
+        assert!(rig.state.reload().is_empty(), "a load is in flight");
+        rig.pump(effects);
+        assert_eq!(rig.state.generation(), 1);
+        let reload = rig.state.reload();
+        assert_eq!(reload.len(), 1);
+        assert!(matches!(
+            reload[0],
+            PluginEffect::Load {
+                refresh: false,
+                review: None
+            }
+        ));
+        assert!(rig.state.reload().is_empty(), "only one at a time");
+        rig.pump(reload);
+        assert_eq!(rig.state.generation(), 2);
     }
 
     #[test]

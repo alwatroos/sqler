@@ -59,7 +59,12 @@ impl KeyDispatcher {
         let keymap = Keymap::with_overrides(p, &overrides);
 
         for id in overrides.keys() {
-            if to_ui(id, registry).is_none() {
+            // A plugin command is registered after the first load, so it is unknown at startup.
+            let plugin_command = id
+                .as_str()
+                .split_once(':')
+                .is_some_and(|(category, _)| crate::plugins::contrib::is_plugin_category(category));
+            if to_ui(id, registry).is_none() && !plugin_command {
                 notices.push(format!("Keybinding for unknown command `{id}` is ignored"));
             }
         }
@@ -251,6 +256,41 @@ mod tests {
         let k = KeyDispatcher::new(OTHER, Ok(ovr(&[("tab:close", &[])])), &base());
         assert_eq!(k.resolve(&chord("ctrl+w")), None);
         assert_eq!(k.shortcut_label(&cid("tab:close")), None);
+    }
+
+    #[test]
+    fn a_plugin_override_is_silent_at_startup_and_binds_once_registered() {
+        let overrides = ovr(&[
+            ("plugin-acme:run", &["ctrl+alt+k"]),
+            ("object-plugin-acme:scan", &["ctrl+alt+j"]),
+            ("panel-plugin-acme:main", &["ctrl+alt+l"]),
+        ]);
+        let k = KeyDispatcher::new(OTHER, Ok(overrides.clone()), &base());
+        assert!(k.notices().is_empty(), "{:?}", k.notices());
+        assert_eq!(k.resolve(&chord("ctrl+alt+k")), None);
+        // The plugin loaded: the dispatcher is rebuilt with its commands registered.
+        let mut r = base();
+        for id in [
+            "plugin-acme:run",
+            "object-plugin-acme:scan",
+            "panel-plugin-acme:main",
+        ] {
+            r.register(Command::new(id, id).unwrap()).unwrap();
+        }
+        let k = KeyDispatcher::new(OTHER, Ok(overrides), &r);
+        assert_eq!(k.notices().len(), 0);
+        assert_eq!(
+            k.resolve(&chord("ctrl+alt+k")),
+            Some(&cid("plugin-acme:run"))
+        );
+        assert_eq!(
+            k.resolve(&chord("ctrl+alt+j")),
+            Some(&cid("object-plugin-acme:scan"))
+        );
+        assert_eq!(
+            k.resolve(&chord("ctrl+alt+l")),
+            Some(&cid("panel-plugin-acme:main"))
+        );
     }
 
     #[test]

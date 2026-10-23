@@ -486,3 +486,33 @@ fn status_effective_is_declared_and_approved() {
     assert_eq!(eff.len(), 1);
     assert!(eff.allows(sqler_plugin_api::CapabilityKind::DbRead));
 }
+
+#[test]
+fn typed_ui_calls_refuse_what_the_manifest_does_not_declare() {
+    // The check runs before any guest code, so the component is never instantiated.
+    let s = setup("undeclared", &[("alpha", "ok")], LONG);
+    let a = id("alpha");
+    let thing: sqler_plugin_api::ContributionId = "thing".parse().unwrap();
+    let r = block_on(
+        &s.rt,
+        s.host
+            .run_command(&a, &thing, sqler_plugin_api::CommandContext::None),
+    );
+    assert_eq!(r, Err(CallError::Undeclared { what: "command" }));
+    let r = block_on(&s.rt, s.host.render_panel(&a, &thing));
+    assert_eq!(r, Err(CallError::Undeclared { what: "panel" }));
+    let event = sqler_plugin_api::WidgetEvent::Clicked("x".to_owned());
+    let r = block_on(&s.rt, s.host.panel_event(&a, &thing, event));
+    assert_eq!(r, Err(CallError::Undeclared { what: "panel" }));
+    let r = block_on(&s.rt, s.host.status(&a, &thing));
+    assert_eq!(
+        r,
+        Err(CallError::Undeclared {
+            what: "status item"
+        })
+    );
+    let r = block_on(&s.rt, s.host.status(&id("ghost"), &thing));
+    assert_eq!(r, Err(CallError::NotFound));
+    assert!(s.host.is_idle(), "a refused call must not create an engine");
+    s.host.shutdown();
+}

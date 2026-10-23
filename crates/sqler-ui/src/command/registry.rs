@@ -85,6 +85,12 @@ impl CommandRegistry {
         self.commands.values()
     }
 
+    /// Keeps only the commands for which `keep` is true. The plugin commands are dropped and registered again after
+    /// every plugin load this way.
+    pub fn retain(&mut self, mut keep: impl FnMut(&Command) -> bool) {
+        self.commands.retain(|_, command| keep(command));
+    }
+
     /// The number of registered commands.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -144,6 +150,19 @@ mod tests {
             .unwrap();
         let ids: Vec<_> = r.iter().map(|c| c.id().as_str()).collect();
         assert_eq!(ids, ["app:open-settings", "query:run-all"]);
+    }
+
+    #[test]
+    fn retain_drops_what_does_not_match() {
+        let mut r = CommandRegistry::new();
+        r.register(cmd("query:run-all", "Run All")).unwrap();
+        r.register(cmd("plugin-acme:run", "Run")).unwrap();
+        r.register(cmd("panel-plugin-acme:main", "Show")).unwrap();
+        r.retain(|c| !c.category().contains("plugin"));
+        assert_eq!(r.len(), 1);
+        assert!(r.get(&CommandId::new("query:run-all").unwrap()).is_some());
+        // The ids are free again.
+        r.register(cmd("plugin-acme:run", "Run")).unwrap();
     }
 
     #[test]

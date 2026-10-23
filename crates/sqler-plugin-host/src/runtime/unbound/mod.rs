@@ -8,8 +8,6 @@
 //! capability gives `capability-denied`; a granted one gives `failed` ("not available in this host"). The item that
 //! implements an interface deletes its file here and its `mod` line.
 
-mod ui;
-
 use sqler_plugin_api::{CapabilityKind, CapabilitySet, Gate, HostInterface, gate};
 
 use super::bindings::sqler::plugin::types::PluginError;

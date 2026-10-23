@@ -37,6 +37,8 @@ pub mod net;
 mod query;
 #[cfg(feature = "runtime")]
 mod runtime;
+#[cfg(feature = "runtime")]
+mod ui;
 
 pub use dirs::PluginDirs;
 pub use discovery::{
@@ -65,3 +67,5 @@ pub use query::{
 };
 #[cfg(feature = "runtime")]
 pub use runtime::{HostOptions, PendingCall, PluginHost, Services};
+#[cfg(feature = "runtime")]
+pub use ui::{PluginUi, UiSink};
