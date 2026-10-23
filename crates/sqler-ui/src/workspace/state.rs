@@ -560,6 +560,8 @@ pub struct Workspace {
     pub(super) assist: EditorAssist,
     /// The plugin manager: the rows, the open permission dialog and the work it asks for (ADR-0060).
     pub(super) plugins: PluginsState,
+    /// The write approvals plugins wait on (AC6, ADR-0058).
+    pub(super) plugin_writes: crate::plugins::WriteQueue,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -625,7 +627,21 @@ impl Workspace {
             agents: AgentTabs::default(),
             assist: EditorAssist::default(),
             plugins: PluginsState::default(),
+            plugin_writes: crate::plugins::WriteQueue::default(),
         }
+    }
+
+    /// The plugin write approvals that wait for the user.
+    #[must_use]
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+    pub(crate) fn plugin_writes(&self) -> &crate::plugins::WriteQueue {
+        &self.plugin_writes
+    }
+
+    /// The same, to answer or add to.
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+    pub(crate) fn plugin_writes_mut(&mut self) -> &mut crate::plugins::WriteQueue {
+        &mut self.plugin_writes
     }
 
     /// Applies what `workbench.toml` held: the layout and the recent connections. A file from a

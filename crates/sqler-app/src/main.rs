@@ -111,7 +111,7 @@ fn start(
     // Builds the grant book and a backend that does nothing until the first refresh, which the window requests after
     // the first frame: no plugin is discovered, compiled or instantiated here.
     #[cfg(feature = "plugins")]
-    let plugins = plugins::startup(dir.as_ref().ok(), plugin_dirs);
+    let plugins = plugins::startup(dir.as_ref().ok(), plugin_dirs, Arc::clone(&connector));
     #[cfg(not(feature = "plugins"))]
     let plugins = {
         drop(plugin_dirs);

@@ -7,7 +7,7 @@
 //! These only render state. Clicks call back into `WorkspaceView`, which goes through the
 //! `Workspace` methods of `workspace/query.rs`.
 
-mod dialogs;
+pub(crate) mod dialogs;
 mod results;
 mod toolbar;
 

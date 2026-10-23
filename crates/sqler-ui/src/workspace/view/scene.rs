@@ -184,6 +184,14 @@ pub const SCENES: &[Scene] = &[
         pending: None,
     },
     Scene {
+        name: "plugins-write",
+        pending: None,
+    },
+    Scene {
+        name: "plugins-write-prod",
+        pending: None,
+    },
+    Scene {
         name: "plugins-empty",
         pending: None,
     },
@@ -306,6 +314,8 @@ enum Step {
     StartPlugins,
     /// Selects the plugin with this id in the manager.
     SelectPlugin(&'static str),
+    /// Queues a write approval of a plugin on a production connection at this stage.
+    PluginWrite(crate::plugins::WriteStage),
 }
 
 /// The canned conversation of an agent scene.
@@ -452,6 +462,14 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::StartPlugins,
             Step::Command("workbench:show-plugins"),
             Step::Wait(Wait::PluginsLoaded),
+            Step::Pause(2),
+        ],
+        "plugins-write" => vec![
+            Step::PluginWrite(crate::plugins::WriteStage::First),
+            Step::Pause(2),
+        ],
+        "plugins-write-prod" => vec![
+            Step::PluginWrite(crate::plugins::WriteStage::ProdSecond),
             Step::Pause(2),
         ],
         "plugins-grant" => vec![
@@ -998,9 +1016,30 @@ impl WorkspaceView {
                 let id = id.parse().map_err(|_| format!("no plugin id {id}"))?;
                 self.plugin_select(&id, cx);
             }
+            Step::PluginWrite(stage) => self.queue_plugin_write(*stage)?,
             Step::Pause(_) | Step::Wait(_) => {}
         }
         cx.notify();
+        Ok(())
+    }
+
+    /// Queues a plugin's write approval on a production connection, as the app's approver would.
+    fn queue_plugin_write(&mut self, stage: crate::plugins::WriteStage) -> Result<(), String> {
+        let request = crate::plugins::PluginWriteRequest::new(
+            "acme-sync".parse().map_err(|_| "plugin id")?,
+            "Acme Sync",
+            "Orders",
+            sqler_driver_api::sqler_core::DriverId::new("postgres").map_err(|_| "driver id")?,
+            true,
+            "update orders set status = 'shipped' where id = 42",
+            stage,
+        );
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        // Kept open for the life of the scene: a closed reply would remove the dialog.
+        std::mem::forget(answer);
+        self.ws
+            .plugin_writes_mut()
+            .push(crate::plugins::PluginWriteAsk { request, reply });
         Ok(())
     }
 

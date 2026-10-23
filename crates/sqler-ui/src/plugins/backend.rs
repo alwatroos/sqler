@@ -12,6 +12,7 @@ use sqler_plugin_api::{
     CapabilitySet, ComponentDigest, Manifest, PluginId, SettingSpec, SettingValue,
 };
 
+use super::approval::WriteInbox;
 use super::grant::GrantBook;
 
 /// The plugin host as the UI uses it.
@@ -56,12 +57,15 @@ pub struct PluginsStartup {
     pub backend: Option<Arc<dyn PluginsBackend>>,
     /// The book of grants; the dialog decides here and the host reads it.
     pub grants: Arc<GrantBook>,
+    /// Where the plugins' write approvals arrive (the app's approver holds the sender). Empty by default.
+    pub writes: WriteInbox,
 }
 
 impl std::fmt::Debug for PluginsStartup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PluginsStartup")
             .field("backend", &self.backend.is_some())
+            .field("writes", &self.writes.is_set())
             .finish_non_exhaustive()
     }
 }
@@ -70,16 +74,24 @@ impl PluginsStartup {
     /// A startup with a host and the book it reads.
     #[must_use]
     pub fn new(backend: Option<Arc<dyn PluginsBackend>>, grants: Arc<GrantBook>) -> Self {
-        Self { backend, grants }
+        Self {
+            backend,
+            grants,
+            writes: WriteInbox::default(),
+        }
+    }
+
+    /// Sets the inbox of plugin write approvals.
+    #[must_use]
+    pub fn with_writes(mut self, writes: WriteInbox) -> Self {
+        self.writes = writes;
+        self
     }
 
     /// A build without plugin support: no host and an empty in-memory book.
     #[must_use]
     pub fn unavailable() -> Self {
-        Self {
-            backend: None,
-            grants: Arc::new(GrantBook::in_memory()),
-        }
+        Self::new(None, Arc::new(GrantBook::in_memory()))
     }
 }
 

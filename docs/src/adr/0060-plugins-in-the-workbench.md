@@ -143,13 +143,20 @@ first frame (AC4); the detail is in [benchmarks](../benchmarks.md).
 
 A plugin write reuses the AI approval shape ([ADR-0053](0053-ai-session-tab-and-approvals.md)): a queue of asks, a card with
 the exact SQL, a dropped reply is a denial, and on a `prod` connection a second confirmation through the ADR-0024 gate.
-Its text is in the user guide; the app implements the host's `QueryApprover` by sending asks to the UI.
+Its text is in the user guide; the app implements the host's `QueryApprover` by sending asks to the UI
+(`PluginWriteAsk` on a channel whose receiver `PluginsStartup::writes` hands to the workspace). The host asks `Confirm`
+and, on `prod`, `ProdSecond`; the window draws the first as a dialog with Deny focused and the second as the query
+editor's production confirmation, opened with `open_prod_gate` on a `QueryTab` the queue owns. The app also implements
+`DataService` over the saved connections: every `acquire` opens a fresh session through the connect pipeline (never a
+tab's, so no user transaction is lent) and `release` always closes it, so a session whose state a plugin statement
+changed (`BEGIN`, `SET ROLE`, `USE`, `ATTACH`, temporary tables) never reaches a pool. `catalog` returns `None` for now.
 
-### Calm `db.read`
+### `db.read` is flagged
 
-`db.read` stays a calm capability in the dialog. The product owner may want it flagged, in particular together with
-`net.http` ("may send your data to that host"); the user guide says so in "Data leaving your machine". This is listed as
-pending for the maintainer.
+`db.read` is flagged in the permission dialog like every other permission; only `ui.panel` is calm (decided by the dev
+team, replacing the calm treatment of ADR-0059 as first written). The Plugins view marks a granted `db.read` and
+`net.http` in the capability chips. The user guide says in "Data leaving your machine" that the two together let a
+plugin send your data to that host.
 
 ## Consequences
 

@@ -77,9 +77,11 @@ use crate::theme::resolve;
 use crate::workbench::view::Hints;
 use crate::workbench::{self, ActivityItem, PanelView, RecentCommands, Region, WorkbenchAction};
 use edit_ui::EditUi;
+use plugin_writes::WriteUi;
 use plugins::PluginsUi;
 
 mod export;
+mod plugin_writes;
 mod plugins;
 #[cfg(feature = "screenshots")]
 pub mod scene;
@@ -250,6 +252,8 @@ pub(crate) struct WorkspaceView {
     export_inputs: Option<export::ExportInputs>,
     /// The focus, the typed-id field and the setting editors of the plugin manager.
     plugins_ui: PluginsUi,
+    /// The focus of the plugin write approval dialog.
+    plugin_writes_ui: WriteUi,
     /// The resizable split of the side panel and the rest, and of the editors and the bottom panel.
     side_split: Entity<ResizableState>,
     panel_split: Entity<ResizableState>,
@@ -301,6 +305,7 @@ impl WorkspaceView {
             .history_dir
             .as_ref()
             .map(|dir| Arc::new(sqler_ai_tools::AuditLog::open(dir)));
+        let plugin_writes = startup.plugins.writes.take();
         let mut ws = Workspace::new(sidebar)
             .with_ai_audit(audit_log.clone().map(|log| crate::ai::AiAudit::new(log)))
             .with_settings(startup.settings)
@@ -481,6 +486,7 @@ impl WorkspaceView {
             edit_ui: EditUi::new(cx),
             export_inputs: None,
             plugins_ui: PluginsUi::new(window, cx),
+            plugin_writes_ui: WriteUi::new(cx),
             side_split,
             panel_split,
             split_generation,
@@ -508,6 +514,9 @@ impl WorkspaceView {
         GridProbe::start_if_requested(window, cx);
         if view.ws.plugins().available() {
             Self::schedule_plugins(window, cx);
+        }
+        if let Some(inbox) = plugin_writes {
+            Self::drain_plugin_writes(inbox, cx);
         }
         view.bind_splits(cx);
         view.sync_sidebar();
@@ -570,11 +579,13 @@ impl WorkspaceView {
     }
 
     /// Routes a key press before the focused element sees it.
+    #[allow(clippy::too_many_lines)] // one ordered chain of overlay checks
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.is_held
             && (self.ws.drop_dialog().is_some()
                 || self.edit_overlay_open()
-                || self.plugin_dialog_open())
+                || self.plugin_dialog_open()
+                || self.plugin_write_open())
         {
             // A held key (auto-repeat) must never confirm or cancel a DROP step, an edit
             // dialog (the production confirmation among them) or the permission dialog.
@@ -598,6 +609,10 @@ impl WorkspaceView {
             // Escape closes the dialog; a host-key prompt counts as "do not trust".
             cx.stop_propagation();
             self.dispatch_connection(ConnectionAction::Cancel, cx);
+            return;
+        }
+        if !was_open && self.plugin_write_key(&chord, cx) {
+            cx.stop_propagation();
             return;
         }
         if !was_open
@@ -1713,6 +1728,7 @@ impl Render for WorkspaceView {
         self.flush_assist_edits(window, cx);
         self.sync_export_inputs(window, cx);
         self.sync_plugin_dialog(window, cx);
+        self.sync_plugin_writes(window, cx);
         self.sync_plugin_inputs(window, cx);
         if self.history_views.materialize(&self.ws, window, cx) {
             // A history dialog or the picker closed: the root takes the focus back.
@@ -1738,6 +1754,7 @@ impl Render for WorkspaceView {
         let edit_dialog = crate::grid::edit::view::edit_overlay(self, cx);
         let export_dialog = export_overlay(self, cx);
         let plugin_dialog = self.plugin_dialog_overlay(cx);
+        let plugin_write_dialog = crate::plugins::approval::view::write_overlay(self, cx);
         let palette = self.palette.is_open().then(|| {
             let items = self.palette.items(&self.commands, &self.keys);
             palette::view::palette_overlay(
@@ -1790,6 +1807,7 @@ impl Render for WorkspaceView {
             .children(edit_dialog)
             .children(export_dialog)
             .children(plugin_dialog)
+            .children(plugin_write_dialog)
             .children(palette)
     }
 }

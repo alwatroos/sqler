@@ -63,7 +63,7 @@ permission the plugin asks for, when it first meets a plugin or a changed one.
 
 | Permission | Text | Extra |
 | ---------- | ---- | ----- |
-| `db.read` | Read the catalog and run read-only queries on your connections | |
+| `db.read` | Read the catalog and run read-only queries on your connections | Highlighted. |
 | `db.write` | Ask to change data or schema on your connections | Highlighted. Every change goes through the same confirmation as your own statements. |
 | `ui.panel` | Show its own panels | |
 | `ai.tool` | Offer tools to the AI assistant | Highlighted. |
@@ -73,7 +73,7 @@ permission the plugin asks for, when it first meets a plugin or a changed one.
 | `fs.read:plugin`, `fs.read:data...` | Read files in its own install folder or its own data folder | Highlighted, with the folder scope. |
 | `fs.read:home/...` | Read files in your home folder | Highlighted, with the folder scope. |
 
-Only `db.read` and `ui.panel` are shown quietly. Every other permission is highlighted, whatever host or folder it names.
+Only `ui.panel` is shown quietly. Every other permission is highlighted, whatever host or folder it names.
 
 Warnings you should read:
 
@@ -91,7 +91,7 @@ characters, invisible format characters and line separators are replaced and lon
 
 ### Data leaving your machine
 
-`db.read` is shown quietly, but a plugin that has `db.read` can read what your connections hold. If it also has
+`db.read` is highlighted because a plugin that has it can read what your connections hold. If it also has
 `net.http`, it can send what it read to the hosts you approved. Grant the two together only to a plugin you trust with
 that data. A database error text that reaches a plugin has account names, hosts, addresses and file paths removed (a permission failure is reduced to "the database denied the request"), so it can name only tables, columns and constraints, which a plugin with `db.read` can read anyway. Plugin output is not filtered the way data sent to an AI model is. A plugin never learns the host, user or
 password of a connection, and it cannot run a statement that changes data (`db.write`, or any statement SQLer does not
@@ -124,6 +124,20 @@ replaced component, means a new question. Only the latest answer per plugin is k
 
 **Revoke** in the Plugins view turns an approval into a denial for the plugin's current version, so SQLer does not ask
 again at the next start. To be asked again, select the plugin and choose **Review permissions**.
+
+### Plugin writes
+
+A plugin with `db.write` can ask to run a statement that changes data. SQLer opens its own connection for each
+statement (never one of your tabs, so it never touches a transaction you hold), and closes it afterwards. Before the
+statement runs, a dialog shows the plugin, the connection and the exact SQL, and nothing runs until you press
+**Approve** with the mouse. **Deny** has the focus, **Escape** denies, and a plugin call that is cancelled removes its
+dialog. If several plugins ask, the dialogs come one after the other. On a connection labelled `prod` a second
+dialog, the same "Run on production?" confirmation as for your own statements, follows; denying either one stops the
+statement. A statement that cannot be shown in that confirmation (for example one with named parameters) is refused.
+
+![The approval of a plugin's statement in the light theme](../screenshots/after/plugins-write-light.png)
+
+![The second confirmation on a production connection in the dark theme](../screenshots/after/plugins-write-prod-dark.png)
 
 ### The files
 

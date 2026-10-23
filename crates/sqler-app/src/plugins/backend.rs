@@ -19,7 +19,7 @@ use sqler_plugin_api::{
 use sqler_plugin_host::net::NetEgressFactory;
 use sqler_plugin_host::{
     DisableReason, DiscoveredPlugin, HostOptions, LoadProblem, PluginHost, PluginSource,
-    PluginState, PluginStatus, discover, read_setting,
+    PluginState, PluginStatus, Services, discover, read_setting,
 };
 use sqler_ui::plugins::grant::GrantBook;
 use sqler_ui::plugins::{PluginProblem, PluginRow, PluginSnapshot, PluginsBackend, RowState};
@@ -77,6 +77,8 @@ pub(super) struct AppPlugins {
     prefs: Arc<Prefs>,
     engine: OnceLock<Result<Engine, String>>,
     cache: Arc<Mutex<Cache>>,
+    /// What the host lends to plugins (the databases and the write approver).
+    services: Services,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -119,7 +121,15 @@ impl AppPlugins {
             prefs,
             engine: OnceLock::new(),
             cache: Arc::new(Mutex::new(Cache::default())),
+            services: Services::new(),
         }
+    }
+
+    /// Sets the services the host gives plugins.
+    #[must_use]
+    pub(super) fn with_services(mut self, services: Services) -> Self {
+        self.services = services;
+        self
     }
 
     /// True while no runtime and no host exist (nothing was ever refreshed).
@@ -158,7 +168,7 @@ impl AppPlugins {
             settings: Arc::clone(&self.prefs) as Arc<dyn sqler_plugin_host::SettingsStore>,
             egress: Arc::new(NetEgressFactory::new()),
             limits: Limits::DEFAULT,
-            services: super::services(),
+            services: self.services.clone(),
         });
         Ok(Engine { runtime, host })
     }
