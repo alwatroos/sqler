@@ -116,8 +116,8 @@ plugins switched off, and never asks.
 ## Limits
 
 - The password from the keychain is put into the target by the connect pipeline, which knows
-  the URL schemes `postgres`, `postgresql`, `mysql` and `mariadb`. A driver with another
-  scheme gets the password only when the user wrote it into the target, and cannot use an SSH
+  the URL schemes `postgres`, `postgresql`, `mysql`, `mariadb`, `sqlserver` and `mssql`. A
+  driver with another scheme gets the password only when the user wrote it into the target, and cannot use an SSH
   tunnel.
 - A plugin driver is reached through the registry only, so the statement classifier and the
   production confirmation always run before a statement reaches it.
@@ -232,7 +232,17 @@ SQL login only, no query keys.
 statement of that session fails with "the SQL Server connection was closed by a cancel; connect
 again".
 
-**API gaps** (the dialect gap is fixed by ADR-0073; the others are open).
+**Keychain and tunnel.** The connect pipeline handles `sqlserver://` and `mssql://` (default port
+1433). It puts the keychain password into the target as percent-encoded userinfo, and a `?user=`
+in the stored target is moved into the userinfo, so the engine never sees a query key (a user
+already in the userinfo wins). Through an SSH tunnel the dial host is `127.0.0.1:<port>`,
+`server_name` is the original host, and `verify-full` checks that name. `verify-full` through a
+tunnel is refused on Windows before anything opens. TLS comes only from the connection's TLS
+setting; a `sslmode` key in the target is not lifted, and the engine refuses it by name. The host
+engine wrapper denies error text that contains the password. A real check through an SSH tunnel
+and against a real SQL Server instance is pending (maintainer).
+
+**API gaps** (the dialect gap is fixed by ADR-0073 and the keychain and tunnel gap, see above; the others are open).
 
 - The manifest `dialect = "tsql"` is read ([ADR-0073](../adr/0073-tsql-dialect-and-manifest-dialect.md)). Known
   names are `postgres`, `mysql`, `sqlite` and `tsql` (exact, case-sensitive); an unknown or absent name means no dialect
@@ -240,8 +250,6 @@ again".
   `[..]` and bound as `@P<k>`; a `select` runs on `prod` without asking and everything else asks.
 - A host-driver plugin cannot supply catalog SQL; the engine implements introspection itself from
   `sys.*` and browses only the current database.
-- The connect pipeline injects no keychain password and opens no SSH tunnel for `sqlserver://`: the
-  password must be in the target, and a tunnel cannot be used.
 - `net` scopes do not apply to host engines; the engine opens its own socket.
 - `rows_affected` is `None`: the statement stream does not expose the `DONE` counts.
 - Cancel ends the session (see above), unlike the other drivers.

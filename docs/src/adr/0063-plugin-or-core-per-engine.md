@@ -59,7 +59,7 @@ CI `db` job; `DuckDB` runs in the manually dispatched `duckdb` job only.
   - `rows_affected` is `None` (the stream does not expose the `DONE` counts), so **inline grid editing cannot be applied
     on SQL Server**: the apply path rolls back safely and writes nothing;
   - a host-driver plugin cannot supply catalog SQL (the engine reads `sys.*` itself and browses the current database);
-  - the connect pipeline injects no keychain password and opens no SSH tunnel for `sqlserver://`;
+  - (fixed by S5, see [ADR-0071](0071-sql-server-plugin.md) Amendment 1) the connect pipeline injects the keychain password and opens the SSH tunnel for `sqlserver://`;
   - `net` scopes do not apply to host engines (the engine opens its own socket);
   - cancel ends the session (the connection is closed, ADR-0071);
   - `money` arrives as a float and only the first result set of a batch is returned.
@@ -91,7 +91,7 @@ For either engine, in this order:
    wiring the manifest `dialect` key (G1) so the production gate classifies instead of always asking.
 2. `rows_affected` in the driver stream for SQL Server (inline editing); a read-only session guard (G3) for `DuckDB`.
 3. Core value types for the types that arrive as text today (G4, `DuckDB`), and decimal for `money` (SQL Server).
-4. The connect pipeline: keychain password injection and the SSH tunnel for `sqlserver://`.
+4. (Done by S5, ADR-0071 Amendment 1.) The connect pipeline: keychain password injection and the SSH tunnel for `sqlserver://`.
 5. A size answer: SQL Server fits (+1.08 MB macOS); `DuckDB` does not, so a promotion means a separate build or download,
    not the default binary.
 6. A real-server run by the owner for SQL Server.

@@ -19,13 +19,24 @@ build does not include").
 ## Targets
 
 ```text
-sqlserver://user:password@host:1433/database
+sqlserver://user@host:1433/database
 ```
 
 `mssql://` is accepted as an alias. The port defaults to 1433 and the database to the default of the
-login. User, password and database may be percent-encoded. A query part (`?key=value`) is refused.
-Windows authentication and Azure AD are not supported. Put the password in the target: the keychain
-password and SSH tunnels are not used for this driver yet.
+login. User, password and database may be percent-encoded. `?user=name` also works: SQLer moves it
+into the target before connecting. Any other query part (`?key=value`) is refused. Windows
+authentication and Azure AD are not supported.
+
+Keep the password out of the target: save it in the keychain with the connection, and SQLer adds it
+(percent-encoded) when it connects. A password typed into the target still works.
+
+## SSH tunnel
+
+A connection can use an SSH tunnel. The default port is 1433 when the target has none. SQLer dials
+`127.0.0.1` on the tunnel's local port, and the name used for the TLS check is the original host, so
+`verify-full` checks the certificate against that host. On Windows, `verify-full` through a tunnel
+is refused before anything opens. A real check through an SSH tunnel against a real SQL Server
+instance is still pending (maintainer).
 
 ## TLS
 

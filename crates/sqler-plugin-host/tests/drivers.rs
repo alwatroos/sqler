@@ -39,9 +39,13 @@ impl Driver for Fake {
 
     fn connect<'a>(
         &'a self,
-        _config: &'a ConnectionConfig,
+        config: &'a ConnectionConfig,
     ) -> BoxFuture<'a, Result<Box<dyn Session>, DriverError>> {
-        Box::pin(async {
+        Box::pin(async move {
+            // An engine whose error text echoes the password, with no marker word the scrub would know.
+            if config.target.starts_with("echo://") {
+                return Err(DriverError::Connection("rejected hunter2xyz".to_owned()));
+            }
             Ok(Box::new(FakeSession {
                 flag: CancelFlag::new(),
             }) as Box<dyn Session>)
@@ -324,6 +328,20 @@ fn a_host_driver_connects_streams_and_closes() {
     assert_eq!(rs.columns()[0].name, "n");
     assert_eq!(rs.len(), 3);
     block_on(&w.rt, session.close()).unwrap();
+}
+
+#[test]
+fn a_host_engine_error_that_echoes_the_password_is_denied() {
+    let w = world("host-echo", &[("p1", "fake-db", Kind::Host)]);
+    let mut cfg = config("fake-db");
+    cfg.target = "echo://u:hunter2xyz@h/db".to_owned();
+    let result = block_on(&w.rt, w.registry.connect(&cfg));
+    match result {
+        // The text is `crate::query::DENIED`, which is `pub(crate)`.
+        Err(DriverError::Connection(t)) => assert_eq!(t, "the database denied the request"),
+        Err(other) => panic!("expected Connection, got {other:?}"),
+        Ok(_) => panic!("expected an error, connected"),
+    }
 }
 
 #[test]
