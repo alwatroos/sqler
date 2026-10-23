@@ -24,6 +24,8 @@ driver-mysql = ["dep:sqler-driver-mysql"]
 # Plugin drivers (ADR-0061; off by default, ADR-0054): the wasmtime host with the Cranelift compiler and the HTTP
 # egress. Plugins come from `<config>/plugins` only; stored grants are honoured, nothing is ever prompted.
 plugins = ["dep:sqler-plugin-api", "dep:sqler-plugin-host", "sqler-plugin-host/cl", "sqler-plugin-host/net"]
+# SQL Server (ADR-0071; off by default): the native engine behind the `sqlserver` plugin (`driver.host:mssql`).
+driver-mssql = ["plugins", "dep:sqler-driver-mssql"]
 
 [dependencies]
 sqler-driver-api.workspace = true
@@ -37,6 +39,7 @@ sqler-config.workspace = true
 sqler-driver-sqlite = { workspace = true, optional = true }
 sqler-driver-postgres = { workspace = true, optional = true }
 sqler-driver-mysql = { workspace = true, optional = true }
+sqler-driver-mssql = { workspace = true, optional = true }
 sqler-plugin-api = { workspace = true, optional = true }
 sqler-plugin-host = { workspace = true, optional = true }
 anyhow.workspace = true

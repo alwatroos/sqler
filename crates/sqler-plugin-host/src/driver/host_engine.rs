@@ -13,10 +13,11 @@ use sqler_driver_api::sqler_core::{
     ConnectionConfig, DbObject, Listing, ObjectKind, ObjectPath, Query, Table,
 };
 use sqler_driver_api::{
-    BoxFuture, CancelHandle, Driver, DriverError, Introspect, QueryStream, Session,
+    BoxFuture, CancelHandle, Driver, DriverError, Introspect, QueryEvent, QueryStream, Session,
 };
 
 use super::source::Gate;
+use crate::query::query_text;
 
 /// The driver the registry gets for a host-engine plugin driver.
 pub(super) struct HostEngineDriver {
@@ -41,7 +42,7 @@ impl Driver for HostEngineDriver {
     ) -> BoxFuture<'a, Result<Box<dyn Session>, DriverError>> {
         Box::pin(async move {
             self.gate.check()?;
-            let mut inner = self.engine.connect(config).await?;
+            let mut inner = self.engine.connect(config).await.map_err(scrub)?;
             let supported = inner.introspection().map(|i| {
                 ObjectKind::ALL
                     .into_iter()
@@ -76,7 +77,8 @@ impl Session for GatedSession {
     ) -> BoxFuture<'s, Result<Box<dyn QueryStream + 's>, DriverError>> {
         Box::pin(async move {
             self.gate.check()?;
-            self.inner.execute(query).await
+            let stream = self.inner.execute(query).await.map_err(scrub)?;
+            Ok(Box::new(ScrubStream(stream)) as Box<dyn QueryStream + 's>)
         })
     }
 
@@ -89,7 +91,27 @@ impl Session for GatedSession {
     }
 
     fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), DriverError>> {
-        self.inner.close()
+        let close = self.inner.close();
+        Box::pin(async move { close.await.map_err(scrub) })
+    }
+}
+
+/// The native engine's error text as the UI may see it: connection and query text pass the same scrub as the text
+/// of a guest driver (a login failure or a denial becomes the fixed text, accounts, hosts and paths are replaced).
+fn scrub(e: DriverError) -> DriverError {
+    match e {
+        DriverError::Query(t) => DriverError::Query(query_text(&t)),
+        DriverError::Connection(t) => DriverError::Connection(query_text(&t)),
+        other => other,
+    }
+}
+
+/// A result stream whose errors pass [`scrub`].
+struct ScrubStream<'s>(Box<dyn QueryStream + 's>);
+
+impl QueryStream for ScrubStream<'_> {
+    fn next_event(&mut self) -> BoxFuture<'_, Option<Result<QueryEvent, DriverError>>> {
+        Box::pin(async move { self.0.next_event().await.map(|r| r.map_err(scrub)) })
     }
 }
 
@@ -108,7 +130,7 @@ impl Introspect for GatedSession {
         Box::pin(async move {
             self.gate.check()?;
             match self.inner.introspection() {
-                Some(i) => i.list(parent, kind).await,
+                Some(i) => i.list(parent, kind).await.map_err(scrub),
                 None => Ok(Listing::Unsupported),
             }
         })
@@ -121,7 +143,7 @@ impl Introspect for GatedSession {
         Box::pin(async move {
             self.gate.check()?;
             match self.inner.introspection() {
-                Some(i) => i.table(table).await,
+                Some(i) => i.table(table).await.map_err(scrub),
                 None => Ok(None),
             }
         })
@@ -134,9 +156,46 @@ impl Introspect for GatedSession {
         Box::pin(async move {
             self.gate.check()?;
             match self.inner.introspection() {
-                Some(i) => i.definition(object).await,
+                Some(i) => i.definition(object).await.map_err(scrub),
                 None => Ok(None),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_errors_are_scrubbed() {
+        assert!(matches!(
+            scrub(DriverError::Connection(
+                "Login failed for user 'sa'. (error 18456)".to_owned()
+            )),
+            DriverError::Connection(t) if t == crate::query::DENIED
+        ));
+        assert!(matches!(
+            scrub(DriverError::Query(
+                "The SELECT permission was denied on the object 'orders', database 'sales', schema 'dbo'. (error 229)"
+                    .to_owned()
+            )),
+            DriverError::Query(t) if t == crate::query::DENIED
+        ));
+        assert!(matches!(
+            scrub(DriverError::Query(
+                "The server principal \"app\" is not able to access the database \"sales\" under the current security context."
+                    .to_owned()
+            )),
+            DriverError::Query(t) if !t.contains("\"app\"")
+        ));
+        assert!(matches!(
+            scrub(DriverError::Query("Invalid object name 't'. (error 208)".to_owned())),
+            DriverError::Query(t) if t.contains("Invalid object name")
+        ));
+        assert!(matches!(
+            scrub(DriverError::Cancelled),
+            DriverError::Cancelled
+        ));
     }
 }
