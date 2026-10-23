@@ -205,8 +205,10 @@ Summary.
   "Keychain: ..." notice and the connection reports a missing secret until you edit it.
 - **Secrets.** Typed passwords are held in a redacting type (`Debug` prints `<redacted>`), are never put in a notice, and
   are cleared on apply. An empty field means skip.
-- **SQL Server password (ADR-0071 amendment 1).** After `plan`, the wizard adds a `DbPassword` secret request to every
-  added `sqlserver` entry that lacks one, and drops the stale note "SQL Server does not use a keychain password yet" (the
-  importer is not changed). The password goes to the keychain and is injected into `sqlserver://` targets at connect
+- **SQL Server password (ADR-0071 amendment 1).** The wizard adds nothing of its own: every importer (pgAdmin, Azure
+  Data Studio and, since the fix of the Beekeeper importer in this change, Beekeeper) already emits a `DbPassword`
+  secret request for its `sqlserver` entries, and the stale note "SQL Server does not use a keychain password yet" is
+  gone. The same fix writes the Beekeeper MySQL and SQL Server user as `?user=` (the connection store rejects user
+  info in a target). The password goes to the keychain and is injected into `sqlserver://` targets at connect
   time. Without `sqlserver` in the driver list the entry is skipped with "not available in this build"; the plugin
   manager registers the driver after start, so reopen the wizard if a file was read too early.

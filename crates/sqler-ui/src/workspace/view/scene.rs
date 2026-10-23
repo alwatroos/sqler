@@ -1171,7 +1171,7 @@ impl WorkspaceView {
             ),
         ];
         // The drivers a full build offers, so the entries of the fixture files can be added.
-        let drivers = ["sqlite", "postgres", "mariadb", "sqlserver"]
+        let drivers = ["sqlite", "postgres", "mysql", "sqlserver"]
             .into_iter()
             .filter_map(|id| DriverId::new(id).ok())
             .collect();
