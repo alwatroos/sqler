@@ -68,5 +68,6 @@ consequences. SQLer uses the MADR format.
 | [0059](0059-plugin-capability-grants.md) | Plugin capability grants: `plugin-grants.toml`, all-or-nothing approval, re-prompt rules, damaged-file lock | accepted |
 | [0060](0060-plugins-in-the-workbench.md) | Plugins in the workbench: activity item and side view, command ids, `PluginsBackend` trait, typed-id keyboard approval, grants re-read, own runtime, explicit dev paths, data folder, `plugins` feature (off by default) and the size rule | accepted |
 | [0068](0068-ci-pipeline-speed.md) | CI pipeline speed: what runs where, path gating with always-reporting names, caches saved on `main` only, Windows PR subset, `CI result` aggregate, rollback | accepted |
+| [0069](0069-binary-size-budget-70-mb.md) | Binary size budget raised from 60 MB to 70 MB (owner decision); the plugin host stays off by default | accepted |
 
 ADR number 0039 is reserved for M5.

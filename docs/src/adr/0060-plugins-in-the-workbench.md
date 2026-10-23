@@ -1,6 +1,7 @@
 # ADR-0060: Plugins in the workbench
 
 - Status: accepted
+- Superseded in part by [ADR-0069](0069-binary-size-budget-70-mb.md) (2026-10-23): the size budget is now 70 MB (73,400,320 bytes), so the limit of the rule below is now 72,351,744 bytes (73,400,320 minus 1 MiB). The `plugins` feature stays off by default regardless.
 - Date: 2026-10-23
 - Deciders: SQLer maintainers
 
