@@ -1,0 +1,14 @@
+# The host tests (crates/sqler-plugin-host/tests/guests/completion.rs) drive every statement text the guest knows.
+[plugin]
+id = "completer"
+name = "Completer"
+version = "0.1.0"
+api = "0.1.0"
+description = "Test fixture: a completion provider for the sqlite engine."
+capabilities = []
+
+[entry]
+component = "completer.wasm"
+
+[completion]
+drivers = ["sqlite"]

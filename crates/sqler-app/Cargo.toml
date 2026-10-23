@@ -60,7 +60,7 @@ sqler-plugin-host = { workspace = true, optional = true }
 sqler-catalog = { workspace = true, optional = true }
 sqler-ai-tools = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 
 [dev-dependencies]
 sqler-sql.workspace = true

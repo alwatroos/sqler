@@ -162,6 +162,11 @@ impl EditorViews {
                 shared.ctx = ctx.as_ref().map(|(_, catalog, dialect)| provider::Context {
                     catalog: catalog.clone(),
                     dialect: *dialect,
+                    plugins: ws.plugins().backend().cloned(),
+                    driver: ws
+                        .tabs()
+                        .get(*tab)
+                        .map(|t| t.connection().driver.as_str().to_owned()),
                 });
                 let (preload, refreshed) = match &ctx {
                     Some(_) if changed => (shared.intel.fresh(bootstrap_keys()), false),

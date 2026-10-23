@@ -16,6 +16,7 @@
 
 mod hover;
 mod keys;
+mod plugin;
 mod popup;
 mod schema;
 pub mod synthetic;
@@ -25,6 +26,9 @@ use std::time::Duration;
 
 pub use hover::{code_name, hover_markdown};
 pub use keys::{bootstrap_keys, keys_for, load, prefetch_keys, prefetch_keys_skipping};
+pub use plugin::{
+    PLUGIN_POPUP_LIMIT, PluginAnswers, PluginPopupItem, merge_plugin_items, plugin_request,
+};
 pub use popup::{
     Popup, PopupItem, complete_popup, flatten_snippet, highlight_ranges, is_completion_trigger,
 };

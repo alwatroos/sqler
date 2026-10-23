@@ -11,6 +11,7 @@ members = [
     "fixtures/driver",
     "fixtures/exporter",
     "fixtures/ai-probe",
+    "fixtures/completer",
 ]
 
 [workspace.package]
