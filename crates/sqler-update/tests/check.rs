@@ -83,6 +83,23 @@ async fn same_older_and_prerelease_are_up_to_date() {
 }
 
 #[tokio::test]
+async fn build_metadata_does_not_make_an_update() {
+    let outcome = check_manifest(&manifest("1.0.0+2")).await.unwrap();
+    assert_eq!(
+        outcome,
+        CheckOutcome::UpToDate {
+            latest: Version::parse("1.0.0+2").unwrap()
+        }
+    );
+    let CheckOutcome::Available(offer) = check_manifest(&manifest("1.0.1+3")).await.unwrap() else {
+        panic!("expected Available");
+    };
+    assert_eq!(offer.version, Version::parse("1.0.1+3").unwrap());
+    let outcome = check_manifest(&manifest("1.0.1")).await.unwrap();
+    assert!(matches!(outcome, CheckOutcome::Available(_)));
+}
+
+#[tokio::test]
 async fn flipped_payload_byte_is_a_bad_signature() {
     let mut env: serde_json::Value =
         serde_json::from_slice(&signed_envelope(&manifest("1.1.0"), &TEST_ONLY_SEED_A)).unwrap();
@@ -142,7 +159,7 @@ async fn truncated_bodies_are_errors() {
 async fn silent_server_times_out() {
     let server = MockServer::start(vec![Route::new(FEED, Reply::stall())]).await;
     let c = client(&server)
-        .with_timeouts(Duration::from_secs(5), Duration::from_millis(200))
+        .with_timeouts(Duration::from_secs(5), Duration::from_millis(50))
         .unwrap();
     assert_eq!(c.check().await, Err(UpdateError::Timeout));
 }

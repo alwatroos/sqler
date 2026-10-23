@@ -175,7 +175,12 @@ impl UpdateClient {
         let manifest = verify_envelope(&body, &self.keys)?;
         let latest = semver::Version::parse(&manifest.version)
             .map_err(|_| UpdateError::Malformed("version"))?;
-        if latest > self.current && latest.pre.is_empty() {
+        // Build metadata does not take part in precedence for the purpose of an offer.
+        let mut latest_cmp = latest.clone();
+        latest_cmp.build = semver::BuildMetadata::EMPTY;
+        let mut current_cmp = self.current.clone();
+        current_cmp.build = semver::BuildMetadata::EMPTY;
+        if latest_cmp > current_cmp && latest.pre.is_empty() {
             let download = current_target().and_then(|t| manifest.platforms.get(t).cloned());
             Ok(CheckOutcome::Available(UpdateOffer {
                 version: latest,

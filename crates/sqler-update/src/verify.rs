@@ -157,6 +157,29 @@ mod tests {
     }
 
     #[test]
+    fn signing_context_bytes_are_pinned() {
+        assert_eq!(SIGNING_CONTEXT, b"sqler-update-manifest-v1\0");
+    }
+
+    #[test]
+    fn signature_over_the_bare_payload_is_rejected() {
+        let raw = public(&pair());
+        let key = TrustedKey::from_base64(&STANDARD.encode(raw)).unwrap();
+        let sig = pair().sign(PAYLOAD.as_bytes());
+        let bytes = serde_json::to_vec(&Envelope {
+            format: 1,
+            key_id: key.id().to_owned(),
+            signature: STANDARD.encode(sig.as_ref()),
+            payload: STANDARD.encode(PAYLOAD),
+        })
+        .unwrap();
+        assert_eq!(
+            verify_envelope(&bytes, &[key]),
+            Err(UpdateError::BadSignature)
+        );
+    }
+
+    #[test]
     fn base64_key_parsing() {
         let raw = public(&pair());
         let text = STANDARD.encode(raw);
