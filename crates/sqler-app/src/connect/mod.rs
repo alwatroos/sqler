@@ -9,7 +9,8 @@
 //! Order of one attempt: resolve the secrets (keychain reads on a blocking thread), build the
 //! `ConnectionConfig`, open the tunnel, point the target at its local port, put the database
 //! password into the in-memory target and connect through the registry. The password never
-//! reaches a stored or printed target.
+//! reaches a stored or printed target. The URL schemes are those of `target::default_port`
+//! (PostgreSQL, MySQL and MariaDB, SQL Server).
 //!
 //! Through a tunnel the driver dials `127.0.0.1:<port>`, so the original host goes into the
 //! config as `TlsConfig::server_name` and the driver verifies the certificate against it

@@ -112,9 +112,39 @@ A foreign `DuckDB` entry is skipped with "DuckDB is not in SQLer 1.0" (ADR-0070)
 engine can be added is decided by the caller's driver list, not by the crate: an engine that is not in the list is
 skipped as "not available in this build".
 
+### Amendment: the Beekeeper Studio source (R8)
+
+Beekeeper's own store is a live SQLite database (`app.db`) that also holds the passwords, so it is not read: the
+source imports the JSON file of **File > Export Connections**, which the user saves where they choose (the default
+locations are guesses: `Downloads` and `Documents`; an explicit path is the primary input). The format is assumed from
+Beekeeper's public source and has not been checked against a real export yet (pending, maintainer). The file is either
+a JSON array of connections or an object with a `connections` array and an optional folder list
+(`connection_folders`); unknown top-level keys become notices. Beekeeper writes passwords in plain text; the importer
+never looks up `password`, `sshPassword`, `sshKeyfilePassword` or any URL field, and does not list their names.
+
+| Beekeeper `connectionType` | Result |
+| -------------------------- | ------ |
+| `postgresql` | driver `postgres`, target `postgres://host:port/db?user=...` (port 5432, database `postgres`) |
+| `mysql`, `mariadb` | driver `mysql`, target `mysql://user@host:port/db` (port 3306) |
+| `sqlite` | driver `sqlite`, target is the absolute file path of `defaultDatabase` (or `databaseFile`) |
+| `sqlserver` | driver `sqlserver`, target `sqlserver://user@host:port/db` (port 1433), consistent with ADR-0071 |
+| `duckdb` | skipped: "DuckDB is not in SQLer 1.0" (ADR-0070) |
+| `cockroachdb`, `redshift`, `oracle`, `mongodb`, ... and unknown types | skipped as unsupported, with the engine name for the known ones |
+
+Other fields: `ssl` false gives TLS `disable`; `ssl` true gives `verify-full` (`sslRejectUnauthorized` unset or true)
+or `require` (false), with `sslCaFile`, `sslCertFile` and `sslKeyFile` checked by `foreign_path` (a lone certificate or
+key is dropped; SQL Server client certificates are dropped with a note). `sshEnabled` gives an SSH tunnel with
+`sshMode` `userpass` (password), `keyfile` (`sshKeyfile`) or `agent`; a bastion host, a socket path and an unusable
+key path are not mapped and skip the entry. `labelColor` names map to a fixed palette, `#rrggbb` is kept.
+Folders become the group path (parents followed with a cycle and depth guard). Secrets to enter: the database password
+(not for SQLite) and the SSH password or key passphrase. SQL Server has no keychain password in 1.0 (ADR-0071), so
+that entry carries a note instead; R9 will push the `DbPassword` for `sqlserver` entries after ADR-0071 Amendment 1
+(S5) lands. A SQL Server entry is a normal import; the planner marks it "not available in this
+build" only when the caller's driver list lacks `sqlserver`. The crate needs no SQLite access and no new dependency.
+
 ### Out of scope
 
-The import wizard and its dialogs (R9), Azure Data Studio (R7), Beekeeper Studio (R8) and reading the `pgadmin4.db`
+The import wizard and its dialogs (R9) and reading the `pgadmin4.db`
 database of pgAdmin. The user guide page is R10.
 
 ## Consequences
@@ -146,7 +176,9 @@ a valid empty report. Default locations: `<user data>/User/settings.json` with `
 | `options.server` | `host`, `host,port`, `tcp:host,port`, `[v6],port`, `.` and `(local)` (localhost); `host\instance` is skipped (named instances need the SQL Browser) |
 | `options.authenticationType` | `SqlLogin` (or none, with a user) is imported; `Integrated` and the Azure AD types (`AzureMFA` and others) are skipped with a reason (SQL login only, ADR-0071); the user is required |
 | `options.encrypt`, `trustServerCertificate` (SQL Server only) | `true`/`Mandatory`: `verify-full`, or `require` when the certificate is trusted; `Strict`: `verify-full`; `false`/`Optional`: `prefer` (note); not set: no TLS profile (driver default `prefer`); unknown value: ignored with a note. `hostNameInCertificate` is listed as unsupported |
-| `options.password` | never read; a non-empty value only adds the note "a stored password was not imported". A `DbPassword` secret is offered for the user to enter |
+| `options.password` | never read; a non-empty value only adds the note "a stored password was not imported". A `DbPassword` secret is offered for the user to enter; it goes to the keychain and is injected into `sqlserver://` targets at connect time (ADR-0071 amendment 1) |
+| `options.database` | `<default>` or empty means no database (SQL Server: the login's default; PostgreSQL: `postgres`) |
+| option names that look like a secret (`password`, `secret`, `token`, `apiKey`, `pwd`, ...) | not listed, not even by name |
 | `connectionName` | the name (else the `server` text, else `Azure Data Studio connection N`) |
 | `groupId` and the group tree | the group path from `parentId` links; the invisible `ROOT` group is not a level; the nearest group `color` (`#rrggbb`) becomes the connection colour (the report has no group colour); an unknown group id imports at the top with a note; a cycle imports at the top with a note; deeper than 8 levels is folded into the 8th |
 | every other key | listed by name (`options.<key>` for options), never by value |

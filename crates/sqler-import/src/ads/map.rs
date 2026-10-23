@@ -295,16 +295,7 @@ pub(super) fn map_entry(
         None => (Vec::new(), None),
     };
 
-    let mut unsupported: Vec<String> = top
-        .keys()
-        .filter(|k| !TOP_MAPPED.contains(&k.as_str()))
-        .map(|k| safe_name(k))
-        .collect();
-    unsupported.extend(
-        opts.keys()
-            .filter(|k| !OPTION_MAPPED.contains(&k.as_str()) && !provider_option(provider, k))
-            .map(|k| format!("options.{}", safe_name(k))),
-    );
+    let unsupported = unsupported_names(top, opts, provider);
     if matches!(opts.get("password"), Some(Value::String(s)) if !s.is_empty()) {
         ctx.notes
             .push("a stored password was not imported".to_owned());
@@ -333,6 +324,9 @@ pub(super) fn map_entry(
             Err(reason) => (EntryOutcome::Skipped(reason), Vec::new()),
         },
     };
+    // `server` is read for the name and again for the host: keep each note once.
+    let mut seen = std::collections::HashSet::new();
+    ctx.notes.retain(|n| seen.insert(n.clone()));
     SourceEntry {
         index,
         name,
@@ -342,6 +336,49 @@ pub(super) fn map_entry(
         notes: ctx.notes,
         secrets,
     }
+}
+
+/// Names of the keys that are not mapped, never secret-looking ones, never values.
+fn unsupported_names(
+    top: &Map<String, Value>,
+    opts: &Map<String, Value>,
+    provider: Option<Provider>,
+) -> Vec<String> {
+    let mut unsupported: Vec<String> = top
+        .keys()
+        .filter(|k| !TOP_MAPPED.contains(&k.as_str()) && !is_secret_name(k))
+        .map(|k| safe_name(k))
+        .collect();
+    unsupported.extend(
+        opts.keys()
+            .filter(|k| {
+                !OPTION_MAPPED.contains(&k.as_str())
+                    && !provider_option(provider, k)
+                    && !is_secret_name(k)
+            })
+            .map(|k| format!("options.{}", safe_name(k))),
+    );
+    unsupported
+}
+
+/// Keys whose name says they hold a secret; they are not even listed as unsupported.
+fn is_secret_name(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    [
+        "password",
+        "passphrase",
+        "pwd",
+        "secret",
+        "token",
+        "apikey",
+        "api_key",
+        "accesskey",
+        "privatekey",
+        "sslkey",
+        "credential",
+    ]
+    .iter()
+    .any(|s| k.contains(s))
 }
 
 /// Option keys that only some providers map.
@@ -386,7 +423,7 @@ fn build(
     let db = ctx
         .text("database")
         .map(|d| d.trim().to_owned())
-        .filter(|d| !d.is_empty())
+        .filter(|d| !d.is_empty() && !d.eq_ignore_ascii_case("<default>"))
         .unwrap_or_else(|| default_db.to_owned());
 
     let mut target = format!("{driver_id}://{host}:{port}");

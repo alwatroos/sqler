@@ -15,13 +15,15 @@
 //! [`MAX_ENTRIES`], [`MAX_FIELD_CHARS`] and [`MAX_GROUP_DEPTH`]; paths found in a file are checked
 //! by [`foreign_path`] and never opened.
 //!
-//! `pgAdmin` `servers.json` is the first source and the Azure Data Studio `settings.json` the
-//! second. A new source is one module plus one line in [`sources`].
+//! `pgAdmin` `servers.json` is the first source; the `Beekeeper Studio` connection export and the
+//! Azure Data Studio `settings.json` are others. A new source is one module plus one line in
+//! [`sources`].
 
 #![forbid(unsafe_code)]
 
 mod ads;
 mod apply;
+mod beekeeper;
 mod error;
 mod model;
 mod path;
@@ -32,6 +34,7 @@ mod source;
 
 pub use ads::AzureDataStudio;
 pub use apply::apply;
+pub use beekeeper::Beekeeper;
 pub use error::ImportError;
 pub use model::{
     ApplyReport, EntryOutcome, ImportOptions, ImportPlan, PlanAction, PlanItem, ProvidedSecret,
@@ -55,7 +58,11 @@ pub const MAX_GROUP_DEPTH: usize = 8;
 /// Every source, one line each.
 #[must_use]
 pub fn sources() -> Vec<Box<dyn Source>> {
-    vec![Box::new(pgadmin::PgAdmin), Box::new(ads::AzureDataStudio)]
+    vec![
+        Box::new(pgadmin::PgAdmin),
+        Box::new(beekeeper::Beekeeper),
+        Box::new(ads::AzureDataStudio),
+    ]
 }
 
 /// The source with this id.

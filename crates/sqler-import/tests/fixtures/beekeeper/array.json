@@ -1,0 +1,10 @@
+[
+  {
+    "connectionType": "mysql",
+    "name": "Plain",
+    "host": "mysql.example.test",
+    "username": "alice",
+    "connectionFolder": { "name": "Team" }
+  },
+  { "connectionType": "postgresql", "name": "Plain", "host": "mysql.example.test", "username": "alice" }
+]

@@ -422,6 +422,51 @@ fn hostile_values_are_skipped_or_encoded() {
 }
 
 #[test]
+fn default_database_marker_means_no_database() {
+    for db in ["<default>", "", "  "] {
+        let e = one(
+            &format!(r#"{{"server":"h.example.test","user":"u","database":"{db}"}}"#),
+            "MSSQL",
+        );
+        assert_eq!(
+            spec_of(&e).target,
+            "sqlserver://h.example.test:1433?user=u",
+            "{db:?}"
+        );
+    }
+    let e = one(
+        r#"{"server":"h.example.test","user":"u","database":"<default>"}"#,
+        "PGSQL",
+    );
+    assert_eq!(
+        spec_of(&e).target,
+        "postgres://h.example.test:5432/postgres?user=u"
+    );
+}
+
+#[test]
+fn too_long_server_is_noted_once() {
+    let long = "x".repeat(5_000);
+    let e = one(&format!(r#"{{"server":"{long}","user":"u"}}"#), "MSSQL");
+    let n = e.notes.iter().filter(|n| n.contains("too long")).count();
+    assert_eq!(n, 1, "{:?}", e.notes);
+}
+
+#[test]
+fn secret_like_option_names_are_not_listed() {
+    let e = one(
+        r#"{"server":"h.example.test","user":"u","accessToken":"t","clientSecret":"s","sslKey":"k","pwd":"p","futureOption":1}"#,
+        "MSSQL",
+    );
+    assert_eq!(e.unsupported, vec!["options.\"futureOption\"".to_owned()]);
+    let text = format!("{e:?}");
+    for s in ["accessToken", "clientSecret", "sslKey", "pwd"] {
+        assert!(!text.contains(s), "{s}");
+    }
+    assert!(e.secrets.contains(&ProfileSecretKind::DbPassword));
+}
+
+#[test]
 fn names_and_long_fields_are_cleaned() {
     let e = one(
         r#"{"connectionName":"  a\u0007b\nc  ","server":"h.example.test","user":"u"}"#,

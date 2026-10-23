@@ -541,6 +541,192 @@ async fn key_file_auth_carries_the_passphrase() {
     );
 }
 
+#[tokio::test]
+async fn sql_server_keychain_password_is_injected_encoded_and_user_moves() {
+    let rig = Rig::ok();
+    let r = reference(SecretKind::DatabasePassword);
+    rig.store.set(&r, &Secret::new(PASSWORD)).unwrap();
+    let spec = spec("sqlserver://db.internal/sales?user=sa").with_password_in_keychain(true);
+    connect(
+        &rig,
+        request(spec, SecretSource::Keychain(r), SecretSource::None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        rig.targets(),
+        [format!("sqlserver://sa:{ENCODED}@db.internal/sales")]
+    );
+    // A typed value and the `mssql://` alias take the same path.
+    connect(
+        &rig,
+        request(
+            spec_of("mssql://db.internal/sales?user=sa"),
+            value(PASSWORD),
+            SecretSource::None,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        rig.targets()[1],
+        format!("mssql://sa:{ENCODED}@db.internal/sales")
+    );
+}
+
+fn spec_of(target: &str) -> ConnectionSpec {
+    spec(target)
+}
+
+#[tokio::test]
+async fn sql_server_without_a_password_moves_the_user_and_leaves_no_query() {
+    let rig = Rig::ok();
+    connect(
+        &rig,
+        request(
+            spec("sqlserver://db/sales?user=sa"),
+            SecretSource::None,
+            SecretSource::None,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rig.targets(), ["sqlserver://sa@db/sales"]);
+}
+
+#[tokio::test]
+async fn sql_server_tunnel_points_the_target_at_the_local_port() {
+    let rig = Rig::ok();
+    let spec = spec("sqlserver://sa@db.internal/sales").with_ssh(ssh(SshAuth::Agent));
+    connect(&rig, request(spec, value(PASSWORD), SecretSource::None))
+        .await
+        .unwrap();
+    assert_eq!(
+        rig.targets(),
+        [format!("sqlserver://sa:{ENCODED}@127.0.0.1:40001/sales")]
+    );
+    {
+        let opened = rig.tunnels.opened.lock().unwrap();
+        let config = &opened[0].0;
+        assert_eq!(
+            (config.target_host.as_str(), config.target_port),
+            ("db.internal", 1433)
+        );
+    }
+    let spec = self::spec("sqlserver://sa@db.internal:14330/sales").with_ssh(ssh(SshAuth::Agent));
+    connect(&rig, request(spec, SecretSource::None, SecretSource::None))
+        .await
+        .unwrap();
+    assert_eq!(rig.targets()[1], "sqlserver://sa@127.0.0.1:40001/sales");
+    assert_eq!(rig.tunnels.opened.lock().unwrap()[1].0.target_port, 14330);
+}
+
+#[tokio::test]
+async fn sql_server_verify_full_through_a_tunnel_names_the_original_host() {
+    let rig = Rig::ok();
+    let spec = spec("sqlserver://db.internal/sales?user=sa")
+        .with_tls(TlsProfile::new(ProfileTlsMode::VerifyFull))
+        .with_ssh(ssh(SshAuth::Agent));
+    let result = connect(&rig, request(spec, SecretSource::None, SecretSource::None)).await;
+    if cfg!(unix) {
+        result.unwrap();
+        let tls = tls_of(&rig).remove(0).unwrap();
+        assert_eq!(tls.mode, TlsMode::VerifyFull);
+        assert_eq!(tls.server_name.as_deref(), Some("db.internal"));
+    } else {
+        let failure = result.err().unwrap();
+        assert!(
+            matches!(&failure, ConnectFailure::TlsHostnameThroughTunnel { host } if host == "db.internal"),
+            "{failure:?}"
+        );
+        assert_eq!(rig.tunnels.opened(), 0);
+    }
+}
+
+#[tokio::test]
+async fn sql_server_url_tls_keys_are_not_lifted_and_not_refused() {
+    let rig = Rig::ok();
+    let spec = spec("sqlserver://db.internal/sales?user=sa&sslmode=verify-full")
+        .with_ssh(ssh(SshAuth::Agent));
+    connect(&rig, request(spec, SecretSource::None, SecretSource::None))
+        .await
+        .unwrap();
+    assert_eq!(tls_of(&rig), [None]);
+    // The key passes through; the engine rejects it by name.
+    assert_eq!(
+        rig.targets(),
+        ["sqlserver://sa@127.0.0.1:40001/sales?sslmode=verify-full"]
+    );
+}
+
+#[tokio::test]
+async fn sql_server_require_through_a_tunnel_keeps_the_original_host_as_name() {
+    let rig = Rig::ok();
+    let spec = spec("sqlserver://db.internal/sales?user=sa")
+        .with_tls(TlsProfile::new(ProfileTlsMode::Require))
+        .with_ssh(ssh(SshAuth::Agent));
+    connect(&rig, request(spec, SecretSource::None, SecretSource::None))
+        .await
+        .unwrap();
+    let tls = tls_of(&rig).remove(0).unwrap();
+    assert_eq!(tls.mode, TlsMode::Require);
+    assert_eq!(tls.server_name.as_deref(), Some("db.internal"));
+}
+
+#[tokio::test]
+async fn sql_server_secrets_stay_out_of_failures_specs_and_debug_output() {
+    let rig = Rig::ok();
+    let failure = fail(
+        &rig,
+        request(
+            spec("sqlserver://db/sales"),
+            value(PASSWORD),
+            SecretSource::None,
+        ),
+    )
+    .await;
+    assert!(matches!(failure, ConnectFailure::Target(_)));
+    for text in [failure.to_string(), format!("{failure:?}")] {
+        assert!(
+            !text.contains(PASSWORD) && !text.contains(ENCODED),
+            "{text}"
+        );
+    }
+
+    let failing = Rig::new(true, false, Some(PathBuf::from("known_hosts")));
+    let failure = fail(
+        &failing,
+        request(
+            spec("sqlserver://db/sales?user=sa"),
+            value(PASSWORD),
+            SecretSource::None,
+        ),
+    )
+    .await;
+    for text in [failure.to_string(), format!("{failure:?}")] {
+        assert!(
+            !text.contains(PASSWORD) && !text.contains(ENCODED),
+            "{text}"
+        );
+    }
+
+    let rig = Rig::ok();
+    let stored = spec("sqlserver://db/sales?user=sa");
+    connect(
+        &rig,
+        request(stored.clone(), value(PASSWORD), SecretSource::None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stored.target, "sqlserver://db/sales?user=sa");
+    let config = rig.configs.lock().unwrap_or_else(PoisonError::into_inner)[0].clone();
+    let debug = format!("{config:?}");
+    assert!(
+        !debug.contains(PASSWORD) && !debug.contains(ENCODED),
+        "{debug}"
+    );
+}
+
 fn verify_full_specs() -> Vec<ConnectionSpec> {
     let explicit = spec("postgres://db.internal/app?user=u")
         .with_tls(TlsProfile::new(ProfileTlsMode::VerifyFull))
