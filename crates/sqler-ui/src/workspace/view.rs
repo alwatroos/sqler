@@ -604,10 +604,12 @@ impl WorkspaceView {
         if event.is_held
             && (self.ws.drop_dialog().is_some()
                 || (self.ws.import_wizard().is_some()
-                    && !self
-                        .inputs
-                        .as_ref()
-                        .is_some_and(|inputs| inputs.any_focused(window, cx)))
+                    && crate::connections::import::ImportWizard::swallows_held_key(
+                        &event.keystroke.key,
+                        self.inputs
+                            .as_ref()
+                            .is_some_and(|inputs| inputs.any_focused(window, cx)),
+                    ))
                 || self.edit_overlay_open()
                 || self.plugin_dialog_open()
                 || self.plugin_write_open())

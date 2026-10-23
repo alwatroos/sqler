@@ -859,6 +859,40 @@ mod tests {
     }
 
     #[test]
+    fn a_held_enter_from_preview_never_applies_on_the_secrets_step() {
+        let mut w = ws();
+        let request = open(&mut w);
+        w.import_discovered(request, None, found("beekeeper"));
+        run(&mut w, "connection-import:cursor-down");
+        let Effect::Import(ImportEffect::ReadFile { request, .. }) =
+            run(&mut w, "connection-import:next")
+        else {
+            panic!("expected ReadFile");
+        };
+        let report = sqler_import::source("beekeeper")
+            .unwrap()
+            .parse(BEEKEEPER.as_bytes());
+        w.import_file_read(request, report);
+        assert_eq!(wizard(&w).step(), ImportStep::Preview);
+        // The fresh key-down moves to Secrets, where the first password field takes the focus;
+        // every auto-repeat after it is dropped by the view, typing or not.
+        let id = wizard(&w)
+            .key_command("enter", false, false, false)
+            .expect("enter is a command");
+        assert!(matches!(run(&mut w, id), Effect::None));
+        assert_eq!(wizard(&w).step(), ImportStep::Secrets);
+        for typing in [false, true] {
+            for _ in 0..5 {
+                if !ImportWizard::swallows_held_key("enter", typing) {
+                    run(&mut w, "connection-import:apply");
+                }
+            }
+        }
+        assert_eq!(wizard(&w).step(), ImportStep::Secrets);
+        assert!(wizard(&w).summary().is_none());
+    }
+
+    #[test]
     fn the_keyboard_alone_runs_the_whole_wizard() {
         let mut w = ws();
         let request = open(&mut w);

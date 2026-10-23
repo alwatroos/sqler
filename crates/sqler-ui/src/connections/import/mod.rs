@@ -267,7 +267,6 @@ pub fn error_text(error: &ImportError, label: &str) -> String {
 }
 
 /// The import wizard.
-#[derive(Debug)]
 pub struct ImportWizard {
     step: ImportStep,
     scanning: bool,
@@ -289,7 +288,32 @@ pub struct ImportWizard {
     summary: Option<ImportSummary>,
 }
 
+impl std::fmt::Debug for ImportWizard {
+    // Never a path, a plan entry or a secret: they can hold the user's name or a password.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImportWizard")
+            .field("step", &self.step)
+            .field("scanning", &self.scanning)
+            .field("loading", &self.loading)
+            .field("cursor", &self.cursor)
+            .field("pending", &self.pending)
+            .field("has_plan", &self.plan.is_some())
+            .field("selected", &self.selected.len())
+            .field("secrets", &self.secrets.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl ImportWizard {
+    /// Whether a held (auto-repeat) key is dropped while the wizard is open. Enter and Space
+    /// never repeat, not even into a focused password field: the Secrets step focuses its first
+    /// field as it opens, so a held Enter must not reach it and apply before the step was seen.
+    /// Other keys repeat only while a password field has the focus (typing, Backspace).
+    #[must_use]
+    pub fn swallows_held_key(key: &str, typing: bool) -> bool {
+        !typing || matches!(key, "enter" | "space")
+    }
+
     /// A wizard that waits for the search of the default locations; `request` is its id.
     pub(crate) fn new(request: u64) -> Self {
         Self {
@@ -898,6 +922,27 @@ mod tests {
         let mut w = wizard_with_files();
         w.step = step;
         w
+    }
+
+    #[test]
+    fn debug_omits_paths_and_secrets() {
+        let mut w = wizard_with_files();
+        w.reading = Some(("beekeeper", PathBuf::from("/home/test/bk.json")));
+        let shown = format!("{w:?}");
+        assert!(shown.contains("ImportWizard"));
+        assert!(!shown.contains("/home/test"));
+        assert!(!shown.contains("bk.json"));
+    }
+
+    #[test]
+    fn held_enter_and_space_never_repeat_into_the_wizard() {
+        for typing in [false, true] {
+            assert!(ImportWizard::swallows_held_key("enter", typing));
+            assert!(ImportWizard::swallows_held_key("space", typing));
+        }
+        assert!(ImportWizard::swallows_held_key("backspace", false));
+        assert!(!ImportWizard::swallows_held_key("backspace", true));
+        assert!(!ImportWizard::swallows_held_key("a", true));
     }
 
     #[test]

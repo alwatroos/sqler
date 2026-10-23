@@ -474,7 +474,7 @@ impl WorkspaceView {
             AppIcon::Check,
             tones.success,
             format!(
-                "{count} connection{} added.",
+                "{count} connection{} queued to save.",
                 if count == 1 { "" } else { "s" }
             ),
         ));
@@ -493,7 +493,7 @@ impl WorkspaceView {
                 AppIcon::KeyRound,
                 tones.muted,
                 format!(
-                    "{} password{} sent to the OS keychain, {} left empty.",
+                    "{} password{} queued for the OS keychain, {} left empty.",
                     summary.passwords_stored,
                     if summary.passwords_stored == 1 {
                         ""
