@@ -35,6 +35,15 @@ pub(crate) struct Live {
     pub pre: InstancePre<HostState>,
     /// The grant generation it was built under; a refresh makes it stale.
     pub generation: u64,
+    /// Unique per instantiation (process-wide). A handle to a guest resource (a driver session) is valid only in the
+    /// instance that made it, and a trap or a cancel replaces the instance without changing `generation`.
+    pub instance_id: u64,
+}
+
+/// The next [`Live::instance_id`].
+fn next_instance_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// What a call produced before the host looked at the store.
@@ -270,6 +279,7 @@ pub(super) async fn instantiate(
             instance,
             pre,
             generation,
+            instance_id: next_instance_id(),
         }),
         // An `init` that reports an error counts as a fault: the plugin did not start.
         Ok((_, Err(e))) => Err(Failure {
