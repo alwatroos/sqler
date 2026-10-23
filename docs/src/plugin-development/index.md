@@ -12,11 +12,15 @@ capabilities it asks for. The user approves the capabilities; the default is den
 
 ## Pages
 
+- [Tutorial](tutorial.md): generate a plugin from the template, build it, install it and run its command.
 - [Manifest](manifest.md): every key of `sqler.toml`, an example and the error list.
 - [Capabilities](capabilities.md): the grammar, what each capability gates, grant keys,
   re-prompts and limits.
 - [Drivers](drivers.md): guest and host drivers, what a driver receives, streaming, cancel and the error texts.
 - [Exporters](exporters.md): file formats for the export dialog and `sqler-cli export`, ids, labels, limits and error texts.
+- [Completion providers](completion.md): rows from a plugin in the SQL editor popup.
+- [WIT reference](wit-reference.md): every interface, function and type of the WIT package.
+- [Publishing](publishing.md): local install, development folders and approvals; a registry is planned after 1.0.
 
 ## Choosing a world
 
@@ -30,8 +34,3 @@ plugin still loads.
 
 A manifest without `[entry]` is declarative only. Drivers of kind `host` and settings need no
 component and load without the WebAssembly runtime.
-
-Planned topics:
-
-- Tutorial: planned (M6)
-- Publishing: planned (M6)
