@@ -150,3 +150,42 @@ fn rust_sources_have_no_template_tags() {
         );
     }
 }
+
+#[test]
+fn lockfile_pins_wit_bindgen_and_names_the_placeholder_package() {
+    let lock: toml::Table = read(&template_dir().join("Cargo.lock"))
+        .parse()
+        .expect("Cargo.lock parses");
+    let packages = lock
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .expect("package entries");
+    let field = |p: &toml::Value, key: &str| -> String {
+        p.get(key)
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_default()
+    };
+    // Exactly one package has no source: the generated crate itself, named by the placeholder.
+    let local: Vec<_> = packages
+        .iter()
+        .filter(|p| p.get("source").is_none())
+        .collect();
+    assert_eq!(
+        local.len(),
+        1,
+        "only the generated crate is a local package"
+    );
+    assert_eq!(field(local[0], "name"), "{{project-name}}");
+    let manifest = read(&template_dir().join("Cargo.toml"));
+    let pin = wit_bindgen_pin(&manifest, false);
+    let locked = packages
+        .iter()
+        .find(|p| field(p, "name") == "wit-bindgen")
+        .map(|p| field(p, "version"))
+        .expect("the lock holds wit-bindgen");
+    assert!(
+        locked.starts_with(pin.trim_start_matches(['=', '^'])),
+        "Cargo.lock holds wit-bindgen {locked}, Cargo.toml asks for {pin}; refresh the lock"
+    );
+}

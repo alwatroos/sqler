@@ -2,7 +2,7 @@
 
 Plugins are WebAssembly components with WIT interfaces. The decision is recorded in
 [ADR-0002](../adr/0002-plugin-abi-wasm-component-model.md). The ABI is the WIT package
-`sqler:plugin@0.1.0` ([ADR-0055](../adr/0055-plugin-abi-wit.md)); the sandbox and the
+`sqler:plugin@0.1.1` ([ADR-0055](../adr/0055-plugin-abi-wit.md)); the sandbox and the
 capability model are in [ADR-0056](../adr/0056-plugin-sandbox-and-capabilities.md).
 
 A plugin is a directory with a `sqler.toml` manifest and, unless it is declarative only, one
