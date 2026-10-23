@@ -56,7 +56,7 @@ pub enum TokenKind {
     Word,
     /// A numeric literal.
     Number,
-    /// A parameter placeholder: `$1`, `?`, `?1`, `:name`, `@name`, `$name`.
+    /// A parameter placeholder: `$1`, `?`, `?1`, `:name`, `@name`, `$name`; on T-SQL `@x` and `@@x`.
     Param,
     /// An operator.
     Op,
@@ -186,6 +186,20 @@ impl<'a> Lexer<'a> {
             };
             return (kind, end.map_or(s.len(), |i| start + 1 + i + 1));
         }
+        if c == '[' && d == Dialect::TSql {
+            // T-SQL bracket identifiers double the closing bracket: `[a]]b]`.
+            let (end, terminated) = self.quoted(start + 1, b']', false);
+            return (TokenKind::QuotedIdent { terminated }, end);
+        }
+        if c == '#' && d == Dialect::TSql {
+            // A temp table name: `#t`, `##t`. A lone `#` is not syntax.
+            let tail = b.get(start + 1).copied();
+            return if tail.is_some_and(|t| t == b'#' || t == b'_' || t.is_ascii_alphanumeric()) {
+                self.word(start)
+            } else {
+                (TokenKind::Other, start + 1)
+            };
+        }
         match c {
             '-' if next == Some(b'-')
                 && (d != Dialect::MySql || self.mysql_dash_comment(start)) =>
@@ -198,7 +212,8 @@ impl<'a> Lexer<'a> {
                     let (end, terminated) = self.block_comment(start, false);
                     (TokenKind::ExecComment { terminated }, end)
                 } else {
-                    let (end, terminated) = self.block_comment(start, d == Dialect::Postgres);
+                    let nested = matches!(d, Dialect::Postgres | Dialect::TSql);
+                    let (end, terminated) = self.block_comment(start, nested);
                     (TokenKind::BlockComment { terminated }, end)
                 }
             }
@@ -215,7 +230,7 @@ impl<'a> Lexer<'a> {
                     (TokenKind::QuotedIdent { terminated }, end)
                 }
             }
-            '`' if d != Dialect::Postgres => {
+            '`' if d != Dialect::Postgres && d != Dialect::TSql => {
                 let (end, terminated) = self.quoted(start + 1, b'`', false);
                 (TokenKind::QuotedIdent { terminated }, end)
             }
@@ -374,6 +389,15 @@ impl<'a> Lexer<'a> {
                 }
             }
             Dialect::MySql => (TokenKind::Other, start + 1),
+            Dialect::TSql => {
+                // `$5` is a money literal, `$action` and `$IDENTITY` are words, a lone `$` is not
+                // syntax.
+                match b.get(start + 1) {
+                    Some(d) if d.is_ascii_digit() => (TokenKind::Number, self.number(start + 1)),
+                    Some(l) if l.is_ascii_alphabetic() || *l == b'_' => self.word(start),
+                    _ => (TokenKind::Other, start + 1),
+                }
+            }
         }
     }
 
@@ -382,17 +406,24 @@ impl<'a> Lexer<'a> {
             Dialect::Postgres => (TokenKind::Op, self.pg_op_end(start)),
             Dialect::MySql => (TokenKind::Param, start + 1),
             Dialect::Sqlite => (TokenKind::Param, self.digits_end(start + 1)),
+            Dialect::TSql => (TokenKind::Other, start + 1),
         }
     }
 
     fn colon(&self, start: usize) -> (TokenKind, usize) {
         let b = self.src.as_bytes();
         let next = b.get(start + 1).copied();
-        if next == Some(b'=') || (self.dialect == Dialect::Postgres && next == Some(b':')) {
+        if next == Some(b'=')
+            || (matches!(self.dialect, Dialect::Postgres | Dialect::TSql) && next == Some(b':'))
+        {
             return (TokenKind::Op, start + 2);
         }
         let after_colon = start > 0 && b[start - 1] == b':';
-        if !after_colon && next.is_some_and(|n| n.is_ascii_alphabetic() || n == b'_') {
+        // T-SQL has no `:name` parameter: a lone colon is not syntax there.
+        if self.dialect != Dialect::TSql
+            && !after_colon
+            && next.is_some_and(|n| n.is_ascii_alphabetic() || n == b'_')
+        {
             return (TokenKind::Param, self.name_end(start + 1));
         }
         (TokenKind::Other, start + 1)
@@ -402,6 +433,25 @@ impl<'a> Lexer<'a> {
         let s = self.src;
         match self.dialect {
             Dialect::Postgres => (TokenKind::Op, self.pg_op_end(start)),
+            Dialect::TSql => {
+                // `@x` and `@@x`: a variable, a system function or a placeholder `@P1`.
+                let b = s.as_bytes();
+                let name_start = start
+                    + if b.get(start + 1) == Some(&b'@') {
+                        2
+                    } else {
+                        1
+                    };
+                let end = s[name_start..]
+                    .char_indices()
+                    .find(|&(_, ch)| !is_tsql_word_char(ch))
+                    .map_or(s.len(), |(i, _)| name_start + i);
+                if end > name_start {
+                    (TokenKind::Param, end)
+                } else {
+                    (TokenKind::Other, start + 1)
+                }
+            }
             Dialect::Sqlite => {
                 let end = self.name_end(start + 1);
                 if end > start + 1 {
@@ -446,7 +496,10 @@ impl<'a> Lexer<'a> {
         let dollar_ok = d != Dialect::Sqlite;
         let mut end = s.len();
         for (i, ch) in s[start..].char_indices() {
-            let cont = ch == '_' || ch.is_alphanumeric() || (ch == '$' && dollar_ok);
+            let cont = ch == '_'
+                || ch.is_alphanumeric()
+                || (ch == '$' && dollar_ok)
+                || (d == Dialect::TSql && is_tsql_word_char(ch));
             if !cont {
                 end = start + i;
                 break;
@@ -470,6 +523,7 @@ impl<'a> Lexer<'a> {
                 Dialect::MySql if ci("N") => Some(true),
                 Dialect::MySql if w.len() > 1 && w.starts_with('_') => Some(true),
                 Dialect::Sqlite if ci("X") => Some(false),
+                Dialect::TSql if ci("N") => Some(false),
                 _ => None,
             };
             if let Some(backslash) = backslash {
@@ -539,6 +593,11 @@ impl<'a> Lexer<'a> {
 const OPS: [&str; 12] = [
     "<=>", "->>", "->", "<=", ">=", "<>", "!=", "||", "&&", "<<", ">>", "==",
 ];
+
+/// A char that continues a T-SQL word: alphanumerics, `_`, `$`, `#` and `@`.
+fn is_tsql_word_char(ch: char) -> bool {
+    ch == '_' || ch == '$' || ch == '#' || ch == '@' || ch.is_alphanumeric()
+}
 
 /// ASCII whitespace: space, tab, LF, VT, FF, CR.
 pub(crate) fn is_ws(c: char) -> bool {
@@ -610,7 +669,7 @@ mod tests {
         t[0].kind
     }
 
-    use crate::Dialect::{MySql as My, Postgres as Pg, Sqlite as Lite};
+    use crate::Dialect::{MySql as My, Postgres as Pg, Sqlite as Lite, TSql as Ts};
     use TokenKind::{
         BlockComment, DollarStr, ExecComment, LineComment, Number, Op, Other, Param, Punct,
         QuotedIdent, Str, Whitespace, Word,
@@ -794,11 +853,14 @@ mod tests {
         assert_eq!(sig(My, "?1").len(), 2);
         assert_eq!(one(Lite, "@name"), Param);
         assert_eq!(one(Lite, "$name"), Param);
-        for d in Dialect::ALL {
+        for d in [Pg, My, Lite] {
             assert_eq!(sig(d, ":name_1")[0], (Param, ":name_1"));
             assert_eq!(sig(d, ":_x")[0], (Param, ":_x"));
             assert_ne!(sig(d, ":1")[0].0, Param);
         }
+        // T-SQL has no `:name` parameter.
+        assert_eq!(sig(Ts, ":name")[0], (Other, ":"));
+        assert_ne!(sig(Ts, ":1")[0].0, Param);
         // Not a param after a colon; PG lexes `::` first.
         assert_eq!(
             sig(Pg, "x::int"),
@@ -863,6 +925,78 @@ mod tests {
         assert_eq!(one(My, "\\"), Other);
         assert_eq!(one(Lite, "\0"), Other);
         assert_eq!(one(Pg, "§"), Other);
+    }
+
+    #[test]
+    fn tsql_brackets_double_the_closing_bracket() {
+        assert_eq!(
+            sig(Ts, "[a]]b] c"),
+            vec![(QuotedIdent { terminated: true }, "[a]]b]"), (Word, "c")]
+        );
+        assert_eq!(one(Ts, "[a;b -- ]"), QuotedIdent { terminated: true });
+        assert_eq!(one(Ts, "[a]]"), QuotedIdent { terminated: false });
+        assert_eq!(one(Ts, "[unterminated"), QuotedIdent { terminated: false });
+        assert_eq!(one(Ts, "\"a\"\"b\""), QuotedIdent { terminated: true });
+        assert_eq!(one(Ts, "\"abc"), QuotedIdent { terminated: false });
+        // `]` alone is punctuation.
+        assert_eq!(sig(Ts, "a]")[1], (Punct, "]"));
+    }
+
+    #[test]
+    fn tsql_strings_have_no_backslash_escapes() {
+        assert_eq!(one(Ts, "N'it''s'"), Str { terminated: true });
+        assert_eq!(one(Ts, "n'x'"), Str { terminated: true });
+        assert_eq!(one(Ts, "'a;b'"), Str { terminated: true });
+        // `'a\'` is a whole string; `b` and the last `'` follow it.
+        assert_eq!(sig(Ts, r"'a\'b'")[0].1, r"'a\'");
+        assert_eq!(sig(Ts, r"'a\'b'").len(), 3);
+        assert_eq!(sig(Ts, r"N'\'; drop table t; --'").len(), 1 + 6);
+        assert_eq!(one(Ts, "N'abc"), Str { terminated: false });
+        // The other prefixes are plain words.
+        for p in ["E", "X", "B", "U&"] {
+            assert!(sig(Ts, &format!("{p}'x'")).len() >= 2, "{p}");
+        }
+    }
+
+    #[test]
+    fn tsql_words_variables_and_numbers() {
+        assert_eq!(sig(Ts, "#t")[0], (Word, "#t"));
+        assert_eq!(sig(Ts, "##t")[0], (Word, "##t"));
+        assert_eq!(sig(Ts, "#_t1")[0], (Word, "#_t1"));
+        assert_eq!(sig(Ts, "a#b$c@d")[0], (Word, "a#b$c@d"));
+        assert_eq!(one(Ts, "#"), Other);
+        assert_eq!(sig(Ts, "# x")[0], (Other, "#"));
+        assert_eq!(one(Ts, "@x"), Param);
+        assert_eq!(one(Ts, "@@rowcount"), Param);
+        assert_eq!(one(Ts, "@P1"), Param);
+        assert_eq!(one(Ts, "@"), Other);
+        assert_eq!(sig(Ts, "@@").len(), 2);
+        assert_eq!(sig(Ts, "@@ x")[0], (Other, "@"));
+        assert_eq!(sig(Ts, "@x=1").len(), 3);
+        assert_eq!(one(Ts, "$5"), Number);
+        assert_eq!(one(Ts, "$5.25"), Number);
+        assert_eq!(one(Ts, "$action"), Word);
+        assert_eq!(one(Ts, "$IDENTITY"), Word);
+        assert_eq!(one(Ts, "$"), Other);
+        assert_eq!(sig(Ts, "$ 1")[0], (Other, "$"));
+        assert_eq!(one(Ts, "0x0A"), Number);
+        assert_eq!(one(Ts, "0x"), Number);
+        assert_eq!(sig(Ts, "a::b"), vec![(Word, "a"), (Op, "::"), (Word, "b")]);
+        assert_eq!(one(Ts, "`"), Other);
+        assert_eq!(one(Ts, "?"), Other);
+        assert_eq!(sig(Ts, "a`b")[1], (Other, "`"));
+    }
+
+    #[test]
+    fn tsql_comments() {
+        assert_eq!(one(Ts, "-- x ; drop"), LineComment);
+        assert_eq!(one(Ts, "--x"), LineComment);
+        assert_eq!(sig(Ts, "a--b\nc")[1], (LineComment, "--b"));
+        assert_eq!(one(Ts, "/* /* */ */"), BlockComment { terminated: true });
+        assert_eq!(one(Ts, "/* /* */"), BlockComment { terminated: false });
+        assert_eq!(one(Ts, "/*! x */"), BlockComment { terminated: true });
+        assert_ne!(one(Ts, "#"), LineComment);
+        assert_eq!(sig(Ts, "# x")[1], (Word, "x"));
     }
 
     #[test]

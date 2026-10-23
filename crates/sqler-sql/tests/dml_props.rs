@@ -174,10 +174,9 @@ fn check_placeholders(d: Dialect, q: &Query) -> Result<(), TestCaseError> {
     prop_assert_eq!(found.len(), q.params.len(), "{}", q.sql);
     for (i, p) in found.iter().enumerate() {
         let expected = match d {
-            Dialect::Postgres | Dialect::Sqlite => {
-                PlaceholderKind::Positional(u32::try_from(i + 1).unwrap())
-            }
-            _ => PlaceholderKind::Anonymous,
+            Dialect::MySql => PlaceholderKind::Anonymous,
+            // `PostgreSQL` `$n`, `SQLite` `?n`, T-SQL `@Pn`.
+            _ => PlaceholderKind::Positional(u32::try_from(i + 1).unwrap()),
         };
         prop_assert_eq!(&p.kind, &expected, "{}", q.sql);
     }

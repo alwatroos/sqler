@@ -1,0 +1,19 @@
+---
+source: crates/sqler-sql/tests/format_snapshots.rs
+expression: out
+---
+INSERT INTO t (a, b)
+VALUES (1, 'it''s'), (2, 'x;y');
+
+UPDATE t
+SET a=a+1, b = 'z'
+WHERE id=3
+  AND name LIKE 'a%';
+
+DELETE
+FROM t
+WHERE id IN (
+  SELECT id
+  FROM u
+  WHERE u.x IS NOT NULL
+);

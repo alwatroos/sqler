@@ -41,6 +41,13 @@ const FRAGMENTS: &[&str] = &[
     "pragma",
     "explain",
     "with",
+    "\nGO\n",
+    "N'",
+    "[[",
+    "]]",
+    "@@",
+    "exec ",
+    "waitfor ",
 ];
 
 fn mixed() -> impl Strategy<Value = String> {
@@ -202,6 +209,84 @@ proptest! {
     fn unterminated_text_is_never_read(d in dialect(), q in prop::sample::select(vec!["'", "\"", "/*"]), rest in "[a-z ]{0,20}") {
         let text = format!("select 1 {q}{rest}");
         prop_assert!(!classify(d, &text).is_read_only(), "{}", text);
+    }
+}
+
+/// T-SQL statements that are not read. Whitespace separates T-SQL statements as well as `;`, so
+/// each one is also tried glued to a read with no separator.
+const TSQL_WRITES: &[&str] = &[
+    "dbcc checkdb",
+    "backup database d to disk = 'x'",
+    "restore database d from disk = 'x'",
+    "bulk insert t from 'f'",
+    "reconfigure",
+    "shutdown",
+    "kill 52",
+    "checkpoint",
+    "send on conversation @h ('x')",
+    "end conversation @h",
+    "move conversation @h to @g",
+    "waitfor ( receive top ( 1 ) * from q )",
+    "waitfor delay '00:00:01'",
+    "updatetext t.c @p 0 0 'x'",
+    "writetext t.c @p 'x'",
+    "deny select on t to u",
+    "enable trigger tr on t",
+    "disable trigger tr on t",
+    "add signature to p by certificate c",
+    "exec p",
+    "execute ( 'drop table t' )",
+    "exec sp_executesql N'delete from t'",
+    "declare @x int = 1",
+    "print 'x'",
+    "save tran s",
+    "set nocount on",
+    "set transaction isolation level serializable",
+    "use master",
+    "begin tran",
+    "commit tran",
+    "rollback tran",
+    "setuser 'x'",
+    "revert",
+    "open symmetric key k decryption by certificate c",
+    "select a into #t from b",
+    "select * from t with ( updlock )",
+    "select next value for s",
+    "create procedure p as select 1",
+    "truncate table t",
+    "if 1 = 1 delete from t",
+];
+
+proptest! {
+    #[test]
+    fn go_line_between_read_and_write_is_never_read(
+        r in prop::sample::select(READS),
+        w in prop::sample::select(WRITES),
+    ) {
+        let text = format!("{r}\nGO\n{w}");
+        prop_assert!(!classify(Dialect::TSql, &text).is_read_only(), "{}", text);
+        let text = format!("{w}\nGO\n{r}");
+        prop_assert!(!classify(Dialect::TSql, &text).is_read_only(), "{}", text);
+    }
+
+    #[test]
+    fn tsql_statements_are_never_read_next_to_a_read(
+        r in prop::sample::select(READS),
+        w in prop::sample::select(TSQL_WRITES),
+        glue in prop::sample::select(vec!["; ", " ", "\n", "\nGO\n", "\nGO 2\n", " /* x */ ", "\r\n"]),
+    ) {
+        let text = format!("{r}{glue}{w}");
+        prop_assert!(!classify(Dialect::TSql, &text).is_read_only(), "{}", text);
+        let text = format!("{w}{glue}{r}");
+        prop_assert!(!classify(Dialect::TSql, &text).is_read_only(), "{}", text);
+    }
+
+    #[test]
+    fn tsql_write_lead_is_never_read(w in prop::sample::select(TSQL_WRITES), rest in mixed()) {
+        let text = format!("{w} {rest}");
+        prop_assert!(!classify(Dialect::TSql, &text).is_read_only(), "{}", text);
+        let text = format!("{}\n{rest}", w.to_uppercase());
+        prop_assert!(!classify(Dialect::TSql, &text).is_read_only(), "{}", text);
     }
 }
 

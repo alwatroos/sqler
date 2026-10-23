@@ -81,6 +81,14 @@ pub fn placeholders(dialect: Dialect, text: &str) -> Vec<Placeholder> {
 }
 
 fn kind_of(dialect: Dialect, t: &str) -> Option<PlaceholderKind> {
+    if dialect == Dialect::TSql {
+        // Only `@P<k>`: every other `@x` is a T-SQL variable.
+        let digits = t.strip_prefix("@P").or_else(|| t.strip_prefix("@p"))?;
+        return (digits.bytes().all(|b| b.is_ascii_digit()) && !digits.starts_with('0'))
+            .then(|| digits.parse::<u32>().ok())
+            .flatten()
+            .map(PlaceholderKind::Positional);
+    }
     if t == "?" {
         return Some(PlaceholderKind::Anonymous);
     }
@@ -135,6 +143,33 @@ mod tests {
             found(Dialect::Postgres, "select $4294967295"),
             ["$4294967295"]
         );
+    }
+
+    #[test]
+    fn tsql_has_only_p_numbered_placeholders() {
+        let t = Dialect::TSql;
+        let p = placeholders(
+            t,
+            "select @P1, @p2, @P10, @x, @@rowcount, @P0, @P01, @P, @Px, ?, :a",
+        );
+        let k: Vec<_> = p.into_iter().map(|p| p.kind).collect();
+        assert_eq!(
+            k,
+            vec![
+                PlaceholderKind::Positional(1),
+                PlaceholderKind::Positional(2),
+                PlaceholderKind::Positional(10),
+            ]
+        );
+        assert_eq!(found(t, "select @P4294967295"), ["@P4294967295"]);
+        assert_eq!(found(t, "select @P4294967296, @P99999999999").len(), 0);
+        // Not in strings, quoted names, comments or routines.
+        assert_eq!(
+            found(t, "select '@P1', [@P2], \"@P3\" -- @P4\n/* @P5 */, @P6"),
+            ["@P6"]
+        );
+        assert_eq!(found(t, "create proc p @P1 int as select @P1").len(), 0);
+        assert_eq!(found(t, "select 1\nGO\nselect @P1"), ["@P1"]);
     }
 
     #[test]

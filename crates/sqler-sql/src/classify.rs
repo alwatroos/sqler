@@ -150,6 +150,44 @@ const OTHER_LEADS: &[&str] = &[
     "UNLOCK",
     "HANDLER",
 ];
+/// T-SQL statements that change data, storage or server state, and exist only there.
+const TSQL_WRITE_LEADS: &[&str] = &[
+    "BULK",
+    "DBCC",
+    "BACKUP",
+    "RESTORE",
+    "RECONFIGURE",
+    "SHUTDOWN",
+    "RECEIVE",
+    "SEND",
+    "UPDATETEXT",
+    "WRITETEXT",
+    "MOVE",
+];
+/// T-SQL statements that change permissions or the state of a trigger or constraint.
+const TSQL_DDL_LEADS: &[&str] = &["DENY", "ENABLE", "DISABLE"];
+/// T-SQL statements that are neither read nor write: variables, messages, savepoints.
+const TSQL_OTHER_LEADS: &[&str] = &["DECLARE", "PRINT", "SAVE"];
+/// T-SQL words that take locks (table hints, isolation levels): a write wherever they appear.
+const TSQL_LOCK_WORDS: &[&str] = &[
+    "UPDLOCK",
+    "XLOCK",
+    "HOLDLOCK",
+    "TABLOCK",
+    "TABLOCKX",
+    "SERIALIZABLE",
+    "REPEATABLEREAD",
+];
+/// T-SQL separates statements by whitespace as well as by `;`, so `select 1 kill 52` runs two
+/// statements. Any word that starts a statement which is not a read is therefore scanned for in
+/// the whole text, at the severity of the statement it starts.
+const TSQL_WRITE_WORDS: &[&str] = &["KILL", "CHECKPOINT"];
+/// Statement starters that only add `ADD SIGNATURE` to the DDL leads already scanned for.
+const TSQL_DDL_WORDS: &[&str] = &["ADD"];
+/// Statement starters that change session state.
+const TSQL_OTHER_WORDS: &[&str] = &["USE", "SET", "BEGIN", "COMMIT", "ROLLBACK"];
+/// Statement starters the classifier does not understand: never read.
+const TSQL_UNKNOWN_WORDS: &[&str] = &["OPEN", "SETUSER", "REVERT"];
 /// Words that make a read candidate a write wherever they appear.
 const WRITE_WORDS: &[&str] = &[
     "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "INTO", "COPY", "LOAD", "LOCK", "SHARE",
@@ -329,6 +367,62 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "varbinary",
     "binary",
 ];
+/// Functions that only T-SQL has and that have no side effects; used only on T-SQL.
+const TSQL_FUNCTIONS: &[&str] = &[
+    // dates and times
+    "getdate",
+    "getutcdate",
+    "sysdatetime",
+    "sysutcdatetime",
+    "sysdatetimeoffset",
+    "dateadd",
+    "datefromparts",
+    "datename",
+    "datepart",
+    "eomonth",
+    // strings
+    "isnull",
+    "len",
+    "datalength",
+    "charindex",
+    "patindex",
+    "stuff",
+    "str",
+    "space",
+    "replicate",
+    "quotename",
+    "unicode",
+    "nchar",
+    "ascii",
+    "format",
+    // conversions and maths
+    "convert",
+    "try_cast",
+    "try_convert",
+    "square",
+    "choose",
+    // metadata
+    "newid",
+    "object_id",
+    "object_name",
+    "object_schema_name",
+    "schema_name",
+    "schema_id",
+    "db_name",
+    "db_id",
+    // aggregates and set functions
+    "count_big",
+    "string_split",
+    "checksum",
+    "binary_checksum",
+    // type names with modifiers
+    "nvarchar",
+    "datetime2",
+    "datetimeoffset",
+    // `FOR XML` and `FOR JSON` options
+    "path",
+    "root",
+];
 /// Longest allowlisted name; longer words skip lowercasing.
 const MAX_NAME_LEN: usize = 32;
 /// `SQLite` pragmas that only read.
@@ -356,12 +450,87 @@ fn is_punct(tok: &Token, src: &str, p: &str) -> bool {
     tok.kind == TokenKind::Punct && tok.text(src) == p
 }
 
-fn is_allowed_function(name: &str) -> bool {
+fn is_allowed_function(dialect: Dialect, name: &str) -> bool {
     if name.len() > MAX_NAME_LEN {
         return false;
     }
     let lower = name.to_ascii_lowercase();
     ALLOWED_FUNCTIONS.contains(&lower.as_str())
+        || (dialect == Dialect::TSql && TSQL_FUNCTIONS.contains(&lower.as_str()))
+}
+
+/// Whether `word` leads a statement that changes data, storage or server state.
+fn is_write_lead(dialect: Dialect, word: &str) -> bool {
+    in_list(word, WRITE_LEADS) || (dialect == Dialect::TSql && in_list(word, TSQL_WRITE_LEADS))
+}
+
+/// Whether `word` leads a statement that changes the schema or permissions.
+fn is_ddl_lead(dialect: Dialect, word: &str) -> bool {
+    in_list(word, DDL_LEADS) || (dialect == Dialect::TSql && in_list(word, TSQL_DDL_LEADS))
+}
+
+/// Whether `word` leads a session or transaction control statement.
+fn is_other_lead(dialect: Dialect, word: &str) -> bool {
+    in_list(word, OTHER_LEADS) || (dialect == Dialect::TSql && in_list(word, TSQL_OTHER_LEADS))
+}
+
+/// T-SQL leads whose class depends on the next word. `None` for every other lead.
+///
+/// `WAITFOR DELAY|TIME` only waits (`Other`, after the scan); any other `WAITFOR` wraps a
+/// statement such as `RECEIVE` (`Write`). `BEGIN TRAN[SACTION]` and `BEGIN DISTRIBUTED ..` (and a
+/// bare `BEGIN`) are transaction control; any other `BEGIN` opens a block or a dialog and is
+/// `Unknown`. `END CONVERSATION` ends a Service Broker conversation (`Write`).
+fn tsql_lead_class(
+    src: &str,
+    all: &[Token],
+    sig: &[Token],
+    lead_idx: usize,
+) -> Option<StatementClass> {
+    let word = sig[lead_idx].text(src);
+    let next = sig.get(lead_idx + 1);
+    let next_is = |w: &str| next.is_some_and(|t| t.is_keyword(src, w));
+    if word.eq_ignore_ascii_case("WAITFOR") {
+        return Some(if next_is("DELAY") || next_is("TIME") {
+            scan(Dialect::TSql, src, all, sig, StatementClass::Other)
+        } else {
+            StatementClass::Write
+        });
+    }
+    if word.eq_ignore_ascii_case("BEGIN") {
+        return Some(
+            if next.is_none() || next_is("TRAN") || next_is("TRANSACTION") || next_is("DISTRIBUTED")
+            {
+                scan(Dialect::TSql, src, all, sig, StatementClass::Other)
+            } else {
+                StatementClass::Unknown
+            },
+        );
+    }
+    if word.eq_ignore_ascii_case("END") && next_is("CONVERSATION") {
+        return Some(StatementClass::Write);
+    }
+    None
+}
+
+/// The class a T-SQL word forces wherever it appears in a statement, or `None`. `at_lead` is
+/// whether the word is the statement's lead, which `tsql_lead_class` has already judged.
+fn tsql_word_class(word: &str, at_lead: bool) -> Option<StatementClass> {
+    if in_list(word, TSQL_LOCK_WORDS)
+        || in_list(word, TSQL_WRITE_WORDS)
+        || in_list(word, TSQL_WRITE_LEADS)
+    {
+        Some(StatementClass::Write)
+    } else if word.eq_ignore_ascii_case("WAITFOR") {
+        (!at_lead).then_some(StatementClass::Write)
+    } else if in_list(word, TSQL_DDL_LEADS) || in_list(word, TSQL_DDL_WORDS) {
+        Some(StatementClass::Ddl)
+    } else if in_list(word, TSQL_UNKNOWN_WORDS) {
+        Some(StatementClass::Unknown)
+    } else if in_list(word, TSQL_OTHER_WORDS) || in_list(word, TSQL_OTHER_LEADS) {
+        Some(StatementClass::Other)
+    } else {
+        None
+    }
 }
 
 /// Classifies one statement body.
@@ -376,6 +545,19 @@ fn classify_body(dialect: Dialect, body: &str) -> StatementClass {
         return StatementClass::Unknown;
     }
     let word = lead.text(body);
+    if dialect == Dialect::TSql {
+        // `EXEC` runs anything, also behind `INSERT .. EXEC`, `GRANT EXECUTE` and
+        // `sp_executesql`; no statement that holds the word is understood.
+        if sig
+            .iter()
+            .any(|t| t.is_keyword(body, "EXEC") || t.is_keyword(body, "EXECUTE"))
+        {
+            return StatementClass::Unknown;
+        }
+        if let Some(class) = tsql_lead_class(body, &all, &sig, lead_idx) {
+            return class;
+        }
+    }
     if word.eq_ignore_ascii_case("PRAGMA") {
         return if dialect == Dialect::Sqlite && all.iter().all(Token::is_terminated) {
             pragma_class(body, &sig[lead_idx + 1..])
@@ -389,13 +571,13 @@ fn classify_body(dialect: Dialect, body: &str) -> StatementClass {
     if in_list(word, EXPLAIN_LEADS) {
         return explain_class(dialect, body, &all, &sig, lead_idx);
     }
-    if in_list(word, WRITE_LEADS) {
+    if is_write_lead(dialect, word) {
         return StatementClass::Write;
     }
-    if in_list(word, DDL_LEADS) {
+    if is_ddl_lead(dialect, word) {
         return StatementClass::Ddl;
     }
-    if !in_list(word, OTHER_LEADS) {
+    if !is_other_lead(dialect, word) {
         return StatementClass::Unknown;
     }
     let next = sig.get(lead_idx + 1);
@@ -483,11 +665,11 @@ fn explain_class(
             let w = t.text(src);
             if in_list(w, READ_LEADS) {
                 StatementClass::Read
-            } else if in_list(w, WRITE_LEADS) {
+            } else if is_write_lead(dialect, w) {
                 StatementClass::Write
-            } else if in_list(w, DDL_LEADS) {
+            } else if is_ddl_lead(dialect, w) {
                 StatementClass::Ddl
-            } else if in_list(w, OTHER_LEADS) {
+            } else if is_other_lead(dialect, w) {
                 StatementClass::Other
             } else if describes_table && !in_list(w, EXPLAIN_LEADS) && is_table_name(src, &sig[i..])
             {
@@ -547,7 +729,10 @@ fn mode_dependent_string(dialect: Dialect, src: &str, tok: &Token) -> bool {
     match dialect {
         Dialect::MySql => text.contains('\\') || text.starts_with('"') || text.starts_with("@\""),
         Dialect::Postgres => text.contains('\\') && !text.starts_with(['e', 'E']),
-        Dialect::Sqlite => false,
+        // T-SQL strings have one reading: no backslash escapes, `''` doubles the quote.
+        // (`QUOTED_IDENTIFIER OFF` reads `".."` as a string; both readings are one token that
+        // doubles its quote, so the token boundaries do not change.)
+        Dialect::Sqlite | Dialect::TSql => false,
     }
 }
 
@@ -590,7 +775,7 @@ fn parenless_hazard(dialect: Dialect, src: &str, sig: &[Token], i: usize) -> boo
             matches!(name.as_str(), "nextval" | "currval" | "lastval")
                 || (qualified && name == "previous")
         }
-        Dialect::Postgres => false,
+        Dialect::Postgres | Dialect::TSql => false,
     }
 }
 
@@ -633,14 +818,25 @@ fn has_word_at_depth_one(src: &str, sig: &[Token], open: usize, word: &str) -> b
 /// (a name after `.` is always a function name) and, for words that the servers also accept as
 /// function names, sits where the grammar puts it: this match is the explicit table of allowed
 /// positions, keyed by the previous token.
-fn structural_here(src: &str, sig: &[Token], i: usize) -> bool {
+fn structural_here(dialect: Dialect, src: &str, sig: &[Token], i: usize) -> bool {
     let text = sig[i].text(src);
     let prev = if i > 0 { sig.get(i - 1) } else { None };
+    let prev_word =
+        |w: &[&str]| prev.is_some_and(|t| t.kind == TokenKind::Word && in_list(t.text(src), w));
+    if dialect == Dialect::TSql
+        && !prev.is_some_and(|t| is_punct(t, src, "."))
+        && in_list(text, &["TOP", "OPTION"])
+    {
+        // `SELECT TOP (n)`, and `OPTION (hints)` after the last operand of a query.
+        return if text.eq_ignore_ascii_case("TOP") {
+            prev_word(&["SELECT", "DISTINCT", "ALL"])
+        } else {
+            ends_operand(src, prev)
+        };
+    }
     if prev.is_some_and(|t| is_punct(t, src, ".")) || !in_list(text, STRUCTURAL) {
         return false;
     }
-    let prev_word =
-        |w: &[&str]| prev.is_some_and(|t| t.kind == TokenKind::Word && in_list(t.text(src), w));
     match text.to_ascii_uppercase().as_str() {
         "OVER" | "FILTER" => prev.is_some_and(|t| is_punct(t, src, ")")),
         "BY" => prev_word(&["GROUP", "ORDER", "PARTITION"]),
@@ -683,6 +879,7 @@ fn scan(
     if sig.iter().any(|t| mode_dependent_string(dialect, src, t)) {
         return StatementClass::Unknown;
     }
+    let lead_pos = sig.iter().position(|t| !is_punct(t, src, "(")).unwrap_or(0);
     for (i, tok) in sig.iter().enumerate() {
         let next_is_paren = sig.get(i + 1).is_some_and(|n| is_punct(n, src, "("));
         match tok.kind {
@@ -700,6 +897,23 @@ fn scan(
                 if in_list(text, UNKNOWN_WORDS) {
                     return StatementClass::Unknown;
                 }
+                if dialect == Dialect::TSql
+                    && let Some(c) = tsql_word_class(text, i == lead_pos)
+                {
+                    if c == StatementClass::Unknown {
+                        return c;
+                    }
+                    class = class.max(c);
+                }
+                // `END` also closes a `CASE`; `END CONVERSATION` is a statement.
+                if dialect == Dialect::TSql
+                    && text.eq_ignore_ascii_case("END")
+                    && sig
+                        .get(i + 1)
+                        .is_some_and(|n| n.is_keyword(src, "CONVERSATION"))
+                {
+                    class = class.max(StatementClass::Write);
+                }
                 if in_list(text, DDL_LEADS) {
                     class = class.max(StatementClass::Ddl);
                 } else if in_list(text, WRITE_WORDS)
@@ -710,9 +924,9 @@ fn scan(
                 if let Some(c) = sequence_form(src, sig, i) {
                     class = class.max(c);
                 }
-                if next_is_paren && !structural_here(src, sig, i) {
+                if next_is_paren && !structural_here(dialect, src, sig, i) {
                     let qualified = i > 0 && is_punct(&sig[i - 1], src, ".");
-                    if qualified || !is_allowed_function(text) {
+                    if qualified || !is_allowed_function(dialect, text) {
                         return StatementClass::Unknown;
                     }
                 }
