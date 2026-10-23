@@ -174,6 +174,50 @@ to the system keychain when you save, never to `connections.toml`; the file only
 one is kept; type to replace it, or choose to clear it to remove the stored value on save. Saving a form without a password does not
 touch the keychain. See [Secrets](secrets.md).
 
+### Import from other tools
+
+Open the wizard with **Import...** at the bottom of the New connection form, or run **Import
+Connections** (`connection:import`) from the command palette. It reads the connections of pgAdmin,
+Beekeeper Studio and Azure Data Studio. Nothing is written until you confirm.
+
+1. **Source.** One row per file found in the usual place of each tool; a tool with no file shows
+   "Not found in the usual places. Choose the file." While SQLer searches, the dialog says "Looking
+   for files...". Pick a row and press **Next**, or choose a file yourself (**Choose File**).
+2. **Preview.** Each entry has a badge: *add* (new), *rename* (the name is taken, so it is added as
+   `name (2)` and the detail says "renamed from ..."), *duplicate* (already in your list) or *skipped*
+   with a reason. Only *add* and *rename* entries can be selected; all start selected. Settings SQLer
+   cannot carry over are listed by name. You need at least one selected entry to continue.
+3. **Passwords.** One masked field per password a selected connection needs (database password, SSH
+   password, SSH key passphrase). Foreign passwords are never read from the file, so type them or
+   leave a field empty to skip it; you can set the password later in the connection form.
+   Passwords go to the keychain, after the connections file is saved. SQL Server entries get the same
+   prompt, and the password is stored in the keychain and put into the `sqlserver://` target when you
+   connect.
+4. **Summary.** The connections added, how many entries were not imported, how many passwords were
+   stored or skipped, and any failure.
+
+Cancel (Escape) at any step leaves everything as it was. Imported connections never overwrite an
+existing one. Entries for a database that is not available are skipped with a reason: DuckDB shows
+"DuckDB is not in SQLer 1.0", and SQL Server shows "not available in this build" until its plugin
+is loaded (reopen the wizard if you read the file very early after start).
+
+Keys: **Up**/**Down** move, **Space** toggles an entry, **Enter** goes on (on the password step it
+imports), **Backspace** goes back (not while typing), **Escape** cancels. The same actions are palette
+commands: `connection-import:cursor-up`, `connection-import:cursor-down`, `connection-import:choose-file`,
+`connection-import:next`, `connection-import:back`, `connection-import:toggle-entry`,
+`connection-import:select-all`, `connection-import:select-none` and `connection-import:apply`.
+
+If a file cannot be used, the Source step shows one of these messages:
+
+- "The file could not be read."
+- "The chosen path is not a file."
+- "The file is larger than 4 MiB and was not read."
+- "The file is not UTF-8 text."
+- "The file is malformed at line L, column C: ..."
+- "This is not a pgAdmin file: ..." (or the name of the tool you chose)
+- "The file holds more than 5000 connections."
+- "The file could not be imported."
+
 ### Test connection
 
 Test connects through the same path as opening a connection: it reads the passwords (the typed ones,
