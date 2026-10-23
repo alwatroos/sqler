@@ -1,0 +1,16 @@
+{
+  "Servers": {
+    "1": { "Name": 42, "Host": "db.example.test", "Port": "abc", "Username": "alice" },
+    "2": { "Name": ["x"], "Host": ["db.example.test"], "Port": 5432 },
+    "3": "not an object",
+    "4": { "Name": "Port zero", "Host": "db.example.test", "Port": 0 },
+    "5": { "Name": "Port big", "Host": "db.example.test", "Port": 70000 },
+    "6": { "Name": "Bad host", "Host": "db.example.test?x=1" },
+    "7": { "Name": "Bad color", "Host": "db.example.test", "BGColor": "red", "SSLMode": 5, "UseSSHTunnel": [1] },
+    "8": { "Name": "No ssh user", "Host": "db.example.test", "UseSSHTunnel": 1, "TunnelHost": "bastion.example.test" },
+    "9": { "Name": "Bad ssh auth", "Host": "db.example.test", "UseSSHTunnel": 1, "TunnelHost": "bastion.example.test", "TunnelUsername": "t", "TunnelAuthentication": 7 },
+    "10": { "Name": "Bad key", "Host": "db.example.test", "UseSSHTunnel": 1, "TunnelHost": "bastion.example.test", "TunnelUsername": "t", "TunnelAuthentication": 1, "TunnelIdentityFile": "~/.ssh/id_test" },
+    "11": { "Name": "Odd mode", "Host": "db.example.test", "SSLMode": "sometimes" },
+    "12": { "Host": "db.example.test", "ConnectionParameters": 7 }
+  }
+}

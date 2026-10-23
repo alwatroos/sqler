@@ -1,0 +1,9 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "CRLF server",
+      "Host": "db.example.test",
+      "Username": "alice"
+    }
+  }
+}
