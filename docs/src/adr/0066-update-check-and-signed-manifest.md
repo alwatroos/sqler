@@ -146,6 +146,29 @@ configured and `check()` no longer returns `NotConfigured` (the empty-list behav
   were deleted.
 - Rotation: follow the rotation rule above; the page `releasing/update-feed.md` lists the current key.
 
+## Note 2026-10-23: settings and notice (R4)
+
+The client is now linked into `sqler-app` and shown in the UI.
+
+- Opt-in: the setting `check_for_updates` in `settings.toml` is `false` by default. While it is off the app makes no
+  request, and the manual command shows a hint instead of checking.
+- Where: **Settings > Updates** (a switch "Check for updates", a "Check now" button and a status line) and a status-bar
+  item. The schedule numbers are unchanged: first check 30 s after the first frame, then every 24 h, backoff from 1 h
+  doubling to 24 h after failures. Turning the setting on arms the first check 30 s later, not at once; turning it off
+  aborts a check in flight.
+- Commands: `app:check-for-updates`, `app:open-release-notes`, `app:dismiss-update-notice`,
+  `settings:toggle-update-checks`.
+- State file `update-state.toml` in the config directory holds exactly three keys: `last_attempt` (unix seconds),
+  `consecutive_failures` and `dismissed_version` (at most 64 characters of `[0-9A-Za-z.+-]`). No URL, path or
+  identifier. A bad field falls back to its default.
+- Notice: when a newer version is found, the status bar shows `Update <version>` with a dismiss button; opening it
+  opens the release notes link (only an `https://` link). Dismissing hides that version from automatic notices across
+  restarts; a manual check still shows it. Manual checks also show a toast; automatic failures are silent.
+- What is sent: one `GET` of the feed with `User-Agent: SQLer/<version> (update-check)` and nothing else (see
+  Request). Nothing is downloaded or installed in 1.0.
+- Build: the cargo feature `update` of `sqler-app` is in `default`, because `reqwest`, `ring` and `semver` are already
+  linked. `--no-default-features` compiles the client out.
+
 ## Rejected alternatives
 
 - A detached `.sig` second asset: two requests, and two `latest` redirects that can race during a release.

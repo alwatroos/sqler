@@ -300,6 +300,8 @@ pub enum Effect {
     /// Call a plugin for one of its contributions (a command, a panel, a status item) on tokio and report the
     /// result with [`Workspace::plugin_ui_finished`].
     PluginUi(PluginUiEffect),
+    /// Call the update service (ADR-0066): arm it, switch it on or off, check, dismiss, or open the release notes.
+    Update(crate::update::UpdateEffect),
 }
 
 impl std::fmt::Debug for Effect {
@@ -471,6 +473,8 @@ impl std::fmt::Debug for Effect {
             Self::Plugins(effect) => f.debug_tuple("Plugins").field(effect).finish(),
             // Ids only: never the editor text or a typed value.
             Self::PluginUi(effect) => f.debug_tuple("PluginUi").field(effect).finish(),
+            // A version or a flag only; the notes URL is an https link from the signed manifest.
+            Self::Update(effect) => f.debug_tuple("Update").field(effect).finish(),
         }
     }
 }
@@ -503,7 +507,7 @@ pub struct Workspace {
     dialog_generation: u64,
     /// A message for the user that no dialog shows (a failed move, a delete of a full group).
     pub(super) notice: Option<String>,
-    settings: SettingsModel,
+    pub(super) settings: SettingsModel,
     settings_tab: SettingsTab,
     system_appearance: Appearance,
     /// Cancel flags of the grid tabs' ingestion threads.
@@ -570,6 +574,8 @@ pub struct Workspace {
     pub(super) plugin_ui: PluginUiState,
     /// The write approvals plugins wait on (AC6, ADR-0058).
     pub(super) plugin_writes: crate::plugins::WriteQueue,
+    /// The update check: availability, the running check, the announced version (ADR-0066).
+    pub(super) update: crate::update::UpdateModel,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -637,6 +643,7 @@ impl Workspace {
             plugins: PluginsState::default(),
             plugin_ui: PluginUiState::default(),
             plugin_writes: crate::plugins::WriteQueue::default(),
+            update: crate::update::UpdateModel::new(&crate::update::UpdateStartup::unavailable()),
         }
     }
 
