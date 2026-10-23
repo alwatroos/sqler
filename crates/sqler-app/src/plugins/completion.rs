@@ -3,21 +3,23 @@
 
 //! Completion calls as the app serves them: at most one call per plugin in flight, and one future per
 //! plugin that is free. A busy plugin is skipped for that ask, so calls never pile up behind the
-//! plugin's lock.
+//! plugin's lock; it gets a future that resolves when its call in flight ends, so the caller can ask
+//! it again.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use sqler_driver_api::BoxFuture;
 use sqler_plugin_api::{CompletionRequest, PluginId};
 use sqler_plugin_host::PluginHost;
-use sqler_ui::plugins::backend::PluginCompletions;
+use sqler_ui::plugins::backend::{CompletionCalls, PluginCompletions};
+use tokio::sync::oneshot;
 
 use super::backend::one_line;
 
-/// The plugins with a completion call in flight.
+/// The plugins with a completion call in flight, each with the waiters for its release.
 #[derive(Clone, Default)]
-pub(super) struct CompletionGate(Arc<Mutex<HashSet<PluginId>>>);
+pub(super) struct CompletionGate(Arc<Mutex<HashMap<PluginId, Vec<oneshot::Sender<()>>>>>);
 
 /// The right to call one plugin; the plugin is free again when it drops.
 pub(super) struct Ticket {
@@ -29,50 +31,77 @@ impl CompletionGate {
     /// A ticket for `id`, or `None` when a call to it is still in flight.
     pub(super) fn try_enter(&self, id: &PluginId) -> Option<Ticket> {
         let mut busy = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        busy.insert(id.clone()).then(|| Ticket {
+        if busy.contains_key(id) {
+            return None;
+        }
+        busy.insert(id.clone(), Vec::new());
+        Some(Ticket {
             gate: self.clone(),
             id: id.clone(),
+        })
+    }
+
+    /// A future that resolves when the call to `id` in flight ends (at once when none is).
+    pub(super) fn released(&self, id: &PluginId) -> BoxFuture<'static, ()> {
+        let mut busy = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let rx = busy.get_mut(id).map(|waiters| {
+            let (tx, rx) = oneshot::channel();
+            waiters.push(tx);
+            rx
+        });
+        Box::pin(async move {
+            if let Some(rx) = rx {
+                // A dropped gate resolves it too.
+                rx.await.ok();
+            }
         })
     }
 }
 
 impl Drop for Ticket {
     fn drop(&mut self) {
-        self.gate
+        let waiters = self
+            .gate
             .0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.id);
+        for waiter in waiters.into_iter().flatten() {
+            waiter.send(()).ok();
+        }
     }
 }
 
-/// One future per free plugin of `providers` (id and display name). Each future owns its ticket from
-/// its creation on, so one dropped before its first poll frees the plugin too.
+/// One future per free plugin of `providers` (id and display name), and a release future per busy
+/// one. Each call future owns its ticket from its creation on, so one dropped before its first poll
+/// frees the plugin too.
 pub(super) fn fan_out(
     host: &PluginHost,
     providers: Vec<(PluginId, String)>,
     request: &CompletionRequest,
     gate: &CompletionGate,
-) -> Vec<BoxFuture<'static, Result<PluginCompletions, String>>> {
-    providers
-        .into_iter()
-        .filter_map(|(plugin, source)| {
-            let ticket = gate.try_enter(&plugin)?;
-            let pending = host.complete(&plugin, request.clone());
-            let future: BoxFuture<'static, _> = Box::pin(async move {
-                let _ticket = ticket;
-                match pending.await {
-                    Ok(items) => Ok(PluginCompletions {
-                        plugin,
-                        source,
-                        items,
-                    }),
-                    Err(e) => Err(one_line(&e.to_string())),
-                }
-            });
-            Some(future)
-        })
-        .collect()
+) -> CompletionCalls {
+    let mut out = CompletionCalls::default();
+    for (plugin, source) in providers {
+        let Some(ticket) = gate.try_enter(&plugin) else {
+            let released = gate.released(&plugin);
+            out.busy.push((plugin, released));
+            continue;
+        };
+        let pending = host.complete(&plugin, request.clone());
+        out.calls.push(Box::pin(async move {
+            let _ticket = ticket;
+            match pending.await {
+                Ok(items) => Ok(PluginCompletions {
+                    plugin,
+                    source,
+                    items,
+                }),
+                Err(e) => Err(one_line(&e.to_string())),
+            }
+        }));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -102,6 +131,21 @@ mod tests {
     fn a_dropped_ticket_frees_the_plugin() {
         let gate = CompletionGate::default();
         drop(gate.try_enter(&id("alpha")));
+        assert!(gate.try_enter(&id("alpha")).is_some());
+    }
+
+    /// The release future of a busy plugin resolves when its ticket drops, and at once for a free one.
+    #[test]
+    fn a_release_future_resolves_when_the_busy_call_ends() {
+        let gate = CompletionGate::default();
+        let mut cx = Context::from_waker(Waker::noop());
+        let mut free = gate.released(&id("alpha"));
+        assert_eq!(pin!(&mut free).poll(&mut cx), Poll::Ready(()));
+        let ticket = gate.try_enter(&id("alpha")).expect("free");
+        let mut waiting = gate.released(&id("alpha"));
+        assert_eq!(pin!(&mut waiting).poll(&mut cx), Poll::Pending);
+        drop(ticket);
+        assert_eq!(pin!(&mut waiting).poll(&mut cx), Poll::Ready(()));
         assert!(gate.try_enter(&id("alpha")).is_some());
     }
 

@@ -55,7 +55,8 @@ label. The editor has no snippet engine, so the insert text is inserted as plain
 A call has 250 ms. A call that runs longer is stopped, and its answer is dropped. A timeout
 or a trap counts as a fault; after three faults the host disables the plugin (the same rule
 as every other call). At most one completion call per plugin is in flight: while a plugin is
-busy, it is skipped for that popup. A plugin without an approved grant, switched off, or with
+busy, it is not called again; it is asked once more, alone, when its call ends, if the cursor
+is still at the same place. A plugin without an approved grant, switched off, or with
 a data directory error is not asked.
 
 ## Ranking and source marking

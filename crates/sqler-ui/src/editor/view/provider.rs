@@ -27,7 +27,7 @@ use sqler_catalog::{CacheKey, Catalog};
 use sqler_completion::{ItemKind, Severity, diagnose};
 use sqler_sql::Dialect;
 
-use sqler_plugin_api::CompletionKind;
+use sqler_plugin_api::{CompletionKind, CompletionRequest, PluginId};
 
 use crate::editor::intellisense::{
     CatalogSchema, PREFETCH_LIMIT, PluginAnswers, TabIntel, code_name, complete_popup,
@@ -126,6 +126,11 @@ impl IntelState {
         self.plugin
             .as_mut()
             .is_some_and(|p| p.answers.accept(ask, answer))
+    }
+
+    /// Whether `ask` is still the ask of the latest place.
+    fn is_current_ask(&self, ask: u64) -> bool {
+        self.plugin.as_ref().is_some_and(|p| p.answers.ask() == ask)
     }
 
     /// Notes that request `seq` was answered with no items, unless a newer one took over.
@@ -280,7 +285,12 @@ impl CompletionProvider for SqlProvider {
         // The plugins are never awaited here: the built-in popup is computed alone, the futures
         // only come back to be spawned, and their answers reopen the popup when they land.
         let backend = ctx.plugins.clone().filter(|_| ask.is_some());
-        let driver = ctx.driver.clone();
+        let place = Place {
+            text: rope.clone(),
+            offset,
+            dialect,
+            driver: ctx.driver.clone(),
+        };
         // The built-in task never touches the backend: the popup does not wait for the grants
         // file read that `backend.complete` may do.
         let compute = cx.background_executor().spawn(async move {
@@ -292,20 +302,25 @@ impl CompletionProvider for SqlProvider {
                 end: rope.offset_to_position(popup.replace.end),
             };
             let rows = merge_plugin_items(&popup.items, &cached);
-            let request = plugin_request(&source, offset, dialect, driver.as_deref());
-            (popup, range, rows, request)
+            (popup, range, rows)
         });
         let handle = self.handle.clone();
         let editor = self.editor.clone();
         window.spawn(cx, async move |cx| {
-            let (popup, range, rows, request) = compute.await;
+            let (popup, range, rows) = compute.await;
             handle.borrow_mut().note_empty(seq, popup.items.is_empty());
-            if let (Some(ask), Some(backend), Some(request)) = (ask, backend, request) {
+            if let (Some(ask), Some(backend)) = (ask, backend) {
                 let owner = handle.clone();
                 let weak = editor.clone();
                 // Detached: this task does not await it, so the popup below is returned first.
                 cx.update(|window, cx| {
-                    spawn_plugin_asks(&owner, &weak, backend, request, ask, window, cx);
+                    let asks = Asks {
+                        handle: owner,
+                        editor: weak,
+                        backend,
+                        ask,
+                    };
+                    spawn_plugin_asks(&asks, Source::Place(place), None, window, cx);
                 })
                 .ok();
             }
@@ -357,30 +372,82 @@ impl CompletionProvider for SqlProvider {
     }
 }
 
-/// Starts the plugin asks of one place in a task of its own. The backend call (which may read the
-/// grants file) runs on the background executor, each answer in a task of its own; a landed answer
-/// reopens the popup. Nothing here is awaited by the built-in popup.
-fn spawn_plugin_asks(
-    handle: &IntelHandle,
-    editor: &WeakEntity<EditorState>,
+/// What the plugin asks of one place share: where the answers go, who is asked, and which ask
+/// (place) they belong to.
+struct Asks {
+    handle: IntelHandle,
+    editor: WeakEntity<EditorState>,
     backend: Arc<dyn PluginsBackend>,
-    request: sqler_plugin_api::CompletionRequest,
     ask: u64,
+}
+
+/// The place a popup was made for; the plugin request is built from it off the built-in task.
+struct Place {
+    text: Rope,
+    offset: usize,
+    dialect: Dialect,
+    driver: Option<String>,
+}
+
+/// Where a plugin request comes from.
+enum Source {
+    /// Built from the place, in the background.
+    Place(Place),
+    /// Built already (a plugin asked again after it was busy).
+    Request(CompletionRequest),
+}
+
+impl Source {
+    fn into_request(self) -> Option<CompletionRequest> {
+        match self {
+            Self::Request(request) => Some(request),
+            Self::Place(p) => plugin_request(
+                &p.text.to_string(),
+                p.offset,
+                p.dialect,
+                p.driver.as_deref(),
+            ),
+        }
+    }
+}
+
+/// Starts the plugin asks of one place in a task of its own, limited to `only` when given. The
+/// request is built and the backend called (which may read the grants file) on the background
+/// executor, each answer is awaited in a task of its own, and a landed answer reopens the popup.
+/// Nothing here is awaited by the built-in popup.
+///
+/// A plugin the backend reports busy is asked again, alone, when its call in flight ends, as long
+/// as the place is still the current one: a stale answer is refused, so without this the plugin
+/// would never contribute at the place the typing stopped at.
+fn spawn_plugin_asks(
+    asks: &Asks,
+    source: Source,
+    only: Option<Vec<PluginId>>,
     window: &Window,
     cx: &App,
 ) {
-    let calls = cx
-        .background_executor()
-        .spawn(async move { backend.complete(&request) });
-    let handle = handle.clone();
-    let editor = editor.clone();
+    let backend = Arc::clone(&asks.backend);
+    let job = cx.background_executor().spawn(async move {
+        let request = source.into_request()?;
+        let calls = backend.complete(&request, only.as_deref());
+        Some((request, calls))
+    });
+    let again = Asks {
+        handle: asks.handle.clone(),
+        editor: asks.editor.clone(),
+        backend: Arc::clone(&asks.backend),
+        ask: asks.ask,
+    };
     window
         .spawn(cx, async move |cx| {
-            let asks = calls.await;
+            let Some((request, calls)) = job.await else {
+                return;
+            };
             cx.update(|window, cx| {
-                for fut in asks {
-                    let handle = handle.clone();
-                    let editor = editor.clone();
+                for fut in calls.calls {
+                    let handle = again.handle.clone();
+                    let editor = again.editor.clone();
+                    let ask = again.ask;
                     window
                         .spawn(cx, async move |cx| {
                             // A failed plugin is skipped: its fault is counted by the host.
@@ -389,6 +456,33 @@ fn spawn_plugin_asks(
                             {
                                 reopen(&editor, &handle, cx);
                             }
+                        })
+                        .detach();
+                }
+                for (plugin, released) in calls.busy {
+                    let next = Asks {
+                        handle: again.handle.clone(),
+                        editor: again.editor.clone(),
+                        backend: Arc::clone(&again.backend),
+                        ask: again.ask,
+                    };
+                    let request = request.clone();
+                    window
+                        .spawn(cx, async move |cx| {
+                            released.await;
+                            if !next.handle.borrow().is_current_ask(next.ask) {
+                                return;
+                            }
+                            cx.update(|window, cx| {
+                                spawn_plugin_asks(
+                                    &next,
+                                    Source::Request(request),
+                                    Some(vec![plugin]),
+                                    window,
+                                    cx,
+                                );
+                            })
+                            .ok();
                         })
                         .detach();
                 }
@@ -878,6 +972,94 @@ mod tests {
             backend.complete_requests.lock().expect("lock").len(),
             1,
             "the same place asks no plugin again"
+        );
+    }
+
+    /// A plugin skipped as busy is asked again, alone, when its call in flight ends: the final
+    /// place gets its rows.
+    #[gpui::test]
+    fn a_busy_plugin_is_asked_again_when_its_call_ends(cx: &mut gpui::TestAppContext) {
+        use std::sync::Arc;
+
+        use gpui_component::input::{CompletionProvider as _, EditorState};
+        use lsp_types::{CompletionContext, CompletionResponse, CompletionTriggerKind};
+
+        use super::{Context as Ctx, SqlProvider};
+        use crate::plugins::PluginsBackend;
+        use crate::plugins::backend::FakeBackend;
+
+        cx.update(gpui_component::init);
+        let (state, cx) = cx.add_window_view(EditorState::new);
+        let (catalog, _worker, _handle) = synthetic_catalog_with(2, 2);
+        let backend = FakeBackend::new(crate::plugins::PluginSnapshot::default());
+        backend
+            .completions
+            .lock()
+            .expect("lock")
+            .push(answer(&["zz_plugin_row"]));
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        backend.busy.lock().expect("lock").push((
+            "alpha".parse().expect("id"),
+            Box::pin(async move {
+                released.await.ok();
+            }),
+        ));
+        let shared = handle();
+        shared.borrow_mut().ctx = Some(Ctx {
+            catalog,
+            dialect: sqler_sql::Dialect::Postgres,
+            plugins: Some(Arc::clone(&backend) as Arc<dyn PluginsBackend>),
+            driver: Some("sqlite".to_owned()),
+        });
+        let provider = SqlProvider {
+            handle: shared,
+            editor: state.downgrade(),
+        };
+        let text = Rope::from("SELECT * FROM ");
+        let ask = |cx: &mut gpui::VisualTestContext| {
+            let task = cx.update(|window, cx| {
+                provider.completions(
+                    &text,
+                    text.len(),
+                    CompletionContext {
+                        trigger_kind: CompletionTriggerKind::INVOKED,
+                        trigger_character: None,
+                    },
+                    window,
+                    cx,
+                )
+            });
+            match cx.foreground_executor().block_test(task).expect("a popup") {
+                CompletionResponse::Array(items) => {
+                    items.into_iter().map(|i| i.label).collect::<Vec<_>>()
+                }
+                CompletionResponse::List(l) => l.items.into_iter().map(|i| i.label).collect(),
+            }
+        };
+        ask(cx);
+        cx.run_until_parked();
+        assert_eq!(backend.complete_requests.lock().expect("lock").len(), 1);
+        assert!(
+            !ask(cx).iter().any(|l| l == "zz_plugin_row"),
+            "busy: no row yet"
+        );
+        // Still busy: nobody is asked again.
+        cx.run_until_parked();
+        assert_eq!(backend.complete_requests.lock().expect("lock").len(), 1);
+        release.send(()).expect("the waiter lives");
+        cx.run_until_parked();
+        assert_eq!(
+            backend.complete_requests.lock().expect("lock").len(),
+            2,
+            "asked again once, when the call ended"
+        );
+        let rows = ask(cx);
+        cx.run_until_parked();
+        assert_eq!(rows.iter().filter(|l| *l == "zz_plugin_row").count(), 1);
+        assert_eq!(
+            backend.complete_requests.lock().expect("lock").len(),
+            2,
+            "the place is cached now"
         );
     }
 

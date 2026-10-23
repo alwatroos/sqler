@@ -47,7 +47,7 @@ Plugin completion providers (see [Completion providers](../plugin-development/co
 - **No wait.** `SqlProvider::completions` returns the built-in popup first, as before. The background task that computes it does not touch the plugin backend. A second task calls `PluginsBackend::complete` (it may read the grants file) on the background executor, and each plugin answer lands in a task of its own. An answer is kept in a per-editor cache keyed by (text, cursor); if the place has not moved the popup is asked for again with the existing reopen rule, and the next call merges the cached rows after the built-in rows. A new place drops the old answers, and a late answer for an old ask is refused.
 - **Deadline.** The host's completion deadline applies: 250 ms per call (`Limits::DEFAULT.deadlines.completion`). The UI has no timer of its own. A timeout or a trap is a fault under the three-fault rule.
 - **Merge order.** Built-in rows keep their order and sort text; plugin rows come after them, sorted by plugin id, each plugin in its own order, deduplicated by (label, insert text) and capped at 100. The plugin name is in `detail`.
-- **Load.** At most one completion call per plugin is in flight; a busy plugin is skipped for that ask.
+- **Load.** At most one completion call per plugin is in flight; a busy plugin is skipped for that ask and asked again alone when its call ends, if the place is still current.
 
 ## Consequences
 

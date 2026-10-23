@@ -22,7 +22,7 @@ use sqler_plugin_host::{
     DisableReason, DiscoveredPlugin, HostOptions, LoadProblem, PluginHost, PluginSource,
     PluginState, PluginStatus, Services, discover, read_setting,
 };
-use sqler_ui::plugins::backend::{PanelRender, PluginCompletions};
+use sqler_ui::plugins::backend::{CompletionCalls, PanelRender};
 use sqler_ui::plugins::grant::GrantBook;
 use sqler_ui::plugins::status::is_unsafe_char;
 use sqler_ui::plugins::{PluginProblem, PluginRow, PluginSnapshot, PluginsBackend, RowState};
@@ -515,29 +515,47 @@ impl PluginsBackend for AppPlugins {
         ui::status(self.built(), id, item)
     }
 
-    fn complete(
-        &self,
-        request: &CompletionRequest,
-    ) -> Vec<BoxFuture<'static, Result<PluginCompletions, String>>> {
+    fn complete(&self, request: &CompletionRequest, only: Option<&[PluginId]>) -> CompletionCalls {
         let Some(host) = self.built() else {
-            return Vec::new();
+            return CompletionCalls::default();
         };
+        let ids = host.completion_providers(request.driver.as_deref());
         // The grants file is re-read in `approved`: the UI calls this off its thread.
-        let providers: Vec<(PluginId, String)> = {
+        let providers = self.eligible(ids, only, |key| self.reloading.approved(key).is_some());
+        completion::fan_out(&host, providers, request, &self.completion)
+    }
+}
+
+impl AppPlugins {
+    /// The completion providers among `ids` (limited to `only` when given) that are enabled, free of
+    /// data errors and approved by `approved`, with their display names.
+    ///
+    /// `approved` may read the grants file, so it runs after the `cache` lock is released: the UI
+    /// thread takes that lock in `snapshot_of` and when it enables or disables a plugin.
+    fn eligible(
+        &self,
+        ids: Vec<PluginId>,
+        only: Option<&[PluginId]>,
+        mut approved: impl FnMut(&GrantKey) -> bool,
+    ) -> Vec<(PluginId, String)> {
+        let candidates: Vec<(PluginId, GrantKey, String)> = {
             let cache = lock(&self.cache);
-            host.completion_providers(request.driver.as_deref())
-                .into_iter()
+            ids.into_iter()
+                .filter(|id| only.is_none_or(|o| o.contains(id)))
                 .filter(|id| {
                     !cache.data_errors.contains_key(id) && !self.prefs.is_disabled(id.as_str())
                 })
                 .filter_map(|id| {
                     let p = cache.discovered.iter().find(|p| p.manifest.id() == &id)?;
-                    self.reloading.approved(&p.key)?;
-                    Some((id, source_name(p.manifest.name())))
+                    Some((id, p.key.clone(), source_name(p.manifest.name())))
                 })
                 .collect()
         };
-        completion::fan_out(&host, providers, request, &self.completion)
+        candidates
+            .into_iter()
+            .filter(|(_, key, _)| approved(key))
+            .map(|(id, _, name)| (id, name))
+            .collect()
     }
 }
 
@@ -718,12 +736,39 @@ default = 5
             statement: "SELECT ".to_owned(),
             cursor: 7,
         };
-        assert!(b.complete(&request).is_empty(), "before the first refresh");
+        assert!(
+            b.complete(&request, None).calls.is_empty(),
+            "before the first refresh"
+        );
         b.refresh();
         assert!(
-            b.complete(&request).is_empty(),
+            b.complete(&request, None).calls.is_empty(),
             "no plugin declares completion"
         );
+    }
+
+    /// The grants file is read with the `cache` lock released: the UI thread takes that lock.
+    #[test]
+    fn the_grants_check_runs_without_the_cache_lock() {
+        let s = Scratch::new("be-eligible");
+        install(&s, MANIFEST);
+        let (b, _grants, _dir) = backend(&s);
+        b.refresh();
+        let mut checked = 0;
+        let got = b.eligible(vec![id()], None, |_| {
+            assert!(
+                b.cache.try_lock().is_ok(),
+                "the cache lock is held during the grants check"
+            );
+            checked += 1;
+            true
+        });
+        assert_eq!(checked, 1, "the discovered plugin is checked");
+        assert_eq!(got.len(), 1);
+        let none = b.eligible(vec![id()], Some(&["other".parse().unwrap()]), |_| true);
+        assert!(none.is_empty(), "`only` limits the providers");
+        let denied = b.eligible(vec![id()], None, |_| false);
+        assert!(denied.is_empty(), "an unapproved plugin is dropped");
     }
 
     #[test]

@@ -163,16 +163,24 @@ pub trait PluginsBackend: Send + Sync {
         Box::pin(async { Err(NO_UI.to_owned()) })
     }
 
-    /// Asks the completion plugins for items. One future per eligible, non-busy plugin; empty means none.
+    /// Asks the completion plugins for items: one future per eligible, free plugin, and for each busy
+    /// one a future that resolves when its call in flight ends. `only` limits the ask to those plugins.
     ///
     /// May read the grants file: call it off the UI thread.
-    fn complete(
-        &self,
-        request: &CompletionRequest,
-    ) -> Vec<BoxFuture<'static, Result<PluginCompletions, String>>> {
-        let _ = request;
-        Vec::new()
+    fn complete(&self, request: &CompletionRequest, only: Option<&[PluginId]>) -> CompletionCalls {
+        let _ = (request, only);
+        CompletionCalls::default()
     }
+}
+
+/// The calls one completion ask started.
+#[derive(Default)]
+pub struct CompletionCalls {
+    /// One future per plugin that was free.
+    pub calls: Vec<BoxFuture<'static, Result<PluginCompletions, String>>>,
+    /// For each plugin that was busy with an earlier call: a future that resolves when that call ends,
+    /// so the caller can ask it again.
+    pub busy: Vec<(PluginId, BoxFuture<'static, ()>)>,
 }
 
 /// The completion items one plugin answered with.
@@ -332,9 +340,9 @@ mod fake {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{
-        Arc, BoxFuture, CapabilitySet, CommandContext, CompletionRequest, ComponentDigest,
-        ContributionId, Manifest, PanelRender, PluginCompletions, PluginId, PluginRow,
-        PluginSnapshot, PluginsBackend, RowState, SettingValue, WidgetEvent, WidgetTree,
+        Arc, BoxFuture, CapabilitySet, CommandContext, CompletionCalls, CompletionRequest,
+        ComponentDigest, ContributionId, Manifest, PanelRender, PluginCompletions, PluginId,
+        PluginRow, PluginSnapshot, PluginsBackend, RowState, SettingValue, WidgetEvent, WidgetTree,
     };
 
     type Key = (String, String);
@@ -370,6 +378,8 @@ mod fake {
         pub completions: Mutex<Vec<PluginCompletions>>,
         /// The requests `complete` saw, in order.
         pub complete_requests: Mutex<Vec<CompletionRequest>>,
+        /// What `complete` reports as busy; handed out once.
+        pub busy: Mutex<Vec<(PluginId, BoxFuture<'static, ()>)>>,
         command_error: Mutex<Option<String>>,
         panels: Mutex<HashMap<Key, PanelRender>>,
         replies: Mutex<HashMap<Key, Result<Option<WidgetTree>, String>>>,
@@ -569,15 +579,21 @@ mod fake {
         fn complete(
             &self,
             request: &CompletionRequest,
-        ) -> Vec<BoxFuture<'static, Result<PluginCompletions, String>>> {
+            only: Option<&[PluginId]>,
+        ) -> CompletionCalls {
             self.complete_requests.lock().unwrap().push(request.clone());
-            self.completions
+            let busy = std::mem::take(&mut *self.busy.lock().unwrap());
+            let calls = self
+                .completions
                 .lock()
                 .unwrap()
                 .iter()
+                .filter(|a| only.is_none_or(|o| o.contains(&a.plugin)))
+                .filter(|a| !busy.iter().any(|(id, _)| *id == a.plugin))
                 .cloned()
                 .map(|answer| Box::pin(async move { Ok(answer) }) as BoxFuture<'static, _>)
-                .collect()
+                .collect();
+            CompletionCalls { calls, busy }
         }
     }
 
@@ -700,7 +716,7 @@ mod tests {
             statement: "select 1".to_owned(),
             cursor: 0,
         };
-        assert!(b.complete(&request).is_empty());
+        assert!(b.complete(&request, None).calls.is_empty());
     }
 
     #[test]
