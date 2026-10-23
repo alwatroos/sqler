@@ -575,8 +575,8 @@ mod tests {
         for (attention, total) in [(8, 10), (10, 32)] {
             let prompt = many(attention, total);
             assert_eq!(prompt.lines().len(), total);
-            // Everything but db.read needs attention.
-            assert_eq!(prompt.attention_count(), total - 1);
+            // Everything needs attention.
+            assert_eq!(prompt.attention_count(), total);
             let (_host, cx, _) = open(cx, prompt);
             for selector in [
                 "grant-summary",

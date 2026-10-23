@@ -13,7 +13,7 @@ use gpui_component::button::Button;
 use gpui_component::input::{Input, InputState};
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
-use sqler_plugin_api::SettingValue;
+use sqler_plugin_api::{CapabilityKind, SettingValue};
 
 use super::RowGrant;
 use crate::plugins::PluginCommand;
@@ -172,17 +172,21 @@ fn list(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> Div {
         let mut caps = div().flex().flex_row().flex_wrap().gap(px(SPACE[1]));
         for cap in row.manifest.capabilities().iter() {
             let granted = row.effective.contains(cap);
-            let color = if granted {
-                cx.theme().foreground
-            } else {
+            // `db.read` and `net.http` are marked: the first reads the user's data, the second can send it away.
+            let marked = matches!(cap.kind(), CapabilityKind::DbRead | CapabilityKind::NetHttp);
+            let color = if !granted {
                 muted_fg
+            } else if marked {
+                cx.theme().warning
+            } else {
+                cx.theme().foreground
             };
             caps = caps.child(
                 div()
                     .px(px(SPACE[1]))
                     .rounded(cx.theme().radius)
                     .border_1()
-                    .border_color(cx.theme().border)
+                    .border_color(if marked { color } else { cx.theme().border })
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(px(ui_scale(cx).mono))
                     .text_color(color)

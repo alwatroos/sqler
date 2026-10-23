@@ -477,12 +477,11 @@ fn line(capability: &Capability, previous: Option<&CapabilitySet>) -> Capability
     l
 }
 
-/// Whether a capability of `kind` needs attention. Only the calm kinds, which neither leave the
-/// machine nor reach files, other tools or drivers, are quiet: reading the catalog of the
-/// connections the user already opened and drawing the plugin's own panels. Everything else,
-/// including any kind added later, is shown with a warning, whatever its argument.
+/// Whether a capability of `kind` needs attention. Only drawing the plugin's own panels is quiet.
+/// Everything else, including reading the catalog of the user's connections (`db.read`) and any
+/// kind added later, is shown with a warning, whatever its argument.
 fn needs_attention(kind: CapabilityKind) -> bool {
-    !matches!(kind, CapabilityKind::DbRead | CapabilityKind::UiPanel)
+    !matches!(kind, CapabilityKind::UiPanel)
 }
 
 fn fs_line(
@@ -634,7 +633,7 @@ mod tests {
         }
         assert_eq!(only("driver.host:duckdb").detail.as_deref(), Some("duckdb"));
         assert!(only("db.write").prominent);
-        assert!(!only("db.read").prominent);
+        assert!(only("db.read").prominent);
         assert!(!only("ui.panel").prominent);
     }
 
@@ -668,10 +667,9 @@ mod tests {
 
     #[test]
     fn only_the_calm_kinds_are_quiet() {
-        for c in ["db.read", "ui.panel"] {
-            assert!(!only(c).prominent, "{c}");
-        }
+        assert!(!only("ui.panel").prominent);
         for c in [
+            "db.read",
             "db.write",
             "ai.tool",
             "driver.guest",
@@ -689,9 +687,8 @@ mod tests {
     #[test]
     fn db_read_with_a_web_host_is_not_calm() {
         let p = prompt_for(&["db.read", "net.http:attacker.example"]);
-        assert_eq!(p.attention_count(), 1);
-        assert_eq!(p.summary(), "2 permissions, 1 needs attention");
-        assert_eq!(p.lines()[0].capability, "net.http:attacker.example");
+        assert_eq!(p.attention_count(), 2);
+        assert_eq!(p.summary(), "2 permissions, 2 need attention");
     }
 
     #[test]
@@ -720,12 +717,12 @@ mod tests {
     #[test]
     fn the_summary_counts_permissions_and_warnings() {
         let p = prompt_for(&["db.read", "ui.panel", "fs.read:home/Library/x"]);
-        assert_eq!(p.summary(), "3 permissions, 1 needs attention");
-        let p = prompt_for(&["db.read", "fs.read:data", "fs.read:home/Library/x"]);
         assert_eq!(p.summary(), "3 permissions, 2 need attention");
+        let p = prompt_for(&["db.read", "fs.read:data", "fs.read:home/Library/x"]);
+        assert_eq!(p.summary(), "3 permissions, 3 need attention");
         assert_eq!(
             prompt_for(&["db.read"]).summary(),
-            "1 permission, none need attention"
+            "1 permission, 1 needs attention"
         );
         let p = prompt_for(&["fs.read:home/Library/x", "fs.read:home/AppData/y"]);
         assert_eq!(p.summary(), "2 permissions, 2 need attention");
@@ -772,7 +769,7 @@ mod tests {
         );
         assert!(p.is_reprompt());
         let prominent = p.lines().iter().take_while(|l| l.prominent).count();
-        assert_eq!(prominent, 2);
+        assert_eq!(prominent, 3);
         assert!(p.lines()[prominent..].iter().all(|l| !l.prominent));
         for l in p.lines() {
             assert_eq!(l.is_new, l.capability != "db.read", "{}", l.capability);
@@ -913,6 +910,6 @@ mod tests {
         assert!(p.lines().iter().any(|l| l.is_new));
         assert!(p.lines().iter().any(|l| !l.is_new));
         assert!(p.lines()[0].prominent);
-        assert_eq!(p.attention_count(), 4);
+        assert_eq!(p.attention_count(), 5);
     }
 }
