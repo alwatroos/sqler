@@ -26,6 +26,10 @@ mod bindings {
     use self::sqler::plugin::settings::{self, SettingValue};
     use self::sqler::plugin::types::ErrorCode;
     use self::sqler::plugin::types::{ObjectPath, Value};
+    use self::sqler::plugin::ui;
+    use self::sqler::plugin::widgets::{
+        Button, ButtonStyle, Direction, Gap, Stack, Text, TextStyle, Widget, WidgetNode,
+    };
 
     struct Probe;
 
@@ -37,7 +41,7 @@ mod bindings {
     }
 
     impl Guest for Probe {
-        fn run_command(command: String, _context: CommandContext) -> Result<(), PluginError> {
+        fn run_command(command: String, context: CommandContext) -> Result<(), PluginError> {
             match command.as_str() {
                 "ok" => Ok(()),
                 "spin" => loop {
@@ -65,6 +69,21 @@ mod bindings {
                     }
                     Ok(())
                 }
+                "ui-calls" => {
+                    for i in 0..100 {
+                        ui::set_status("env", &format!("tick {i}"));
+                    }
+                    for i in 0..10 {
+                        ui::notify(&format!("note {i}"));
+                    }
+                    ui::refresh_panel("tree");
+                    Ok(())
+                }
+                // Hands the context back as the error message, so a test sees what crossed the boundary.
+                "context" => Err(PluginError {
+                    code: ErrorCode::Failed,
+                    message: format!("{context:?}"),
+                }),
                 other => Err(PluginError {
                     code: ErrorCode::NotFound,
                     message: format!("unknown command {other}"),
@@ -72,13 +91,19 @@ mod bindings {
             }
         }
 
-        fn render_panel(_panel: String) -> WidgetTree {
-            // The probe declares no panels; the host never asks.
-            WidgetTree { nodes: Vec::new() }
+        fn render_panel(panel: String) -> WidgetTree {
+            match panel.as_str() {
+                "tree" => tree("ready"),
+                // An empty node list fails the host's validation.
+                _ => WidgetTree { nodes: Vec::new() },
+            }
         }
 
-        fn panel_event(_panel: String, _event: WidgetEvent) -> Option<WidgetTree> {
-            None
+        fn panel_event(panel: String, event: WidgetEvent) -> Option<WidgetTree> {
+            match (panel.as_str(), event) {
+                ("tree", WidgetEvent::Clicked(id)) => Some(tree(&format!("clicked {id}"))),
+                _ => None,
+            }
         }
 
         fn status(item: String) -> Option<String> {
@@ -107,6 +132,36 @@ mod bindings {
                 _ => return None,
             };
             Some(text)
+        }
+    }
+
+    /// A valid three-node tree: a stack holding a text and a button.
+    fn tree(label: &str) -> WidgetTree {
+        WidgetTree {
+            nodes: vec![
+                WidgetNode {
+                    widget: Widget::Stack(Stack {
+                        direction: Direction::Vertical,
+                        gap: Gap::Small,
+                    }),
+                    children: vec![1, 2],
+                },
+                WidgetNode {
+                    widget: Widget::Text(Text {
+                        content: label.to_owned(),
+                        style: TextStyle::Body,
+                    }),
+                    children: Vec::new(),
+                },
+                WidgetNode {
+                    widget: Widget::Button(Button {
+                        id: "go".to_owned(),
+                        label: "Go".to_owned(),
+                        style: ButtonStyle::Primary,
+                    }),
+                    children: Vec::new(),
+                },
+            ],
         }
     }
 

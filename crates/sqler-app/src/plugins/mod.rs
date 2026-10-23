@@ -14,6 +14,7 @@ mod data;
 mod dirs;
 pub(crate) mod drivers;
 mod settings;
+mod ui;
 
 #[cfg(test)]
 mod scratch;
@@ -22,8 +23,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use sqler_config::ConfigDir;
-use sqler_plugin_host::{PluginData, Services};
+use sqler_plugin_host::{PluginData, PluginUi, Services};
 use sqler_ui::connections::Connector;
+use sqler_ui::plugins::backend::{UiSender, ui_channel};
 use sqler_ui::plugins::grant::GrantBook;
 use sqler_ui::plugins::{PluginsStartup, WriteSender};
 
@@ -32,13 +34,16 @@ use approver::UiApprover;
 use backend::AppPlugins;
 use data::AppData;
 use settings::Prefs;
+use ui::AppUiSink;
 
-/// The host services every plugin sees: the saved connections (`data`, one fresh session per statement) and the
-/// approver that sends every write to the window through `writes`.
-fn services(data: Arc<AppData>, writes: WriteSender) -> Services {
+/// The host services every plugin sees: the saved connections (`data`, one fresh session per statement), the approver
+/// that sends every write to the window through `writes`, and the UI sink that sends status texts, panel refreshes
+/// and notifications to the window through `ui`.
+fn services(data: Arc<AppData>, writes: WriteSender, ui: UiSender) -> Services {
     let data = PluginData::new(data).with_approver(Arc::new(UiApprover::new(writes)));
     let mut services = Services::new();
     services.insert(Arc::new(data));
+    services.insert(Arc::new(PluginUi::new(Arc::new(AppUiSink(ui)))));
     services
 }
 
@@ -55,6 +60,7 @@ pub(crate) fn startup(
         Arc::new(config.map_or_else(GrantBook::in_memory, |dir| GrantBook::open(dir.clone())));
     let prefs = Arc::new(Prefs::new(config.cloned()));
     let (writes, inbox) = sqler_ui::plugins::write_channel();
+    let (ui_sender, ui_inbox) = ui_channel();
     let data = Arc::new(AppData::new(config.cloned(), connector));
     let backend = Arc::new(
         AppPlugins::new(
@@ -64,12 +70,13 @@ pub(crate) fn startup(
             dev,
             std::env::home_dir(),
         )
-        .with_services(services(Arc::clone(&data), writes)),
+        .with_services(services(Arc::clone(&data), writes, ui_sender)),
     );
     // The AI surfaces list the plugins' tools; each call lends the plugin its own data and approver (ADR-0062).
     let ai_tools = AppAiTools::new(Arc::clone(&backend), data);
     PluginsStartup::new(Some(backend), grants)
         .with_writes(inbox)
+        .with_ui_events(ui_inbox)
         .with_ai_tools(Arc::new(ai_tools))
 }
 
@@ -112,6 +119,12 @@ mod tests {
     fn startup_hands_the_window_the_inbox_of_write_approvals() {
         let started = startup(None, Vec::new());
         assert!(started.writes.is_set());
+    }
+
+    #[test]
+    fn startup_hands_the_window_the_inbox_of_plugin_ui_events() {
+        let started = startup(None, Vec::new());
+        assert!(started.ui_events.is_set());
     }
 
     #[test]

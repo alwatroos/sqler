@@ -37,6 +37,8 @@ pub mod net;
 mod query;
 #[cfg(feature = "runtime")]
 mod runtime;
+#[cfg(feature = "runtime")]
+mod ui;
 
 pub use dirs::PluginDirs;
 pub use discovery::{
@@ -68,3 +70,5 @@ pub use runtime::{
     HostOptions, MAX_AI_ARGUMENT_BYTES, MAX_AI_RESULT_BYTES, PendingCall, PluginAiTool, PluginHost,
     Services,
 };
+#[cfg(feature = "runtime")]
+pub use ui::{PluginUi, UiSink};

@@ -13,7 +13,10 @@ use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme as _, Icon};
 use sqler_driver_api::sqler_core::Environment;
 
+use sqler_plugin_api::Alignment;
+
 use super::{Hints, appearance, run_command_id, scale};
+use crate::plugins::status::Shown;
 use crate::theme::icons::AppIcon;
 use crate::theme::widgets::env_chip;
 use crate::theme::{SPACE, env_accent, env_label, tooltip_text};
@@ -44,6 +47,24 @@ fn item(id: impl Into<gpui::ElementId>, colors: Colors) -> Stateful<gpui::Div> {
         .gap(px(SPACE[1]))
         .text_color(colors.text)
         .hover(move |s| s.bg(hover))
+}
+
+/// An item a plugin contributed: a plug mark, its text, and a tooltip that always ends in the plugin name.
+fn plugin_item(shown: Shown, colors: Colors) -> Stateful<gpui::Div> {
+    let tip = SharedString::from(shown.tooltip);
+    item(
+        SharedString::from(format!("status-plugin-{}", shown.key)),
+        colors,
+    )
+    .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+    // The plug mark and the tooltip name the plugin; neither is the plugin's to choose, so its text cannot pass as one of
+    // SQLer's own items.
+    .child(
+        Icon::new(AppIcon::Plug)
+            .size(px(12.))
+            .text_color(colors.text),
+    )
+    .child(shown.text)
 }
 
 /// A clickable item that runs `command`.
@@ -183,6 +204,11 @@ pub(crate) fn status_bar(
         );
     }
 
+    // Plugin items are plain text: not focusable, the tooltip says whose they are.
+    for shown in view.workspace().plugin_ui().status().shown(Alignment::Left) {
+        left = left.child(plugin_item(shown, colors));
+    }
+
     let mut right = div().h_full().flex().flex_row().items_center();
     let running = match model.run {
         RunIndicator::Idle => None,
@@ -205,6 +231,14 @@ pub(crate) fn status_bar(
     }
     if let Some(timing) = &model.timing {
         right = right.child(item("status-timing", colors).child(timing.clone()));
+    }
+    for shown in view
+        .workspace()
+        .plugin_ui()
+        .status()
+        .shown(Alignment::Right)
+    {
+        right = right.child(plugin_item(shown, colors));
     }
     let layout = view.workspace().layout();
     for (id, icon, command, label, open) in [

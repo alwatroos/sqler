@@ -2,7 +2,7 @@
 
 Plugin loading, sandboxing, capability grants and lifecycle.
 
-Status: engine-free core, wasmtime runtime (`cl`, `pulley-rt`) and `NetEgress` (`net`) are in (P4, ADR-0057). The guarded `catalog` and `query` interfaces are in (P5, ADR-0058). The typed calls for the UI, driver, export, completion and AI interfaces come with P8 to P12; `ui` imports are dropped until P8; the other interfaces come with P9 to P12.
+Status: engine-free core, wasmtime runtime (`cl`, `pulley-rt`) and `NetEgress` (`net`) are in (P4, ADR-0057). The guarded `catalog` and `query` interfaces are in (P5, ADR-0058). The `ui` import and the typed `ui-handler` calls (`run_command`, `render_panel`, `panel_event`, `status`) are in (P8, ADR-0060): the app inserts one `PluginUi` over its `UiSink` into `Services`, and the import is gated by the manifest's declarations, by `ui.panel` for panels, and by per-plugin rate limits. The typed calls for the driver, export, completion and AI interfaces come with P9 to P12.
 
 Layer: L3
 

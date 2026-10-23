@@ -39,6 +39,7 @@ use crate::grid::{
     GridCancel, GridTab, InsertTarget, SYNTHETIC_BATCH, SYNTHETIC_COLUMNS, SYNTHETIC_ROWS,
 };
 use crate::history::HistorySearch;
+use crate::plugins::contrib::{PluginUiEffect, PluginUiState};
 use crate::plugins::manager::{PluginEffect, PluginsState};
 use crate::query::{Phase, QueryJob, QueryTab, RunEvent, StatementStatus};
 use crate::settings::SettingsModel;
@@ -296,6 +297,9 @@ pub enum Effect {
     /// [`Workspace::plugin_finished`] (`SessionBridge::blocking` with `PluginEffect::run_blocking`; a
     /// `Start` runs the backend future on tokio).
     Plugins(PluginEffect),
+    /// Call a plugin for one of its contributions (a command, a panel, a status item) on tokio and report the
+    /// result with [`Workspace::plugin_ui_finished`].
+    PluginUi(PluginUiEffect),
 }
 
 impl std::fmt::Debug for Effect {
@@ -465,6 +469,8 @@ impl std::fmt::Debug for Effect {
             Self::CancelAssist(id) => f.debug_tuple("CancelAssist").field(id).finish(),
             // Ids and keys only: the effect's own Debug never shows a setting value.
             Self::Plugins(effect) => f.debug_tuple("Plugins").field(effect).finish(),
+            // Ids only: never the editor text or a typed value.
+            Self::PluginUi(effect) => f.debug_tuple("PluginUi").field(effect).finish(),
         }
     }
 }
@@ -560,6 +566,8 @@ pub struct Workspace {
     pub(super) assist: EditorAssist,
     /// The plugin manager: the rows, the open permission dialog and the work it asks for (ADR-0060).
     pub(super) plugins: PluginsState,
+    /// What the plugins contribute: palette and menu commands, panels and status items (ADR-0060).
+    pub(super) plugin_ui: PluginUiState,
     /// The write approvals plugins wait on (AC6, ADR-0058).
     pub(super) plugin_writes: crate::plugins::WriteQueue,
 }
@@ -627,6 +635,7 @@ impl Workspace {
             agents: AgentTabs::default(),
             assist: EditorAssist::default(),
             plugins: PluginsState::default(),
+            plugin_ui: PluginUiState::default(),
             plugin_writes: crate::plugins::WriteQueue::default(),
         }
     }

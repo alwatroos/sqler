@@ -73,6 +73,8 @@ pub enum PanelView {
     Audit,
     /// The answers of the AI assistant for the active editor tab.
     Assistant,
+    /// The panels plugins contribute (ADR-0060); the tab shows only while one is registered.
+    PluginPanels,
 }
 
 impl PanelView {
@@ -85,6 +87,7 @@ impl PanelView {
             Self::History => BOTTOM_VIEWS[2],
             Self::Audit => BOTTOM_VIEWS[3],
             Self::Assistant => BOTTOM_VIEWS[4],
+            Self::PluginPanels => BOTTOM_VIEWS[5],
         }
     }
 
@@ -97,6 +100,7 @@ impl PanelView {
             "history" => Some(Self::History),
             "ai-audit" => Some(Self::Audit),
             "assistant" => Some(Self::Assistant),
+            "plugin-panels" => Some(Self::PluginPanels),
             _ => None,
         }
     }
@@ -348,6 +352,7 @@ mod tests {
             (PanelView::History, "history"),
             (PanelView::Audit, "ai-audit"),
             (PanelView::Assistant, "assistant"),
+            (PanelView::PluginPanels, "plugin-panels"),
         ] {
             assert_eq!(v.as_str(), s);
             assert_eq!(PanelView::parse(s), Some(v));

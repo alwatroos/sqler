@@ -14,18 +14,22 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use sqler_config::ConfigDir;
 use sqler_driver_api::BoxFuture;
 use sqler_plugin_api::{
-    CapabilitySet, FsRoot, GrantKey, GrantSource, Limits, PluginId, SettingValue,
+    CapabilitySet, CommandContext, ContributionId, FsRoot, GrantKey, GrantSource, Limits, PluginId,
+    SettingValue, WidgetEvent, WidgetTree,
 };
 use sqler_plugin_host::net::NetEgressFactory;
 use sqler_plugin_host::{
     DisableReason, DiscoveredPlugin, HostOptions, LoadProblem, PluginHost, PluginSource,
     PluginState, PluginStatus, Services, discover, read_setting,
 };
+use sqler_ui::plugins::backend::PanelRender;
 use sqler_ui::plugins::grant::GrantBook;
+use sqler_ui::plugins::status::is_unsafe_char;
 use sqler_ui::plugins::{PluginProblem, PluginRow, PluginSnapshot, PluginsBackend, RowState};
 
 use super::dirs::{ensure_data_dir, plugin_dirs};
 use super::settings::Prefs;
+use super::ui;
 
 /// Longest error line shown in the manager, in characters.
 const MAX_LINE: usize = 300;
@@ -86,10 +90,10 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// One printable line of at most [`MAX_LINE`] characters.
-fn one_line(text: &str) -> String {
+pub(super) fn one_line(text: &str) -> String {
     let flat: String = text
         .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| if is_unsafe_char(c) { ' ' } else { c })
         .collect();
     let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= MAX_LINE {
@@ -456,6 +460,40 @@ impl PluginsBackend for AppPlugins {
             }
         })
     }
+
+    fn run_command(
+        &self,
+        id: &PluginId,
+        command: &ContributionId,
+        context: CommandContext,
+    ) -> BoxFuture<'static, Result<(), String>> {
+        ui::run_command(self.built(), id, command, context)
+    }
+
+    fn render_panel(
+        &self,
+        id: &PluginId,
+        panel: &ContributionId,
+    ) -> BoxFuture<'static, PanelRender> {
+        ui::render_panel(self.built(), id, panel)
+    }
+
+    fn panel_event(
+        &self,
+        id: &PluginId,
+        panel: &ContributionId,
+        event: WidgetEvent,
+    ) -> BoxFuture<'static, Result<Option<WidgetTree>, String>> {
+        ui::panel_event(self.built(), id, panel, event)
+    }
+
+    fn status(
+        &self,
+        id: &PluginId,
+        item: &ContributionId,
+    ) -> BoxFuture<'static, Result<Option<String>, String>> {
+        ui::status(self.built(), id, item)
+    }
 }
 
 impl Drop for AppPlugins {
@@ -771,6 +809,7 @@ default = 5
     #[test]
     fn one_line_flattens_and_cuts() {
         assert_eq!(one_line("a\nb\t c"), "a b c");
+        assert_eq!(one_line("a\u{202e}b\u{2028}c"), "a b c");
         let long = "x".repeat(1000);
         assert_eq!(one_line(&long).chars().count(), MAX_LINE);
     }
