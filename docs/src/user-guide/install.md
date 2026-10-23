@@ -33,7 +33,7 @@ Shell installer. It puts the binary in `~/.sqler/bin` and writes an `env` script
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/alwatroos/sqler/releases/latest/download/sqler-app-installer.sh | sh
 ```
 
-To leave your shell profiles alone, set `CARGO_DIST_NO_MODIFY_PATH=1` for the installer (`... | CARGO_DIST_NO_MODIFY_PATH=1 sh`) and add `~/.sqler/bin` to your `PATH` yourself. To uninstall, delete `~/.sqler` and remove the profile line the installer added.
+To leave your shell profiles alone, set `SQLER_APP_NO_MODIFY_PATH=1` for the installer (`... | SQLER_APP_NO_MODIFY_PATH=1 sh`; the generic `INSTALLER_NO_MODIFY_PATH=1` works too) and add `~/.sqler/bin` to your `PATH` yourself. To uninstall, delete `~/.sqler` and remove the profile line the installer added.
 
 Archive: download `sqler-app-<target>.tar.xz`, unpack it with `tar -xJf` and run the `sqler` binary inside.
 
@@ -58,6 +58,13 @@ The window needs the usual desktop libraries on the machine. This list is provis
 PowerShell installer. It puts the binary in `~/.sqler/bin`:
 
 ```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/alwatroos/sqler/releases/latest/download/sqler-app-installer.ps1 | iex"
+```
+
+By default it also adds `~/.sqler/bin` to your user `PATH`. To prevent that, set `SQLER_APP_NO_MODIFY_PATH=1` (or `INSTALLER_NO_MODIFY_PATH=1`) in the environment first:
+
+```powershell
+$env:SQLER_APP_NO_MODIFY_PATH = "1"
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/alwatroos/sqler/releases/latest/download/sqler-app-installer.ps1 | iex"
 ```
 
