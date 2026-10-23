@@ -60,7 +60,7 @@ context-menu entry goes through the palette-filtered object menu. P7 adds none o
 host's view of the plugins whose grants changed, return the rows), `set_enabled`, `grants_changed`, `set_setting` and
 `start` (a future). The data is `PluginSnapshot { rows, problems }`, `PluginRow` (manifest, digest, dev flag, `RowState`,
 enabled flag, effective capabilities, last error, scope issues, settings with values) and `PluginProblem`.
-`Startup.plugins` is a `PluginsStartup { backend: Option<Arc<dyn PluginsBackend>>, grants: Arc<GrantBook> }`, built only
+`Startup.plugins` is a `PluginsStartup { backend: Option<Arc<dyn PluginsBackend>>, grants: Arc<GrantBook>, writes: WriteInbox }`, built only
 through `new` or `unavailable()` (never a literal) so fields can be added. Without the feature the backend is `None` and
 the view says "This build has no plugin support".
 
@@ -90,7 +90,8 @@ reads settings through `SettingsStore` over it; a plugin never writes.
 
 ### Startup, runtime and paths
 
-- `sqler_app::plugins::startup(config, dev)` builds the grant book and an idle backend. It does no I/O beyond reading
+- `sqler_app::plugins::startup(config, dev, connector)` builds the grant book, the channel of write approvals (its inbox is
+  `PluginsStartup.writes`) and an idle backend that lends sessions opened through `connector`. It does no I/O beyond reading
   `plugin-grants.toml`. The first `refresh` is requested from `window.on_next_frame`, so no folder is scanned and no
   plugin is compiled or instantiated on the first-frame path. The host is created on that first refresh;
   `PluginHost::new` itself does nothing.
@@ -111,7 +112,7 @@ reads settings through `SettingsStore` over it; a plugin never writes.
 
 ### The `plugins` feature, and the engine
 
-`sqler-app` feature `plugins = ["dep:sqler-plugin-host", "sqler-plugin-host/cl", "sqler-plugin-host/net"]`, **off by
+`sqler-app` feature `plugins = ["dep:sqler-plugin-api", "dep:sqler-plugin-host", "dep:sqler-catalog", "sqler-plugin-host/cl", "sqler-plugin-host/net"]`, **off by
 default**. The engine is `cl` (Cranelift), which loads a plain `.wasm`. `pulley-rt` is not used: the app would carry no
 compiler, so it would need an unbuilt `.cwasm` precompile pipeline and an `unsafe` deserialize (the workspace forbids
 `unsafe`), and its +3.6 MB does not fit the headroom either.
@@ -146,7 +147,9 @@ the exact SQL, a dropped reply is a denial, and on a `prod` connection a second 
 Its text is in the user guide; the app implements the host's `QueryApprover` by sending asks to the UI
 (`PluginWriteAsk` on a channel whose receiver `PluginsStartup::writes` hands to the workspace). The host asks `Confirm`
 and, on `prod`, `ProdSecond`; the window draws the first as a dialog with Deny focused and the second as the query
-editor's production confirmation, opened with `open_prod_gate` on a `QueryTab` the queue owns. The app also implements
+editor's production confirmation, opened with `open_prod_gate` on a `QueryTab` the queue owns. Both dialogs name the
+plugin by display name and id, and both Approve buttons are pointer-only (no tab stop, keyboard clicks ignored, as in the
+grant dialog) and dead for 500 ms after the dialog appears, so a click meant for the grid cannot land on it. The app also implements
 `DataService` over the saved connections: every `acquire` opens a fresh session through the connect pipeline (never a
 tab's, so no user transaction is lent) and `release` always closes it, so a session whose state a plugin statement
 changed (`BEGIN`, `SET ROLE`, `USE`, `ATTACH`, temporary tables) never reaches a pool. `catalog` returns `None` for now.

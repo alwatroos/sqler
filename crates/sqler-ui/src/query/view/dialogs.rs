@@ -181,6 +181,7 @@ fn confirm_dialog(
         statements,
         None,
         view.queries.confirm_focus(),
+        false,
         cancel,
         confirm,
         cx,
@@ -189,13 +190,16 @@ fn confirm_dialog(
 
 /// The production confirmation as a dialog: the look of a run on a production connection. Shared with the approval
 /// of plugin writes, whose second confirmation goes through the same gate. `intro` goes before the question; `focus`
-/// is the handle of the Cancel wrapper (a stray Enter never confirms); the handlers see pointer clicks only.
-#[allow(clippy::too_many_lines)] // one declarative element tree
+/// is the handle of the Cancel wrapper (a stray Enter never confirms). With `pointer_only` the Run button is no tab
+/// stop (the caller's handler must also refuse keyboard clicks); the query editor's own gate keeps it in the tab
+/// order.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // one declarative element tree
 pub(crate) fn confirm_panel(
     connection: &str,
     statements: &[BoundStatement],
     intro: Option<String>,
     focus: Option<&gpui::FocusHandle>,
+    pointer_only: bool,
     on_cancel: impl Fn(&ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
     on_confirm: impl Fn(&ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
     cx: &gpui::App,
@@ -276,17 +280,21 @@ pub(crate) fn confirm_panel(
     if let Some(focus) = focus {
         cancel = cancel.track_focus(focus);
     }
-    let confirm = Button::new("confirm-run")
+    let mut confirm = Button::new("confirm-run")
         .label("Run")
         .primary()
         .danger()
         .small()
         .on_click(on_confirm);
+    if pointer_only {
+        confirm = confirm.tab_stop(false);
+    }
     let title = dialog_title(Some(AppIcon::TriangleAlert), "Run on production?", cx)
         .child(env_chip(Environment::Prod, cx));
     scrim("confirm-scrim", cx)
         .child(
             dialog_panel("confirm-dialog", DIALOG_W_LG, cx)
+                .debug_selector(|| "confirm-dialog".to_owned())
                 .child(title)
                 .child(div().text_size(px(scale.sm)).text_color(muted).child(body))
                 .child(list)

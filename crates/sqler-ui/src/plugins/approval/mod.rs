@@ -345,10 +345,16 @@ impl WriteQueue {
     }
 }
 
-/// The title of the first card: `Acme Sync wants to change data`.
+/// Who asks: the display name (the plugin controls it) and the id (it does not): `Acme Sync (acme-sync)`.
+#[must_use]
+pub fn asker(request: &PluginWriteRequest) -> String {
+    format!("{} ({})", request.plugin_name, request.plugin.as_str())
+}
+
+/// The title of the first card: `Acme Sync (acme-sync) wants to run a statement`.
 #[must_use]
 pub fn card_title(request: &PluginWriteRequest) -> String {
-    format!("{} wants to run a statement", request.plugin_name)
+    format!("{} wants to run a statement", asker(request))
 }
 
 #[cfg(test)]

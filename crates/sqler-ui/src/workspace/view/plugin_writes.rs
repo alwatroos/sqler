@@ -4,6 +4,8 @@
 //! The `GPUI` side of plugin write approvals (AC6): drains the asks the app's approver sends, keeps the Deny button
 //! focused while a dialog is up and routes the answers to the [`WriteQueue`](crate::plugins::WriteQueue).
 
+use std::time::{Duration, Instant};
+
 use gpui::{Context, FocusHandle, Window};
 use sqler_config::{KeyChord, Modifiers};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -17,15 +19,38 @@ pub(crate) struct WriteUi {
     focus: FocusHandle,
     /// The ask and stage the focus was prepared for.
     focused: Option<(u64, WriteStage)>,
+    /// When the ask and stage on screen became visible.
+    shown: Option<(u64, WriteStage, Instant)>,
 }
+
+/// How long Approve is dead after a dialog appears: a plugin chooses when its dialog shows, so a click meant for
+/// the grid or the editor must not land on it.
+const ARMING_DELAY: Duration = Duration::from_millis(500);
 
 impl WriteUi {
     pub(crate) fn new(cx: &mut Context<WorkspaceView>) -> Self {
         Self {
             focus: cx.focus_handle(),
             focused: None,
+            shown: None,
         }
     }
+
+    /// Whether Approve of `id` at `stage` counts at `now`: the dialog must have been visible for [`ARMING_DELAY`].
+    fn armed(&self, id: u64, stage: WriteStage, now: Instant) -> bool {
+        is_armed(self.shown, id, stage, now)
+    }
+}
+
+fn is_armed(
+    shown: Option<(u64, WriteStage, Instant)>,
+    id: u64,
+    stage: WriteStage,
+    now: Instant,
+) -> bool {
+    shown.is_some_and(|(i, s, since)| {
+        i == id && s == stage && now.saturating_duration_since(since) >= ARMING_DELAY
+    })
 }
 
 impl WorkspaceView {
@@ -61,7 +86,7 @@ impl WorkspaceView {
         self.ws.plugin_writes().is_waiting()
     }
 
-    /// Answers ask `id` at `stage`. A stale id does nothing.
+    /// Answers ask `id` at `stage`. A stale id does nothing, and neither does an Approve before the dialog is armed.
     pub(crate) fn plugin_write_answer(
         &mut self,
         id: u64,
@@ -69,6 +94,9 @@ impl WorkspaceView {
         approve: bool,
         cx: &mut Context<Self>,
     ) {
+        if approve && !self.plugin_writes_ui.armed(id, stage, Instant::now()) {
+            return;
+        }
         self.ws.plugin_writes_mut().answer(id, stage, approve);
         cx.notify();
     }
@@ -99,10 +127,31 @@ impl WorkspaceView {
             return;
         }
         self.plugin_writes_ui.focused = now;
+        self.plugin_writes_ui.shown = now.map(|(id, stage)| (id, stage, Instant::now()));
         if now.is_some() {
             window.focus(&self.plugin_writes_ui.focus, cx);
         } else {
             window.focus(&self.focus, cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn approve_waits_for_the_arming_delay() {
+        let t0 = Instant::now();
+        let shown = Some((3, WriteStage::First, t0));
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let delay = u64::try_from(ARMING_DELAY.as_millis()).unwrap();
+        assert!(!is_armed(shown, 3, WriteStage::First, t0));
+        assert!(!is_armed(shown, 3, WriteStage::First, at(delay - 1)));
+        assert!(is_armed(shown, 3, WriteStage::First, at(delay)));
+        // Another ask or stage is a new dialog and is not armed by this one's time.
+        assert!(!is_armed(shown, 4, WriteStage::First, at(delay)));
+        assert!(!is_armed(shown, 3, WriteStage::ProdSecond, at(delay)));
+        assert!(!is_armed(None, 3, WriteStage::First, at(delay)));
     }
 }

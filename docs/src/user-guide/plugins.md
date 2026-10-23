@@ -129,8 +129,9 @@ again at the next start. To be asked again, select the plugin and choose **Revie
 
 A plugin with `db.write` can ask to run a statement that changes data. SQLer opens its own connection for each
 statement (never one of your tabs, so it never touches a transaction you hold), and closes it afterwards. Before the
-statement runs, a dialog shows the plugin, the connection and the exact SQL, and nothing runs until you press
-**Approve** with the mouse. **Deny** has the focus, **Escape** denies, and a plugin call that is cancelled removes its
+statement runs, a dialog shows the plugin (name and id), the connection and the exact SQL, and nothing runs until you
+press **Approve** with the mouse. Approve ignores clicks for about half a second after the dialog appears, so a click
+meant for the grid or the editor cannot approve it. **Deny** has the focus, **Escape** denies, and a plugin call that is cancelled removes its
 dialog. If several plugins ask, the dialogs come one after the other. On a connection labelled `prod` a second
 dialog, the same "Run on production?" confirmation as for your own statements, follows; denying either one stops the
 statement. A statement that cannot be shown in that confirmation (for example one with named parameters) is refused.

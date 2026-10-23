@@ -28,19 +28,38 @@ impl AppData {
         Self { config, connector }
     }
 
-    /// The saved profiles; empty without a configuration folder or when the file does not load.
-    fn profiles(&self) -> Vec<ConnectionProfile> {
-        self.config
-            .as_ref()
+    /// The saved profiles; empty without a configuration folder or when the file does not load. Blocking file I/O.
+    fn read_profiles(config: Option<&ConfigDir>) -> Vec<ConnectionProfile> {
+        config
             .and_then(|dir| dir.load_connection_store().ok())
             .map(|store| store.connections().to_vec())
             .unwrap_or_default()
+    }
+
+    /// The profiles, read on a blocking task so the runtime worker is not held by the file.
+    async fn profiles(&self) -> Vec<ConnectionProfile> {
+        let config = self.config.clone();
+        tokio::task::spawn_blocking(move || Self::read_profiles(config.as_ref()))
+            .await
+            .unwrap_or_default()
+    }
+
+    /// The same for the synchronous trait method: on a multi-threaded runtime the worker is handed over while the
+    /// file is read; elsewhere there is no worker to hold.
+    fn profiles_sync(&self) -> Vec<ConnectionProfile> {
+        let multi = tokio::runtime::Handle::try_current()
+            .is_ok_and(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread);
+        if multi {
+            tokio::task::block_in_place(|| Self::read_profiles(self.config.as_ref()))
+        } else {
+            Self::read_profiles(self.config.as_ref())
+        }
     }
 }
 
 impl DataService for AppData {
     fn connections(&self) -> Vec<PluginConnection> {
-        self.profiles()
+        self.profiles_sync()
             .iter()
             .map(|p| {
                 let spec = p.spec();
@@ -66,6 +85,7 @@ impl DataService for AppData {
         Box::pin(async move {
             let profile = self
                 .profiles()
+                .await
                 .into_iter()
                 .find(|p| p.id().as_str() == connection)
                 .ok_or_else(|| DataError::UnknownConnection(connection.to_owned()))?;
