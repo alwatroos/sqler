@@ -1,24 +1,66 @@
 name: Bench
 
+# Runs on push to main (absolute budgets only, no base; it also saves the rust-cache that PRs restore)
+# and on pull requests that touch what the benches build. Paths: every crate outside
+# `cargo tree -e normal,dev,build -p sqler-ui -p sqler-catalog -p sqler-completion`, no markdown.
+# The two path lists below must stay identical (no YAML anchors in workflows).
+# No required_status_checks rule exists on main today, so a path-skipped run blocks nothing.
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - "crates/**"
+      - "!crates/sqler-app/**"
+      - "!crates/sqler-cli/**"
+      - "!crates/sqler-ai-anthropic/**"
+      - "!crates/sqler-ai-mistral/**"
+      - "!crates/sqler-ai-ollama/**"
+      - "!crates/sqler-ai-openai/**"
+      - "!crates/sqler-driver-duckdb/**"
+      - "!crates/sqler-driver-mssql/**"
+      - "!crates/sqler-plugin-host/**"
+      - "!crates/sqler-tunnel/**"
+      - "!crates/**/*.md"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
+      - "vendor/**"
+      - ".github/workflows/bench.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "!crates/sqler-app/**"
+      - "!crates/sqler-cli/**"
+      - "!crates/sqler-ai-anthropic/**"
+      - "!crates/sqler-ai-mistral/**"
+      - "!crates/sqler-ai-ollama/**"
+      - "!crates/sqler-ai-openai/**"
+      - "!crates/sqler-driver-duckdb/**"
+      - "!crates/sqler-driver-mssql/**"
+      - "!crates/sqler-plugin-host/**"
+      - "!crates/sqler-tunnel/**"
+      - "!crates/**/*.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "vendor/**"
       - ".github/workflows/bench.yml"
   workflow_dispatch:
 
+# Cancel superseded runs on pull requests only; every main run completes (own group per run).
 concurrency:
-  group: bench-${{ github.ref }}
-  cancel-in-progress: true
+  group: bench-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  # The base worktree builds into the workspace target/ (cached by rust-cache) instead of ../base/target,
+  # which is never cached: its third-party dependencies come from main's cache. Path crates hash by path,
+  # so base and PR artifacts do not mix. Revert: set this to ${{ github.workspace }}/../base/target.
+  BASE_TARGET_DIR: ${{ github.workspace }}/target
 
 jobs:
   grid-viewport:
@@ -31,6 +73,13 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          # Saved on main only; PRs restore (they would otherwise evict main's caches).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check out the base commit
         if: github.event_name == 'pull_request'
         env:
@@ -52,14 +101,14 @@ jobs:
             if grep -q -- '--reps' "$BASE_SRC"; then BASE_ARGS="--reps 1"; fi
             # --staged (staged edits on the grid) is newer still; pass it only if the base source knows it.
             if grep -q -- '--staged' "$BASE_SRC"; then BASE_ARGS="$BASE_ARGS --staged 10000"; fi
-            (cd "$GITHUB_WORKSPACE/../base" && rustup toolchain install && cargo bench -p sqler-ui --bench grid_viewport --no-run)
+            (cd "$GITHUB_WORKSPACE/../base" && rustup toolchain install && CARGO_TARGET_DIR="$BASE_TARGET_DIR" cargo bench -p sqler-ui --bench grid_viewport --no-run)
           else
             echo "::notice::no baseline bench on base"
           fi
           cargo bench -p sqler-ui --bench grid_viewport --no-run
           base_round() {
             # Exit 1 means the base itself broke the 1 ms budget; the file is saved first.
-            (cd "$GITHUB_WORKSPACE/../base" && cargo bench -p sqler-ui --bench grid_viewport -- $BASE_ARGS --save "$T/bench-base-$1.txt") || [ $? -eq 1 ]
+            (cd "$GITHUB_WORKSPACE/../base" && CARGO_TARGET_DIR="$BASE_TARGET_DIR" cargo bench -p sqler-ui --bench grid_viewport -- $BASE_ARGS --save "$T/bench-base-$1.txt") || [ $? -eq 1 ]
           }
           pr_round() {
             cargo bench -p sqler-ui --bench grid_viewport -- --reps 1 --staged 10000 --save "$T/bench-pr-$1.txt" || [ $? -eq 1 ]
@@ -85,7 +134,7 @@ jobs:
           if [ -f ../base/crates/sqler-catalog/benches/catalog_tree.rs ]; then
             cd ../base
             # Exit 1 means the base itself broke a budget; the file is saved first.
-            cargo bench -p sqler-catalog --bench catalog_tree -- --save "$GITHUB_WORKSPACE/target/catalog-base.txt" || [ $? -eq 1 ]
+            CARGO_TARGET_DIR="$BASE_TARGET_DIR" cargo bench -p sqler-catalog --bench catalog_tree -- --save "$GITHUB_WORKSPACE/target/catalog-base.txt" || [ $? -eq 1 ]
           else
             echo "::notice::no catalog baseline bench on base"
           fi
@@ -105,7 +154,7 @@ jobs:
           if [ -f ../base/crates/sqler-catalog/benches/catalog_index.rs ]; then
             cd ../base
             # Exit 1 means the base itself broke a budget; the file is saved first.
-            cargo bench -p sqler-catalog --bench catalog_index -- --save "$GITHUB_WORKSPACE/target/catalog-index-base.txt" || [ $? -eq 1 ]
+            CARGO_TARGET_DIR="$BASE_TARGET_DIR" cargo bench -p sqler-catalog --bench catalog_index -- --save "$GITHUB_WORKSPACE/target/catalog-index-base.txt" || [ $? -eq 1 ]
           else
             echo "::notice::no catalog index baseline bench on base"
           fi
@@ -128,7 +177,7 @@ jobs:
             if grep -q -- '--reps' ../base/crates/sqler-ui/benches/grid_sort.rs; then REPS="--reps 3"; fi
             cd ../base
             # Exit 1 means the base itself broke a budget; the file is saved first.
-            cargo bench -p sqler-ui --bench grid_sort -- $REPS --save "$GITHUB_WORKSPACE/target/grid-sort-base.txt" || [ $? -eq 1 ]
+            CARGO_TARGET_DIR="$BASE_TARGET_DIR" cargo bench -p sqler-ui --bench grid_sort -- $REPS --save "$GITHUB_WORKSPACE/target/grid-sort-base.txt" || [ $? -eq 1 ]
           else
             echo "::notice::no grid sort baseline bench on base"
           fi
@@ -156,14 +205,14 @@ jobs:
             HAVE_BASE=1
             # Older base benches reject --reps (exit 2); pass it only if the base source knows it.
             if grep -q -- '--reps' "$BASE_SRC"; then BASE_ARGS="--reps 1"; fi
-            (cd "$GITHUB_WORKSPACE/../base" && rustup toolchain install && cargo bench -p sqler-ui --bench browser_tree --no-run)
+            (cd "$GITHUB_WORKSPACE/../base" && rustup toolchain install && CARGO_TARGET_DIR="$BASE_TARGET_DIR" cargo bench -p sqler-ui --bench browser_tree --no-run)
           else
             echo "::notice::no browser tree baseline bench on base"
           fi
           cargo bench -p sqler-ui --bench browser_tree --no-run
           base_round() {
             # Exit 1 means the base itself broke a budget; the file is saved first.
-            (cd "$GITHUB_WORKSPACE/../base" && cargo bench -p sqler-ui --bench browser_tree -- $BASE_ARGS --save "$T/browser-base-$1.txt") || [ $? -eq 1 ]
+            (cd "$GITHUB_WORKSPACE/../base" && CARGO_TARGET_DIR="$BASE_TARGET_DIR" cargo bench -p sqler-ui --bench browser_tree -- $BASE_ARGS --save "$T/browser-base-$1.txt") || [ $? -eq 1 ]
           }
           pr_round() {
             cargo bench -p sqler-ui --bench browser_tree -- --reps 1 --save "$T/browser-pr-$1.txt" || [ $? -eq 1 ]
@@ -189,7 +238,7 @@ jobs:
           if [ -f "$GITHUB_WORKSPACE/../base/crates/sqler-completion/benches/completion.rs" ]; then
             cd "$GITHUB_WORKSPACE/../base"
             # Exit 1 means the base itself broke a budget; the file is saved first.
-            cargo bench -p sqler-completion --bench completion -- --save "$GITHUB_WORKSPACE/target/completion-base.txt" || [ $? -eq 1 ]
+            CARGO_TARGET_DIR="$BASE_TARGET_DIR" cargo bench -p sqler-completion --bench completion -- --save "$GITHUB_WORKSPACE/target/completion-base.txt" || [ $? -eq 1 ]
           else
             echo "::notice::no completion baseline bench on base"
           fi

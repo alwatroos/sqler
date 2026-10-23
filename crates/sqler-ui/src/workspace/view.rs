@@ -64,6 +64,7 @@ use crate::keymap::{
     KeyDispatcher, KeyOutcome, action_for, chord_from_input, pane_action_for, route_key,
 };
 use crate::palette::{self, OPEN_PALETTE, PaletteState};
+use crate::plugins::grant::GrantPrompt;
 use crate::query::view::{OverlayChange, QueryViews, query_overlay};
 use crate::query::{self, ParamInput, ParamKind, QueryCommand, RunEvent};
 use crate::settings::SettingsModel;
@@ -76,8 +77,12 @@ use crate::theme::resolve;
 use crate::workbench::view::Hints;
 use crate::workbench::{self, ActivityItem, PanelView, RecentCommands, Region, WorkbenchAction};
 use edit_ui::EditUi;
+use plugin_writes::WriteUi;
+use plugins::PluginsUi;
 
 mod export;
+mod plugin_writes;
+mod plugins;
 #[cfg(feature = "screenshots")]
 pub mod scene;
 
@@ -111,6 +116,8 @@ pub struct Startup {
     pub workbench: crate::workbench::WorkbenchStartup,
     /// The AI settings and the provider factory, loaded by the binary.
     pub ai: crate::ai::AiStartup,
+    /// The plugin host and the book of grants; `PluginsStartup::unavailable()` in a build without plugins.
+    pub plugins: crate::plugins::PluginsStartup,
 }
 
 impl std::fmt::Debug for Startup {
@@ -123,6 +130,7 @@ impl std::fmt::Debug for Startup {
             .field("keybindings", &self.keybindings)
             .field("history_dir", &self.history_dir)
             .field("ai", &self.ai)
+            .field("plugins", &self.plugins)
             .finish_non_exhaustive()
     }
 }
@@ -242,6 +250,10 @@ pub(crate) struct WorkspaceView {
     edit_ui: EditUi,
     /// The text inputs of the export dialog on screen.
     export_inputs: Option<export::ExportInputs>,
+    /// The focus, the typed-id field and the setting editors of the plugin manager.
+    plugins_ui: PluginsUi,
+    /// The focus of the plugin write approval dialog.
+    plugin_writes_ui: WriteUi,
     /// The resizable split of the side panel and the rest, and of the editors and the bottom panel.
     side_split: Entity<ResizableState>,
     panel_split: Entity<ResizableState>,
@@ -293,12 +305,14 @@ impl WorkspaceView {
             .history_dir
             .as_ref()
             .map(|dir| Arc::new(sqler_ai_tools::AuditLog::open(dir)));
+        let plugin_writes = startup.plugins.writes.take();
         let mut ws = Workspace::new(sidebar)
             .with_ai_audit(audit_log.clone().map(|log| crate::ai::AiAudit::new(log)))
             .with_settings(startup.settings)
             .with_drivers(startup.connector.driver_ids())
             .with_workbench(&startup.workbench.load)
-            .with_ai(crate::ai::AiState::from_startup(&startup.ai));
+            .with_ai(crate::ai::AiState::from_startup(&startup.ai))
+            .with_plugins(&startup.plugins);
         ws.set_system_appearance(appearance_of(window.appearance()));
         apply(ws.appearance(), ws.settings().settings().ui_font_size, cx);
         // Follow the OS while the preference is "follow system". Nothing changes in the
@@ -349,6 +363,9 @@ impl WorkspaceView {
         }
         if let Err(err) = crate::ai::register_commands(&mut commands) {
             eprintln!("sqler: could not register the AI commands: {err}");
+        }
+        if let Err(err) = crate::plugins::register_commands(&mut commands) {
+            eprintln!("sqler: could not register the plugin commands: {err}");
         }
         if let Err(err) = workbench::register_commands(&mut commands) {
             eprintln!("sqler: could not register the workbench commands: {err}");
@@ -468,6 +485,8 @@ impl WorkspaceView {
             history_views: HistoryViews::default(),
             edit_ui: EditUi::new(cx),
             export_inputs: None,
+            plugins_ui: PluginsUi::new(window, cx),
+            plugin_writes_ui: WriteUi::new(cx),
             side_split,
             panel_split,
             split_generation,
@@ -493,6 +512,12 @@ impl WorkspaceView {
             _quit: quit,
         };
         GridProbe::start_if_requested(window, cx);
+        if view.ws.plugins().available() {
+            Self::schedule_plugins(window, cx);
+        }
+        if let Some(inbox) = plugin_writes {
+            Self::drain_plugin_writes(inbox, cx);
+        }
         view.bind_splits(cx);
         view.sync_sidebar();
         view.load_history(cx);
@@ -554,10 +579,16 @@ impl WorkspaceView {
     }
 
     /// Routes a key press before the focused element sees it.
+    #[allow(clippy::too_many_lines)] // one ordered chain of overlay checks
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if event.is_held && (self.ws.drop_dialog().is_some() || self.edit_overlay_open()) {
-            // A held key (auto-repeat) must never confirm or cancel a DROP step or an edit
-            // dialog (the production confirmation among them).
+        if event.is_held
+            && (self.ws.drop_dialog().is_some()
+                || self.edit_overlay_open()
+                || self.plugin_dialog_open()
+                || self.plugin_write_open())
+        {
+            // A held key (auto-repeat) must never confirm or cancel a DROP step, an edit
+            // dialog (the production confirmation among them) or the permission dialog.
             cx.stop_propagation();
             return;
         }
@@ -578,6 +609,19 @@ impl WorkspaceView {
             // Escape closes the dialog; a host-key prompt counts as "do not trust".
             cx.stop_propagation();
             self.dispatch_connection(ConnectionAction::Cancel, cx);
+            return;
+        }
+        if !was_open && self.plugin_write_key(&chord, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if !was_open
+            && self.plugin_dialog_open()
+            && let Some(command) = GrantPrompt::key_command(&chord)
+        {
+            // Escape is Deny, also from the typed-id field; no key is ever Approve.
+            cx.stop_propagation();
+            self.plugin_answer(command, cx);
             return;
         }
         if !was_open
@@ -810,6 +854,9 @@ impl WorkspaceView {
         } else if let Some(command) = crate::export::action_for(id) {
             self.palette.close();
             self.run_export_command(command, window, cx);
+        } else if id.category() == "plugins" {
+            self.palette.close();
+            self.run_plugin_command(id, window, cx);
         } else if let Some(action) = crate::ai::action_for(id, &self.ws) {
             self.palette.close();
             self.dispatch_ai(action, cx);
@@ -1234,6 +1281,7 @@ impl WorkspaceView {
                 self.apply_ai_session(effect, cx);
             }
             Effect::LoadAgentProfiles | Effect::StartAgent { .. } => self.apply_agent(effect, cx),
+            Effect::Plugins(work) => self.apply_plugins(work, cx),
             edit @ Effect::EditorEdit { .. } => self.assist_edits.push(edit),
             Effect::RunAssist(job) => self.run_assist_effect(job, cx),
             Effect::CancelAssist(id) => self.cancel_assist_effect(id),
@@ -1679,6 +1727,9 @@ impl Render for WorkspaceView {
         self.sync_assist_inputs(window, cx);
         self.flush_assist_edits(window, cx);
         self.sync_export_inputs(window, cx);
+        self.sync_plugin_dialog(window, cx);
+        self.sync_plugin_writes(window, cx);
+        self.sync_plugin_inputs(window, cx);
         if self.history_views.materialize(&self.ws, window, cx) {
             // A history dialog or the picker closed: the root takes the focus back.
             window.focus(&self.focus, cx);
@@ -1702,6 +1753,8 @@ impl Render for WorkspaceView {
         let history_dialog = history::view::history_overlay(self, cx);
         let edit_dialog = crate::grid::edit::view::edit_overlay(self, cx);
         let export_dialog = export_overlay(self, cx);
+        let plugin_dialog = self.plugin_dialog_overlay(cx);
+        let plugin_write_dialog = crate::plugins::approval::view::write_overlay(self, cx);
         let palette = self.palette.is_open().then(|| {
             let items = self.palette.items(&self.commands, &self.keys);
             palette::view::palette_overlay(
@@ -1753,6 +1806,8 @@ impl Render for WorkspaceView {
             .children(history_dialog)
             .children(edit_dialog)
             .children(export_dialog)
+            .children(plugin_dialog)
+            .children(plugin_write_dialog)
             .children(palette)
     }
 }

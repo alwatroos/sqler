@@ -157,6 +157,7 @@ fn is_device_name(seg: &str) -> bool {
 /// The lexical rules for a `plugin` or `data` root, checked on the text before any file system call and the same on
 /// every OS (`windows` selects the Windows-only rules so they can be tested everywhere). Returns the root with a
 /// verbatim prefix stripped, or `None` if refused:
+/// - no trailing `/` or `\` (on Unix a trailing separator makes the file system follow a link in the last name);
 /// - the text splits at `/` and `\` alike (a verbatim path treats `/` as a name character, so `\\?\C:\d/..` is not
 ///   what it seems to `Path::components`);
 /// - no `..` segment anywhere, and a last segment that is a real name (not `.`, not a bare drive or the file system
@@ -165,6 +166,10 @@ fn is_device_name(seg: &str) -> bool {
 ///   `data.` is `data`), no DOS device name, no `\\.\`/`\\?\GLOBALROOT` namespaces.
 fn lexical_root(root: &str, windows: bool) -> Option<String> {
     let simple = strip_verbatim(root).ok()?;
+    // A trailing separator would make `symlink_metadata("<dir>/data/")` follow a `data -> sibling` link on Unix.
+    if simple.ends_with(['/', '\\']) {
+        return None;
+    }
     let segs: Vec<&str> = simple
         .split(['/', '\\'])
         .filter(|s| !s.is_empty())
@@ -222,17 +227,18 @@ fn owned_root(root: &Path, scope: &FsScope) -> Result<PathBuf, ScopeIssue> {
     // the prefix (and, on Windows, in case) but in nothing else.
     let asked = simple.file_name().and_then(|n| n.to_str());
     let found = canonical.file_name().and_then(|n| n.to_str());
-    if !names_match(asked, found, cfg!(windows)) {
+    if !names_match(asked, found, cfg!(windows) || cfg!(target_os = "macos")) {
         return Err(escapes());
     }
     Ok(canonical)
 }
 
 /// Whether the requested last name and the canonical last name are the same directory name: exact, except that Windows
-/// reports the on-disk case.
-fn names_match(asked: Option<&str>, found: Option<&str>, windows: bool) -> bool {
+/// and macOS (case-insensitive by default) report the on-disk case, so ASCII case is ignored there. Non-ASCII names
+/// are compared byte for byte: macOS `canonicalize` returns NFD, so a root spelled in NFC fails closed (as Escapes).
+fn names_match(asked: Option<&str>, found: Option<&str>, case_insensitive: bool) -> bool {
     match (asked, found) {
-        (Some(a), Some(f)) => a == f || (windows && a.eq_ignore_ascii_case(f)),
+        (Some(a), Some(f)) => a == f || (case_insensitive && a.eq_ignore_ascii_case(f)),
         _ => false,
     }
 }
@@ -333,6 +339,22 @@ mod tests {
             lexical_root(r"\\?\C:\x\data", true).as_deref(),
             Some(r"C:\x\data")
         );
+    }
+
+    #[test]
+    fn a_trailing_separator_is_refused_on_every_os() {
+        for bad in [
+            "/tmp/x/data/",
+            r"/tmp/x/data\",
+            r"C:\x\data\",
+            r"C:\x\data/",
+            r"\\?\C:\x\data\",
+            "/tmp/x/data//",
+        ] {
+            assert_eq!(lexical_root(bad, false), None, "{bad}");
+            assert_eq!(lexical_root(bad, true), None, "{bad} (windows rules)");
+            assert_eq!(raw_root_text(bad, false), None, "{bad}");
+        }
     }
 
     #[test]

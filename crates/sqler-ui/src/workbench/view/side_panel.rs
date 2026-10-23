@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! The side panel: the Connections, Saved Queries or AI view.
+//! The side panel: the Connections, Saved Queries, AI or Plugins view.
 
 use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement as _, ParentElement as _,
@@ -11,6 +11,7 @@ use gpui_component::ActiveTheme as _;
 
 use crate::ai::hub::view::ai_view;
 use crate::history::view::saved_section;
+use crate::plugins::manager::view::plugins_view;
 use crate::sidebar::view::sidebar;
 use crate::theme::widgets::section_header;
 use crate::workbench::SideView;
@@ -21,6 +22,7 @@ pub(crate) fn side_panel(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) 
     match view.workspace().layout().side_view() {
         SideView::Connections => sidebar(view, cx).into_any_element(),
         SideView::Ai => ai_view(view, cx),
+        SideView::Plugins => plugins_view(view, cx),
         SideView::SavedQueries => {
             let theme = cx.theme();
             let (bg, fg, border) = (

@@ -543,6 +543,46 @@ With Parquet the x86_64 binary is 6,918,720 bytes under the 61,865,984 limit. Au
 
 One run, exit 0, load average 1.9. The slice is 16 times under the budget on this machine, so a machine 10 times slower still keeps a copy from blocking a frame. There was no earlier figure to compare with.
 
+## CI timings
+
+Measured 2026-10-22 and 2026-10-23 for C1 ([ADR-0068](adr/0068-ci-pipeline-speed.md)) with
+`.github/scripts/ci-timings.sh` and `gh run view --json jobs`. Wall = run `updatedAt` minus `createdAt`; job = job
+duration (queue excluded).
+
+Baseline, 20 completed runs per filter at main `54ce348` (2026-10-22): `ci.yml` wall median 1364 s on PRs (max 1674)
+and 1237 s on `main`; critical path `check (windows-latest)` 1362 s (tests 744 s, clippy 283 s, cache save 186 s);
+`check (ubuntu-latest)` 684 s, `check (macos-latest)` 520 s. `Bench` 1134 s and `Binary size` 734 s on PRs, beside CI.
+Caches: 12 caches, all under a PR ref, none on `main`; 10.3 of 10 GB. Clippy on Windows alone ranged from 312 s (cache
+hit) to 1696 s (miss).
+
+Before and after on the same Rust tree (the same sources; `1d56336`, `9c24a2d` and the baseline scratch branch differ
+only in workflow files and docs). "Old" = the `main` version of `ci.yml`, run by `workflow_dispatch` from a scratch
+branch (`ci-baseline-c1`, deleted afterwards). "New" = this branch. Cold = no cache for the ref; warm = the previous
+run of the same ref saved its caches.
+
+| Run | Date | Id | Wall (s) | check windows | clippy windows | check macOS | check Linux | Note |
+| --- | ---- | -- | -------: | ------------: | -------------: | ----------: | ----------: | ---- |
+| Old, cold | 2026-10-23 | 39903941400 | 1208 | 1205 | in check | 1180 | 925 | full suite everywhere |
+| Old, warm | 2026-10-23 | 39905859552 | 1080 | 1076 (1 flaky test failed) | in check | 536 | 447 | full suite everywhere |
+| New, PR event, cold | 2026-10-23 | 39902726618 | 763 | 749 | 348 | 722 | 705 | PR subsets; `main` has no caches yet |
+| New, PR event, cold, two CI runs at once | 2026-10-23 | 39909585328 | 1033 | 692 | 402 | 885 | 582 | shared the macOS pool with the run below |
+| New, dispatch with `full` unticked (PR subsets), warm | 2026-10-23 | 39909579173 | 553 | 464 | 142 | 448 | 274 (failed: flaky UI test) | critical path: macOS check, `screenshots (linux)` 347 s |
+| New, PR event, cold, beside the dispatch run below | 2026-10-23 | 39911420305 | 741 | 721 | 417 | 727 | 489 | all green |
+| New, dispatch with `full` unticked, warm (repeat) | 2026-10-23 | 39911413672 | 626 | 611 | 135 | 478 | 284 (failed: same flaky UI test) | critical path: Windows check |
+| New, dispatch full (as on `main`), partly warm | 2026-10-23 | 39907597059 | 1211 | 1196 | 383 | 382 | 818 | the full matrix is kept: the Windows full suite is the long pole on `main` |
+
+Reading: on a PR the wall time fell from a 1364 s median (old PR runs) and 1208 s (old, same tree, cold) to 741 to 763 s (12.4 to 12.7 minutes) for a PR event with no usable cache
+and 553 to 626 s (9.2 to 10.4 minutes) warm. The 8 to 10 minute target is met only when the caches are warm; a
+PR with a cold cache (a `Cargo.lock` or toolchain change, or before `main` has saved the caches) is 12 to 17 minutes
+(1033 s when two CI runs shared the macOS pool). `sqler-ui::...::cancel_while_a_statement_runs_asks_the_database_to_stop`
+failed on Linux in both warm dispatch runs and passed in all other runs of this tree: an existing race, not a CI change. The run
+on `main` is not faster (about 20 minutes cold, Windows full suite) and does not need to be: it keeps full coverage.
+Caches are saved on `main` only, so a PR event could not be measured warm before the merge (a PR cannot read a branch
+cache); the dispatch with `full` unticked runs the same subsets on the branch ref instead.
+
+The levers that did not pay or were not needed are in the ADR (sharding, `workflow_run` chaining, sccache, linker and
+incremental flags, toolchain and apt caching).
+
 ## UI framework spike
 
 Data, not pass/fail; spike build, not the product. Measured on `spikes/ui-framework` (ADR-0001), release profile
@@ -568,3 +608,15 @@ Watch it when the real UI lands.
 start is the `hyperfine` mean of the whole process (`--exit-after-first-frame`, 3 warm-ups, 20 runs).
 The procedure is `spikes/ui-framework/scripts/measure.sh` (Linux, macOS) and
 `spikes/ui-framework/scripts/measure.ps1` (Windows); CI runs it in `.github/workflows/spike.yml`.
+
+## Plugins in the app (P7)
+
+Measured for [ADR-0060](adr/0060-plugins-in-the-workbench.md) on macOS 27.0.1 arm64 (Apple M4 Pro), local release builds of the uncommitted P7 tree, `--locked`; Linux and Windows sizes come from the `Binary size` workflow of the pull request (no GUI runner for cold start).
+
+| Build | Size (bytes) | Cold start, hyperfine mean of 20 (ms), three rounds |
+| ----- | ------------ | ------------------------------------------------------ |
+| default | 38,186,592 | 119.1, 122.3, 115.8 (sigma 2.3 to 9.3) |
+| `--features plugins` | 49,272,272 (+11,085,680) | 117.6, 123.0, 117.5 (sigma 2.1 to 4.3) |
+| `--features plugins`, `--plugin-dir` (a staged 143 KB component, not approved) | same binary | 123.3, 117.3, 117.7 (sigma 2.2 to 3.4) |
+
+Method: `hyperfine -N -w 3 -r 20 "<binary> --exit-after-first-frame"` with `HOME` pointing at a scratch directory whose configuration folder holds `plugins/smoke` (the staged `smoke` fixture); the three commands in one hyperfine call, the order rotated between the rounds. The differences are inside the noise, in both directions: the plugins build adds only the construction of the grant book and an idle backend before the first frame, and the first scan (`refresh`) is requested after it. The 143 KB component of `--plugin-dir` is read and hashed by that scan, never compiled, because it is not approved. Linux and Windows cold start: not measured.

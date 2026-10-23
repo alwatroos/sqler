@@ -91,7 +91,7 @@ fn valid_plugins_with_and_without_component() {
     plugin(&s.0, "beta", "beta", Some(("beta.wasm", b"\0asm-bytes")));
     let d = discover(&config(&s.0));
     assert!(d.problems.is_empty(), "{:?}", d.problems);
-    let ids: Vec<_> = d.plugins.iter().map(|p| p.manifest.id.as_str()).collect();
+    let ids: Vec<_> = d.plugins.iter().map(|p| p.manifest.id().as_str()).collect();
     assert_eq!(ids, ["alpha", "beta"]);
     let alpha = &d.plugins[0];
     assert!(alpha.component.is_none());
@@ -169,7 +169,7 @@ fn a_single_dev_path_is_exempt_from_the_name_rule() {
         ..PluginDirs::default()
     });
     assert!(d.problems.is_empty(), "{:?}", d.problems);
-    assert_eq!(d.plugins[0].manifest.id.as_str(), "my-plugin");
+    assert_eq!(d.plugins[0].manifest.id().as_str(), "my-plugin");
     assert_eq!(d.plugins[0].source, PluginSource::Dev);
 }
 
@@ -207,7 +207,7 @@ fn dev_paths_win_over_the_config_dir_for_duplicate_ids() {
     let same: Vec<_> = d
         .plugins
         .iter()
-        .filter(|p| p.manifest.id.as_str() == "same")
+        .filter(|p| p.manifest.id().as_str() == "same")
         .collect();
     assert_eq!(same.len(), 1);
     assert_eq!(same[0].source, PluginSource::Dev);

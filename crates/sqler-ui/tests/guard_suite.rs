@@ -251,12 +251,18 @@ fn connection(env: Environment, path: &str) -> (ConnectionInfo, ConnectRequest) 
     (info, request)
 }
 
-/// The limits of the suite: 5 rows and the smallest time limit the config can hold (1 s; the
-/// config has whole seconds).
-fn config() -> AiConfig {
+/// The time limit of every scenario but the time-limit one. The limit covers the whole call, the
+/// wait for the user's approval included, so it must not be the thing a slow runner trips over; it
+/// stays below `HANG`.
+const CALM_LIMIT_SECS: u32 = 25;
+/// The smallest time limit the config can hold (whole seconds): the time-limit scenario only.
+const SHORT_LIMIT_SECS: u32 = 1;
+
+/// The limits of the suite: 5 rows and a time limit of `secs`.
+fn config(secs: u32) -> AiConfig {
     let mut config = AiConfig::default();
     config.limits.max_rows = 5;
-    config.limits.timeout_secs = 1;
+    config.limits.timeout_secs = secs;
     config
 }
 
@@ -588,6 +594,7 @@ impl SessionRig {
         request: ConnectRequest,
         audit: Arc<dyn AuditSink>,
         asks: UnboundedSender<ApprovalAsk>,
+        secs: u32,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (tx, mut host) = unbounded_channel::<HostMsg>();
         // Host messages other than asks are dropped; asks go to the user.
@@ -606,7 +613,7 @@ impl SessionRig {
         });
         let source = Arc::new(TabSource::new(info.clone(), request, Arc::new(Lite)));
         let approver = Arc::new(ChannelApprover::new(tx, HostMsg::Ask));
-        let tools = ToolSet::configured(source.clone(), &config())
+        let tools = ToolSet::configured(source.clone(), &config(secs))
             .with_approver(approver)
             .with_audit(audit, Surface::Session);
         let provider = Arc::new(
@@ -697,10 +704,11 @@ impl McpRig {
         request: ConnectRequest,
         audit: Arc<dyn AuditSink>,
         asks: UnboundedSender<ApprovalAsk>,
+        secs: u32,
     ) -> Self {
         let source = Arc::new(TabSource::new(info.clone(), request, Arc::new(Lite)));
         let approver = Arc::new(ChannelApprover::new(asks, std::convert::identity));
-        let tools = ToolSet::configured(source, &config()).with_approver(approver);
+        let tools = ToolSet::configured(source, &config(secs)).with_approver(approver);
         let server = McpServer::new(tools, audit, ServerOptions::default());
         let token = AuthToken::generate().unwrap();
         let auth = format!("Bearer {}", token.expose());
@@ -779,6 +787,7 @@ impl AcpRig {
         audit_file: PathBuf,
         cwd: PathBuf,
         asks: UnboundedSender<ApprovalAsk>,
+        secs: u32,
     ) -> Self {
         let (tx, mut host) = unbounded_channel::<AgentMsg>();
         let launch = LaunchOptions {
@@ -790,7 +799,7 @@ impl AcpRig {
             profile: mock_profile(),
             info: info.clone(),
             request,
-            config: config(),
+            config: config(secs),
             audit: AiAudit::new(audit),
             cwd,
             launch,
@@ -943,29 +952,38 @@ struct Rig {
     db: String,
     calls: usize,
     env: Environment,
+    /// The time limit of a tool call, in seconds.
+    secs: u32,
     /// The database, the audit file and the agent folder.
     scratch: Scratch,
 }
 
 impl Rig {
     async fn new(surface: Surface, env: Environment) -> Self {
+        Self::with_time_limit(surface, env, CALM_LIMIT_SECS).await
+    }
+
+    /// A rig whose tool calls stop after `secs` seconds.
+    async fn with_time_limit(surface: Surface, env: Environment, secs: u32) -> Self {
         let scratch = Scratch::new(surface.as_str());
         seed(&scratch.db()).await;
-        Self::build(surface, env, scratch).await
+        Self::build(surface, env, scratch, secs).await
     }
 
     /// A rig on the database in `scratch`.
-    async fn build(surface: Surface, env: Environment, scratch: Scratch) -> Self {
+    async fn build(surface: Surface, env: Environment, scratch: Scratch, secs: u32) -> Self {
         let db = scratch.db();
         let (info, request) = connection(env, &db);
         let (asks_tx, asks) = unbounded_channel();
         let audit = Arc::new(MemoryAudit::new());
         let inner = match surface {
             Surface::Session => {
-                let (rig, forward) = SessionRig::new(&info, request, audit.clone(), asks_tx);
+                let (rig, forward) = SessionRig::new(&info, request, audit.clone(), asks_tx, secs);
                 Inner::Session(Box::new(rig), forward)
             }
-            Surface::Mcp => Inner::Mcp(McpRig::new(&info, request, audit.clone(), asks_tx).await),
+            Surface::Mcp => {
+                Inner::Mcp(McpRig::new(&info, request, audit.clone(), asks_tx, secs).await)
+            }
             Surface::Agent => {
                 let file = scratch.0.join("ai-audit.jsonl");
                 let sink = Arc::new(Tee {
@@ -974,7 +992,7 @@ impl Rig {
                 });
                 let cwd = scratch.0.join("agent-cwd");
                 Inner::Acp(Box::new(
-                    AcpRig::new(&info, request, sink, file, cwd, asks_tx).await,
+                    AcpRig::new(&info, request, sink, file, cwd, asks_tx, secs).await,
                 ))
             }
             other => panic!("not a surface of the suite: {other:?}"),
@@ -988,6 +1006,7 @@ impl Rig {
             db,
             calls: 0,
             env,
+            secs,
             scratch,
         }
     }
@@ -995,9 +1014,9 @@ impl Rig {
     /// Closes this rig and starts a new one (a new agent or server, new sessions, a new audit
     /// log) on the same database file.
     async fn restart(self) -> Self {
-        let (surface, env) = (self.surface, self.env);
+        let (surface, env, secs) = (self.surface, self.env, self.secs);
         let scratch = self.close().await;
-        Self::build(surface, env, scratch).await
+        Self::build(surface, env, scratch, secs).await
     }
 
     /// Calls `run_query` with the user's scripted answers and normalises what happened.
@@ -1097,6 +1116,8 @@ struct Scenario {
     env: Environment,
     sql: &'static str,
     user: &'static [Decision],
+    /// The time limit of the call in seconds.
+    secs: u32,
 }
 
 const S1: Scenario = Scenario {
@@ -1104,48 +1125,56 @@ const S1: Scenario = Scenario {
     env: Environment::Dev,
     sql: READ,
     user: &[],
+    secs: CALM_LIMIT_SECS,
 };
 const S2: Scenario = Scenario {
     name: "S2 write needs approval",
     env: Environment::Dev,
     sql: WRITE,
     user: &[APPROVE],
+    secs: CALM_LIMIT_SECS,
 };
 const S3: Scenario = Scenario {
     name: "S3 deny",
     env: Environment::Dev,
     sql: DELETE,
     user: &[DENY],
+    secs: CALM_LIMIT_SECS,
 };
 const S4: Scenario = Scenario {
     name: "S4 prod double confirm",
     env: Environment::Prod,
     sql: PROD_WRITE,
     user: &[APPROVE, APPROVE],
+    secs: CALM_LIMIT_SECS,
 };
 const S4B: Scenario = Scenario {
     name: "S4b prod second refused",
     env: Environment::Prod,
     sql: PROD_WRITE,
     user: &[APPROVE, DENY],
+    secs: CALM_LIMIT_SECS,
 };
 const S5: Scenario = Scenario {
     name: "S5 row limit",
     env: Environment::Dev,
     sql: TO_NINE,
     user: &[],
+    secs: CALM_LIMIT_SECS,
 };
 const S6: Scenario = Scenario {
     name: "S6 time limit",
     env: Environment::Dev,
     sql: ENDLESS,
     user: &[],
+    secs: SHORT_LIMIT_SECS,
 };
 const S7: Scenario = Scenario {
     name: "S7 redaction",
     env: Environment::Dev,
     sql: SECRETS,
     user: &[],
+    secs: CALM_LIMIT_SECS,
 };
 const ALL: [Scenario; 8] = [S1, S2, S3, S4, S4B, S5, S6, S7];
 
@@ -1154,7 +1183,7 @@ const ALL: [Scenario; 8] = [S1, S2, S3, S4, S4B, S5, S6, S7];
 async fn on_all(scn: Scenario) -> Vec<Outcome> {
     let mut outcomes = Vec::new();
     for surface in SURFACES {
-        let mut rig = Rig::new(surface, scn.env).await;
+        let mut rig = Rig::with_time_limit(surface, scn.env, scn.secs).await;
         let out = rig.call(scn.sql, scn.user).await;
         rig.close().await;
         outcomes.push(out);
@@ -1296,7 +1325,7 @@ fn s6_the_time_limit_stops_the_query_and_the_database_stays_usable() {
         let mut outcomes = Vec::new();
         let mut again = Vec::new();
         for surface in SURFACES {
-            let mut rig = Rig::new(surface, Environment::Dev).await;
+            let mut rig = Rig::with_time_limit(surface, Environment::Dev, S6.secs).await;
             outcomes.push(rig.call(S6.sql, S6.user).await);
             // The `SQLite` driver stops a statement only between rows, so the session of the
             // call may still be busy. A new server or agent on the same file reads normally.

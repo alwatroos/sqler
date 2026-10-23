@@ -88,7 +88,7 @@ fn fixture(test: &str, plugins: &[(&str, &[&str])], limits: &Limits) -> Fixture 
     let grants = Approve(Mutex::new(
         d.plugins
             .iter()
-            .map(|p| (p.key.clone(), p.manifest.capabilities.clone()))
+            .map(|p| (p.key.clone(), p.manifest.capabilities().clone()))
             .collect(),
     ));
     let rt = tokio::runtime::Builder::new_current_thread()

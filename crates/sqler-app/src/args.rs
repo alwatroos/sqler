@@ -4,23 +4,26 @@
 //! Command-line argument parsing, with std only.
 
 use std::fmt;
+use std::path::PathBuf;
 
 /// The usage text, printed for `--help` and after a usage error.
 pub(crate) const USAGE: &str = "\
 Usage:
-  sqler [--exit-after-first-frame | --open-sessions]
+  sqler [--exit-after-first-frame | --open-sessions] [--plugin-dir <PATH>]...
   sqler --help | -h
   sqler --version | -V
 
 Options:
   --exit-after-first-frame   Exit with code 0 once the first frame is presented
   --open-sessions            Open every saved connection after startup, then idle (idle RSS measurement)
+  --plugin-dir <PATH>        Also load a plugin (a folder with sqler.toml) or every plugin below a folder;
+                             repeatable; only in builds with plugin support
   -h, --help                 Print this help
   -V, --version              Print the version
 ";
 
 /// A parsed command line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Command {
     /// Start the application.
     Run {
@@ -28,6 +31,8 @@ pub(crate) enum Command {
         exit_after_first_frame: bool,
         /// Open every saved connection after startup, then idle (idle RSS measurement).
         open_sessions: bool,
+        /// Development plugin paths (`--plugin-dir`), in the order given. The only source of such paths.
+        plugin_dirs: Vec<PathBuf>,
     },
     /// Print the usage.
     Help,
@@ -49,13 +54,24 @@ impl fmt::Display for UsageError {
 pub(crate) fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, UsageError> {
     let mut exit_after_first_frame = false;
     let mut open_sessions = false;
-    for arg in args {
+    let mut plugin_dirs = Vec::new();
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => return Ok(Command::Help),
             "--version" | "-V" => return Ok(Command::Version),
             "--exit-after-first-frame" => exit_after_first_frame = true,
             "--open-sessions" => open_sessions = true,
-            other => return Err(UsageError(format!("unknown argument: {other}"))),
+            "--plugin-dir" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| UsageError("--plugin-dir needs a path".into()))?;
+                plugin_dirs.push(plugin_dir(&value)?);
+            }
+            other => match other.strip_prefix("--plugin-dir=") {
+                Some(value) => plugin_dirs.push(plugin_dir(value)?),
+                None => return Err(UsageError(format!("unknown argument: {other}"))),
+            },
         }
     }
     if exit_after_first_frame && open_sessions {
@@ -66,7 +82,21 @@ pub(crate) fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, U
     Ok(Command::Run {
         exit_after_first_frame,
         open_sessions,
+        plugin_dirs,
     })
+}
+
+/// One `--plugin-dir` value. A build without plugin support refuses the option instead of ignoring it.
+fn plugin_dir(value: &str) -> Result<PathBuf, UsageError> {
+    if !cfg!(feature = "plugins") {
+        return Err(UsageError(
+            "--plugin-dir needs a build with plugin support (feature `plugins`)".into(),
+        ));
+    }
+    if value.is_empty() {
+        return Err(UsageError("--plugin-dir needs a path".into()));
+    }
+    Ok(PathBuf::from(value))
 }
 
 #[cfg(test)]
@@ -83,7 +113,8 @@ mod tests {
             parse_strs(&[]),
             Ok(Command::Run {
                 exit_after_first_frame: false,
-                open_sessions: false
+                open_sessions: false,
+                plugin_dirs: Vec::new()
             })
         );
     }
@@ -94,7 +125,8 @@ mod tests {
             parse_strs(&["--exit-after-first-frame"]),
             Ok(Command::Run {
                 exit_after_first_frame: true,
-                open_sessions: false
+                open_sessions: false,
+                plugin_dirs: Vec::new()
             })
         );
     }
@@ -105,7 +137,8 @@ mod tests {
             parse_strs(&["--open-sessions"]),
             Ok(Command::Run {
                 exit_after_first_frame: false,
-                open_sessions: true
+                open_sessions: true,
+                plugin_dirs: Vec::new()
             })
         );
     }
@@ -128,6 +161,41 @@ mod tests {
     #[test]
     fn usage_lists_open_sessions() {
         assert!(USAGE.contains("--open-sessions"));
+    }
+
+    #[cfg(feature = "plugins")]
+    #[test]
+    fn plugin_dir_is_repeatable_and_keeps_the_order() {
+        let got = parse_strs(&["--plugin-dir", "a", "--plugin-dir=b/c", "--plugin-dir", "d"]);
+        assert_eq!(
+            got,
+            Ok(Command::Run {
+                exit_after_first_frame: false,
+                open_sessions: false,
+                plugin_dirs: vec!["a".into(), "b/c".into(), "d".into()],
+            })
+        );
+    }
+
+    #[cfg(feature = "plugins")]
+    #[test]
+    fn plugin_dir_needs_a_value() {
+        assert!(parse_strs(&["--plugin-dir"]).is_err());
+        assert!(parse_strs(&["--plugin-dir="]).is_err());
+        assert!(parse_strs(&["--plugin-dir", ""]).is_err());
+    }
+
+    #[cfg(not(feature = "plugins"))]
+    #[test]
+    fn plugin_dir_is_a_usage_error_without_the_feature() {
+        let err = parse_strs(&["--plugin-dir", "a"]).unwrap_err();
+        assert!(err.0.contains("plugin support"));
+        assert!(parse_strs(&["--plugin-dir=a"]).is_err());
+    }
+
+    #[test]
+    fn usage_lists_plugin_dir() {
+        assert!(USAGE.contains("--plugin-dir"));
     }
 
     #[test]

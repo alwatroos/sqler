@@ -110,12 +110,12 @@ proptest! {
             text.push_str(&format!("[[commands]]\nid = \"c{i}\"\ntitle = \"Title {i}\"\n"));
         }
         let m = Manifest::parse(&text).map_err(|e| TestCaseError::fail(format!("{e}")))?;
-        prop_assert_eq!(m.id.as_str(), id.as_str());
-        prop_assert_eq!(&m.name, &name);
-        prop_assert_eq!(m.version.to_string(), format!("{major}.{minor}.{patch}"));
-        prop_assert_eq!(m.contributes.commands.len(), n_commands);
-        prop_assert_eq!(m.capabilities.len(), usize::from(read));
-        for (i, c) in m.contributes.commands.iter().enumerate() {
+        prop_assert_eq!(m.id().as_str(), id.as_str());
+        prop_assert_eq!(m.name(), name.as_str());
+        prop_assert_eq!(m.version().to_string(), format!("{major}.{minor}.{patch}"));
+        prop_assert_eq!(m.contributes().commands.len(), n_commands);
+        prop_assert_eq!(m.capabilities().len(), usize::from(read));
+        for (i, c) in m.contributes().commands.iter().enumerate() {
             prop_assert_eq!(c.id.as_str(), format!("c{i}"));
             prop_assert_eq!(&c.title, &format!("Title {i}"));
         }

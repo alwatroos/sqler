@@ -10,11 +10,16 @@
 
 mod file;
 mod model;
+mod prefs;
 
 pub use file::PLUGIN_GRANTS_FORMAT_VERSION;
 pub use model::{
     GrantDecision, GrantRecord, GrantRecordError, MAX_GRANT_CAPABILITIES, MAX_PLUGIN_GRANTS,
     PluginGrants,
+};
+pub use prefs::{
+    MAX_PREF_PLUGINS, MAX_PREF_SETTINGS, MAX_PREF_TEXT_BYTES, PLUGIN_PREFS_FORMAT_VERSION,
+    PluginPrefs, PrefValue, PrefsLoad,
 };
 
 use std::fs;

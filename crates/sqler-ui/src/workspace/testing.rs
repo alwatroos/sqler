@@ -2785,8 +2785,20 @@ mod ai_session_flow {
         assert!(matches!(effect, Effect::CancelQuery(_)), "{effect:?}");
         chat.pump(effect);
         chat.until_ready();
+        assert!(chat.seen.contains(&Seen::CancelQuery));
+        // The two cancels are stored one after the other: the session flag, then the driver flag.
+        // A worker that is already inside its poll of the call when the first one is set can see
+        // the driver flag before it sees the session flag. The call then ends with its statement
+        // cancelled by the driver (an `Ok` result, the statement marked failed) instead of being
+        // dropped as `Cancelled`. Both mean "the statement did not complete"; the turn is cancelled
+        // either way.
         let statuses = chat.tool_statuses();
-        assert_eq!(statuses, vec![ToolCallStatus::Cancelled], "{statuses:?}");
+        let dropped = statuses == vec![ToolCallStatus::Cancelled];
+        let stopped_by_driver = statuses == vec![ToolCallStatus::Ok]
+            && !chat.sqls().is_empty()
+            && chat.sqls().iter().all(|s| s.failed);
+        assert!(dropped || stopped_by_driver, "{statuses:?}");
+        assert_eq!(chat.session().state(), SessionState::Cancelled);
         assert!(
             chat.entries()
                 .contains(&TranscriptEntry::Notice(Notice::Cancelled))

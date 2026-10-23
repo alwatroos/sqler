@@ -146,7 +146,7 @@ fn prepare(
     if let Some(took) = compiled {
         inner.record(|m| &mut m.compile, took);
     }
-    let effective = effective(&plugin.manifest.capabilities, approved);
+    let effective = effective(plugin.manifest.capabilities(), approved);
     let (preopens, issues) = resolve_preopens(&effective, &plugin.roots);
     entry
         .state
@@ -154,13 +154,13 @@ fn prepare(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .scope_issues
         .clone_from(&issues);
-    let id: PluginId = plugin.manifest.id.clone();
+    let id: PluginId = plugin.manifest.id().clone();
     let log = Arc::clone(&entry.log);
     let wasi = wasi::build(&id, &preopens, &issues, &log);
     let egress = inner.opts.egress.for_plugin(&id, &effective);
     let guest_driver = plugin
         .manifest
-        .contributes
+        .contributes()
         .drivers
         .iter()
         .any(|d| matches!(d.kind, DriverKind::Guest));

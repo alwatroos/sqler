@@ -57,7 +57,7 @@ impl SettingsStore for MemorySettings {
 
 fn declared<'m>(m: &'m Manifest, key: &str) -> Option<(SettingKey, &'m SettingSpec)> {
     let key: SettingKey = key.parse().ok()?;
-    let spec = m.contributes.settings.iter().find(|s| s.key == key)?;
+    let spec = m.contributes().settings.iter().find(|s| s.key == key)?;
     Some((key, spec))
 }
 
@@ -76,7 +76,7 @@ fn type_name(v: &SettingValue) -> &'static str {
 #[must_use]
 pub fn read_setting(m: &Manifest, s: &dyn SettingsStore, key: &str) -> Option<SettingValue> {
     let (key, spec) = declared(m, key)?;
-    match s.get(&m.id, &key) {
+    match s.get(m.id(), &key) {
         Some(v) if discriminant(&v) == discriminant(&spec.default) => Some(v),
         _ => Some(spec.default.clone()),
     }
@@ -104,7 +104,7 @@ pub fn write_setting(
             expected: type_name(&spec.default),
         });
     }
-    s.set(&m.id, &parsed, v)
+    s.set(m.id(), &parsed, v)
 }
 
 #[cfg(test)]
@@ -158,7 +158,7 @@ default = 5
         );
         // A store that holds a value of another type (edited by hand, older manifest) yields the default.
         s.set(
-            &m.id,
+            m.id(),
             &"limit".parse().unwrap(),
             SettingValue::Text("x".into()),
         )
@@ -195,6 +195,6 @@ default = 5
                 ..
             }
         ));
-        assert_eq!(s.get(&m.id, &"limit".parse().unwrap()), None);
+        assert_eq!(s.get(m.id(), &"limit".parse().unwrap()), None);
     }
 }

@@ -5,74 +5,271 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      full:
+        description: "Full matrix (all OSes, all tests). Untick to run the pull request subsets."
+        type: boolean
+        default: true
 
+# Only PR runs are cancelled by a newer push. A run on main (or a dispatch) has its own group, so main is never cancelled.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  # Line tables are enough for test backtraces and panic locations; full DWARF only makes the cache and the link step bigger.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Crates a macOS PR run leaves out: pure logic, drivers, exporters and AI clients have no macOS-specific code
+  # (the macOS cfg code lives in sqler-config and sqler-ui) and Linux runs them. Used as `--workspace $MAC_SKIP`.
+  MAC_SKIP: >-
+    --exclude sqler-sql --exclude sqler-catalog --exclude sqler-completion --exclude sqler-driver-api
+    --exclude sqler-driver-sqlite --exclude sqler-driver-mysql --exclude sqler-driver-postgres
+    --exclude sqler-driver-mssql --exclude sqler-driver-duckdb --exclude sqler-export
+    --exclude sqler-ai-api --exclude sqler-ai-anthropic --exclude sqler-ai-mistral
+    --exclude sqler-ai-ollama --exclude sqler-ai-openai
 
+# Gating rules (ADR-0068):
+# - `changes` always runs and decides what is relevant. On main, on dispatch and on a PR with the label `full-ci`
+#   (read at the next push) every filter is true.
+# - A matrix job is never skipped with a job-level `if`: a skipped matrix job reports the unexpanded name
+#   `check (${{ matrix.os }})`. It runs, skips its steps, and falls back to an ubuntu runner so the no-op costs no
+#   macOS or Windows minutes.
+# - A non-matrix job may use a job-level `if` (it reports `skipped`, which counts as a pass).
+# - Caches are saved on main only. PRs restore them but never save, so PR code cannot write a cache main restores and
+#   PR caches stop evicting main's within the 10 GB repository limit.
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      full: ${{ steps.out.outputs.full }}
+      rust: ${{ steps.out.outputs.rust }}
+      ui: ${{ steps.out.outputs.ui }}
+      plugins: ${{ steps.out.outputs.plugins }}
+    steps:
+      # On pull_request the filter reads the changed files through the API: no checkout needed.
+      - uses: dorny/paths-filter@v4
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'xtask/**'
+              - 'vendor/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'deny.toml'
+              - 'clippy.toml'
+              - 'rustfmt.toml'
+              - '.rustfmt.toml'
+              - '.cargo/**'
+              - '.github/workflows/ci.yml'
+              - '.github/scripts/**'
+            ui:
+              - 'crates/sqler-ui/**'
+              - 'crates/sqler-app/**'
+              # Local crates sqler-ui depends on (cargo tree -e normal,dev,build -p sqler-ui -p sqler-app).
+              - 'crates/sqler-acp/**'
+              - 'crates/sqler-ai-api/**'
+              - 'crates/sqler-ai-tools/**'
+              - 'crates/sqler-catalog/**'
+              - 'crates/sqler-completion/**'
+              - 'crates/sqler-config/**'
+              - 'crates/sqler-core/**'
+              - 'crates/sqler-driver-api/**'
+              - 'crates/sqler-driver-mysql/**'
+              - 'crates/sqler-driver-postgres/**'
+              - 'crates/sqler-driver-sqlite/**'
+              - 'crates/sqler-export/**'
+              - 'crates/sqler-mcp/**'
+              - 'crates/sqler-plugin-api/**'
+              - 'crates/sqler-sql/**'
+              - 'vendor/**'
+              - '.cargo/**'
+              - 'docs/src/screenshots/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+            plugins:
+              - 'plugins/**'
+              - 'xtask/**'
+              - 'crates/sqler-plugin-api/**'
+              - 'crates/sqler-plugin-host/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'deny.toml'
+              - '.github/workflows/ci.yml'
+      - name: Resolve outputs
+        id: out
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_FULL: ${{ github.event.inputs.full }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+          F_RUST: ${{ steps.filter.outputs.rust }}
+          F_UI: ${{ steps.filter.outputs.ui }}
+          F_PLUGINS: ${{ steps.filter.outputs.plugins }}
+        run: |
+          # Full matrix: main, a dispatch (unless `full` is unticked, which runs the PR subsets for a timing check), the label.
+          full=true
+          if [ "$EVENT" = pull_request ] && [ "$FULL_LABEL" != true ]; then full=false; fi
+          if [ "$EVENT" = workflow_dispatch ] && [ "$INPUT_FULL" = false ]; then full=false; fi
+          # Areas: every area is relevant outside a PR; on a PR the path filter decides unless the run is full.
+          pick() { if [ "$EVENT" != pull_request ] || [ "$full" = true ] || [ "$1" = true ]; then echo true; else echo false; fi; }
+          {
+            echo "full=$full"
+            echo "rust=$(pick "$F_RUST")"
+            echo "ui=$(pick "$F_UI")"
+            echo "plugins=$(pick "$F_PLUGINS")"
+          } >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
   check:
     name: check (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    needs: changes
+    # No-op runs (nothing relevant changed) use an ubuntu runner instead of macOS/Windows.
+    runs-on: ${{ needs.changes.outputs.rust == 'true' && matrix.os || 'ubuntu-latest' }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.rust == 'true'
       - name: Install toolchain from rust-toolchain.toml
+        if: needs.changes.outputs.rust == 'true'
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.rust == 'true'
+        with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          # check, screenshots, db and docs build the same debug tree; only this job saves it.
+          shared-key: debug
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Linux system packages (GPUI build)
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends \
             pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
       # macOS images may ship Xcode without the separately downloaded Metal toolchain.
       - name: Metal toolchain
-        if: runner.os == 'macOS'
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'macOS'
         run: xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
       - name: Format
+        if: needs.changes.outputs.rust == 'true'
         run: cargo fmt --all --check
+      # Windows clippy runs in its own job (`clippy (windows-latest)`) in parallel with the tests; `CI result` gates on it.
+      # macOS on a PR lints and tests the crates with OS-facing code only (MAC_SKIP: pure logic, drivers, exporters, AI
+      # clients; Linux covers them). Main, dispatch and the label `full-ci` run everything.
       - name: Clippy
+        if: needs.changes.outputs.rust == 'true' && matrix.os != 'windows-latest' && (matrix.os != 'macos-latest' || needs.changes.outputs.full == 'true')
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Clippy (macOS PR subset)
+        if: needs.changes.outputs.rust == 'true' && matrix.os == 'macos-latest' && needs.changes.outputs.full != 'true'
+        run: cargo clippy --workspace $MAC_SKIP --all-targets --all-features -- -D warnings
       - uses: taiki-e/install-action@v2
+        if: needs.changes.outputs.rust == 'true'
         with:
           tool: cargo-nextest@0.9.148
       - name: Test
+        if: needs.changes.outputs.rust == 'true' && (matrix.os == 'ubuntu-latest' || needs.changes.outputs.full == 'true')
         run: cargo nextest run --workspace --no-tests=pass
+      - name: Test (macOS PR subset)
+        if: needs.changes.outputs.rust == 'true' && matrix.os == 'macos-latest' && needs.changes.outputs.full != 'true'
+        run: cargo nextest run --workspace $MAC_SKIP --no-tests=pass
+      # Windows PR subset: the crates with Windows-only history (paths, processes, reserved names, CRLF, tunnels) by
+      # `-p`, so the other crates' test binaries are not even built, and the two sqler-ui groups that failed only on
+      # Windows. The full Windows suite runs on main, on dispatch and with the label `full-ci`.
+      - name: Test (Windows PR subset)
+        if: needs.changes.outputs.rust == 'true' && matrix.os == 'windows-latest' && needs.changes.outputs.full != 'true'
+        shell: bash
+        run: |
+          rc=0
+          cargo nextest run -p sqler-plugin-host -p sqler-plugin-api -p sqler-config -p xtask -p sqler-acp -p sqler-mcp -p sqler-cli -p sqler-tunnel --no-tests=pass || rc=1
+          cargo nextest run -p sqler-ui -E 'test(/agent_flow/) | binary(guard_suite)' --no-tests=pass || rc=1
+          exit $rc
       # The plugin host's runtime and egress layers are off by default (ADR-0057), so the workspace run above skips them.
       - name: Test (plugin host runtime and egress)
+        if: needs.changes.outputs.rust == 'true'
         run: cargo nextest run -p sqler-plugin-host --features cl,net --no-tests=fail
+      # The `plugins` feature of the app is off by default (ADR-0060), so the workspace run skips its code. A second
+      # invocation, not `--workspace --features plugins`, which would also turn the feature on for other crates.
+      - name: Test sqler-app with plugin support
+        if: needs.changes.outputs.rust == 'true' && (matrix.os != 'windows-latest' || needs.changes.outputs.full == 'true')
+        run: cargo nextest run -p sqler-app --features plugins --no-tests=fail
       - name: Check sqler-export feature sets
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         run: |
           cargo check -p sqler-export --no-default-features
           cargo check -p sqler-export --no-default-features --features parquet
           cargo check -p sqler-export --no-default-features --features xlsx
 
-  screenshots:
-    name: screenshots (linux)
-    runs-on: ubuntu-latest
+  # Clippy for Windows, split out of `check (windows-latest)` so it runs beside the tests (the Windows job was the
+  # critical path). Linux and macOS keep clippy inside `check`. `CI result` makes this job part of the gate.
+  clippy-windows:
+    name: clippy (windows-latest)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          # Clippy builds the check profile, not the test tree `check` caches, so it keeps its own key.
+          shared-key: clippy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  screenshots:
+    name: screenshots (linux)
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          shared-key: debug
+          save-if: false
       # The build set of `check`, plus a software Vulkan driver (lavapipe, shows up as llvmpipe)
       # and a font. No display, Xvfb or compositor: the harness opens no OS window.
       - name: Linux system packages (GPUI build, software Vulkan, fonts)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends \
             pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev \
             mesa-vulkan-drivers libvulkan1 fonts-dejavu-core
@@ -87,7 +284,10 @@ jobs:
 
   screenshots-macos:
     name: screenshots (macos)
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
     runs-on: macos-latest
+    timeout-minutes: 30
     # A runner without a Metal device ends the process inside GPUI, so this job may not be green.
     continue-on-error: true
     steps:
@@ -95,6 +295,13 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          shared-key: debug
+          save-if: false
       # macOS images may ship Xcode without the separately downloaded Metal toolchain.
       - name: Metal toolchain
         run: xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
@@ -109,7 +316,10 @@ jobs:
 
   db:
     name: db
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       SQLER_TEST_REQUIRE_DB: postgres,mysql,ssh
     steps:
@@ -117,6 +327,13 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          shared-key: debug
+          save-if: false
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.148
@@ -143,14 +360,17 @@ jobs:
       - name: CLI smoke test (PostgreSQL)
         run: cargo run -p sqler-cli -- run --driver postgres "$SQLER_TEST_POSTGRES_URL" "select 1" | grep -qx 1
 
+  # No rust-cache here: `cargo deny` and `cargo tree` compile nothing, the cache was 214 MiB of restore and save for no gain.
   deny:
     name: deny
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.20.2
@@ -168,54 +388,74 @@ jobs:
           # `cargo tree` runs on its own so a failure of the command itself fails the step instead of passing the grep.
           tree=$(cargo tree -p sqler-app -e normal --prefix none) || { echo "cargo tree failed"; exit 1; }
           if printf '%s\n' "$tree" | grep -q '^wasmtime '; then echo "wasmtime is in the default sqler-app tree"; exit 1; fi
+          # With the `plugins` feature the host must really be wired in.
+          tree=$(cargo tree -p sqler-app -e normal --prefix none --features plugins) || { echo "cargo tree failed"; exit 1; }
+          if ! printf '%s\n' "$tree" | grep -q '^wasmtime '; then echo "wasmtime is missing with --features plugins"; exit 1; fi
+          # sqler-ui must stay wasmtime-free whatever the app enables.
+          if cargo tree -p sqler-ui -i wasmtime 2>/dev/null; then echo "wasmtime is in the sqler-ui tree"; exit 1; fi
 
   plugins:
     name: plugins (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    needs: changes
+    # No-op runs use an ubuntu runner instead of macOS/Windows.
+    runs-on: ${{ needs.changes.outputs.plugins == 'true' && matrix.os || 'ubuntu-latest' }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.plugins == 'true'
       - name: Install toolchain from rust-toolchain.toml
+        if: needs.changes.outputs.plugins == 'true'
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.plugins == 'true'
         with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
           # The guest workspace builds into target/plugins/cargo, which the root target dir already caches.
           workspaces: . -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the plugins (debug)
+        if: needs.changes.outputs.plugins == 'true'
         shell: bash
         run: cargo run -p xtask --locked -- plugins build
       - name: Build the plugins (release)
+        if: needs.changes.outputs.plugins == 'true'
         shell: bash
         run: cargo run -p xtask --locked -- plugins build --release
       - name: Staged files exist
+        if: needs.changes.outputs.plugins == 'true'
         shell: bash
         run: test -f target/plugins/release/smoke/smoke.wasm && test -f target/plugins/release/smoke/sqler.toml
       # End-to-end: the host runs the staged debug guests. A missing fixture is a failure here, not a skip.
       - name: Guest tests (plugin host)
+        if: needs.changes.outputs.plugins == 'true'
         shell: bash
         env:
           SQLER_PLUGIN_FIXTURES: target/plugins/debug
           SQLER_TEST_REQUIRE_PLUGINS: "1"
         run: cargo test --locked -p sqler-plugin-host --features cl,net --test guests
       - name: Format and clippy (Linux)
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.plugins == 'true' && runner.os == 'Linux'
         shell: bash
         run: cargo run -p xtask --locked -- plugins check
       - uses: taiki-e/install-action@v2
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.plugins == 'true' && runner.os == 'Linux'
         with:
           tool: cargo-deny@0.20.2
       - name: cargo deny (guest workspace, Linux)
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.plugins == 'true' && runner.os == 'Linux'
         shell: bash
         run: |
           cargo deny --manifest-path plugins/Cargo.toml --config deny.toml fetch
           cargo deny --manifest-path plugins/Cargo.toml --config deny.toml check
       - name: Clean (Linux)
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.plugins == 'true' && runner.os == 'Linux'
         shell: bash
         run: |
           cargo run -p xtask --locked -- plugins clean
@@ -223,20 +463,33 @@ jobs:
 
   docs:
     name: docs
+    needs: changes
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+      # rustdoc only when Rust changed; the mdBook build below always runs.
       - name: Install toolchain from rust-toolchain.toml
+        if: needs.changes.outputs.rust == 'true'
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.rust == 'true'
+        with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          shared-key: debug
+          save-if: false
       - name: Linux system packages (GPUI build)
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends \
             pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
       - name: rustdoc
+        if: needs.changes.outputs.rust == 'true'
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --document-private-items
@@ -248,8 +501,31 @@ jobs:
 
   spdx:
     name: spdx
+    needs: changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - name: SPDX headers
         run: sh .github/scripts/check-spdx.sh
+
+  # One result for the whole workflow. A failed or cancelled job fails it; `skipped` (path-gated) passes.
+  # `screenshots (macos)` is advisory (continue-on-error) and left out on purpose.
+  ci-result:
+    name: CI result
+    if: always()
+    needs: [changes, check, clippy-windows, screenshots, db, deny, plugins, docs, spdx]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate
+        shell: bash
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          CHANGES: ${{ needs.changes.result }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in failure|cancelled) echo "a job ended as $r"; exit 1 ;; esac
+          done
+          test "$CHANGES" = success

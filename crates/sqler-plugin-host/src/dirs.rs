@@ -9,6 +9,9 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginDirs {
     /// The user's plugin directory (`<config>/plugins`); each child is a plugin, `<id>/data` is its data root.
+    ///
+    /// Callers pass an absolute, canonical path (and keep the data last segment spelled exactly `data`): a relative
+    /// path such as `./plugins` is refused by the scope rules and shows up as a scope that escapes, without a hint.
     pub config_plugins: Option<PathBuf>,
     /// Development paths (`--plugin-dir`): a path holding `sqler.toml` is one plugin, otherwise its children are
     /// scanned. They win over `config_plugins` for a duplicate id.

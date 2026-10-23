@@ -3,4 +3,18 @@
 
 //! Plugins in the UI: the permission dialog and the book of what the user approved (ADR-0059).
 
+pub mod action;
+pub mod approval;
+pub mod backend;
 pub mod grant;
+pub mod manager;
+
+pub use action::{PluginCommand, register_commands};
+pub use approval::{
+    PluginWriteAsk, PluginWriteRequest, WriteInbox, WriteQueue, WriteSender, WriteStage,
+    write_channel,
+};
+
+pub use backend::{
+    PluginProblem, PluginRow, PluginSnapshot, PluginsBackend, PluginsStartup, RowState,
+};

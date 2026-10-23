@@ -89,7 +89,7 @@ proptest! {
         } else {
             prop_assert_ne!(ma.hash(), mb.hash());
             prop_assert_ne!(ma.grant_key(None).unwrap(), mb.grant_key(None).unwrap());
-            prop_assert!(!mb.capabilities.diff(&ma.capabilities).is_empty());
+            prop_assert!(!mb.capabilities().diff(ma.capabilities()).is_empty());
         }
     }
 

@@ -197,6 +197,33 @@ pub struct WriteRequest {
     pub stage: ApprovalStage,
 }
 
+impl WriteRequest {
+    /// A request. The host builds them itself; applications need this to test their approver.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)] // one field each; the struct is `non_exhaustive`
+    pub fn new(
+        plugin: PluginId,
+        plugin_name: impl Into<String>,
+        connection: PluginConnection,
+        sql: impl Into<String>,
+        params: Vec<Value>,
+        class: StatementClass,
+        reason: WriteReason,
+        stage: ApprovalStage,
+    ) -> Self {
+        Self {
+            plugin,
+            plugin_name: plugin_name.into(),
+            connection,
+            sql: sql.into(),
+            params,
+            class,
+            reason,
+            stage,
+        }
+    }
+}
+
 /// Asks the user whether a plugin's statement may run (the dialog is the application's, ADR-0036).
 pub trait QueryApprover: Send + Sync {
     /// Asks for one stage. Dropping the future means not approved.

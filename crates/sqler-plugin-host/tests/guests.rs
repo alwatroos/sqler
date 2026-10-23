@@ -210,7 +210,7 @@ fn world(label: &str, fixtures: &Path, name: &str, opts: &Opts) -> World {
     });
     assert!(d.problems.is_empty(), "{:?}", d.problems);
     let plugin = &d.plugins[0];
-    let id = plugin.manifest.id.clone();
+    let id = plugin.manifest.id().clone();
     let grants = Arc::new(Grants::default());
     let key = plugin.key.clone();
     let mut services = opts.services.clone();

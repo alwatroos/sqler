@@ -29,7 +29,6 @@ use crate::browser::{BrowserAction, LoadState, TreeNodeId};
 use crate::command::CommandId;
 use crate::connections::{ConnectionAction, Connector};
 use crate::palette::OPEN_PALETTE;
-use crate::plugins::grant::{sample_prompt, view::GrantSceneHost};
 use crate::settings::SettingsModel;
 use crate::tabs::{TabId, TabKind};
 use crate::workspace::WorkspaceAction;
@@ -180,6 +179,22 @@ pub const SCENES: &[Scene] = &[
         name: "plugins-grant",
         pending: None,
     },
+    Scene {
+        name: "plugins-manager",
+        pending: None,
+    },
+    Scene {
+        name: "plugins-write",
+        pending: None,
+    },
+    Scene {
+        name: "plugins-write-prod",
+        pending: None,
+    },
+    Scene {
+        name: "plugins-empty",
+        pending: None,
+    },
 ];
 
 /// The window size of every scene, in logical pixels.
@@ -236,6 +251,10 @@ enum Wait {
     PromptInput,
     /// The assistant of the active tab has answered: it is neither idle nor running.
     Assist,
+    /// The plugin manager has read the plugins.
+    PluginsLoaded,
+    /// The permission dialog is open.
+    PluginsDialog,
 }
 
 impl Wait {
@@ -250,6 +269,8 @@ impl Wait {
             Self::AiGate => "the production confirmation".to_owned(),
             Self::PromptInput => "the AI prompt bar".to_owned(),
             Self::Assist => "the AI answer".to_owned(),
+            Self::PluginsLoaded => "the plugins to be read".to_owned(),
+            Self::PluginsDialog => "the permission dialog".to_owned(),
         }
     }
 }
@@ -289,6 +310,12 @@ enum Step {
     AgentFixture(AgentScene),
     /// Waits.
     Wait(Wait),
+    /// Starts the plugin manager, as the first-frame hook does (the headless renderer has no frame callbacks).
+    StartPlugins,
+    /// Selects the plugin with this id in the manager.
+    SelectPlugin(&'static str),
+    /// Queues a write approval of a plugin on a production connection at this stage.
+    PluginWrite(crate::plugins::WriteStage),
 }
 
 /// The canned conversation of an agent scene.
@@ -424,6 +451,32 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Wait(Wait::Assist),
         ],
         "settings" => vec![Step::Command("settings:open")],
+        "plugins-manager" => vec![
+            Step::StartPlugins,
+            Step::Command("workbench:show-plugins"),
+            Step::Wait(Wait::PluginsLoaded),
+            Step::SelectPlugin("flaky-linter"),
+            Step::Pause(2),
+        ],
+        "plugins-empty" => vec![
+            Step::StartPlugins,
+            Step::Command("workbench:show-plugins"),
+            Step::Wait(Wait::PluginsLoaded),
+            Step::Pause(2),
+        ],
+        "plugins-write" => vec![
+            Step::PluginWrite(crate::plugins::WriteStage::First),
+            Step::Pause(2),
+        ],
+        "plugins-write-prod" => vec![
+            Step::PluginWrite(crate::plugins::WriteStage::ProdSecond),
+            Step::Pause(2),
+        ],
+        "plugins-grant" => vec![
+            Step::StartPlugins,
+            Step::Wait(Wait::PluginsDialog),
+            Step::Pause(2),
+        ],
         "panels-collapsed" => vec![
             open_step("dev", "select * from customers;"),
             Step::Wait(Wait::Editors(1)),
@@ -619,6 +672,7 @@ fn startup(
         history_dir: None,
         workbench: crate::workbench::WorkbenchStartup::default(),
         ai: ai_startup(scene),
+        plugins: crate::plugins::manager::fixture::scene_startup(scene.name),
     }
 }
 
@@ -780,13 +834,7 @@ pub fn open(
     view.update(cx, |view, _| {
         view.ws.ai_audit = Some(crate::ai::AiAudit::in_memory());
     });
-    let root = if scene.name == "plugins-grant" {
-        // The dialog is drawn by a small host over the real workspace, so `view.rs` is untouched.
-        let host = cx.new(|cx| GrantSceneHost::new(view.clone(), sample_prompt(), cx));
-        cx.new(|cx| Root::new(host, window, cx))
-    } else {
-        cx.new(|cx| Root::new(view.clone(), window, cx))
-    };
+    let root = cx.new(|cx| Root::new(view.clone(), window, cx));
     let player = ScenePlayer {
         view,
         scene: *scene,
@@ -963,9 +1011,35 @@ impl WorkspaceView {
                 self.dispatch_ai(AiAction::ApproveStatement(tab, id), cx);
             }
             Step::AgentFixture(scene) => self.open_agent_fixture(*scene, cx)?,
+            Step::StartPlugins => self.start_plugins(cx),
+            Step::SelectPlugin(id) => {
+                let id = id.parse().map_err(|_| format!("no plugin id {id}"))?;
+                self.plugin_select(&id, cx);
+            }
+            Step::PluginWrite(stage) => self.queue_plugin_write(*stage)?,
             Step::Pause(_) | Step::Wait(_) => {}
         }
         cx.notify();
+        Ok(())
+    }
+
+    /// Queues a plugin's write approval on a production connection, as the app's approver would.
+    fn queue_plugin_write(&mut self, stage: crate::plugins::WriteStage) -> Result<(), String> {
+        let request = crate::plugins::PluginWriteRequest::new(
+            "acme-sync".parse().map_err(|_| "plugin id")?,
+            "Acme Sync",
+            "Orders",
+            sqler_driver_api::sqler_core::DriverId::new("postgres").map_err(|_| "driver id")?,
+            true,
+            "update orders set status = 'shipped' where id = 42",
+            stage,
+        );
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        // Kept open for the life of the scene: a closed reply would remove the dialog.
+        std::mem::forget(answer);
+        self.ws
+            .plugin_writes_mut()
+            .push(crate::plugins::PluginWriteAsk { request, reply });
         Ok(())
     }
 
@@ -1028,6 +1102,8 @@ impl WorkspaceView {
                     })
             }
             Wait::Table { conn, name } => self.table_found(conn, name, cx),
+            Wait::PluginsLoaded => !self.ws.plugins().loading(),
+            Wait::PluginsDialog => self.ws.plugins().dialog().is_some(),
             Wait::AiReady => self
                 .ws
                 .active_ai_session()
