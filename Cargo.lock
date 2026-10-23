@@ -11111,6 +11111,7 @@ version = "0.1.0"
 dependencies = [
  "sqler-plugin-api",
  "toml 1.1.8+spec-1.1.0",
+ "wit-parser 0.262.0",
 ]
 
 [[package]]

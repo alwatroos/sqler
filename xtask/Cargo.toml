@@ -21,3 +21,4 @@ sqler-plugin-api.workspace = true
 
 [dev-dependencies]
 toml.workspace = true
+wit-parser.workspace = true
