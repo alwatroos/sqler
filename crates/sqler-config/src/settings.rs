@@ -43,6 +43,9 @@ pub struct Settings {
     /// Rows per result page; the grid stops loading when a page is full and "Fetch more"
     /// continues. Must be within [`RESULT_PAGE_ROWS_RANGE`].
     pub result_page_rows: u32,
+    /// Whether `SQLer` may look for a newer version about once a day (ADR-0066). Off by default;
+    /// while it is off no update request is ever made, including the manual command.
+    pub check_for_updates: bool,
 }
 
 impl Default for Settings {
@@ -51,6 +54,7 @@ impl Default for Settings {
             theme: ThemePreference::System,
             ui_font_size: 14,
             result_page_rows: DEFAULT_RESULT_PAGE_ROWS,
+            check_for_updates: false,
         }
     }
 }
@@ -138,6 +142,7 @@ mod tests {
         assert_eq!(s.theme, ThemePreference::System);
         assert_eq!(s.ui_font_size, 14);
         assert_eq!(s.result_page_rows, 100_000);
+        assert!(!s.check_for_updates);
     }
 
     #[test]
@@ -148,6 +153,17 @@ mod tests {
         assert_eq!((s.theme, s.ui_font_size), (ThemePreference::System, 20));
         let s = parse("result_page_rows = 5000").unwrap();
         assert_eq!((s.result_page_rows, s.ui_font_size), (5000, 14));
+    }
+
+    #[test]
+    fn check_for_updates_parses() {
+        assert!(parse("check_for_updates = true").unwrap().check_for_updates);
+        assert!(
+            !parse("check_for_updates = false")
+                .unwrap()
+                .check_for_updates
+        );
+        assert!(!parse("theme = \"dark\"").unwrap().check_for_updates);
     }
 
     #[test]
@@ -171,6 +187,8 @@ mod tests {
         assert!(parse("result_page_rows = \"many\"").is_err());
         assert!(parse("result_page_rows = -5").is_err());
         assert!(parse("result_page_rows = 1.5").is_err());
+        assert!(parse("check_for_updates = \"yes\"").is_err());
+        assert!(parse("check_for_updates = 1").is_err());
     }
 
     #[test]

@@ -12,6 +12,8 @@ mod connect;
 mod open_sessions;
 #[cfg(feature = "plugins")]
 mod plugins;
+#[cfg(feature = "update")]
+mod update;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -122,6 +124,12 @@ fn start(
         drop(plugin_dirs);
         sqler_ui::plugins::PluginsStartup::unavailable()
     };
+    // Spawns one idle task: no client is built and nothing is requested until the window starts it after the first
+    // frame, and only while `check_for_updates` is on.
+    #[cfg(feature = "update")]
+    let update = update::startup(dir.as_ref().ok(), runtime.handle());
+    #[cfg(not(feature = "update"))]
+    let update = sqler_ui::update::UpdateStartup::unavailable();
     #[cfg(feature = "plugins")]
     let export_sources = vec![plugins::exporters::source() as Arc<dyn FormatSource>];
     #[cfg(not(feature = "plugins"))]
@@ -139,6 +147,7 @@ fn start(
         workbench,
         ai,
         plugins,
+        update,
         export_sources,
     });
     ExitCode::SUCCESS

@@ -421,6 +421,7 @@ mod tests {
             },
             plugins,
             export_sources: Vec::new(),
+            update: crate::update::UpdateStartup::unavailable(),
         };
         let (view, cx) =
             cx.add_window_view(move |window, cx| WorkspaceView::new(startup, window, cx));
