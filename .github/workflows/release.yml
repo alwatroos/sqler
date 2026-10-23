@@ -1,0 +1,484 @@
+name: Release
+
+# Release pipeline (ADR-0064): cargo-dist builds and packages `sqler-app`; a `v*` tag publishes a GitHub Release.
+# Started from `dist generate` and now maintained by hand (`allow-dirty = ["ci"]` in dist-workspace.toml): the
+# path-gated PR trigger, the dry run, the GPUI setup, the DuckDB guard before every upload, the smoke run and the
+# size line cannot be generated. After a dist upgrade, run `dist generate` into a scratch copy and diff it.
+#
+# - Pull request touching a release file: plan, guard and a Linux x86_64 build (uploaded as a workflow artifact, 7
+#   days). The label `full-ci` (read when the run starts; push again after labelling) adds every OS, the global
+#   artifacts and the SBOM.
+# - workflow_dispatch: always a full dry run, never publishes. It needs this file on the default branch.
+# - Tag `vX.Y.Z`: the full run, then `host` creates the GitHub Release. Nothing else ever publishes.
+#
+# The release feature set is the single `features = [...]` line in dist-workspace.toml, pending the owner's decision
+# (ADR-0064). `release-guard.sh` rejects `driver-duckdb` whatever that line holds (ADR-0070).
+on:
+  pull_request:
+    paths:
+      - "dist-workspace.toml"
+      - ".github/workflows/release.yml"
+      - ".github/scripts/release-guard.sh"
+      - "crates/sqler-app/Cargo.toml"
+      - "crates/sqler-app/wix/**"
+  workflow_dispatch:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+# Cancel superseded runs on pull requests only; a tag or dispatch run completes (own group per run), as in size.yml.
+concurrency:
+  group: release-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Runs `dist plan` (or `dist host --steps=create` on a tag) to decide what to build.
+  plan:
+    name: plan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    outputs:
+      val: ${{ steps.plan.outputs.manifest }}
+      tag: ${{ steps.mode.outputs.tag }}
+      tag-flag: ${{ steps.mode.outputs.tag-flag }}
+      publishing: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+      full: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PUBLISHING: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+      FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+      # taiki-e/install-action has no manifest for cargo-dist; build the version pinned in dist-workspace.toml.
+      - name: Install dist
+        shell: bash
+        run: |
+          ver=$(sed -n 's/^cargo-dist-version *= *"\([^"]*\)".*/\1/p' dist-workspace.toml)
+          test -n "$ver"
+          # Outside the repository, so rust-toolchain.toml does not select the toolchain for the tool build.
+          cd "$RUNNER_TEMP"
+          cargo install --locked --version "$ver" --root "$RUNNER_TEMP/dist" cargo-dist
+          echo "$RUNNER_TEMP/dist/bin" >> "$GITHUB_PATH"
+      - name: Cache dist for the Linux jobs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cargo-dist-cache
+          path: ${{ runner.temp }}/dist/bin/dist
+          retention-days: 1
+      - id: mode
+        shell: bash
+        run: |
+          if [ "$PUBLISHING" = "true" ]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "tag-flag=--tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "tag-flag=" >> "$GITHUB_OUTPUT"
+          fi
+      - id: plan
+        shell: bash
+        run: |
+          if [ "$PUBLISHING" = "true" ]; then
+            dist host --steps=create --tag="$GITHUB_REF_NAME" --output-format=json > plan-dist-manifest.json
+          else
+            dist plan --output-format=json > plan-dist-manifest.json
+          fi
+          echo "dist ran successfully"
+          cat plan-dist-manifest.json
+          # A PR without the label `full-ci` builds Linux x86_64 only; the uploaded plan keeps the full matrix.
+          if [ "$FULL" = "true" ]; then
+            echo "manifest=$(jq -c '.' plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "manifest=$(jq -c '.ci.github.artifacts_matrix.include |= map(select(.targets | index("x86_64-unknown-linux-gnu")))' plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload dist-manifest.json
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: artifacts-plan-dist-manifest
+          path: plan-dist-manifest.json
+          retention-days: 7
+
+  # Fails before any build when the release configuration could ship the DuckDB engine (ADR-0070).
+  guard:
+    name: guard (features)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+      - name: Release features and dependency tree
+        shell: bash
+        run: sh .github/scripts/release-guard.sh features
+
+  # Builds and packages the platform-specific artifacts, one job per target.
+  build:
+    name: build (${{ join(matrix.targets, ', ') }})
+    needs:
+      - plan
+      - guard
+    if: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null && (needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      # The matrix (runner, targets, dist-args) is computed by dist in the plan job.
+      matrix: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TARGET: ${{ matrix.targets[0] }}
+      TAG_FLAG: ${{ needs.plan.outputs.tag-flag }}
+      DIST_ARGS: ${{ matrix.dist_args }}
+      BUILD_MANIFEST_NAME: target/distrib/${{ join(matrix.targets, '-') }}-dist-manifest.json
+    steps:
+      # Checkout must not rewrite line endings: the guard script and the wxs are read byte-exactly on Windows.
+      - name: Disable line-ending conversion and enable long paths
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+      - name: Linux system packages (GPUI build)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends \
+            pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
+      # macOS images may ship Xcode without the separately downloaded Metal toolchain.
+      - name: Metal toolchain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+      - name: Fetch the dist built by the plan job
+        if: matrix.runner == 'ubuntu-22.04'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: cargo-dist-cache
+          path: ${{ runner.temp }}/dist-cache
+      - name: Use the cached dist
+        if: matrix.runner == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          chmod +x "$RUNNER_TEMP/dist-cache/dist"
+          echo "$RUNNER_TEMP/dist-cache" >> "$GITHUB_PATH"
+      - name: Install dist
+        if: matrix.runner != 'ubuntu-22.04'
+        shell: bash
+        run: |
+          ver=$(sed -n 's/^cargo-dist-version *= *"\([^"]*\)".*/\1/p' dist-workspace.toml)
+          test -n "$ver"
+          cd "$RUNNER_TEMP"
+          cargo install --locked --version "$ver" --root "$RUNNER_TEMP/dist" cargo-dist
+          bin="$RUNNER_TEMP/dist/bin"
+          if command -v cygpath >/dev/null 2>&1; then bin=$(cygpath -w "$bin"); fi
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: Build artifacts
+        shell: bash
+        run: |
+          # shellcheck disable=SC2086 # TAG_FLAG and DIST_ARGS are flag lists
+          dist build $TAG_FLAG --print=linkage --output-format=json $DIST_ARGS > dist-manifest.json
+          echo "dist ran successfully"
+      - name: Guard (no DuckDB build output)
+        shell: bash
+        run: sh .github/scripts/release-guard.sh build-dir "target/$TARGET/dist"
+      - name: Extract the archive
+        id: extract
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/extracted"
+          rm -rf "$out"
+          mkdir -p "$out"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            archive="target/distrib/sqler-app-$TARGET.zip"
+            7z x -y -o"$(cygpath -m "$out")" "$archive" > /dev/null
+            name=sqler.exe
+          else
+            archive="target/distrib/sqler-app-$TARGET.tar.xz"
+            tar -xJf "$archive" -C "$out"
+            name=sqler
+          fi
+          bin=$(find "$out" -type f -name "$name" | head -n 1)
+          test -n "$bin"
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+      - name: Guard (no DuckDB engine in the binary)
+        shell: bash
+        env:
+          BIN: ${{ steps.extract.outputs.bin }}
+        run: sh .github/scripts/release-guard.sh binary "$BIN"
+      # Windows builds the GUI subsystem, so the output goes to a file instead of the console.
+      - name: Smoke check (--version)
+        shell: bash
+        env:
+          BIN: ${{ steps.extract.outputs.bin }}
+        run: |
+          "$BIN" --version > "$RUNNER_TEMP/version.txt" 2>&1
+          cat "$RUNNER_TEMP/version.txt"
+          grep -Eq '^sqler [0-9]' "$RUNNER_TEMP/version.txt"
+      # Report only, never a gate (ADR-0069: budget 80 MB = 83,886,080 bytes).
+      - name: Size report
+        shell: bash
+        env:
+          BIN: ${{ steps.extract.outputs.bin }}
+          ARCHIVE: ${{ steps.extract.outputs.archive }}
+        run: |
+          budget=83886080
+          bin_bytes=$(wc -c < "$BIN" | tr -d ' ')
+          archive_bytes=$(wc -c < "$ARCHIVE" | tr -d ' ')
+          line="sqler release on $RUNNER_OS ($TARGET): binary $bin_bytes bytes, archive $archive_bytes bytes (budget 80 MB = $budget bytes)"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bin_bytes" -gt "$budget" ]; then
+            echo "::warning title=Binary size::sqler on $RUNNER_OS is $bin_bytes bytes, over the 80 MB budget"
+          fi
+      # R2 replaces this placeholder with codesign and notarisation (ADR-0065). Until then the macOS build is unsigned.
+      - name: macOS notarisation (R2)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::notice title=Unsigned macOS build::no Apple signing secret; the macOS archive is unsigned (ADR-0064, owner decision 1)"
+          else
+            echo "Apple signing secret present; signing and notarisation arrive with R2"
+          fi
+      - id: cargo-dist
+        name: Collect the upload list
+        shell: bash
+        run: |
+          # Parse out what was built and upload it to scratch storage.
+          {
+            echo "paths<<EOF"
+            dist print-upload-files-from-manifest --manifest dist-manifest.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          cp dist-manifest.json "$BUILD_MANIFEST_NAME"
+      - name: Guard (no DuckDB in the artifacts)
+        shell: bash
+        run: sh .github/scripts/release-guard.sh artifacts target/distrib
+      - name: Upload artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: artifacts-build-local-${{ join(matrix.targets, '_') }}
+          path: |
+            ${{ steps.cargo-dist.outputs.paths }}
+            ${{ env.BUILD_MANIFEST_NAME }}
+          retention-days: 7
+
+  # Platform-agnostic artifacts: the unified checksum file, the source archive, the installers and the SBOM.
+  global:
+    name: global artifacts
+    needs:
+      - plan
+      - build
+    if: ${{ needs.plan.outputs.full == 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG_FLAG: ${{ needs.plan.outputs.tag-flag }}
+      BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+      - name: Fetch the dist built by the plan job
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: cargo-dist-cache
+          path: ${{ runner.temp }}/dist-cache
+      - name: Use the cached dist
+        shell: bash
+        run: |
+          chmod +x "$RUNNER_TEMP/dist-cache/dist"
+          echo "$RUNNER_TEMP/dist-cache" >> "$GITHUB_PATH"
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2
+        with:
+          tool: cargo-cyclonedx@0.5.9
+      # The local artifacts are needed for the checksums.
+      - name: Fetch local artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: artifacts-*
+          path: target/distrib/
+          merge-multiple: true
+      - id: cargo-dist
+        shell: bash
+        run: |
+          # shellcheck disable=SC2086 # TAG_FLAG is a flag
+          dist build $TAG_FLAG --output-format=json "--artifacts=global" > dist-manifest.json
+          echo "dist ran successfully"
+          {
+            echo "paths<<EOF"
+            jq --raw-output ".upload_files[]" dist-manifest.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          cp dist-manifest.json "$BUILD_MANIFEST_NAME"
+      # One SBOM per release, for the shipped package only (per-artifact SBOMs are a follow-up, ADR-0064). It uses
+      # the feature list of dist-workspace.toml, so it describes what is shipped.
+      - id: cargo-cyclonedx
+        name: SBOM
+        shell: bash
+        run: |
+          feats=$(sed -n 's/^features *= *\[\([^]]*\)\].*/\1/p' dist-workspace.toml | tr -d '" ')
+          if [ -n "$feats" ]; then
+            cargo cyclonedx -v --manifest-path crates/sqler-app/Cargo.toml --features "$feats"
+          else
+            cargo cyclonedx -v --manifest-path crates/sqler-app/Cargo.toml
+          fi
+          # Keep sqler-app.cdx.xml only, and move it next to the other artifacts.
+          find . -name '*.cdx.xml' ! -name 'sqler-app.cdx.xml' -delete
+          find . -name 'sqler-app.cdx.xml' -not -path './target/distrib/*' -exec mv '{}' target/distrib/ ';'
+          test -f target/distrib/sqler-app.cdx.xml
+          echo "paths<<EOF" >> "$GITHUB_OUTPUT"
+          echo "target/distrib/sqler-app.cdx.xml" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+      - name: Guard (no DuckDB in the artifacts)
+        shell: bash
+        run: sh .github/scripts/release-guard.sh artifacts target/distrib
+      - name: Upload artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: artifacts-build-global
+          path: |
+            ${{ steps.cargo-dist.outputs.paths }}
+            ${{ steps.cargo-cyclonedx.outputs.paths }}
+            ${{ env.BUILD_MANIFEST_NAME }}
+          retention-days: 7
+
+  # Publishes the GitHub Release. Runs on a `v*` tag only (publishing), after every build and the global artifacts.
+  host:
+    name: host
+    needs:
+      - plan
+      - guard
+      - build
+      - global
+    if: ${{ always() && needs.plan.outputs.publishing == 'true' && needs.plan.result == 'success' && needs.guard.result == 'success' && needs.build.result == 'success' && needs.global.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG_FLAG: ${{ needs.plan.outputs.tag-flag }}
+    outputs:
+      val: ${{ steps.host.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Fetch the dist built by the plan job
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: cargo-dist-cache
+          path: ${{ runner.temp }}/dist-cache
+      - name: Use the cached dist
+        shell: bash
+        run: |
+          chmod +x "$RUNNER_TEMP/dist-cache/dist"
+          echo "$RUNNER_TEMP/dist-cache" >> "$GITHUB_PATH"
+      - name: Fetch artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: artifacts-*
+          path: target/distrib/
+          merge-multiple: true
+      # R5 adds the update manifest signing here (an `environment:` with the key, and the signing step).
+      # R2 and R5: every signing secret (Apple certificate, update key) must live in a GitHub environment whose
+      # deployment rules limit it to `v*` tag runs, never in repository-wide secrets (ADR-0064).
+      - name: Update manifest signing (R5)
+        shell: bash
+        env:
+          SQLER_UPDATE_SIGNING_KEY: ${{ secrets.SQLER_UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$SQLER_UPDATE_SIGNING_KEY" ]; then
+            echo "::notice title=Update manifest::no signing key; the release carries no signed update manifest (R5)"
+          else
+            echo "Signing key present; manifest signing arrives with R5"
+          fi
+      - name: Guard (no DuckDB in the artifacts)
+        shell: bash
+        run: sh .github/scripts/release-guard.sh artifacts target/distrib
+      - id: host
+        shell: bash
+        run: |
+          # shellcheck disable=SC2086 # TAG_FLAG is a flag
+          dist host $TAG_FLAG --steps=upload --steps=release --output-format=json > dist-manifest.json
+          echo "artifacts uploaded and released successfully"
+          cat dist-manifest.json
+          echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
+      - name: Upload dist-manifest.json
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          # Overwrite the previous copy.
+          name: artifacts-dist-manifest
+          path: dist-manifest.json
+          retention-days: 7
+      - name: Download GitHub artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: artifacts-*
+          path: artifacts
+          merge-multiple: true
+      - name: Cleanup
+        shell: bash
+        run: |
+          # Remove the granular manifests.
+          rm -f artifacts/*-dist-manifest.json
+      - name: Guard (no DuckDB in the release files)
+        shell: bash
+        run: sh .github/scripts/release-guard.sh artifacts artifacts
+      - name: Create GitHub Release
+        env:
+          PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
+          ANNOUNCEMENT_TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
+          ANNOUNCEMENT_BODY: "${{ fromJson(steps.host.outputs.manifest).announcement_github_body }}"
+          RELEASE_COMMIT: "${{ github.sha }}"
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        shell: bash
+        run: |
+          # Write and read notes from a file to avoid quoting breaking things.
+          echo "$ANNOUNCEMENT_BODY" > "$RUNNER_TEMP/notes.txt"
+          # shellcheck disable=SC2086 # PRERELEASE_FLAG is empty or one flag
+          gh release create "$RELEASE_TAG" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+
+  announce:
+    name: announce
+    needs:
+      - plan
+      - host
+    if: ${{ always() && needs.plan.outputs.publishing == 'true' && needs.host.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
