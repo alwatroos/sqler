@@ -177,8 +177,9 @@ with it is outside the size budget by design. The default build does not change 
 is not in the default `sqler-app` or `sqler-cli` tree).
 
 The bundled C++ engine also adds build time: about 490 s of CPU for an uncached debug build (64 s wall on a 14-core
-laptop). The first run of the `duckdb` CI job took about an hour on a cold cache; the job is path-filtered, so
-it runs only for pull requests that touch the DuckDB paths. See
+laptop). The `duckdb` CI job is informational, path-filtered and non-blocking: it runs only for pull requests that
+touch the DuckDB paths, is not required for merge and does not affect `CI result`. It builds the engine once
+(about 11 to 15 minutes on a cold cache). See
 [ADR-0070](../adr/0070-duckdb-engine-and-licence.md), amendment 2.
 
 ## SQL Server

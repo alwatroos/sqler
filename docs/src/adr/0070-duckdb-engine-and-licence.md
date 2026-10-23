@@ -124,12 +124,14 @@ saying it is build-time only. Never an advisory ignore, never the `rsa` crate.
     `deny` job checks that the list names every workspace feature except `driver-duckdb`, so a new feature cannot be
     forgotten.
   - The tests of `sqler-app` and `sqler-cli` with the feature `plugins` no longer add `driver-duckdb`.
-  - A separate job `duckdb` (Linux only, 120 minute limit) runs clippy and the tests of `sqler-driver-duckdb`, and
-    clippy and the tests of `sqler-app` and `sqler-cli` with `driver-duckdb`. It runs on `workflow_dispatch` or on a
-    pull request that changes `crates/sqler-driver-duckdb/**`, `plugins/duckdb/**`, the `Cargo.toml` of `sqler-app` or
-    `sqler-cli`, or their plugin driver wiring (`sqler-app/src/plugins/drivers.rs`, `sqler-cli/src/plugins.rs`). Not on
-    pushes to `main` and not through the label `full-ci`. When it does not run it reports `skipped`, which `CI result`
-    counts as a pass; job names, path gating and the cache policy of
+  - A separate job `duckdb` (Linux only, 120 minute limit) is informational, path-filtered and non-blocking: it is
+    not in the `needs` of `CI result`, so a running, failed or skipped `duckdb` job never affects `CI result` or the
+    mergeability of a pull request, and it must never be made a required check. It runs on `workflow_dispatch` or on a
+    pull request that changes `crates/sqler-driver-duckdb/**` or `plugins/duckdb/**`. Not on pushes to `main` and not
+    through the label `full-ci`. It compiles the bundled C++ engine once: one `cargo clippy` and one `cargo nextest
+    run` over `sqler-driver-duckdb`, `sqler-app` and `sqler-cli` with the same feature set (`driver-duckdb`), in one
+    target directory. Expected cost is one cold engine build of about 11 to 15 minutes (the earlier four-step layout
+    rebuilt it four times, about an hour); job names and the cache policy of
     [ADR-0068](0068-ci-pipeline-speed.md) are otherwise unchanged.
   - `cargo deny` keeps `all-features = true`, so licences and advisories of the `DuckDB` dependency tree are still
     checked (no compile), and the `deny` job still asserts `duckdb` is absent from the default `sqler-app` and

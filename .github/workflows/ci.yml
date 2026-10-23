@@ -131,10 +131,6 @@ jobs:
             duckdb:
               - 'crates/sqler-driver-duckdb/**'
               - 'plugins/duckdb/**'
-              - 'crates/sqler-app/Cargo.toml'
-              - 'crates/sqler-cli/Cargo.toml'
-              - 'crates/sqler-app/src/plugins/drivers.rs'
-              - 'crates/sqler-cli/src/plugins.rs'
       - name: Resolve outputs
         id: out
         shell: bash
@@ -593,8 +589,9 @@ jobs:
         run: mdbook build docs
 
   # The only job that compiles the bundled DuckDB C++ engine (ADR-0070, amendment 2: DuckDB is out of v1.0). It runs on
-  # a dispatch or when the engine, its plugin entry or the app/cli driver wiring changes; otherwise it reports `skipped`,
-  # which `CI result` counts as a pass. Linux only. No cache save: the engine has its own target tree.
+  # a dispatch or when the engine or its plugin entry changes. INFORMATIONAL: it is not in `needs` of `CI result`, so a
+  # running, failed or skipped `duckdb` job never affects the result or the mergeability; it must never be a required
+  # check. One C++ engine build (one clippy and one test run on one feature set). Linux only.
   duckdb:
     name: duckdb
     needs: changes
@@ -620,16 +617,11 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.148
-      - name: Clippy (engine)
-        run: cargo clippy -p sqler-driver-duckdb --all-targets -- -D warnings
-      - name: Tests (engine)
-        run: cargo nextest run -p sqler-driver-duckdb --no-tests=fail
-      - name: Clippy (app and cli with driver-duckdb)
-        run: cargo clippy -p sqler-app -p sqler-cli --all-targets --features sqler-app/driver-duckdb,sqler-cli/driver-duckdb -- -D warnings
-      - name: Tests (app with driver-duckdb)
-        run: cargo nextest run -p sqler-app --features driver-duckdb --no-tests=fail
-      - name: Tests (cli with driver-duckdb)
-        run: cargo nextest run -p sqler-cli --features driver-duckdb --no-tests=fail
+      # One feature set for every step, so the bundled C++ engine is compiled once and reused by the test build.
+      - name: Clippy (engine, app and cli with driver-duckdb)
+        run: cargo clippy -p sqler-driver-duckdb -p sqler-app -p sqler-cli --all-targets --features sqler-app/driver-duckdb,sqler-cli/driver-duckdb -- -D warnings
+      - name: Tests (engine, app and cli with driver-duckdb)
+        run: cargo nextest run -p sqler-driver-duckdb -p sqler-app -p sqler-cli --features sqler-app/driver-duckdb,sqler-cli/driver-duckdb --no-tests=fail
 
   spdx:
     name: spdx
@@ -646,7 +638,7 @@ jobs:
   ci-result:
     name: CI result
     if: always()
-    needs: [changes, check, clippy-windows, screenshots, db, deny, plugins, duckdb, docs, spdx]
+    needs: [changes, check, clippy-windows, screenshots, db, deny, plugins, docs, spdx]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
