@@ -506,7 +506,9 @@ fn tsql_lead_class(
             },
         );
     }
-    if word.eq_ignore_ascii_case("END") && next_is("CONVERSATION") {
+    if (word.eq_ignore_ascii_case("END") || word.eq_ignore_ascii_case("GET"))
+        && next_is("CONVERSATION")
+    {
         return Some(StatementClass::Write);
     }
     None
@@ -879,6 +881,12 @@ fn scan(
     if sig.iter().any(|t| mode_dependent_string(dialect, src, t)) {
         return StatementClass::Unknown;
     }
+    // On T-SQL a number glued to a word (`1from`, `0x1Fdelete`) is ambiguous to the eye: the word
+    // starts a new token, but nothing the classifier understands. Not `Read`.
+    let glued_number = dialect == Dialect::TSql
+        && all.windows(2).any(|w| {
+            w[0].kind == TokenKind::Number && w[1].kind == TokenKind::Word && w[0].end == w[1].start
+        });
     let lead_pos = sig.iter().position(|t| !is_punct(t, src, "(")).unwrap_or(0);
     for (i, tok) in sig.iter().enumerate() {
         let next_is_paren = sig.get(i + 1).is_some_and(|n| is_punct(n, src, "("));
@@ -905,9 +913,10 @@ fn scan(
                     }
                     class = class.max(c);
                 }
-                // `END` also closes a `CASE`; `END CONVERSATION` is a statement.
+                // `END` also closes a `CASE`; `END CONVERSATION` is a statement. `GET
+                // CONVERSATION GROUP` locks a queue like `RECEIVE`.
                 if dialect == Dialect::TSql
-                    && text.eq_ignore_ascii_case("END")
+                    && (text.eq_ignore_ascii_case("END") || text.eq_ignore_ascii_case("GET"))
                     && sig
                         .get(i + 1)
                         .is_some_and(|n| n.is_keyword(src, "CONVERSATION"))
@@ -938,6 +947,9 @@ fn scan(
             }
             _ => {}
         }
+    }
+    if glued_number && class < StatementClass::Write {
+        return StatementClass::Unknown;
     }
     class
 }

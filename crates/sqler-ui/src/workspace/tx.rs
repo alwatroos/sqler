@@ -31,6 +31,14 @@ pub(crate) enum TxEffect {
     Begin,
     /// The session is back in autocommit mode.
     End,
+    /// T-SQL only: the change of the transaction nesting count (`@@TRANCOUNT`). `BEGIN TRAN` adds
+    /// one, `COMMIT` takes one off, and a bare `ROLLBACK` sets the count to zero first (`reset`).
+    Tran {
+        /// The count goes to zero before `delta` is added.
+        reset: bool,
+        /// The net change after the reset, if any.
+        delta: i32,
+    },
     /// `SET autocommit = 0` (or a value that cannot be read) on `MySQL`: the session is inside a
     /// transaction now, and the next one starts as soon as this one ends.
     AutocommitOff,
@@ -58,6 +66,8 @@ pub(crate) fn tx_effect(dialect: Dialect, sql: &str) -> TxEffect {
     // `SET autocommit = 0` is sticky: only `autocommit = 1` clears it, not `COMMIT` or `BEGIN`.
     let mut off = false;
     let mut any = false;
+    // T-SQL nesting, folded over the statements of the script.
+    let (mut reset, mut delta) = (false, 0i32);
     for segment in split(dialect, sql) {
         if segment.kind != SegmentKind::Statement {
             continue;
@@ -72,7 +82,16 @@ pub(crate) fn tx_effect(dialect: Dialect, sql: &str) -> TxEffect {
                     TxEffect::AutocommitOn => off = false,
                     _ => {}
                 }
-                result = effect;
+                result = if let TxEffect::Tran { reset: r, delta: d } = effect {
+                    if r {
+                        reset = true;
+                        delta = 0;
+                    }
+                    delta = delta.saturating_add(d);
+                    TxEffect::Tran { reset, delta }
+                } else {
+                    effect
+                };
             }
         }
     }
@@ -155,10 +174,12 @@ fn statement_effect(dialect: Dialect, body: &str) -> TxEffect {
     }
 }
 
-/// T-SQL: any leading `BEGIN` (`BEGIN TRAN`, `BEGIN DISTRIBUTED TRAN`, a block) and `SAVE` count as a
-/// transaction, and so does a `BEGIN TRAN[SACTION]` or `BEGIN DISTRIBUTED` anywhere in the statement (inside an
-/// `IF`, say). `COMMIT [TRAN|TRANSACTION|WORK] [name]` and a bare `ROLLBACK [TRAN|TRANSACTION|WORK]` end it; a
-/// `ROLLBACK` with a name goes back to a savepoint (or names the transaction) and leaves the state alone.
+/// T-SQL: every `BEGIN TRAN[SACTION]` or `BEGIN DISTRIBUTED` anywhere in the statement (inside an
+/// `IF`, say) adds a nesting level, as `@@TRANCOUNT` does; `BEGIN TRY` and a plain `BEGIN` block do
+/// not. `SAVE` counts as a transaction. `COMMIT [TRAN|TRANSACTION|WORK] [name]` takes one level
+/// off, so only the outermost ends the transaction; a bare `ROLLBACK [TRAN|TRANSACTION|WORK]` ends
+/// all of them. A `ROLLBACK` with a name goes back to a savepoint (or names the transaction) and
+/// leaves the state alone.
 /// `SET IMPLICIT_TRANSACTIONS ON|OFF` switches the autocommit mode.
 fn tsql_effect(t: &[Tok]) -> TxEffect {
     let Some(Tok::Word(first)) = t.first() else {
@@ -168,27 +189,37 @@ fn tsql_effect(t: &[Tok]) -> TxEffect {
     if is(t, rest, "WORK") || is(t, rest, "TRANSACTION") || is(t, rest, "TRAN") {
         rest += 1;
     }
+    // Every `BEGIN TRAN[SACTION]` and `BEGIN DISTRIBUTED` adds a level; `BEGIN TRY` and a plain
+    // `BEGIN` block open none.
+    let begins = t
+        .windows(2)
+        .filter(|w| {
+            matches!(&w[0], Tok::Word(a) if a == "BEGIN")
+                && matches!(&w[1], Tok::Word(b)
+                    if matches!(b.as_str(), "TRAN" | "TRANSACTION" | "DISTRIBUTED"))
+        })
+        .count();
+    let begins = i32::try_from(begins).unwrap_or(i32::MAX);
     match first.as_str() {
-        "BEGIN" | "SAVE" => TxEffect::Begin,
-        "COMMIT" => TxEffect::End,
-        "ROLLBACK" if t.len() == rest => TxEffect::End,
+        "SAVE" => TxEffect::Begin,
+        "COMMIT" => TxEffect::Tran {
+            reset: false,
+            delta: begins - 1,
+        },
+        "ROLLBACK" if t.len() == rest => TxEffect::Tran {
+            reset: true,
+            delta: begins,
+        },
         "SET" if is(t, 1, "IMPLICIT_TRANSACTIONS") => match t.get(2) {
             Some(Tok::Word(v)) if v == "ON" => TxEffect::AutocommitOff,
             Some(Tok::Word(v)) if v == "OFF" => TxEffect::AutocommitOn,
             _ => TxEffect::None,
         },
-        _ => {
-            let begins = t.windows(2).any(|w| {
-                matches!(&w[0], Tok::Word(a) if a == "BEGIN")
-                    && matches!(&w[1], Tok::Word(b)
-                        if matches!(b.as_str(), "TRAN" | "TRANSACTION" | "DISTRIBUTED"))
-            });
-            if begins {
-                TxEffect::Begin
-            } else {
-                TxEffect::None
-            }
-        }
+        _ if begins > 0 => TxEffect::Tran {
+            reset: false,
+            delta: begins,
+        },
+        _ => TxEffect::None,
     }
 }
 
@@ -258,25 +289,49 @@ mod tests {
     const MY: Dialect = Dialect::MySql;
     const LITE: Dialect = Dialect::Sqlite;
 
-    use TxEffect::{AutocommitOff, AutocommitOn, Begin, End, None as Nothing};
+    use TxEffect::{AutocommitOff, AutocommitOn, Begin, End, None as Nothing, Tran};
 
     #[test]
     fn table_of_t_sql_statements() {
+        let nest = |delta| Tran {
+            reset: false,
+            delta,
+        };
+        let all = Tran {
+            reset: true,
+            delta: 0,
+        };
         let table: &[(&str, TxEffect)] = &[
-            ("BEGIN", Begin),
-            ("begin tran", Begin),
-            ("BEGIN TRANSACTION t1", Begin),
-            ("BEGIN DISTRIBUTED TRAN", Begin),
-            ("BEGIN TRY select 1 END TRY BEGIN CATCH END CATCH", Begin),
+            ("BEGIN", Nothing),
+            ("BEGIN TRY select 1 END TRY BEGIN CATCH END CATCH", Nothing),
+            ("begin select 1 end", Nothing),
+            ("begin tran", nest(1)),
+            ("BEGIN TRANSACTION t1", nest(1)),
+            ("BEGIN DISTRIBUTED TRAN", nest(1)),
+            (
+                "begin try begin tran end try begin catch end catch",
+                nest(1),
+            ),
             ("SAVE TRAN s", Begin),
-            ("if @x = 1 begin tran", Begin),
-            ("COMMIT", End),
-            ("commit tran", End),
-            ("COMMIT TRANSACTION t1", End),
-            ("COMMIT WORK", End),
-            ("ROLLBACK", End),
-            ("rollback tran", End),
-            ("ROLLBACK WORK", End),
+            ("if @x = 1 begin tran", nest(1)),
+            ("COMMIT", nest(-1)),
+            ("commit tran", nest(-1)),
+            ("COMMIT TRANSACTION t1", nest(-1)),
+            ("COMMIT WORK", nest(-1)),
+            ("begin tran; begin tran", nest(2)),
+            ("begin tran; begin tran; commit", nest(1)),
+            ("begin tran; commit", nest(0)),
+            ("begin tran; begin tran; rollback", all),
+            (
+                "rollback; begin tran",
+                Tran {
+                    reset: true,
+                    delta: 1,
+                },
+            ),
+            ("ROLLBACK", all),
+            ("rollback tran", all),
+            ("ROLLBACK WORK", all),
             ("ROLLBACK TRAN s", Nothing),
             ("ROLLBACK TRANSACTION savepoint1", Nothing),
             ("ROLLBACK s", Nothing),
@@ -285,8 +340,7 @@ mod tests {
             ("SET NOCOUNT ON", Nothing),
             ("SELECT 'BEGIN TRAN'", Nothing),
             ("SELECT [begin] FROM t", Nothing),
-            ("select 1; begin tran; insert into t values (1)", Begin),
-            ("begin tran; commit", End),
+            ("select 1; begin tran; insert into t values (1)", nest(1)),
             ("SET IMPLICIT_TRANSACTIONS ON; commit", AutocommitOff),
         ];
         for (sql, expected) in table {

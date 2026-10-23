@@ -175,6 +175,8 @@ pub(super) struct EditFlow {
     resolved: HashMap<(TabId, usize), Option<String>>,
     /// Query tabs whose session may be inside a user transaction.
     in_tx: HashSet<TabId>,
+    /// T-SQL: the `@@TRANCOUNT` the statements of the tab left, as far as the text shows.
+    tran_depth: HashMap<TabId, u32>,
     /// Query tabs whose session has `autocommit = 0`: ending a transaction starts the next one.
     autocommit_off: HashSet<TabId>,
     /// Applies in flight.
@@ -213,6 +215,7 @@ impl EditFlow {
         self.data_tabs.remove(&tab);
         self.resolved.retain(|(t, _), _| *t != tab);
         self.in_tx.remove(&tab);
+        self.tran_depth.remove(&tab);
         self.autocommit_off.remove(&tab);
         self.applies.remove(&tab);
         self.commit_unknown.retain(|key| key.tab != tab);
@@ -245,6 +248,20 @@ impl EditFlow {
             TxEffect::End if ended => {
                 !self.autocommit_off.contains(&tab) && self.in_tx.remove(&tab)
             }
+            // T-SQL counts nested `BEGIN TRAN`s like `@@TRANCOUNT`: a `COMMIT` ends the
+            // transaction only at the outermost level, a bare `ROLLBACK` always.
+            TxEffect::Tran { reset, delta } if (delta > 0 && sent) || (delta <= 0 && ended) => {
+                let depth = self.tran_depth.get(&tab).copied().unwrap_or(0);
+                let base = if reset { 0 } else { depth };
+                let next = base.saturating_add_signed(delta);
+                if next > 0 {
+                    self.tran_depth.insert(tab, next);
+                    self.in_tx.insert(tab) || next != depth
+                } else {
+                    self.tran_depth.remove(&tab);
+                    !self.autocommit_off.contains(&tab) && self.in_tx.remove(&tab)
+                }
+            }
             TxEffect::AutocommitOff if sent => {
                 let first = self.autocommit_off.insert(tab);
                 self.in_tx.insert(tab) || first
@@ -252,6 +269,7 @@ impl EditFlow {
             // The server commits an open transaction when autocommit is switched on.
             TxEffect::AutocommitOn if finished => {
                 let off = self.autocommit_off.remove(&tab);
+                self.tran_depth.remove(&tab);
                 self.in_tx.remove(&tab) || off
             }
             _ => false,
@@ -271,6 +289,7 @@ impl EditFlow {
     /// The session of the tab is gone or lost: it is in no transaction any more.
     pub(super) fn session_gone(&mut self, tab: TabId) {
         let off = self.autocommit_off.remove(&tab);
+        self.tran_depth.remove(&tab);
         if self.in_tx.remove(&tab) || off {
             self.generation += 1;
         }

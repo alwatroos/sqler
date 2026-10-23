@@ -59,6 +59,45 @@ fn write() {
     );
 }
 
+/// SQL Server ends a numeric literal at the first character that cannot continue it and needs no
+/// separator before the next statement, so a keyword glued to a number still runs.
+#[test]
+fn glued_number_keywords_are_seen() {
+    check(
+        Write,
+        &[
+            "select 1delete t",
+            "select 1e5delete t",
+            "select 1.5delete t",
+            "select $1delete t",
+            "select 1e delete t",
+            "select 1.delete t",
+            "select 1e+5delete t",
+            "select 0x1F delete t",
+            "select 1delete t; select 2",
+            "get conversation group @g from q",
+            "select 1 get conversation group @g from q",
+            "GET CONVERSATION GROUP @g FROM q",
+        ],
+    );
+    // Glued to a word the classifier does not understand: never `Read`.
+    check(
+        Unknown,
+        &[
+            "select 1from t",
+            "select 1as a",
+            "select 0x1Fdelete t",
+            "select 1e5x",
+            "select $1x",
+            "select 1_a",
+        ],
+    );
+    check(
+        Read,
+        &["select 1e5, 1.5, 0x1F, $1.5, 1 from t", "select 1e+5 as a"],
+    );
+}
+
 #[test]
 fn unknown() {
     check(

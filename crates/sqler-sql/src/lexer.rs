@@ -309,7 +309,39 @@ impl<'a> Lexer<'a> {
         (b.len(), false)
     }
 
+    /// A T-SQL numeric literal ends at the first character that cannot continue it, and T-SQL
+    /// needs no separator before the next token: `1delete t` is `1` then `delete t`. Digits, an
+    /// optional fraction, an exponent only when digits follow it, or `0x` and hex digits.
+    fn tsql_number(&self, start: usize) -> usize {
+        let b = self.src.as_bytes();
+        let mut i = start;
+        if b[i] == b'0' && matches!(b.get(i + 1), Some(b'x' | b'X')) {
+            i += 2;
+            while i < b.len() && b[i].is_ascii_hexdigit() {
+                i += 1;
+            }
+            return i;
+        }
+        i = self.digits_end(i);
+        if b.get(i) == Some(&b'.') {
+            i = self.digits_end(i + 1);
+        }
+        if matches!(b.get(i), Some(b'e' | b'E')) {
+            let mut j = i + 1;
+            if matches!(b.get(j), Some(b'+' | b'-')) {
+                j += 1;
+            }
+            if b.get(j).is_some_and(u8::is_ascii_digit) {
+                i = self.digits_end(j);
+            }
+        }
+        i
+    }
+
     fn number(&self, start: usize) -> usize {
+        if self.dialect == Dialect::TSql {
+            return self.tsql_number(start);
+        }
         let b = self.src.as_bytes();
         let mut i = start;
         let mut after_e = false;

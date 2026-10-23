@@ -954,6 +954,36 @@ mod flow {
     }
 
     #[test]
+    fn t_sql_commit_ends_the_transaction_only_at_the_outermost_level() {
+        use super::super::tx::TxEffect::Tran;
+        let nest = |delta| Tran {
+            reset: false,
+            delta,
+        };
+        let mut f = Flow::new(None);
+        let tab = f.open();
+        assert!(f.w.edit.follow(tab, nest(1), true, true, true));
+        f.w.edit.follow(tab, nest(1), true, true, true);
+        assert!(f.w.in_transaction(tab));
+        // The inner `COMMIT` leaves one level.
+        f.w.edit.follow(tab, nest(-1), true, true, true);
+        assert!(f.w.in_transaction(tab));
+        assert!(f.w.edit.follow(tab, nest(-1), true, true, true));
+        assert!(!f.w.in_transaction(tab));
+        // A bare `ROLLBACK` ends every level.
+        f.w.edit.follow(tab, nest(2), true, true, true);
+        let all = Tran {
+            reset: true,
+            delta: 0,
+        };
+        assert!(f.w.edit.follow(tab, all, true, true, true));
+        assert!(!f.w.in_transaction(tab));
+        // A `COMMIT` with nothing open (or a `BEGIN TRY` that never counted) stays out.
+        assert!(!f.w.edit.follow(tab, nest(-1), true, true, true));
+        assert!(!f.w.in_transaction(tab));
+    }
+
+    #[test]
     fn debug_of_the_dialogs_and_the_job_shows_no_values_or_sql() {
         let mut f = Flow::new(Some(Environment::Prod));
         let (_, key, mut grid) = editable(&mut f);

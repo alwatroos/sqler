@@ -1054,7 +1054,10 @@ fn failure_text(failure: &ApplyFailure, at: Option<usize>) -> String {
                 "{position}affected {n} row(s) instead of {expected}, so it was rolled back; the \
                  row was changed or removed since it was read, or it is not unique"
             ),
-            None => format!("{position}did not report how many rows it affected"),
+            None => format!(
+                "{position}did not report how many rows it affected, so it was rolled back; SQL \
+                 Server does not report affected rows yet, so its grids cannot be applied"
+            ),
         },
         ApplyFailure::Driver(message) => format!("{position}failed: {message}"),
         ApplyFailure::Cancelled => "the apply was cancelled".to_owned(),
@@ -1582,6 +1585,23 @@ mod tests {
         assert_eq!(shown(&e, &m, 4, 0), (String::new(), CellMark::Unset));
         // A mixed selection skips the applied rows.
         assert_eq!(e.delete_rows(&m, &[0, 2]), Ok(1));
+    }
+
+    #[test]
+    fn an_unreported_row_count_says_why_it_was_rolled_back() {
+        let text = failure_text(
+            &ApplyFailure::RowCount {
+                expected: 1,
+                actual: None,
+            },
+            Some(0),
+        );
+        assert!(text.starts_with("statement 1 did not report"), "{text}");
+        assert!(text.contains("rolled back"), "{text}");
+        assert!(
+            text.contains("SQL Server does not report affected rows yet"),
+            "{text}"
+        );
     }
 
     #[test]

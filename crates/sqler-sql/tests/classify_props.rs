@@ -223,6 +223,7 @@ const TSQL_WRITES: &[&str] = &[
     "shutdown",
     "kill 52",
     "checkpoint",
+    "get conversation group @g from q",
     "send on conversation @h ('x')",
     "end conversation @h",
     "move conversation @h to @g",
@@ -278,6 +279,28 @@ proptest! {
         let text = format!("{r}{glue}{w}");
         prop_assert!(!classify(Dialect::TSql, &text).is_read_only(), "{}", text);
         let text = format!("{w}{glue}{r}");
+        prop_assert!(!classify(Dialect::TSql, &text).is_read_only(), "{}", text);
+    }
+
+    #[test]
+    fn tsql_glued_number_then_write_lead_is_never_read(
+        r in prop::sample::select(vec!["select ", "select a, "]),
+        num in prop::sample::select(vec!["1", "1.5", "1.", "1e5", "1e+5", "1e", "$1", ".5"]),
+        w in prop::sample::select(TSQL_WRITES),
+        sep in prop::sample::select(vec!["", " "]),
+    ) {
+        let text = format!("{r}{num}{w}{sep}");
+        prop_assert!(!classify(Dialect::TSql, &text).is_read_only(), "{}", text);
+        let text = format!("{r}{num}{} t", w.to_uppercase());
+        prop_assert!(!classify(Dialect::TSql, &text).is_read_only(), "{}", text);
+    }
+
+    #[test]
+    fn tsql_glued_number_then_dml_is_never_read(
+        num in prop::sample::select(vec!["1", "1.5", "1.", "1e5", "1e+5", "1e", "$1", ".5"]),
+        w in prop::sample::select(WRITES),
+    ) {
+        let text = format!("select {num}{w}");
         prop_assert!(!classify(Dialect::TSql, &text).is_read_only(), "{}", text);
     }
 

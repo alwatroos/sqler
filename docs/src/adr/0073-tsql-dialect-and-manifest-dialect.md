@@ -59,7 +59,7 @@ scan looks for these words anywhere in a statement, not only at the lead:
 - `Unknown`: `EXEC` and `EXECUTE` anywhere (including `INSERT .. EXEC`, `GRANT EXECUTE`, `sp_executesql`), `OPEN`,
   `SETUSER`, `REVERT`, and any `BEGIN` that is not `BEGIN TRAN`, `TRANSACTION` or `DISTRIBUTED` (a block, `TRY`).
 - `Write`: `KILL`, `CHECKPOINT`, `BULK`, `DBCC`, `BACKUP`, `RESTORE`, `RECONFIGURE`, `SHUTDOWN`, `RECEIVE`, `SEND`,
-  `MOVE`, `UPDATETEXT`, `WRITETEXT`, `END CONVERSATION`, a `WAITFOR` that is not the lead (a lead `WAITFOR DELAY|TIME`
+  `MOVE`, `UPDATETEXT`, `WRITETEXT`, `END CONVERSATION`, `GET CONVERSATION GROUP` (it locks a queue like `RECEIVE`), a `WAITFOR` that is not the lead (a lead `WAITFOR DELAY|TIME`
   is `Other`), the lock hints `UPDLOCK`, `XLOCK`, `HOLDLOCK`, `TABLOCK`, `TABLOCKX`, `SERIALIZABLE`, `REPEATABLEREAD`,
   and `SELECT .. INTO`.
 - `Ddl`: `DENY`, `ENABLE`, `DISABLE`, `ADD`.
@@ -68,6 +68,11 @@ scan looks for these words anywhere in a statement, not only at the lead:
   allowlist of T-SQL functions (`getdate`, `isnull`, `len`, `convert`, `newid`, `object_id`, ...) is not a call that
   makes a statement `Unknown`. A qualified call, a quoted call, an unknown function and `NEXT VALUE FOR` keep their class.
 - Write and Ddl both ask for approval; only the label differs.
+- **Number glue.** SQL Server ends a numeric literal at the first character that cannot continue it (digits, an
+  optional fraction, an exponent only when digits follow it, `0x` and hex digits, `$` money), and needs no separator
+  before the next token, so `select 1delete t` runs `delete t`. The T-SQL lexer ends numbers the same way (other
+  dialects keep their greedy rule), so the keyword scans see the glued word. In addition, a number immediately followed
+  by a word makes the statement `Unknown` when no stronger class applies (`select 1from t`, `select 0x1Fdelete t`).
 
 This is stricter than a lead-word rule on purpose (the direction is always more non-`Read`, never less). The cost: a
 column or alias with an unquoted name `move`, `send`, `receive`, `enable` and the like asks for approval until it is
