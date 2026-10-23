@@ -129,7 +129,7 @@ Memory is gated on a result with 6 columns (the `grid_viewport` default); other 
 
 **Export Results...** (`grid:export`, in the command palette) writes the result of the active grid or query result to a file. It works on a table-data tab and on every result of a query tab. The dialog offers:
 
-- **Format**: CSV, JSON, SQL `INSERT` and Markdown in every build. Excel (`.xlsx`) and Parquet are listed only when the build has them (the `export-xlsx` and `export-parquet` features), see below.
+- **Format**: CSV, JSON, SQL `INSERT` and Markdown in every build. Excel (`.xlsx`) and Parquet are listed only when the build has them (the `export-xlsx` and `export-parquet` features), see below. A build with the `plugins` feature also lists the formats of plugins that are switched on, after the built-in ones, as `<plugin name> (plugin): <label>`; they have no options, and a failing plugin ends the export with a short message and no file (see [Exporters](../plugin-development/exporters.md)).
 - **Scope**: *Loaded rows (N)*, the rows the grid holds now, as displayed (with the current sort and filter, in the order you see them; N is the number of rows shown), *Selection (rows x columns)* when cells are selected, copied in the order you see them, and *All rows (runs the query again)*.
 - **Options**: for CSV the delimiter (`,` `;` Tab `|`), a header row and the NULL text; for Markdown the NULL text; for SQL the table name, an optional schema and the rows per `INSERT` (1 to 10,000). JSON, Parquet and Excel use their defaults.
 

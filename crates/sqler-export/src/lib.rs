@@ -53,7 +53,7 @@ pub use options::{
 };
 #[cfg(feature = "parquet")]
 pub use parquet::ParquetFormat;
-pub use registry::{CSV, JSON, MARKDOWN, PARQUET, Registry, SQL, XLSX};
+pub use registry::{CSV, FormatSource, JSON, MARKDOWN, PARQUET, Registry, SQL, XLSX};
 pub use sql::SqlFormat;
 pub use writer::{
     CancelToken, ExportControl, Exporter, Format, Progress, RowWriter, Sink, Summary, export_to_vec,

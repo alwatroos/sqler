@@ -374,6 +374,24 @@ impl Interrupts {
     }
 }
 
+/// The prefix of every plugin format id (ADR-0072). No built-in id starts with it.
+#[cfg(feature = "plugins")]
+const PLUGIN_PREFIX: &str = "plugin-";
+
+/// The built-in formats, plus the formats of plugins when `--format` names one. Only then is the plugin folder
+/// scanned, so a built-in export never loads a plugin.
+#[cfg_attr(not(feature = "plugins"), allow(unused_variables))]
+fn formats_for(args: &ExportArgs) -> Registry {
+    #[cfg(feature = "plugins")]
+    if args.format.starts_with(PLUGIN_PREFIX)
+        && let Some(source) = crate::plugins::format_source()
+    {
+        let sources: [Arc<dyn sqler_export::FormatSource>; 1] = [source];
+        return Registry::with_sources(&sources);
+    }
+    Registry::with_builtin()
+}
+
 async fn run_export(args: &ExportArgs) -> Result<(), Failure> {
     let drivers = registry()?;
     // Before the gate: an unknown driver is a runtime error, not a refusal to write.
@@ -383,7 +401,7 @@ async fn run_export(args: &ExportArgs) -> Result<(), Failure> {
         return Err(Failure::Runtime(anyhow!(crate::UNKNOWN_DRIVER)));
     }
     let warning = gate(args)?;
-    let formats = Registry::with_builtin();
+    let formats = formats_for(args);
     let (format, options) = resolve_format(&formats, args)?;
     if let Some(warning) = warning {
         eprintln!("{warning}");
@@ -640,6 +658,54 @@ mod tests {
             };
             assert!(msg.contains("binary format"), "{msg}");
         }
+    }
+
+    #[test]
+    fn a_plugin_format_is_unknown_without_a_plugin_folder() {
+        let mut a = args("sqlite", "select 1");
+        a.format = "plugin-x:y".to_owned();
+        let Err(Failure::Usage(msg)) = resolve(&a) else {
+            panic!("expected a usage error");
+        };
+        assert!(msg.starts_with("unknown format"), "{msg}");
+    }
+
+    #[test]
+    fn a_plugin_format_is_binary_safe_and_refused_on_stdout() {
+        struct Fake;
+        struct FakeFormat;
+        impl sqler_export::FormatSource for Fake {
+            fn formats(&self) -> Vec<Box<dyn Format>> {
+                vec![Box::new(FakeFormat)]
+            }
+        }
+        impl Format for FakeFormat {
+            fn id(&self) -> &'static str {
+                "plugin-x:y"
+            }
+            fn label(&self) -> &'static str {
+                "X"
+            }
+            fn extension(&self) -> &'static str {
+                "x"
+            }
+            fn create<'a>(
+                &self,
+                _options: &ExportOptions,
+                _sink: Sink<'a>,
+            ) -> Result<Box<dyn sqler_export::RowWriter + 'a>, ExportError> {
+                Err(ExportError::Cancelled)
+            }
+        }
+        let sources: [Arc<dyn sqler_export::FormatSource>; 1] = [Arc::new(Fake)];
+        let registry = Registry::with_sources(&sources);
+        let mut a = args("sqlite", "select 1");
+        a.format = "plugin-x:y".to_owned();
+        a.output = Output::Stdout;
+        let Err(Failure::Usage(msg)) = resolve_format(&registry, &a).map(|(_, o)| o) else {
+            panic!("expected a usage error");
+        };
+        assert!(msg.contains("binary format"), "{msg}");
     }
 
     #[test]

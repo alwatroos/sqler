@@ -1,21 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! Plugin drivers for the CLI (feature `plugins`, ADR-0061).
+//! Plugin drivers and export formats for the CLI (feature `plugins`, ADR-0061, ADR-0072).
 //!
 //! The CLI looks in `<config>/plugins` and nowhere else (there is no `--plugin-dir`), honours the grants stored in
 //! `plugin-grants.toml` and the plugins switched off in `plugin-prefs.toml`, and never prompts: a plugin the user has
-//! not approved offers no driver. The host runs on the runtime the command already has.
+//! not approved offers no driver. The driver host runs on the runtime the command already has; the export formats
+//! get a runtime of their own.
 
 use std::str::FromStr as _;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use sqler_config::{ConfigDir, GrantDecision, GrantsLoad, PluginGrants, PrefsLoad};
 use sqler_plugin_api::{Capability, CapabilitySet, GrantKey, GrantSource, Limits, PluginId};
 use sqler_plugin_host::net::NetEgressFactory;
 use sqler_plugin_host::{
-    HostEngines, HostOptions, MemorySettings, PluginDirs, PluginDrivers, PluginHost, Services,
-    discover,
+    HostEngines, HostOptions, MemorySettings, PluginDirs, PluginDrivers, PluginExporters,
+    PluginHost, Services, discover,
 };
 
 /// The grants as they were on disk when the command started. Read-only: an unknown key, a denial, a damaged or newer
@@ -55,6 +56,46 @@ pub(crate) fn driver_source() -> Option<Arc<PluginDrivers>> {
 /// Like [`driver_source`] for an explicit configuration folder.
 pub(crate) fn driver_source_in(dir: &ConfigDir) -> Option<Arc<PluginDrivers>> {
     let runtime = tokio::runtime::Handle::try_current().ok()?;
+    let host = host_in(dir, runtime)?;
+    // A plugin whose native engine this build does not link is listed as unavailable.
+    let source = PluginDrivers::new(engines());
+    source.attach(&host);
+    Some(source)
+}
+
+/// The runtime of the export formats: one worker, started on first use and kept for the life of the process.
+///
+/// An export writes from the command's current-thread runtime and blocks on every plugin call, so the host must
+/// run on a runtime of its own (ADR-0072).
+static EXPORT_RUNTIME: OnceLock<Option<tokio::runtime::Runtime>> = OnceLock::new();
+
+/// The plugin export formats for the user's configuration folder, or `None` when there is nothing to offer (no
+/// folder, no plugin directory, no runtime).
+pub(crate) fn format_source() -> Option<Arc<PluginExporters>> {
+    let dir = ConfigDir::platform().ok()?;
+    format_source_in(&dir)
+}
+
+/// Like [`format_source`] for an explicit configuration folder.
+pub(crate) fn format_source_in(dir: &ConfigDir) -> Option<Arc<PluginExporters>> {
+    let runtime = EXPORT_RUNTIME
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .ok()
+        })
+        .as_ref()?;
+    let host = host_in(dir, runtime.handle().clone())?;
+    let source = PluginExporters::new();
+    source.attach(&host);
+    Some(source)
+}
+
+/// A host on `runtime` with the plugins of `<config>/plugins`, the grants stored on disk and the plugins switched
+/// off in the prefs, or `None` when there is no plugin folder.
+fn host_in(dir: &ConfigDir, runtime: tokio::runtime::Handle) -> Option<PluginHost> {
     let plugins = dir.root().join("plugins").canonicalize().ok()?;
     let discovery = discover(&PluginDirs {
         config_plugins: Some(plugins),
@@ -81,10 +122,7 @@ pub(crate) fn driver_source_in(dir: &ConfigDir) -> Option<Arc<PluginDrivers>> {
             host.disable(&id);
         }
     }
-    // A plugin whose native engine this build does not link is listed as unavailable.
-    let source = PluginDrivers::new(engines());
-    source.attach(&host);
-    Some(source)
+    Some(host)
 }
 
 /// The native engines this build links: `DuckDB` with the feature `driver-duckdb` (ADR-0070).

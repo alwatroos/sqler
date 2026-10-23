@@ -15,7 +15,7 @@
 
 mod calls;
 mod convert;
-mod limits;
+pub(crate) mod limits;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

@@ -207,6 +207,10 @@ pub const SCENES: &[Scene] = &[
         name: "plugins-panel-menu",
         pending: None,
     },
+    Scene {
+        name: "plugins-export-dialog",
+        pending: None,
+    },
 ];
 
 /// The window size of every scene, in logical pixels.
@@ -317,6 +321,9 @@ enum Step {
     Prompt(&'static str),
     /// Lets `n` more frames pass, so a layout change settles before the capture.
     Pause(u8),
+    /// Opens the export dialog on the active query tab with fixed facts about a finished result
+    /// (the grid fills on timers the scene loop does not advance).
+    OpenExport,
     /// Fills the audit view with the sample entries.
     AuditFixture,
     /// Types a message into the composer of the active AI session tab and sends it.
@@ -492,6 +499,14 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Wait(Wait::PluginsLoaded),
             Step::Command("object:show-menu"),
             Step::PaletteQuery("Object:"),
+            Step::Pause(3),
+        ],
+        "plugins-export-dialog" => vec![
+            open_step("dev", RESULTS_SQL),
+            Step::Wait(Wait::Editors(1)),
+            Step::Command("query:run-all"),
+            Step::Wait(Wait::RunDone),
+            Step::OpenExport,
             Step::Pause(3),
         ],
         "plugins-empty" => vec![
@@ -709,6 +724,7 @@ fn startup(
         workbench: crate::workbench::WorkbenchStartup::default(),
         ai: ai_startup(scene),
         plugins: crate::plugins::manager::fixture::scene_startup(scene.name),
+        export_sources: export_sources(scene.name),
     }
 }
 
@@ -1053,6 +1069,7 @@ impl WorkspaceView {
                 self.dispatch_ai(AiAction::ApproveStatement(tab, id), cx);
             }
             Step::AgentFixture(scene) => self.open_agent_fixture(*scene, cx)?,
+            Step::OpenExport => self.open_export_fixture(cx)?,
             Step::StartPlugins => self.start_plugins(cx),
             Step::SelectPlugin(id) => {
                 let id = id.parse().map_err(|_| format!("no plugin id {id}"))?;
@@ -1082,6 +1099,25 @@ impl WorkspaceView {
         self.ws
             .plugin_writes_mut()
             .push(crate::plugins::PluginWriteAsk { request, reply });
+        Ok(())
+    }
+
+    /// Opens the export dialog on the shown result of the active query tab.
+    fn open_export_fixture(&mut self, cx: &mut gpui::Context<Self>) -> Result<(), String> {
+        let tab = self.ws_active_query().ok_or("no query tab")?;
+        let facts = crate::export::GridFacts {
+            columns: 4,
+            rows: 12,
+            displayed: None,
+            complete: true,
+            selection: None,
+        };
+        let target = crate::export::ExportTarget {
+            tab,
+            result: Some(0),
+        };
+        let effect = self.ws.open_export(target, &facts);
+        self.apply(effect, cx);
         Ok(())
     }
 
@@ -1206,5 +1242,46 @@ impl WorkspaceView {
             self.dispatch_object(&id, node, BrowserAction::Expand, cx);
         }
         false
+    }
+}
+
+/// The export formats a scene is drawn with: the plugin scene gets one fake plugin format.
+fn export_sources(scene: &str) -> Vec<Arc<dyn crate::export::FormatSource>> {
+    if scene == "plugins-export-dialog" {
+        vec![Arc::new(SceneFormats)]
+    } else {
+        Vec::new()
+    }
+}
+
+/// A source with the format a plugin would offer; nothing is ever written with it.
+struct SceneFormats;
+
+impl crate::export::FormatSource for SceneFormats {
+    fn formats(&self) -> Vec<Box<dyn sqler_export::Format>> {
+        vec![Box::new(SceneFormat)]
+    }
+}
+
+struct SceneFormat;
+
+impl sqler_export::Format for SceneFormat {
+    fn id(&self) -> &'static str {
+        "plugin-exporter-fixture:tsv"
+    }
+    fn label(&self) -> &'static str {
+        "Fixture exporter (plugin): Tab-separated"
+    }
+    fn extension(&self) -> &'static str {
+        "tsv"
+    }
+    fn create<'a>(
+        &self,
+        _options: &sqler_export::ExportOptions,
+        _sink: sqler_export::Sink<'a>,
+    ) -> Result<Box<dyn sqler_export::RowWriter + 'a>, sqler_export::ExportError> {
+        Err(sqler_export::ExportError::InvalidOptions(
+            "the scene format writes nothing".to_owned(),
+        ))
     }
 }

@@ -8458,6 +8458,7 @@ dependencies = [
  "sqler-catalog",
  "sqler-driver-api",
  "sqler-driver-sqlite",
+ "sqler-export",
  "sqler-plugin-api",
  "sqler-sql",
  "thiserror 2.0.21",
