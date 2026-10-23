@@ -1,0 +1,11 @@
+{
+  "Servers": {
+    "1": { "Name": "con", "Host": "db.example.test", "SSLMode": "verify-ca", "SSLRootCert": "/home/alice/certs/con.pem" },
+    "2": { "Name": "verbatim", "Host": "db.example.test", "SSLMode": "verify-ca", "SSLRootCert": "\\\\?\\C:\\certs\\ca.pem" },
+    "3": { "Name": "relative", "Host": "db.example.test", "SSLMode": "verify-ca", "SSLRootCert": "certs/ca.pem" },
+    "4": { "Name": "tilde", "Host": "db.example.test", "SSLMode": "verify-ca", "SSLRootCert": "~/certs/ca.pem" },
+    "5": { "Name": "half pair", "Host": "db.example.test", "SSLMode": "require", "SSLCert": "/home/alice/certs/client.pem" },
+    "6": { "Name": "storage dir", "Host": "db.example.test", "SSLMode": "verify-ca", "SSLRootCert": "<STORAGE_DIR>/ca.pem" },
+    "7": { "Name": "reserved key", "Host": "db.example.test", "UseSSHTunnel": 1, "TunnelHost": "b.example.test", "TunnelUsername": "t", "TunnelAuthentication": 1, "TunnelIdentityFile": "/home/alice/.ssh/NUL.key" }
+  }
+}

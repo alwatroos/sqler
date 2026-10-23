@@ -96,6 +96,7 @@
   - [ADR-0062: Plugin AI tools](adr/0062-plugin-ai-tools.md)
   - [ADR-0063: Plugin or core per engine](adr/0063-plugin-or-core-per-engine.md)
   - [ADR-0066: Update check and signed manifest](adr/0066-update-check-and-signed-manifest.md)
+  - [ADR-0067: Connection import](adr/0067-connection-import.md)
   - [ADR-0068: CI pipeline speed](adr/0068-ci-pipeline-speed.md)
   - [ADR-0070: DuckDB native engine and licence](adr/0070-duckdb-engine-and-licence.md)
   - [ADR-0071: SQL Server plugin](adr/0071-sql-server-plugin.md)

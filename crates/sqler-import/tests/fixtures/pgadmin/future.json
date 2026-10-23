@@ -1,0 +1,20 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Future",
+      "Host": "db.example.test",
+      "Username": "alice",
+      "Tags": ["a", "b"],
+      "PostConnectionSQL": "SELECT 1",
+      "PasswordExecCommand": "echo fake-pw-123",
+      "BrandNewField": {"nested": true},
+      "ConnectionParameters": {
+        "sslmode": "prefer",
+        "sslcrl": "/home/alice/certs/crl.pem",
+        "brand_new_parameter": "x"
+      }
+    }
+  },
+  "Version": 2,
+  "Notes": "from a newer pgAdmin"
+}

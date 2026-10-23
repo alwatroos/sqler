@@ -8458,6 +8458,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqler-import"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+ "sqler-config",
+ "sqler-core",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "sqler-mcp"
 version = "0.1.0"
 dependencies = [
