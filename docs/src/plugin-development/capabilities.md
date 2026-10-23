@@ -27,6 +27,14 @@ db.read | db.write | ui.panel | ai.tool | driver.guest
 | `fs.read:<scope>` | read-only WASI preopens of the scope |
 | `driver.host:<engine-id>` | a declarative driver backed by a host engine |
 
+An `ai.tool` plugin's tools reach the model as `<plugin-id>__<tool-name>` ([ADR-0062](../adr/0062-plugin-ai-tools.md)).
+During such a call `query.run` and `catalog` see only the connections the AI surface lends, a `read_only` connection
+refuses every statement but a plain read, and a statement that needs approval is confirmed on the surface's own card
+(never on a statement with bound parameters: those are refused). The arguments the model sent have passed a subset of
+the tool's `input-schema`, and the JSON text the tool returns is redacted and wrapped as untrusted data. A tool that
+returns `columns` should list plain names or objects with a `name`, so a column such as `password` is masked.
+Standalone `sqler-cli mcp` does not offer plugin tools.
+
 Statement classification is fail-safe: an unknown statement is not Read, so it needs
 `db.write`. A write goes through the same gate as in the app: production connections ask for
 confirmation, and the statement is refused when there is no approver. `db.write` without

@@ -77,10 +77,12 @@ use crate::theme::resolve;
 use crate::workbench::view::Hints;
 use crate::workbench::{self, ActivityItem, PanelView, RecentCommands, Region, WorkbenchAction};
 use edit_ui::EditUi;
+use plugin_ui::PluginUiViews;
 use plugin_writes::WriteUi;
 use plugins::PluginsUi;
 
 mod export;
+mod plugin_ui;
 mod plugin_writes;
 mod plugins;
 #[cfg(feature = "screenshots")]
@@ -118,6 +120,8 @@ pub struct Startup {
     pub ai: crate::ai::AiStartup,
     /// The plugin host and the book of grants; `PluginsStartup::unavailable()` in a build without plugins.
     pub plugins: crate::plugins::PluginsStartup,
+    /// Sources of run-time export formats (plugin exporters); empty in a build without plugins.
+    pub export_sources: Vec<Arc<dyn crate::export::FormatSource>>,
 }
 
 impl std::fmt::Debug for Startup {
@@ -131,6 +135,7 @@ impl std::fmt::Debug for Startup {
             .field("history_dir", &self.history_dir)
             .field("ai", &self.ai)
             .field("plugins", &self.plugins)
+            .field("export_sources", &self.export_sources.len())
             .finish_non_exhaustive()
     }
 }
@@ -254,6 +259,10 @@ pub(crate) struct WorkspaceView {
     plugins_ui: PluginsUi,
     /// The focus of the plugin write approval dialog.
     plugin_writes_ui: WriteUi,
+    /// The text editors of the plugin panel on screen.
+    plugin_ui_views: PluginUiViews,
+    /// The keybinding overrides as loaded; the key dispatcher is rebuilt from them when plugin commands change.
+    key_overrides: Result<KeybindingOverrides, String>,
     /// The resizable split of the side panel and the rest, and of the editors and the bottom panel.
     side_split: Entity<ResizableState>,
     panel_split: Entity<ResizableState>,
@@ -306,13 +315,18 @@ impl WorkspaceView {
             .as_ref()
             .map(|dir| Arc::new(sqler_ai_tools::AuditLog::open(dir)));
         let plugin_writes = startup.plugins.writes.take();
+        let plugin_events = startup.plugins.ui_events.take();
+        let key_overrides = startup.keybindings.clone();
         let mut ws = Workspace::new(sidebar)
-            .with_ai_audit(audit_log.clone().map(|log| crate::ai::AiAudit::new(log)))
+            .with_ai_audit(audit_log.clone().map(|log| {
+                crate::ai::AiAudit::new(log).with_external_tools(startup.plugins.ai_tools.clone())
+            }))
             .with_settings(startup.settings)
             .with_drivers(startup.connector.driver_ids())
             .with_workbench(&startup.workbench.load)
             .with_ai(crate::ai::AiState::from_startup(&startup.ai))
-            .with_plugins(&startup.plugins);
+            .with_plugins(&startup.plugins)
+            .with_export_sources(startup.export_sources);
         ws.set_system_appearance(appearance_of(window.appearance()));
         apply(ws.appearance(), ws.settings().settings().ui_font_size, cx);
         // Follow the OS while the preference is "follow system". Nothing changes in the
@@ -487,6 +501,8 @@ impl WorkspaceView {
             export_inputs: None,
             plugins_ui: PluginsUi::new(window, cx),
             plugin_writes_ui: WriteUi::new(cx),
+            plugin_ui_views: PluginUiViews::default(),
+            key_overrides,
             side_split,
             panel_split,
             split_generation,
@@ -517,6 +533,9 @@ impl WorkspaceView {
         }
         if let Some(inbox) = plugin_writes {
             Self::drain_plugin_writes(inbox, cx);
+        }
+        if let Some(inbox) = plugin_events {
+            Self::drain_plugin_ui(inbox, cx);
         }
         view.bind_splits(cx);
         view.sync_sidebar();
@@ -857,6 +876,12 @@ impl WorkspaceView {
         } else if id.category() == "plugins" {
             self.palette.close();
             self.run_plugin_command(id, window, cx);
+        } else if crate::plugins::contrib::is_plugin_category(id.category()) {
+            // A command a plugin contributed; one that is gone (its plugin was switched off) does nothing.
+            self.palette.close();
+            if !self.run_plugin_contribution(id, window, cx) {
+                window.push_notification("This plugin command is not available any more.", cx);
+            }
         } else if let Some(action) = crate::ai::action_for(id, &self.ws) {
             self.palette.close();
             self.dispatch_ai(action, cx);
@@ -1163,6 +1188,7 @@ impl WorkspaceView {
         if let Some(notice) = self.ws.take_notice() {
             self.notices.push(notice);
         }
+        self.sync_plugin_contributions(cx);
         self.grids.retain(self.ws.tabs());
         self.editors.retain(&self.ws);
         self.queries.retain(self.ws.tabs());
@@ -1282,6 +1308,7 @@ impl WorkspaceView {
             }
             Effect::LoadAgentProfiles | Effect::StartAgent { .. } => self.apply_agent(effect, cx),
             Effect::Plugins(work) => self.apply_plugins(work, cx),
+            Effect::PluginUi(work) => self.apply_plugin_ui(work, cx),
             edit @ Effect::EditorEdit { .. } => self.assist_edits.push(edit),
             Effect::RunAssist(job) => self.run_assist_effect(job, cx),
             Effect::CancelAssist(id) => self.cancel_assist_effect(id),
@@ -1730,6 +1757,7 @@ impl Render for WorkspaceView {
         self.sync_plugin_dialog(window, cx);
         self.sync_plugin_writes(window, cx);
         self.sync_plugin_inputs(window, cx);
+        self.sync_plugin_panel_inputs(window, cx);
         if self.history_views.materialize(&self.ws, window, cx) {
             // A history dialog or the picker closed: the root takes the focus back.
             window.focus(&self.focus, cx);

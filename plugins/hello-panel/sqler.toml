@@ -1,0 +1,25 @@
+# Example plugin: see README.md. The ids the app derives are `plugin-hello-panel:say-hello` (command) and
+# `panel-plugin-hello-panel:hello` (panel).
+[plugin]
+id = "hello-panel"
+name = "Hello Panel"
+version = "0.1.0"
+api = "0.1.1"
+description = "Example plugin: a panel that counts clicks, a command and a status item."
+capabilities = ["ui.panel"]
+
+[entry]
+component = "hello-panel.wasm"
+
+[[commands]]
+id = "say-hello"
+title = "Say hello"
+
+[[panels]]
+id = "hello"
+title = "Hello"
+
+[[status-items]]
+id = "clicks"
+tooltip = "Clicks in the Hello panel"
+alignment = "left"

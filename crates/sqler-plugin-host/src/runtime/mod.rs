@@ -19,7 +19,6 @@ mod log_host;
 mod services;
 mod settings_host;
 mod state;
-mod ui_seam;
 mod unbound;
 mod wasi;
 
@@ -27,6 +26,12 @@ mod wasi;
 #[cfg(all(test, feature = "cl"))]
 mod tests;
 
+// The `ai-tools` call. It lives under `src/ai/` but is compiled as a child of this module, because it reads the
+// host's registry and grant source, which are private to `runtime`.
+#[path = "../ai/mod.rs"]
+mod ai;
+
+pub use ai::{MAX_AI_ARGUMENT_BYTES, MAX_AI_RESULT_BYTES, PluginAiTool};
 pub use call::PendingCall;
 pub use host::{HostOptions, PluginHost};
 pub use services::Services;
@@ -34,6 +39,7 @@ pub use services::Services;
 // The generated bindings and the error constructor, for the host interfaces that live outside this module (query,
 // catalog, ...).
 pub(crate) use bindings::exports::sqler::plugin as wit_exports;
+pub(crate) use bindings::exports::sqler::plugin::ui_handler;
 pub(crate) use bindings::sqler::plugin as wit;
 pub(crate) use convert::plugin_error;
 

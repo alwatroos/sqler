@@ -158,6 +158,12 @@ pub enum CallError {
         /// The interface name.
         interface: &'static str,
     },
+    /// The manifest does not declare the command, panel or status item that was called.
+    #[error("plugin does not declare that {what}")]
+    Undeclared {
+        /// What was asked for: `"command"`, `"panel"` or `"status item"`.
+        what: &'static str,
+    },
     /// The plugin is disabled.
     #[error("plugin is disabled")]
     Disabled,

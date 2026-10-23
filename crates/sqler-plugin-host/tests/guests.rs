@@ -12,10 +12,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
+#[path = "guests/completion.rs"]
+mod completion;
 #[path = "guests/data.rs"]
 mod data;
 #[path = "guests/driver.rs"]
 mod driver;
+#[path = "guests/exporter.rs"]
+mod exporter;
+#[path = "guests/exporter_markdown.rs"]
+mod exporter_markdown;
+#[path = "guests/hello_panel.rs"]
+mod hello_panel;
 
 use std::convert::Infallible;
 use std::fs;
@@ -24,10 +32,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use sqler_plugin_api::{Capability, CapabilitySet, PluginId, SettingValue};
+use sqler_plugin_api::{
+    Capability, CapabilitySet, CommandContext, ContributionId, PluginId, SettingValue, Widget,
+    WidgetError, WidgetEvent,
+};
 use sqler_plugin_host::{
     CallError, DataService, EgressFactory, ErrorCode, GrantSource, HostOptions, MemorySettings,
-    PluginData, PluginDirs, PluginHost, PluginState, QueryApprover, Services, discover,
+    PluginData, PluginDirs, PluginHost, PluginState, PluginUi, QueryApprover, Services, UiSink,
+    discover,
 };
 
 use common::{Grants, Scratch, block_on, capture, plugin_lines, runtime};
@@ -43,15 +55,17 @@ fn fixtures(test: &str) -> Option<PathBuf> {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(d)
         }
     });
-    let complete = resolved
-        .as_ref()
-        .filter(|d| d.join("probe/probe.wasm").is_file() && d.join("smoke/smoke.wasm").is_file());
+    let complete = resolved.as_ref().filter(|d| {
+        d.join("probe/probe.wasm").is_file()
+            && d.join("smoke/smoke.wasm").is_file()
+            && d.join("exporter-fixture/exporter.wasm").is_file()
+    });
     if let Some(d) = complete {
         return Some(d.clone());
     }
     assert!(
         !required,
-        "{test}: SQLER_TEST_REQUIRE_PLUGINS=1 but SQLER_PLUGIN_FIXTURES is unset or lacks the built probe and smoke \
+        "{test}: SQLER_TEST_REQUIRE_PLUGINS=1 but SQLER_PLUGIN_FIXTURES is unset or lacks the built probe, smoke and exporter \
          plugins (run `cargo run -p xtask -- plugins build`)"
     );
     eprintln!(
@@ -275,14 +289,25 @@ fn world(label: &str, fixtures: &Path, name: &str, opts: &Opts) -> World {
 }
 
 impl World {
+    /// The status text, or `None` when the guest has nothing to show (an empty text counts as nothing).
+    fn status_opt(&self, item: &str) -> Option<String> {
+        block_on(&self.rt, self.host.status(&self.id, &cid(item))).unwrap()
+    }
+
     fn status(&self, item: &str) -> String {
-        block_on(&self.rt, self.host.call_status(&self.id, item))
-            .unwrap()
+        self.status_opt(item)
             .unwrap_or_else(|| panic!("no status for {item}"))
     }
 
     fn command(&self, command: &str) -> Result<(), CallError> {
-        block_on(&self.rt, self.host.call_command(&self.id, command))
+        self.command_in(command, CommandContext::None)
+    }
+
+    fn command_in(&self, command: &str, context: CommandContext) -> Result<(), CallError> {
+        block_on(
+            &self.rt,
+            self.host.run_command(&self.id, &cid(command), context),
+        )
     }
 
     fn set(&self, key: &str, value: &str) {
@@ -326,8 +351,8 @@ fn probe_ok_command_and_init_log() {
             .iter()
             .any(|l| l.message == "probe: init")
     );
-    // An unknown command is a guest error, not a fault.
-    match w.command("nope") {
+    // A declared command the guest does not know is a guest error, not a fault.
+    match w.command("unknown") {
         Err(CallError::Guest(e)) => assert_eq!(e.code, ErrorCode::NotFound),
         other => panic!("{other:?}"),
     }
@@ -504,7 +529,8 @@ fn settings_reach_the_guest_read_only() {
         return;
     };
     let w = world("setting", &fx, "probe", &Opts::default());
-    assert_eq!(w.status("setting"), "");
+    // An unset setting reads as empty text, which the host reports as nothing to show.
+    assert_eq!(w.status_opt("setting"), None);
     w.host
         .set_setting(&w.id, "url", SettingValue::Text("http://x/".to_owned()))
         .unwrap();
@@ -602,5 +628,226 @@ fn nothing_approved_still_loads_and_runs() {
     let w = world("nothing", &fx, "probe", &opts);
     w.command("ok").unwrap();
     assert!(w.host.plugins()[0].effective.is_empty());
+    w.done();
+}
+
+fn cid(s: &str) -> ContributionId {
+    s.parse().unwrap()
+}
+
+/// Records what the guest pushed through the `ui` import.
+#[derive(Default)]
+struct Pushed(std::sync::Mutex<Vec<String>>);
+
+impl Pushed {
+    fn count(&self, prefix: &str) -> usize {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.starts_with(prefix))
+            .count()
+    }
+}
+
+impl UiSink for Pushed {
+    fn refresh_panel(&self, plugin: &PluginId, panel: &ContributionId) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("refresh {plugin}/{panel}"));
+    }
+
+    fn set_status(&self, plugin: &PluginId, item: &ContributionId, text: String) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("status {plugin}/{item} {text}"));
+    }
+
+    fn notify(&self, plugin: &PluginId, message: String) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("notify {plugin} {message}"));
+    }
+}
+
+fn with_sink() -> (Opts, Arc<Pushed>) {
+    let pushed = Arc::new(Pushed::default());
+    let mut services = Services::new();
+    services.insert(Arc::new(PluginUi::new(
+        Arc::clone(&pushed) as Arc<dyn UiSink>
+    )));
+    (
+        Opts {
+            services,
+            ..Opts::default()
+        },
+        pushed,
+    )
+}
+
+#[test]
+fn a_panel_renders_a_validated_tree() {
+    let Some(fx) = fixtures("ui_render") else {
+        return;
+    };
+    let w = world("ui-render", &fx, "probe", &Opts::default());
+    let tree = block_on(&w.rt, w.host.render_panel(&w.id, &cid("tree")))
+        .unwrap()
+        .unwrap();
+    assert_eq!(tree.nodes().len(), 3);
+    assert!(matches!(tree.root().widget, Widget::Stack(_)));
+    w.done();
+}
+
+#[test]
+fn a_bad_tree_is_an_error_value_and_not_a_fault() {
+    let Some(fx) = fixtures("ui_bad_tree") else {
+        return;
+    };
+    let w = world("ui-bad-tree", &fx, "probe", &Opts::default());
+    for _ in 0..4 {
+        let r = block_on(&w.rt, w.host.render_panel(&w.id, &cid("bad-tree"))).unwrap();
+        assert_eq!(r.unwrap_err(), WidgetError::Empty);
+    }
+    // Four bad trees in a row would have disabled a faulting plugin (three faults).
+    assert_eq!(w.host.plugins()[0].state, PluginState::Live);
+    w.command("ok").unwrap();
+    w.done();
+}
+
+#[test]
+fn a_panel_event_can_replace_the_tree() {
+    let Some(fx) = fixtures("ui_event") else {
+        return;
+    };
+    let w = world("ui-event", &fx, "probe", &Opts::default());
+    let replaced = block_on(
+        &w.rt,
+        w.host
+            .panel_event(&w.id, &cid("tree"), WidgetEvent::Clicked("go".to_owned())),
+    )
+    .unwrap()
+    .expect("the probe answers a click with a tree")
+    .unwrap();
+    let Widget::Text(text) = &replaced.nodes()[1].widget else {
+        panic!("{:?}", replaced.nodes()[1]);
+    };
+    assert_eq!(text.content, "clicked go");
+    let untouched = block_on(
+        &w.rt,
+        w.host.panel_event(
+            &w.id,
+            &cid("tree"),
+            WidgetEvent::Toggled {
+                id: "x".to_owned(),
+                checked: true,
+            },
+        ),
+    )
+    .unwrap();
+    assert!(untouched.is_none());
+    w.done();
+}
+
+#[test]
+fn undeclared_contributions_never_reach_the_guest() {
+    let Some(fx) = fixtures("ui_undeclared") else {
+        return;
+    };
+    let w = world("ui-undeclared", &fx, "probe", &Opts::default());
+    let r = block_on(&w.rt, w.host.render_panel(&w.id, &cid("nope")));
+    assert!(
+        matches!(r, Err(CallError::Undeclared { what: "panel" })),
+        "{r:?}"
+    );
+    let r = w.command("nope");
+    assert!(
+        matches!(r, Err(CallError::Undeclared { what: "command" })),
+        "{r:?}"
+    );
+    let r = block_on(&w.rt, w.host.status(&w.id, &cid("nope")));
+    assert!(
+        matches!(
+            r,
+            Err(CallError::Undeclared {
+                what: "status item"
+            })
+        ),
+        "{r:?}"
+    );
+    w.done();
+}
+
+#[test]
+fn a_panel_without_ui_panel_is_denied() {
+    let Some(fx) = fixtures("ui_denied") else {
+        return;
+    };
+    let opts = Opts {
+        approve: Approve::Only(&["db.read"]),
+        ..Opts::default()
+    };
+    let w = world("ui-denied", &fx, "probe", &opts);
+    let r = block_on(&w.rt, w.host.render_panel(&w.id, &cid("tree")));
+    match r {
+        Err(CallError::Guest(e)) => assert_eq!(e.code, ErrorCode::CapabilityDenied),
+        other => panic!("{other:?}"),
+    }
+    // A command needs no capability.
+    w.command("ok").unwrap();
+    w.done();
+}
+
+#[test]
+fn the_ui_import_is_rate_limited_per_plugin() {
+    let Some(fx) = fixtures("ui_limits") else {
+        return;
+    };
+    let (opts, pushed) = with_sink();
+    let w = world("ui-limits", &fx, "probe", &opts);
+    w.command("ui-calls").unwrap();
+    // 100 status texts in a burst: the bucket holds 20 and refills at 10 per second (loose upper bound).
+    let status = pushed.count("status ");
+    assert!((20..60).contains(&status), "{status} status texts");
+    assert_eq!(pushed.count("notify "), 3);
+    assert_eq!(pushed.count("refresh probe/tree"), 1);
+    w.done();
+}
+
+#[test]
+fn the_ui_import_without_a_sink_is_dropped_silently() {
+    let Some(fx) = fixtures("ui_no_sink") else {
+        return;
+    };
+    let w = world("ui-no-sink", &fx, "probe", &Opts::default());
+    w.command("ui-calls").unwrap();
+    assert_eq!(w.host.plugins()[0].state, PluginState::Live);
+    w.done();
+}
+
+#[test]
+fn the_command_context_reaches_the_guest() {
+    let Some(fx) = fixtures("ui_context") else {
+        return;
+    };
+    let w = world("ui-context", &fx, "probe", &Opts::default());
+    let r = w.command_in(
+        "context",
+        CommandContext::Editor {
+            connection: Some("conn-1".to_owned()),
+            selection: "select 1".to_owned(),
+        },
+    );
+    match r {
+        Err(CallError::Guest(e)) => {
+            assert!(e.message.contains("Editor"), "{}", e.message);
+            assert!(e.message.contains("conn-1"), "{}", e.message);
+            assert!(e.message.contains("select 1"), "{}", e.message);
+        }
+        other => panic!("{other:?}"),
+    }
     w.done();
 }

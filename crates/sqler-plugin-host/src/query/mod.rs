@@ -29,8 +29,8 @@ pub(crate) mod support;
 mod tests;
 
 pub(crate) use convert::{
-    cell_cost, clip, environment_to_wit, kind_to_wit, path_from_wit, path_to_wit, type_name,
-    value_from_wit, value_to_wit,
+    cell_cost, clip, data_type_to_wit, environment_to_wit, kind_to_wit, path_from_wit, path_to_wit,
+    type_name, value_from_wit, value_to_wit,
 };
 pub(crate) use exec::NOT_AVAILABLE;
 pub(crate) use scrub::{DENIED, query_text};

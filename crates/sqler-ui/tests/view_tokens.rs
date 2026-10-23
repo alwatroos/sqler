@@ -43,6 +43,8 @@ const SCANNED: &[(&str, &str)] = &[
     ("workspace/view/plugins.rs", ""),
     ("plugins/approval/view.rs", ""),
     ("workspace/view/plugin_writes.rs", ""),
+    ("plugins/widget/view.rs", ""),
+    ("workspace/view/plugin_ui.rs", ""),
 ];
 
 /// Spacing helper prefixes: `.p_2()`, `.gap_1()` and friends.

@@ -1,0 +1,52 @@
+# The host tests (crates/sqler-plugin-host/tests/guests_ai.rs) drive every tool below.
+[plugin]
+id = "ai-probe"
+name = "AI Probe"
+version = "0.1.0"
+api = "0.1.0"
+description = "Test fixture: contributes AI tools that echo, run a query, trap and spin."
+capabilities = ["ai.tool", "db.read", "db.write"]
+
+[entry]
+component = "ai-probe.wasm"
+
+[[ai-tools]]
+name = "echo"
+description = "Returns its arguments unchanged."
+
+[ai-tools.input-schema]
+type = "object"
+
+[ai-tools.input-schema.properties.text]
+type = "string"
+
+[[ai-tools]]
+name = "query"
+description = "Runs the sql setting on the connection setting and returns the columns and rows."
+
+[ai-tools.input-schema]
+type = "object"
+
+[[ai-tools]]
+name = "trap"
+description = "Traps."
+
+[ai-tools.input-schema]
+type = "object"
+
+[[ai-tools]]
+name = "spin"
+description = "Never returns."
+
+[ai-tools.input-schema]
+type = "object"
+
+[[settings]]
+key = "connection"
+label = "Connection id the query tool uses"
+default = ""
+
+[[settings]]
+key = "sql"
+label = "SQL text the query tool runs"
+default = ""

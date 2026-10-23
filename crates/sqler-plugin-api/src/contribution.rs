@@ -175,10 +175,10 @@ pub struct Contributions {
     pub settings: Vec<SettingSpec>,
 }
 
-/// The host-wide id of a command: `plugin:<plugin>:<command>`.
+/// The host-wide id of a command: `plugin-<plugin>:<command>` (ADR-0060).
 #[must_use]
 pub fn command_id(plugin: &PluginId, command: &ContributionId) -> String {
-    format!("plugin:{plugin}:{command}")
+    format!("plugin-{plugin}:{command}")
 }
 
 #[cfg(test)]
@@ -189,6 +189,6 @@ mod tests {
     fn command_id_format() {
         let p: PluginId = "my-plugin".parse().unwrap();
         let c: ContributionId = "run".parse().unwrap();
-        assert_eq!(command_id(&p, &c), "plugin:my-plugin:run");
+        assert_eq!(command_id(&p, &c), "plugin-my-plugin:run");
     }
 }

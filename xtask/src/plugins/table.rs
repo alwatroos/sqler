@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! The plugin table: one row per plugin. P13-P16 append one row each.
+//! The plugin table: one row per plugin: the test fixtures, then the example plugins.
 
 /// One plugin known to the build task.
 pub struct PluginRow {
@@ -26,6 +26,11 @@ pub const PLUGINS: &[PluginRow] = &[
         package: Some("sqler-fixture-probe"),
     },
     PluginRow {
+        name: "ai-probe",
+        dir: "plugins/fixtures/ai-probe",
+        package: Some("sqler-fixture-ai-probe"),
+    },
+    PluginRow {
         name: "driver",
         dir: "plugins/fixtures/driver",
         package: Some("sqler-fixture-driver"),
@@ -34,6 +39,26 @@ pub const PLUGINS: &[PluginRow] = &[
         name: "sqlserver",
         dir: "plugins/sqlserver",
         package: None,
+    },
+    PluginRow {
+        name: "completer",
+        dir: "plugins/fixtures/completer",
+        package: Some("sqler-fixture-completer"),
+    },
+    PluginRow {
+        name: "exporter",
+        dir: "plugins/fixtures/exporter",
+        package: Some("sqler-fixture-exporter"),
+    },
+    PluginRow {
+        name: "hello-panel",
+        dir: "plugins/hello-panel",
+        package: Some("sqler-example-hello-panel"),
+    },
+    PluginRow {
+        name: "exporter-markdown",
+        dir: "plugins/exporter-markdown",
+        package: Some("sqler-example-exporter-markdown"),
     },
 ];
 

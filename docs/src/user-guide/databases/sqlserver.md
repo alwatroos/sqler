@@ -50,7 +50,7 @@ against that name instead of the host you dial. Client certificates and keys are
   connection was closed by a cancel; connect again").
 - **Production confirmation.** There is no T-SQL dialect yet, so on a production connection every
   statement asks for confirmation, including a plain `select`.
-- **Rows affected.** The number of rows changed by `insert`, `update` and `delete` is not shown.
+- **Rows affected.** The number of rows changed by `insert`, `update` and `delete` is not shown. For the same reason, inline editing in the results grid cannot be applied on SQL Server until the driver reports a changed-row count: the apply is rolled back and nothing is written.
 - **Result sets.** Only the first result set of a batch is shown.
 - **Types.** `money` arrives as a float; `uniqueidentifier` and `xml` as text; `decimal` keeps its
   scale.

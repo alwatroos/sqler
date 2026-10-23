@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use sqler_sql::{Dialect, StatementClass, classify_each};
 
@@ -25,13 +26,14 @@ use crate::export::{
 use crate::query::BoundStatement;
 use crate::tabs::TabId;
 use sqler_driver_api::sqler_core::Query;
-use sqler_export::{ExportOptions, Progress};
+use sqler_export::{ExportOptions, FormatSource, Progress, Registry};
 
 /// A submitted dialog that waits for the save dialog.
 struct PendingExport {
     target: ExportTarget,
     format_id: String,
     options: ExportOptions,
+    formats: Arc<Registry>,
     source: ExportSource,
     /// The dialog showed that a fresh run was refused.
     loaded_only: bool,
@@ -67,6 +69,10 @@ pub(super) struct ExportCenter {
     /// The generation of the result the open dialog describes.
     dialog_result: u64,
     last_dir: Option<PathBuf>,
+    /// Formats that come and go at run time (plugin exporters).
+    sources: Vec<Arc<dyn FormatSource>>,
+    /// The registry the open dialog offered; the one that writes.
+    formats: Option<Arc<Registry>>,
 }
 
 impl Workspace {
@@ -144,6 +150,14 @@ impl Workspace {
         Ok((request, query))
     }
 
+    /// Sets the sources of run-time export formats (plugin exporters). Each dialog takes a
+    /// snapshot of them when it opens.
+    #[must_use]
+    pub fn with_export_sources(mut self, sources: Vec<Arc<dyn FormatSource>>) -> Self {
+        self.exports.sources = sources;
+        self
+    }
+
     /// Opens the export dialog for a result.
     ///
     /// Refuses with a notice when the result has no columns or the tab already exports.
@@ -178,12 +192,15 @@ impl Workspace {
         self.exports.next_dialog += 1;
         self.exports.dialog_result = self.result_generation(target.tab);
         self.exports.pending = None;
+        let registry = Arc::new(Registry::with_sources(&self.exports.sources));
+        self.exports.formats = Some(Arc::clone(&registry));
         self.exports.dialog = Some(ExportDialog::new(
             target,
             facts,
             fresh,
             stem,
             self.exports.next_dialog,
+            &registry,
         ));
         Effect::None
     }
@@ -216,6 +233,11 @@ impl Workspace {
             return self.export_notice(RESULT_CHANGED);
         }
         let dialect = self.export_dialect(target.tab);
+        let formats = self
+            .exports
+            .formats
+            .clone()
+            .unwrap_or_else(|| Arc::new(Registry::with_sources(&self.exports.sources)));
         // Checked again here: the statement and the connection may have changed.
         let fresh = self.fresh_check(target);
         let Some(dialog) = self.exports.dialog.as_mut() else {
@@ -223,7 +245,7 @@ impl Workspace {
         };
         dialog.form = form;
         dialog.error = None;
-        let (format_id, options) = match validate(&dialog.form, dialect) {
+        let (format_id, options) = match validate(&dialog.form, dialect, &formats) {
             Ok(checked) => checked,
             Err(message) => {
                 dialog.error = Some(message);
@@ -272,6 +294,7 @@ impl Workspace {
             target,
             format_id,
             options,
+            formats,
             source,
             loaded_only,
             result: self.exports.dialog_result,
@@ -344,6 +367,7 @@ impl Workspace {
             spec: WriteSpec {
                 format_id: pending.format_id,
                 options: pending.options,
+                formats: pending.formats,
                 path,
                 job: id,
             },
@@ -516,6 +540,93 @@ mod tests {
             panic!("expected RunExport");
         };
         job
+    }
+
+    struct PluginFormat;
+
+    impl sqler_export::Format for PluginFormat {
+        fn id(&self) -> &'static str {
+            "plugin-p:f"
+        }
+        fn label(&self) -> &'static str {
+            "P (plugin): F"
+        }
+        fn extension(&self) -> &'static str {
+            "tsv"
+        }
+        fn create<'a>(
+            &self,
+            _options: &ExportOptions,
+            _sink: sqler_export::Sink<'a>,
+        ) -> Result<Box<dyn sqler_export::RowWriter + 'a>, sqler_export::ExportError> {
+            Ok(Box::new(NoWriter))
+        }
+    }
+
+    struct NoWriter;
+
+    impl sqler_export::RowWriter for NoWriter {
+        fn begin(
+            &mut self,
+            _c: &[sqler_driver_api::sqler_core::Column],
+        ) -> Result<(), sqler_export::ExportError> {
+            Ok(())
+        }
+        fn write_batch(
+            &mut self,
+            _r: &[sqler_driver_api::sqler_core::Row],
+        ) -> Result<(), sqler_export::ExportError> {
+            Ok(())
+        }
+        fn finish(self: Box<Self>) -> Result<(), sqler_export::ExportError> {
+            Ok(())
+        }
+    }
+
+    struct PluginSource;
+
+    impl FormatSource for PluginSource {
+        fn formats(&self) -> Vec<Box<dyn sqler_export::Format>> {
+            vec![Box::new(PluginFormat)]
+        }
+    }
+
+    #[test]
+    fn a_source_format_is_offered_and_travels_into_the_job() {
+        let mut w = ws().with_export_sources(vec![Arc::new(PluginSource)]);
+        let tab = open(&mut w, 0);
+        w.open_export(target(tab, 0), &facts(false));
+        let dialog = w.export_dialog_mut().unwrap();
+        let ids: Vec<&str> = dialog.formats.iter().map(|(id, _, _)| *id).collect();
+        assert_eq!(ids.last(), Some(&"plugin-p:f"));
+        dialog.set_format("plugin-p:f");
+        dialog.set_scope(ExportScope::Loaded);
+        assert_eq!(dialog.extension(), "tsv");
+        let f = form(&w);
+        assert!(matches!(w.submit_export(f), Effect::PickExportPath { .. }));
+        let Effect::RunExport(job) = w.export_path_chosen(
+            w.export_dialog().unwrap().generation,
+            Some(PathBuf::from("/tmp/x/out.tsv")),
+        ) else {
+            panic!("expected RunExport");
+        };
+        assert_eq!(job.spec.format_id, "plugin-p:f");
+        assert!(job.spec.formats.get("plugin-p:f").is_some());
+        assert!(job.spec.formats.get("csv").is_some());
+    }
+
+    #[test]
+    fn without_sources_only_the_built_ins_are_offered() {
+        let mut w = ws();
+        let tab = open(&mut w, 0);
+        w.open_export(target(tab, 0), &facts(false));
+        let dialog = w.export_dialog().unwrap();
+        assert!(
+            dialog
+                .formats
+                .iter()
+                .all(|(id, _, _)| !id.starts_with("plugin-"))
+        );
     }
 
     #[test]

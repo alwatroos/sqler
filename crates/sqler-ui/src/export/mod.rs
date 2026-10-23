@@ -29,6 +29,7 @@ pub use plan::{
     ExportStatus, ExportTarget, FormatEntry, FreshRun, GridFacts, LoadedRows, MAX_ROWS_PER_INSERT,
     available_formats, display_name, file_stem, fresh_gate, rows_text, start_directory, validate,
 };
+pub use sqler_export::FormatSource;
 
 /// A user command of the export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

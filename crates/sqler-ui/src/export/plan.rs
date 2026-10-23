@@ -228,10 +228,10 @@ pub struct ExportDialog {
     pub stem: String,
 }
 
-/// The formats compiled into this build, in registry order.
+/// The formats of `registry`, in registry order (built-ins first, then those of the sources).
 #[must_use]
-pub fn available_formats() -> Vec<FormatEntry> {
-    Registry::with_builtin()
+pub fn available_formats(registry: &Registry) -> Vec<FormatEntry> {
+    registry
         .formats()
         .map(|f| (f.id(), f.label(), f.extension()))
         .collect()
@@ -246,6 +246,7 @@ impl ExportDialog {
         fresh: FreshRun,
         stem: String,
         generation: u64,
+        registry: &Registry,
     ) -> Self {
         let scope = if fresh == FreshRun::Allowed {
             ExportScope::Fresh
@@ -254,7 +255,7 @@ impl ExportDialog {
         };
         Self {
             target,
-            formats: available_formats(),
+            formats: available_formats(registry),
             form: ExportForm::new(scope),
             loaded_rows: facts.rows,
             displayed: facts.displayed.clone(),
@@ -437,8 +438,8 @@ pub fn rows_text(rows: u64) -> String {
 pub fn validate(
     form: &ExportForm,
     dialect: Option<Dialect>,
+    registry: &Registry,
 ) -> Result<(String, ExportOptions), String> {
-    let registry = Registry::with_builtin();
     let Some(format) = registry.get(&form.format) else {
         return Err("This format is not available in this build.".to_owned());
     };
@@ -612,7 +613,100 @@ mod tests {
             ),
             result: None,
         };
-        ExportDialog::new(target, &facts(complete), fresh, "r".to_owned(), 1)
+        ExportDialog::new(
+            target,
+            &facts(complete),
+            fresh,
+            "r".to_owned(),
+            1,
+            &Registry::with_builtin(),
+        )
+    }
+
+    struct PluginFormat;
+
+    impl sqler_export::Format for PluginFormat {
+        fn id(&self) -> &'static str {
+            "plugin-p:f"
+        }
+        fn label(&self) -> &'static str {
+            "P (plugin): F"
+        }
+        fn extension(&self) -> &'static str {
+            "tsv"
+        }
+        fn create<'a>(
+            &self,
+            _options: &ExportOptions,
+            _sink: sqler_export::Sink<'a>,
+        ) -> Result<Box<dyn sqler_export::RowWriter + 'a>, sqler_export::ExportError> {
+            Ok(Box::new(NoWriter))
+        }
+    }
+
+    struct NoWriter;
+
+    impl sqler_export::RowWriter for NoWriter {
+        fn begin(
+            &mut self,
+            _columns: &[sqler_driver_api::sqler_core::Column],
+        ) -> Result<(), sqler_export::ExportError> {
+            Ok(())
+        }
+        fn write_batch(
+            &mut self,
+            _rows: &[sqler_driver_api::sqler_core::Row],
+        ) -> Result<(), sqler_export::ExportError> {
+            Ok(())
+        }
+        fn finish(self: Box<Self>) -> Result<(), sqler_export::ExportError> {
+            Ok(())
+        }
+    }
+
+    struct PluginSource;
+
+    impl sqler_export::FormatSource for PluginSource {
+        fn formats(&self) -> Vec<Box<dyn sqler_export::Format>> {
+            vec![Box::new(PluginFormat)]
+        }
+    }
+
+    #[test]
+    fn plugin_formats_follow_the_built_ins_and_can_be_picked() {
+        let sources: Vec<std::sync::Arc<dyn sqler_export::FormatSource>> =
+            vec![std::sync::Arc::new(PluginSource)];
+        let registry = Registry::with_sources(&sources);
+        let target = ExportTarget {
+            tab: crate::tabs::TabStrip::default().open(
+                crate::tabs::TabConnection {
+                    name: "dev".to_owned(),
+                    driver: sqler_driver_api::sqler_core::DriverId::new("sqlite").unwrap(),
+                    color: None,
+                    environment: None,
+                },
+                crate::tabs::TabKind::Query,
+            ),
+            result: None,
+        };
+        let mut d = ExportDialog::new(
+            target,
+            &facts(true),
+            FreshRun::NotNeeded,
+            "r".to_owned(),
+            1,
+            &registry,
+        );
+        let builtin = Registry::with_builtin().formats().count();
+        assert_eq!(d.formats.len(), builtin + 1);
+        assert_eq!(d.formats.last().map(|f| f.0), Some("plugin-p:f"));
+        d.set_format("plugin-p:f");
+        assert_eq!(d.form.format, "plugin-p:f");
+        assert_eq!(d.extension(), "tsv");
+        let (id, _) = validate(&d.form, None, &registry).unwrap();
+        assert_eq!(id, "plugin-p:f");
+        // A registry without the source does not know the id.
+        assert!(validate(&d.form, None, &Registry::with_builtin()).is_err());
     }
 
     #[test]
@@ -660,7 +754,7 @@ mod tests {
         form.delimiter = Delimiter::Semicolon;
         form.header = false;
         form.null_text = "NA".to_owned();
-        let (id, options) = validate(&form, None).unwrap();
+        let (id, options) = validate(&form, None, &Registry::with_builtin()).unwrap();
         assert_eq!(id, "csv");
         assert_eq!(options.csv.delimiter, b';');
         assert!(!options.csv.header);
@@ -672,29 +766,35 @@ mod tests {
     fn validation_errors() {
         let mut form = ExportForm::new(ExportScope::Loaded);
         form.format = "nope".to_owned();
-        assert!(validate(&form, None).unwrap_err().contains("not available"));
+        assert!(
+            validate(&form, None, &Registry::with_builtin())
+                .unwrap_err()
+                .contains("not available")
+        );
 
         let mut form = ExportForm::new(ExportScope::Loaded);
         form.format = "sql".to_owned();
         assert!(
-            validate(&form, Some(Dialect::Sqlite))
+            validate(&form, Some(Dialect::Sqlite), &Registry::with_builtin())
                 .unwrap_err()
                 .contains("table name")
         );
         form.table = "t".to_owned();
         assert!(
-            validate(&form, None)
+            validate(&form, None, &Registry::with_builtin())
                 .unwrap_err()
                 .contains("does not support")
         );
         for bad in ["", "0", "10001", "x", "-1"] {
             form.rows_per_insert = bad.to_owned();
-            let msg = validate(&form, Some(Dialect::Sqlite)).unwrap_err();
+            let msg =
+                validate(&form, Some(Dialect::Sqlite), &Registry::with_builtin()).unwrap_err();
             assert!(msg.contains("1 to 10000"), "{bad}: {msg}");
         }
         form.rows_per_insert = " 10000 ".to_owned();
         form.schema = " main ".to_owned();
-        let (_, options) = validate(&form, Some(Dialect::Sqlite)).unwrap();
+        let (_, options) =
+            validate(&form, Some(Dialect::Sqlite), &Registry::with_builtin()).unwrap();
         assert_eq!(options.sql.rows_per_statement.get(), 10_000);
         assert_eq!(options.sql.schema.as_deref(), Some("main"));
         assert_eq!(options.sql.table, "t");
@@ -704,7 +804,7 @@ mod tests {
         let mut form = ExportForm::new(ExportScope::Loaded);
         form.null_text = ",".to_owned();
         assert!(
-            validate(&form, None)
+            validate(&form, None, &Registry::with_builtin())
                 .unwrap_err()
                 .contains("cannot be used")
         );

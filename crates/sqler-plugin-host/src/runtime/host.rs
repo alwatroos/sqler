@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use sqler_plugin_api::{Limits, PluginId, SettingValue};
+use sqler_plugin_api::{CapabilitySet, Limits, PluginId, SettingValue};
 use tokio_util::sync::CancellationToken;
 
 use super::call::PendingCall;
@@ -296,6 +296,31 @@ impl PluginHost {
             .filter(|e| !e.plugin.manifest.contributes().drivers.is_empty())
             .map(|e| (Arc::clone(&e.plugin), self.status_of(e)))
             .collect()
+    }
+
+    /// The registered plugins in load order whose manifest declares at least one exporter, with whether each is
+    /// disabled now. Grants are not read: the `exporter` interface needs no capability.
+    pub(crate) fn exporter_plugins(&self) -> Vec<(Arc<DiscoveredPlugin>, bool)> {
+        self.entries()
+            .iter()
+            .filter(|e| !e.plugin.manifest.contributes().exporters.is_empty())
+            .map(|e| {
+                let disabled = lock(&e.state).disabled.is_some();
+                (Arc::clone(&e.plugin), disabled)
+            })
+            .collect()
+    }
+
+    /// The discovered plugin and its effective capabilities now, for the typed calls that check a declaration before
+    /// they reach the guest.
+    pub(crate) fn plugin_view(
+        &self,
+        id: &PluginId,
+    ) -> Option<(Arc<DiscoveredPlugin>, CapabilitySet)> {
+        let entry = self.inner.entry(id)?;
+        let approved = self.inner.opts.grants.approved(&entry.plugin.key);
+        let caps = effective(entry.plugin.manifest.capabilities(), approved.as_ref());
+        Some((Arc::clone(&entry.plugin), caps))
     }
 
     fn entries(&self) -> Vec<Arc<PluginEntry>> {

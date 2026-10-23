@@ -458,6 +458,25 @@ pub(crate) fn search_data_definition() -> ToolDefinition {
     )
 }
 
+/// Whether `name` is one of the built-in tool names (external tools may not shadow them).
+pub(crate) fn is_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        names::LIST_CONNECTIONS
+            | names::LIST_SCHEMAS
+            | names::LIST_TABLES
+            | names::DESCRIBE_TABLE
+            | names::DESCRIBE_FUNCTION
+            | names::SEARCH_SCHEMA
+            | names::SAMPLE_ROWS
+            | names::RUN_QUERY
+            | names::EXPLAIN_QUERY
+            | names::OPEN_IN_EDITOR
+            | names::OPEN_RESULTS_TAB
+            | names::SEARCH_DATA
+    )
+}
+
 /// The tool definitions a host exports. The UI-only tools are listed only when `ui` is true;
 /// `search_data` is never listed here.
 #[must_use]

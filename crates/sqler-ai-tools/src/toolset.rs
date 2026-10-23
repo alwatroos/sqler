@@ -20,6 +20,7 @@ use crate::audit::{
     AuditDraft, AuditEntry, AuditSink, CancelPoint, DraftError, DraftRun, DraftStatement, Surface,
 };
 use crate::error::ToolError;
+use crate::external::{self, ExternalContext, ExternalTools};
 use crate::limits::Limits;
 use crate::redact::{RedactScope, Redaction, RedactionSummary};
 use crate::schema::{self, names};
@@ -118,7 +119,7 @@ pub(crate) struct Ran {
 }
 
 impl Ran {
-    fn with<R>(&self, f: impl FnOnce(&mut RanState) -> R) -> R {
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut RanState) -> R) -> R {
         f(&mut self.state.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
@@ -250,6 +251,7 @@ pub(crate) struct Inner {
     pub audit: Option<Arc<dyn AuditSink>>,
     pub surface: Surface,
     pub data_search: Option<Arc<dyn DataSearch>>,
+    pub external: Option<Arc<dyn ExternalTools>>,
     definitions: Mutex<HashMap<DefinitionKey, Option<String>>>,
 }
 
@@ -322,6 +324,7 @@ impl std::fmt::Debug for ToolSet {
             .field("approver", &self.inner.approver.is_some())
             .field("ui_host", &self.inner.ui.is_some())
             .field("data_search", &self.inner.data_search.is_some())
+            .field("external", &self.inner.external.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -340,6 +343,7 @@ impl ToolSet {
                 audit: None,
                 surface: Surface::Unspecified,
                 data_search: None,
+                external: None,
                 definitions: Mutex::new(HashMap::new()),
             }),
         }
@@ -361,6 +365,7 @@ impl ToolSet {
             audit: self.inner.audit.clone(),
             surface: self.inner.surface,
             data_search: self.inner.data_search.clone(),
+            external: self.inner.external.clone(),
             definitions: Mutex::new(HashMap::new()),
         };
         change(&mut inner);
@@ -403,6 +408,13 @@ impl ToolSet {
         self.rebuilt(|i| i.data_search = Some(search))
     }
 
+    /// Attaches a host that supplies extra tools (for example from plugins). They are listed
+    /// after the built-in tools and run through the same guards, redaction and audit.
+    #[must_use]
+    pub fn with_external_tools(&self, tools: Arc<dyn ExternalTools>) -> Self {
+        self.rebuilt(|i| i.external = Some(tools))
+    }
+
     /// The redaction rules every result of this tool set passes.
     #[must_use]
     pub fn redaction(&self) -> &Redaction {
@@ -424,6 +436,13 @@ impl ToolSet {
         let mut tools = schema::definitions(self.inner.ui.is_some());
         if self.inner.data_search.is_some() {
             tools.push(schema::search_data_definition());
+        }
+        if let Some(external) = &self.inner.external {
+            tools.extend(
+                external::listed(external.as_ref())
+                    .into_iter()
+                    .map(|t| ToolDefinition::new(t.name, t.description, t.input_schema)),
+            );
         }
         tools
     }
@@ -601,8 +620,30 @@ impl ToolSet {
                 let info = self.connection(&a.connection, ran)?;
                 crate::assist::search_data(ts, search, &info, &a, ran).await
             }
-            other => Err(ToolError::UnknownTool(other.to_owned())),
+            other => self.call_external(other, args, ran).await,
         }
+    }
+
+    /// A name no built-in arm took: an external tool, or unknown.
+    async fn call_external(&self, name: &str, args: Value, ran: &Ran) -> Result<Value, ToolError> {
+        let unknown = || ToolError::UnknownTool(name.to_owned());
+        let external = self.inner.external.as_ref().ok_or_else(unknown)?;
+        let tool = external::listed(external.as_ref())
+            .into_iter()
+            .find(|t| t.name == name)
+            .ok_or_else(unknown)?;
+        external::check_arguments(&tool.input_schema, &args)?;
+        let ctx = ExternalContext::new(Arc::clone(&self.inner), ran.clone());
+        let _close = ctx.close_on_drop();
+        let outcome = external.call(name, args, ctx.clone()).await;
+        ctx.verdict()?;
+        let used = ran.with(|s| s.info.as_ref().map(|i| i.send_rows));
+        // A plugin may shape its result any way; once it used a connection, contain what the
+        // columns+rows walk would not recognise.
+        Ok(match (outcome?, used) {
+            (value, Some(send_rows)) => self.inner.redaction.contain_external(value, send_rows),
+            (value, None) => value,
+        })
     }
 
     fn connection(&self, name: &str, ran: &Ran) -> Result<ConnectionInfo, ToolError> {

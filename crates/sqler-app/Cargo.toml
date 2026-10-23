@@ -39,7 +39,7 @@ ai-openai = ["dep:sqler-ai-openai"]
 ai-mistral = ["dep:sqler-ai-mistral"]
 # Plugins (ADR-0060; off by default, ADR-0054): the wasmtime host with the Cranelift compiler (`cl`, loads plain
 # `.wasm`) and the HTTP egress (`net`).
-plugins = ["dep:sqler-plugin-api", "dep:sqler-plugin-host", "dep:sqler-catalog", "sqler-plugin-host/cl", "sqler-plugin-host/net"]
+plugins = ["dep:sqler-plugin-api", "dep:sqler-plugin-host", "dep:sqler-catalog", "dep:sqler-ai-tools", "dep:serde_json", "sqler-plugin-host/cl", "sqler-plugin-host/net"]
 # SQL Server (ADR-0071; off by default): the native engine behind the `sqlserver` plugin (`driver.host:mssql`).
 driver-mssql = ["plugins", "dep:sqler-driver-mssql"]
 
@@ -61,7 +61,9 @@ sqler-ai-mistral = { workspace = true, optional = true }
 sqler-plugin-api = { workspace = true, optional = true }
 sqler-plugin-host = { workspace = true, optional = true }
 sqler-catalog = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+sqler-ai-tools = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 
 [dev-dependencies]
 sqler-sql.workspace = true

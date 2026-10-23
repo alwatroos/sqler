@@ -30,13 +30,19 @@ mod status;
 #[cfg(feature = "runtime")]
 mod catalog;
 #[cfg(feature = "runtime")]
+mod completion;
+#[cfg(feature = "runtime")]
 mod driver;
+#[cfg(feature = "runtime")]
+mod export;
 #[cfg(feature = "net")]
 pub mod net;
 #[cfg(feature = "runtime")]
 mod query;
 #[cfg(feature = "runtime")]
 mod runtime;
+#[cfg(feature = "runtime")]
+mod ui;
 
 pub use dirs::PluginDirs;
 pub use discovery::{
@@ -58,10 +64,17 @@ pub use status::{CallKind, DisableReason, PluginState, PluginStatus};
 #[cfg(feature = "runtime")]
 pub use driver::{HostEngines, PluginDrivers};
 #[cfg(feature = "runtime")]
+pub use export::PluginExporters;
+#[cfg(feature = "runtime")]
 pub use query::{
     ApprovalStage, DataError, DataService, Decision, MAX_CATALOG_ITEMS, MAX_PARAMS,
     MAX_RESULT_BYTES, MAX_SQL_BYTES, PluginConnection, PluginData, QueryApprover, WriteReason,
     WriteRequest,
 };
 #[cfg(feature = "runtime")]
-pub use runtime::{HostOptions, PendingCall, PluginHost, Services};
+pub use runtime::{
+    HostOptions, MAX_AI_ARGUMENT_BYTES, MAX_AI_RESULT_BYTES, PendingCall, PluginAiTool, PluginHost,
+    Services,
+};
+#[cfg(feature = "runtime")]
+pub use ui::{PluginUi, UiSink};

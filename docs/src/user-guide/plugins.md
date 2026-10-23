@@ -18,6 +18,52 @@ allow. See [Plugin development](../plugin-development/index.md) to write one.
   started only when it is switched on and you have allowed it. Plugins run on their own threads, apart from your
   database work.
 
+## What plugins add
+
+A plugin that is switched on, started and allowed can add the following to SQLer. Each item is named in the plugin's
+manifest; none is added for a plugin that is off, has failed or whose permissions you denied.
+
+- **Palette commands.** In the command palette (**Mod+Shift+P**) a command appears as `<plugin name> (plugin): <title>`. Running
+  it calls the plugin. If the call fails, a notification says so and SQLer carries on.
+- **Object menu.** Open the object menu on the selected object with **Shift+F10** (or the Menu key); plugin entries
+  are listed with the plugin name. An entry that does not apply to the selected kind says so. Entries for the editor
+  and the results grid are in the command palette (`Editor: ...`, `Results: ...`); they need an open editor or result.
+  An editor or results command sends the SQL you selected (up to 256 KiB) to that plugin when you run it, without any
+  permission, so run such a command only for a plugin you trust with that text.
+- **Status bar.** A plugin can show a short text on the left or right of the status bar. It is not focusable and is drawn with a plug mark;
+  the tooltip always names the plugin (after the plugin's own tooltip, if any), so it cannot pass as a SQLer item. Texts are shortened to 64 characters and at most 8 plugin items show.
+- **Plugins bottom tab.** A plugin with the `ui.panel` permission can add panels. The bottom panel then has a **Plugins**
+  tab (command **View: Show Plugin Panels**, and `View: Show <panel> (<plugin>)` per panel). If a panel cannot be shown,
+  the tab says why and has a **Reload** button. A panel shows the plugin name above its content. A table is drawn up to a
+  fixed number of cells; the rest shows as "N more rows not shown".
+- **Export formats.** A plugin that declares an exporter adds a file format to **Export Results...** (listed after the built-in ones as `<plugin name> (plugin): <label>`) and to `sqler-cli export --format plugin-<id>:<fmt>`. The plugin only turns rows into bytes; SQLer writes the file, so a cancelled or failed export leaves no file. It receives column names, types and the exported rows, and needs no permission. Cancel can take up to 5 s to act while a plugin call runs.
+
+![A plugin panel in the bottom panel, light theme](../screenshots/after/plugins-panel-light.png)
+
+![A plugin panel that could not be shown, dark theme](../screenshots/after/plugins-panel-error-dark.png)
+
+![The object menu with plugin entries, dark theme](../screenshots/after/plugins-panel-menu-dark.png)
+
+![The Hello Panel example plugin with a click counter and a status item, light theme](../screenshots/after/plugins-hello-panel-light.png)
+
+### Rebinding
+
+Every plugin command is a normal command with an id of the form `plugin-<plugin id>:<command>` (menu entries
+`object-plugin-...`, `editor-plugin-...`, `results-plugin-...`, panels `panel-plugin-...`). Bind a key to it in
+`keybindings.toml` like any other command (see [Keybindings](keybindings.md)). The binding is kept while the plugin
+is off, but does nothing then.
+
+### Removal
+
+Switching a plugin off, a fault, a failed load or a revoked approval removes its commands, status items and panels
+at once. A plugin that is switched on again gets them back. The "Recently
+used" list of the palette forgets plugin commands after a restart, because plugins are not loaded yet when it is read.
+
+### Limits
+
+Plugins cannot flood the window: pushed status texts and notifications are rate limited per plugin, notifications are
+prefixed with the plugin name, and a panel is redrawn at most ten times a second.
+
 ## The Plugins view
 
 The **Plugins** item in the activity bar (the plug icon, near Settings, or the command **View: Show Plugins**) opens
@@ -88,6 +134,15 @@ At the top the dialog shows a summary ("N permissions, M need attention"; "none 
 permission is highlighted) and, as a chip, every highlighted permission with its host or folder; the full list below scrolls and has a scrollbar. Highlighted rows are listed first. When the dialog opens because the plugin changed, capabilities that were not in your
 previous approval are marked as new. Names and descriptions come from the plugin; control and direction-changing
 characters, invisible format characters and line separators are replaced and long text is cut.
+
+### AI tools
+
+A plugin with the `ai.tool` permission offers its tools to the AI assistant, the agent and the built-in MCP server as
+`<plugin-id>__<tool-name>`. The tool only sees the connections you allowed for AI. A statement it wants to run that
+changes data asks you on the AI approval card (exact SQL, connection, and a second confirmation on `prod`); with no
+way to ask, it is refused. Its result is redacted and marked as untrusted data like any other tool result, and every
+call is written to the AI audit log. The standalone `sqler-cli mcp` offers no plugin tools. See
+[ADR-0062](../adr/0062-plugin-ai-tools.md).
 
 ### Data leaving your machine
 
