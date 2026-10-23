@@ -567,11 +567,15 @@ run of the same ref saved its caches.
 | New, PR event, cold | 2026-10-23 | 39902726618 | 763 | 749 | 348 | 722 | 705 | PR subsets; `main` has no caches yet |
 | New, PR event, cold, two CI runs at once | 2026-10-23 | 39909585328 | 1033 | 692 | 402 | 885 | 582 | shared the macOS pool with the run below |
 | New, dispatch with `full` unticked (PR subsets), warm | 2026-10-23 | 39909579173 | 553 | 464 | 142 | 448 | 274 (failed: flaky UI test) | critical path: macOS check, `screenshots (linux)` 347 s |
+| New, PR event, cold, beside the dispatch run below | 2026-10-23 | 39911420305 | 741 | 721 | 417 | 727 | 489 | all green |
+| New, dispatch with `full` unticked, warm (repeat) | 2026-10-23 | 39911413672 | 626 | 611 | 135 | 478 | 284 (failed: same flaky UI test) | critical path: Windows check |
 | New, dispatch full (as on `main`), partly warm | 2026-10-23 | 39907597059 | 1211 | 1196 | 383 | 382 | 818 | the full matrix is kept: the Windows full suite is the long pole on `main` |
 
-Reading: on a PR the wall time fell from a 1364 s median (old PR runs) and 1208 s (old, same tree, cold) to 763 s cold
-and 553 s warm. The 8 to 10 minute target is met when the caches are warm and the macOS pool is not shared; a cold PR
-(a `Cargo.lock` or toolchain change, or the first PRs before `main` has saved the caches) is 12 to 17 minutes. The run
+Reading: on a PR the wall time fell from a 1364 s median (old PR runs) and 1208 s (old, same tree, cold) to 741 to 763 s (12.4 to 12.7 minutes) for a PR event with no usable cache
+and 553 to 626 s (9.2 to 10.4 minutes) warm. The 8 to 10 minute target is met only when the caches are warm; a
+PR with a cold cache (a `Cargo.lock` or toolchain change, or before `main` has saved the caches) is 12 to 17 minutes
+(1033 s when two CI runs shared the macOS pool). `sqler-ui::...::cancel_while_a_statement_runs_asks_the_database_to_stop`
+failed on Linux in both warm dispatch runs and passed in all other runs of this tree: an existing race, not a CI change. The run
 on `main` is not faster (about 20 minutes cold, Windows full suite) and does not need to be: it keeps full coverage.
 Caches are saved on `main` only, so a PR event could not be measured warm before the merge (a PR cannot read a branch
 cache); the dispatch with `full` unticked runs the same subsets on the branch ref instead.
