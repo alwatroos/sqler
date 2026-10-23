@@ -12,6 +12,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
+#[path = "guests/completion.rs"]
+mod completion;
 #[path = "guests/data.rs"]
 mod data;
 #[path = "guests/driver.rs"]

@@ -30,6 +30,8 @@ mod status;
 #[cfg(feature = "runtime")]
 mod catalog;
 #[cfg(feature = "runtime")]
+mod completion;
+#[cfg(feature = "runtime")]
 mod driver;
 #[cfg(feature = "net")]
 pub mod net;
