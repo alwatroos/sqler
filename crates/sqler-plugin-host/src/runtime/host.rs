@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use sqler_plugin_api::{Limits, PluginId, SettingValue};
+use sqler_plugin_api::{CapabilitySet, Limits, PluginId, SettingValue};
 use tokio_util::sync::CancellationToken;
 
 use super::call::PendingCall;
@@ -317,6 +317,18 @@ impl PluginHost {
                 }
             })
             .collect()
+    }
+
+    /// The discovered plugin and its effective capabilities now, for the typed calls that check a declaration before
+    /// they reach the guest.
+    pub(crate) fn plugin_view(
+        &self,
+        id: &PluginId,
+    ) -> Option<(Arc<DiscoveredPlugin>, CapabilitySet)> {
+        let entry = self.inner.entry(id)?;
+        let approved = self.inner.opts.grants.approved(&entry.plugin.key);
+        let caps = effective(entry.plugin.manifest.capabilities(), approved.as_ref());
+        Some((Arc::clone(&entry.plugin), caps))
     }
 
     /// Instantiates the plugin if needed (which runs `lifecycle.init`). A no-op for a live plugin.

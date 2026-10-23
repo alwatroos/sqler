@@ -29,7 +29,7 @@ pub(crate) mod support;
 mod tests;
 
 pub(crate) use convert::{
-    clip, environment_to_wit, kind_to_wit, path_from_wit, path_to_wit, type_name,
+    clip, data_type_to_wit, environment_to_wit, kind_to_wit, path_from_wit, path_to_wit, type_name,
 };
 pub(crate) use exec::NOT_AVAILABLE;
 pub use service::{

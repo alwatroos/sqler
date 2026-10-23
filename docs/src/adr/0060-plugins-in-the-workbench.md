@@ -168,3 +168,57 @@ plugin send your data to that host.
 - Bad: the default download has no plugins until the size budget allows it or a second artifact is published; the typed
   id is new UX; every call re-reads a small file (at most 1 MiB) off the UI thread.
 - Follow-up: P8 adds contributions to the surfaces above; P9 to P12 add services to `Services`.
+
+## Addendum (P8): plugin contributions
+
+P8 adds no WIT and no package version bump. Contributions come from the manifest (`Manifest::contributes()`); the
+window turns them into registrations and the host answers the plugin's `ui` import.
+
+### Command ids
+
+Every id passes `CommandId::new` and is rebindable in `keybindings.toml`. The form is `plugin-<plugin>:<command>`
+(one `:` only, which `CommandId` allows), not `plugin:<id>:<action>`. The categories are `plugin-` (palette,
+`<plugin name>: <title>`, called with no context), `object-plugin-`, `editor-plugin-` and `results-plugin-` (menu
+entries, each called with its location's context), `panel-plugin-` (show a panel) and the built-in
+`workbench:show-plugin-panels`. The prefixes differ, so categories cannot collide with each other or with a built-in id.
+The UI builds the registrations from the `PluginRow`s the manager loads, validates and namespaces every id, refuses
+invalid ones and duplicates with a one-time notice, and re-syncs the palette, the keymap (the dispatcher and its hints
+are rebuilt), the status bar and the bottom panel after every manager load. A plugin that is off, faulted, failed or
+not approved loses its contributions at that point. Panels also need an effective `ui.panel`; commands, status items
+and menu entries need no capability. `recent_commands` restored at startup drop plugin ids, because those are not
+registered yet.
+
+### Placement
+
+Palette commands appear in the command palette. Object entries are in the object menu (Shift+F10 or the Menu key,
+`object:show-menu`), editor entries and results entries only in the palette; pointer context menus of the grid and the
+editor are not extended. Status items fill in once the row turns `Live` (through `ui-handler.status`) and then from
+`set-status` events. A `left` item goes at the end of the left group of the status bar and a `right` item between the
+timing and the panel toggles; they are not focusable, and the tooltip is the manifest tooltip, else the plugin name.
+
+### Panel host
+
+`PanelView::PluginPanels` (`"plugin-panels"`, the sixth `BOTTOM_VIEWS` entry, additive per ADR-0045) is the bottom tab
+"Plugins". It shows only when at least one panel is registered; the selected panel is not persisted. A headless
+`PanelSlot` (`Loading | Tree | Failed`) renders a tree only while the panel is shown, keeps one render or event call in
+flight, queues one follow-up refresh and drops events beyond a queue of 8. After a failed call it asks the manager to
+reload so a fault shows up. The window calls the plugin through `PluginsBackend` futures run with `SessionBridge::spawn`;
+the host sends `refresh-panel`, `set-status` and `notify` over an unbounded channel whose inbox `PluginsStartup` hands
+to the workspace, as for writes. The host's typed calls replace the removed `ui_seam` (ADR-0057). A bad tree is a value
+(`WidgetError`), not a fault, and shows the error state with a Reload action.
+
+### Caps
+
+- Host, per plugin, token bucket: `refresh-panel` 20 burst and 10 per second, `set-status` 20 and 10 per second,
+  `notify` 3 and 1 per 10 seconds. Over-rate calls are dropped with one `tracing::debug!`. A missing sink, an undeclared
+  item or `refresh-panel` without `ui.panel` also drops the call.
+- Text from a plugin is one line without control characters and cut at a character boundary: status 256 bytes, notify
+  512. Notifications are prefixed with the plugin name, which guards against spoofing.
+- Window: a status shows at most 64 characters with "…" and at most 8 plugin items; an empty text hides the item. A
+  panel renders at most 10 times a second (100 ms apart); an editor selection passed to a command is capped at 256 KiB.
+  Tree size uses the existing widget limits.
+
+### Not done
+
+No tracing subscriber is installed (the `debug!` lines go nowhere): it would be a new dependency in a default build with
+about 400 KB of headroom under the size budget. This is a follow-up.

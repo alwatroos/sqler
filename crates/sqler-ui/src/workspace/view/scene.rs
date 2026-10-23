@@ -195,6 +195,18 @@ pub const SCENES: &[Scene] = &[
         name: "plugins-empty",
         pending: None,
     },
+    Scene {
+        name: "plugins-panel",
+        pending: None,
+    },
+    Scene {
+        name: "plugins-panel-error",
+        pending: None,
+    },
+    Scene {
+        name: "plugins-panel-menu",
+        pending: None,
+    },
 ];
 
 /// The window size of every scene, in logical pixels.
@@ -255,6 +267,8 @@ enum Wait {
     PluginsLoaded,
     /// The permission dialog is open.
     PluginsDialog,
+    /// The plugin panel on screen has been drawn, or has failed.
+    PluginPanel,
 }
 
 impl Wait {
@@ -271,6 +285,7 @@ impl Wait {
             Self::Assist => "the AI answer".to_owned(),
             Self::PluginsLoaded => "the plugins to be read".to_owned(),
             Self::PluginsDialog => "the permission dialog".to_owned(),
+            Self::PluginPanel => "the plugin panel".to_owned(),
         }
     }
 }
@@ -290,6 +305,8 @@ enum Step {
     ScrollSettingsToEnd,
     /// Selects the sidebar entry called `conn`.
     Select(&'static str),
+    /// Types a query into the open palette (the input and the filter).
+    PaletteQuery(&'static str),
     /// Records a command as just used in the palette.
     Record(&'static str),
     /// Closes every tab.
@@ -457,6 +474,25 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Wait(Wait::PluginsLoaded),
             Step::SelectPlugin("flaky-linter"),
             Step::Pause(2),
+        ],
+        "plugins-panel" | "plugins-panel-error" => vec![
+            open_step("dev", "select * from customers order by id;"),
+            Step::Wait(Wait::Editors(1)),
+            Step::StartPlugins,
+            Step::Wait(Wait::PluginsLoaded),
+            Step::Command("panel-plugin-acme-sync:overview"),
+            Step::Wait(Wait::PluginPanel),
+            Step::Pause(3),
+        ],
+        "plugins-panel-menu" => vec![
+            open_step("dev", "select * from customers order by id;"),
+            Step::Wait(Wait::Editors(1)),
+            Step::Select("dev"),
+            Step::StartPlugins,
+            Step::Wait(Wait::PluginsLoaded),
+            Step::Command("object:show-menu"),
+            Step::PaletteQuery("Object:"),
+            Step::Pause(3),
         ],
         "plugins-empty" => vec![
             Step::StartPlugins,
@@ -918,6 +954,7 @@ impl WorkspaceView {
             .map(|entry| entry.id().clone())
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per step
     fn run_step(
         &mut self,
         step: &Step,
@@ -943,6 +980,11 @@ impl WorkspaceView {
                 self.dispatch_ai(AiAction::EditProvider(id), cx);
             }
             Step::Connection(action) => self.dispatch_connection(action.clone(), cx),
+            Step::PaletteQuery(query) => {
+                self.palette_input
+                    .update(cx, |input, cx| input.set_value(*query, window, cx));
+                self.palette.set_query(*query);
+            }
             Step::Record(command) => {
                 let id = CommandId::new(command).map_err(|err| err.to_string())?;
                 self.palette.record(&id);
@@ -1104,6 +1146,13 @@ impl WorkspaceView {
             Wait::Table { conn, name } => self.table_found(conn, name, cx),
             Wait::PluginsLoaded => !self.ws.plugins().loading(),
             Wait::PluginsDialog => self.ws.plugins().dialog().is_some(),
+            Wait::PluginPanel => self.ws.plugin_ui().selected_slot().is_some_and(|slot| {
+                matches!(
+                    slot.view(),
+                    crate::plugins::panel::SlotView::Tree(_)
+                        | crate::plugins::panel::SlotView::Failed(_)
+                )
+            }),
             Wait::AiReady => self
                 .ws
                 .active_ai_session()

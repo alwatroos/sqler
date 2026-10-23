@@ -530,7 +530,7 @@ fn a_dropped_call_releases_the_session() {
     };
     let w = data_world("dropped", &fx, opts);
     w.set("sql", FOREVER);
-    let r = block_on(&w.rt, w.host.call_status(&w.id, "query"));
+    let r = block_on(&w.rt, w.host.status(&w.id, &"query".parse().unwrap()));
     assert!(matches!(r, Err(CallError::Timeout { .. })), "{r:?}");
     let data = w.data.as_ref().unwrap();
     assert_eq!(data.acquires.load(Ordering::SeqCst), 1);

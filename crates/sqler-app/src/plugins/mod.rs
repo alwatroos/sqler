@@ -12,6 +12,7 @@ mod backend;
 mod data;
 mod dirs;
 mod settings;
+mod ui;
 
 #[cfg(test)]
 mod scratch;
@@ -20,8 +21,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use sqler_config::ConfigDir;
-use sqler_plugin_host::{PluginData, Services};
+use sqler_plugin_host::{PluginData, PluginUi, Services};
 use sqler_ui::connections::Connector;
+use sqler_ui::plugins::backend::{UiSender, ui_channel};
 use sqler_ui::plugins::grant::GrantBook;
 use sqler_ui::plugins::{PluginsStartup, WriteSender};
 
@@ -29,18 +31,22 @@ use approver::UiApprover;
 use backend::AppPlugins;
 use data::AppData;
 use settings::Prefs;
+use ui::AppUiSink;
 
 /// The host services every plugin sees: the saved connections (opened on `connector`, one fresh session per
-/// statement) and the approver that sends every write to the window through `writes`.
+/// statement), the approver that sends every write to the window through `writes`, and the UI sink that sends status
+/// texts, panel refreshes and notifications to the window through `ui`.
 fn services(
     config: Option<&ConfigDir>,
     connector: Arc<dyn Connector>,
     writes: WriteSender,
+    ui: UiSender,
 ) -> Services {
     let data = PluginData::new(Arc::new(AppData::new(config.cloned(), connector)))
         .with_approver(Arc::new(UiApprover::new(writes)));
     let mut services = Services::new();
     services.insert(Arc::new(data));
+    services.insert(Arc::new(PluginUi::new(Arc::new(AppUiSink(ui)))));
     services
 }
 
@@ -57,6 +63,7 @@ pub(crate) fn startup(
         Arc::new(config.map_or_else(GrantBook::in_memory, |dir| GrantBook::open(dir.clone())));
     let prefs = Arc::new(Prefs::new(config.cloned()));
     let (writes, inbox) = sqler_ui::plugins::write_channel();
+    let (ui_sender, ui_inbox) = ui_channel();
     let backend = AppPlugins::new(
         Arc::clone(&grants),
         prefs,
@@ -64,8 +71,10 @@ pub(crate) fn startup(
         dev,
         std::env::home_dir(),
     )
-    .with_services(services(config, connector, writes));
-    PluginsStartup::new(Some(Arc::new(backend)), grants).with_writes(inbox)
+    .with_services(services(config, connector, writes, ui_sender));
+    PluginsStartup::new(Some(Arc::new(backend)), grants)
+        .with_writes(inbox)
+        .with_ui_events(ui_inbox)
 }
 
 #[cfg(test)]
@@ -107,6 +116,12 @@ mod tests {
     fn startup_hands_the_window_the_inbox_of_write_approvals() {
         let started = startup(None, Vec::new());
         assert!(started.writes.is_set());
+    }
+
+    #[test]
+    fn startup_hands_the_window_the_inbox_of_plugin_ui_events() {
+        let started = startup(None, Vec::new());
+        assert!(started.ui_events.is_set());
     }
 
     #[test]

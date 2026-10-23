@@ -22,7 +22,7 @@ use crate::workspace::WorkspaceView;
 const HEADER_HEIGHT: f32 = 30.;
 
 /// The tabs of the header: view, label and the command that shows it.
-const TABS: [(PanelView, &str, &str); 5] = [
+const TABS: [(PanelView, &str, &str); 6] = [
     (PanelView::Results, "Results", "workbench:show-results"),
     (PanelView::Messages, "Messages", "workbench:show-messages"),
     (PanelView::History, "History", "history:open"),
@@ -32,7 +32,18 @@ const TABS: [(PanelView, &str, &str); 5] = [
         "Assistant",
         "workbench:show-assistant",
     ),
+    (
+        PanelView::PluginPanels,
+        "Plugins",
+        "workbench:show-plugin-panels",
+    ),
 ];
+
+/// Whether the header shows the tab of `panel`: the plugin tab only while a plugin panel is registered (or while
+/// its view is the current one, so the user can see why it is empty).
+fn tab_shown(panel: PanelView, current: PanelView, plugin_panels: usize) -> bool {
+    panel != PanelView::PluginPanels || plugin_panels > 0 || current == PanelView::PluginPanels
+}
 
 /// The panel: a header with the view tabs and a close button above `body`. `focus` marks the
 /// region for `F6`.
@@ -60,7 +71,11 @@ pub(crate) fn bottom_panel(
         .flex_row()
         .h_full()
         .role(Role::TabList);
+    let plugin_panels = view.plugin_panel_count();
     for (panel, label, command) in TABS {
+        if !tab_shown(panel, current, plugin_panels) {
+            continue;
+        }
         let active = panel == current;
         // The tab itself carries the focus ring; the underline of the active tab is its child.
         let underline = div()

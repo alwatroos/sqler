@@ -329,6 +329,7 @@ impl WorkspaceView {
             PanelView::History => history_panel_body(self, cx),
             PanelView::Assistant => crate::ai::editor::view::assistant_body(self, active, cx),
             PanelView::Audit => audit_panel_body(self, cx),
+            PanelView::PluginPanels => self.plugin_panel_body(cx),
         }
     }
 
