@@ -1,0 +1,39 @@
+{
+  "datasource.connectionGroups": [
+    { "name": "ROOT", "id": "root" },
+    { "name": "A", "id": "a", "parentId": "root" },
+    { "name": "B", "id": "b", "parentId": "a" },
+    { "name": "C", "id": "c", "parentId": "b" },
+    { "name": "D", "id": "d", "parentId": "c" },
+    { "name": "E", "id": "e", "parentId": "d" },
+    { "name": "F", "id": "f", "parentId": "e" },
+    { "name": "G", "id": "g", "parentId": "f" },
+    { "name": "H", "id": "h", "parentId": "g" },
+    { "name": "I", "id": "i", "parentId": "h" },
+    { "name": "Loop1", "id": "l1", "parentId": "l2" },
+    { "name": "Loop2", "id": "l2", "parentId": "l1" },
+    { "name": "Orphan", "id": "o", "parentId": "missing" },
+    { "name": "", "id": "empty-name" },
+    { "id": "no-name" },
+    { "name": "No id" },
+    "not an object"
+  ],
+  "datasource.connections": [
+    {
+      "options": { "server": "h1.example.test", "authenticationType": "SqlLogin", "user": "u", "groupId": "i" },
+      "providerName": "MSSQL"
+    },
+    {
+      "options": { "server": "h2.example.test", "authenticationType": "SqlLogin", "user": "u", "groupId": "l1" },
+      "providerName": "MSSQL"
+    },
+    {
+      "options": { "server": "h3.example.test", "authenticationType": "SqlLogin", "user": "u", "groupId": "o" },
+      "providerName": "MSSQL"
+    },
+    {
+      "options": { "server": "h4.example.test", "authenticationType": "SqlLogin", "user": "u", "groupId": "nope" },
+      "providerName": "MSSQL"
+    }
+  ]
+}

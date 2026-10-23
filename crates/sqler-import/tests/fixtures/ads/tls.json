@@ -1,0 +1,12 @@
+{
+  "datasource.connections": [
+    { "options": { "connectionName": "none", "server": "a.example.test", "authenticationType": "SqlLogin", "user": "u" }, "providerName": "MSSQL" },
+    { "options": { "connectionName": "true", "server": "a.example.test", "authenticationType": "SqlLogin", "user": "u", "encrypt": true }, "providerName": "MSSQL" },
+    { "options": { "connectionName": "true trust", "server": "a.example.test", "authenticationType": "SqlLogin", "user": "u", "encrypt": "true", "trustServerCertificate": "true" }, "providerName": "MSSQL" },
+    { "options": { "connectionName": "false", "server": "a.example.test", "authenticationType": "SqlLogin", "user": "u", "encrypt": false }, "providerName": "MSSQL" },
+    { "options": { "connectionName": "optional", "server": "a.example.test", "authenticationType": "SqlLogin", "user": "u", "encrypt": "Optional", "trustServerCertificate": true }, "providerName": "MSSQL" },
+    { "options": { "connectionName": "strict", "server": "a.example.test", "authenticationType": "SqlLogin", "user": "u", "encrypt": "Strict" }, "providerName": "MSSQL" },
+    { "options": { "connectionName": "unknown", "server": "a.example.test", "authenticationType": "SqlLogin", "user": "u", "encrypt": "sometimes" }, "providerName": "MSSQL" },
+    { "options": { "connectionName": "pg ignores encrypt", "server": "p.example.test", "authenticationType": "SqlLogin", "user": "u", "encrypt": true }, "providerName": "PGSQL" }
+  ]
+}
