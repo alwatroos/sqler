@@ -132,11 +132,11 @@ Filled in from the `full-ci` dry run of the release-pipeline PR.
 
 | OS (target) | Binary bytes | Archive bytes | `size.yml` binary | Budget |
 | ----------- | ------------ | ------------- | ----------------- | ------ |
-| macOS arm64 | TBD (INT) | TBD (INT) | TBD (INT) | 73,400,320 |
-| macOS x86_64 | TBD (INT) | TBD (INT) | n/a | 73,400,320 |
-| Linux x86_64 | TBD (INT) | TBD (INT) | TBD (INT) | 73,400,320 |
-| Linux aarch64 | TBD (INT) | TBD (INT) | n/a | 73,400,320 |
-| Windows x86_64 | TBD (INT) | TBD (INT) | TBD (INT) | 73,400,320 |
+| macOS arm64 | 38,557,920 | 10,383,528 | 38,507,056 | 73,400,320 |
+| macOS x86_64 | 41,923,104 | 11,810,636 | n/a | 73,400,320 |
+| Linux x86_64 | 63,279,336 | 16,640,340 | 63,330,024 | 73,400,320 |
+| Linux aarch64 | 54,601,192 | 14,597,448 | n/a | 73,400,320 |
+| Windows x86_64 | 51,094,528 | 19,128,405 | 50,760,704 | 73,400,320 |
 
 Engine markers, confirmed against a real `cargo build --release -p sqler-app --features driver-duckdb` binary (96,116,480
 bytes): `Could not set lock on file`, `preserve_insertion_order`, `checkpoint_threshold` and `enable_object_cache` are all
@@ -144,7 +144,12 @@ present, so `release-guard.sh binary` exits 1 on it; on the default release bina
 four are absent and it exits 0. `release-guard.sh build-dir` exits 1 on the DuckDB build (two `libduckdb-sys-*` build
 directories). `SQLER_RELEASE_FEATURES=driver-duckdb release-guard.sh features` exits 1.
 
-Smoke output and guard lines of the dry run: TBD (INT).
+All five targets stay under the budget (largest: Linux x86_64 at 63,279,336 bytes). The Windows archive is the `.zip`
+(the `.msi` is a separate file). The `full-ci` dry run of the pull request (plan, `guard (features)`, five builds,
+`global artifacts`) was green; `host` and `announce` were skipped (`PUBLISHING: false`), so nothing was published. Every
+build job printed `sqler 0.1.0` from the smoke run and `release-guard: build-dir ok`, `binary ok (4 markers absent ...)`
+and `artifacts ok`; the global job printed `release-guard: artifacts ok (25 files, 18 text artifacts checked)`. The
+macOS x86_64 build ran on the native Intel runner and took about 30 minutes, the longest job by a wide margin.
 
 ## Rollback
 
