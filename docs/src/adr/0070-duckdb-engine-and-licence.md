@@ -84,6 +84,21 @@ saying it is build-time only. Never an advisory ignore, never the `rsa` crate.
 - Negative: the bundled C++ build adds minutes to every uncached build that compiles the crate (workspace tests and
   `clippy --all-features`), and the engine plus Arrow is large; it stays off by default and the integration step
   reports the binary size. `arrow` brings about 30 new crates to `Cargo.lock`, all permissively licensed.
+- Size (macOS aarch64, release `sqler-app`): `plugins` 49,757,680 bytes, `plugins,driver-duckdb` 95,180,224 bytes,
+  delta +45,422,544 bytes. With the engine the binary is 21,779,904 bytes over the 73,400,320 byte budget of
+  [ADR-0069](0069-binary-size-budget-70-mb.md). That is why the feature is off by default; a build with it is outside
+  the budget by design. The default build is unchanged (a `deny` job assertion checks that `duckdb` is not in the
+  default `sqler-app` or `sqler-cli` tree).
+- CI cost: the bundled C++ build took about 490 s of CPU for an uncached debug `cargo check` (64 s wall on 14 cores).
+  The crate is a workspace member, so the Linux workspace run and `clippy --all-features` on all OSes compile it, but
+  only when the cache misses: caches are saved on `main` and the build script output is shared between `check` and
+  `build`. Estimated uncached wall time is 2 to 4 minutes on Linux and macOS and up to about 8 on Windows, below the
+  10-minute trigger of the plan. Mitigation inside the ADR-0068 design: the macOS PR subset already excludes
+  `sqler-driver-duckdb` (`MAC_SKIP`), the Windows PR test subset does not run it (the Windows clippy job still builds it), and the engine tests through
+  `sqler-app` and `sqler-cli` (`--features plugins,driver-duckdb`) run on Linux always and on macOS and Windows in full
+  runs only (`main`, dispatch, label `full-ci`); the engine has no OS-specific code. Job names, path gating and the
+  cache policy are unchanged. If the Windows clippy job grows by more than 10 minutes, a follow-up excludes the crate
+  there.
 - Gaps (recorded in the plugin driver docs): one statement per run; a nested value is text; the manifest `dialect` has
   no consumer so a `duckdb` connection is classified `Unknown`; sandboxing is engine-specific and not shown in the grant
   dialog.

@@ -40,6 +40,8 @@ ai-mistral = ["dep:sqler-ai-mistral"]
 # Plugins (ADR-0060; off by default, ADR-0054): the wasmtime host with the Cranelift compiler (`cl`, loads plain
 # `.wasm`) and the HTTP egress (`net`).
 plugins = ["dep:sqler-plugin-api", "dep:sqler-plugin-host", "dep:sqler-catalog", "sqler-plugin-host/cl", "sqler-plugin-host/net"]
+# The native `DuckDB` engine behind the host-kind plugin `duckdb` (ADR-0070; off by default: it compiles the bundled C++ engine).
+driver-duckdb = ["plugins", "dep:sqler-driver-duckdb"]
 
 [dependencies]
 sqler-ui = { workspace = true, features = ["gui"] }
@@ -50,6 +52,7 @@ sqler-tunnel.workspace = true
 sqler-driver-sqlite = { workspace = true, optional = true }
 sqler-driver-postgres = { workspace = true, optional = true }
 sqler-driver-mysql = { workspace = true, optional = true }
+sqler-driver-duckdb = { workspace = true, optional = true }
 sqler-export = { workspace = true, optional = true }
 sqler-ai-ollama = { workspace = true, optional = true }
 sqler-ai-anthropic = { workspace = true, optional = true }

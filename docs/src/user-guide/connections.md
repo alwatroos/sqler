@@ -161,7 +161,7 @@ a URL target.
 
 ### DuckDB
 
-`DuckDB` is a plugin driver (driver id `duckdb`, [ADR-0070](../adr/0070-duckdb-engine-and-webpki-roots.md)). It needs:
+`DuckDB` is a plugin driver (driver id `duckdb`, [ADR-0070](../adr/0070-duckdb-engine-and-licence.md)). It needs:
 
 - a build with the `driver-duckdb` feature of `sqler-app` or `sqler-cli` (off by default; it implies `plugins`);
 - the plugin `plugins/duckdb` installed in the `plugins` folder of the configuration directory, and its permission

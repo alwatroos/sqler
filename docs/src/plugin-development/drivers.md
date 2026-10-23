@@ -160,8 +160,20 @@ What the plugin API could not express for this driver, as found while building i
 
 ### Size and build cost
 
-To be filled at integration: the release binary with and without `driver-duckdb`, the delta, and the margin to the
-size budget.
+Measured on macOS (aarch64), `cargo build --release -p sqler-app --locked`:
+
+| Features | Bytes | MiB |
+| -------- | ----- | --- |
+| `plugins` | 49,757,680 | 47.5 |
+| `plugins,driver-duckdb` | 95,180,224 | 90.8 |
+
+The engine adds 45,422,544 bytes (43.3 MiB). With it the binary is 21,779,904 bytes over the 73,400,320 byte budget
+([ADR-0069](../adr/0069-binary-size-budget-70-mb.md)), so `driver-duckdb` stays off in the default build and a build
+with it is outside the size budget by design. The default build does not change (the `deny` job asserts that `duckdb`
+is not in the default `sqler-app` or `sqler-cli` tree).
+
+The bundled C++ engine also adds build time: about 490 s of CPU for an uncached debug build (64 s wall on a 14-core
+laptop), so a few minutes on a CI runner. See [ADR-0070](../adr/0070-duckdb-engine-and-licence.md), "CI cost".
 
 ## SQL Server
 
