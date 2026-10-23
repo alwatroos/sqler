@@ -20,6 +20,7 @@ use sqler_config::{ConfigDir, KeychainStore, Platform, SecretStore};
 use sqler_driver_api::{DriverError, DriverRegistry};
 use sqler_ui::ai::AiStartup;
 use sqler_ui::connections::Connector;
+use sqler_ui::export::FormatSource;
 use sqler_ui::settings::SettingsModel;
 use sqler_ui::workbench::WorkbenchStartup;
 use sqler_ui::workspace::{Startup, run};
@@ -117,6 +118,10 @@ fn start(
         drop(plugin_dirs);
         sqler_ui::plugins::PluginsStartup::unavailable()
     };
+    #[cfg(feature = "plugins")]
+    let export_sources = vec![plugins::exporters::source() as Arc<dyn FormatSource>];
+    #[cfg(not(feature = "plugins"))]
+    let export_sources: Vec<Arc<dyn FormatSource>> = Vec::new();
     run(Startup {
         connections,
         config_dir,
@@ -130,6 +135,7 @@ fn start(
         workbench,
         ai,
         plugins,
+        export_sources,
     });
     ExitCode::SUCCESS
 }

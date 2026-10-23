@@ -154,6 +154,8 @@ pub struct WriteSpec {
     pub format_id: String,
     /// The options of the format.
     pub options: ExportOptions,
+    /// The formats the dialog offered; the one named by `format_id` writes.
+    pub formats: Arc<Registry>,
     /// The target file.
     pub path: PathBuf,
     /// The job; it names the partial file.
@@ -204,7 +206,7 @@ fn write_with(
     progress: Box<dyn FnMut(Progress) + Send>,
     wrap: impl FnOnce(std::fs::File) -> Sink<'static>,
 ) -> ExportOutcome {
-    let registry = Registry::with_builtin();
+    let registry = Arc::clone(&spec.formats);
     let Some(format) = registry.get(&spec.format_id) else {
         return Err(ExportFailure::Format(
             "this format is not available in this build".to_owned(),
@@ -647,6 +649,7 @@ mod tests {
         WriteSpec {
             format_id: "csv".to_owned(),
             options: ExportOptions::default(),
+            formats: Arc::new(Registry::with_builtin()),
             path: dir.0.join(name),
             job: 1,
         }
@@ -690,6 +693,84 @@ mod tests {
         );
         assert_eq!(summary.bytes, std::fs::metadata(&path).unwrap().len());
         assert_eq!(dir.names(), ["out.csv"]);
+    }
+
+    /// A format from a source whose writer fails on its second batch.
+    struct FailingFormat;
+
+    struct FailingWriter<'a> {
+        sink: Sink<'a>,
+        batches: usize,
+    }
+
+    impl sqler_export::RowWriter for FailingWriter<'_> {
+        fn begin(&mut self, _columns: &[Column]) -> Result<(), ExportError> {
+            self.sink.write_all(b"head\n").map_err(ExportError::Io)
+        }
+        fn write_batch(&mut self, _rows: &[Row]) -> Result<(), ExportError> {
+            self.batches += 1;
+            if self.batches == 2 {
+                return Err(ExportError::Plugin(
+                    "the export format `F` of plugin `p` crashed".to_owned(),
+                ));
+            }
+            self.sink.write_all(b"batch\n").map_err(ExportError::Io)
+        }
+        fn finish(self: Box<Self>) -> Result<(), ExportError> {
+            Ok(())
+        }
+    }
+
+    impl sqler_export::Format for FailingFormat {
+        fn id(&self) -> &'static str {
+            "plugin-p:f"
+        }
+        fn label(&self) -> &'static str {
+            "F (plugin)"
+        }
+        fn extension(&self) -> &'static str {
+            "tsv"
+        }
+        fn create<'a>(
+            &self,
+            _options: &ExportOptions,
+            sink: Sink<'a>,
+        ) -> Result<Box<dyn sqler_export::RowWriter + 'a>, ExportError> {
+            Ok(Box::new(FailingWriter { sink, batches: 0 }))
+        }
+    }
+
+    struct FailingSource;
+
+    impl sqler_export::FormatSource for FailingSource {
+        fn formats(&self) -> Vec<Box<dyn sqler_export::Format>> {
+            vec![Box::new(FailingFormat)]
+        }
+    }
+
+    #[test]
+    fn a_source_format_that_fails_leaves_no_target_and_no_partial_file() {
+        let dir = Scratch::new("job-source-fail");
+        let sources: Vec<Arc<dyn sqler_export::FormatSource>> = vec![Arc::new(FailingSource)];
+        let mut spec = spec(&dir, "out.tsv");
+        spec.format_id = "plugin-p:f".to_owned();
+        spec.formats = Arc::new(Registry::with_sources(&sources));
+        let err = run_feed(
+            spec,
+            &ExportStop::new(),
+            vec![
+                Feed::Columns(cols()),
+                Feed::Rows(rows(0, 2)),
+                Feed::Rows(rows(2, 2)),
+                Feed::Done,
+            ],
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            ExportFailure::Format("the export format `F` of plugin `p` crashed".to_owned())
+        );
+        dir.assert_empty();
     }
 
     #[test]

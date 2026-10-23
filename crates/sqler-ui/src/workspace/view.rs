@@ -120,6 +120,8 @@ pub struct Startup {
     pub ai: crate::ai::AiStartup,
     /// The plugin host and the book of grants; `PluginsStartup::unavailable()` in a build without plugins.
     pub plugins: crate::plugins::PluginsStartup,
+    /// Sources of run-time export formats (plugin exporters); empty in a build without plugins.
+    pub export_sources: Vec<Arc<dyn crate::export::FormatSource>>,
 }
 
 impl std::fmt::Debug for Startup {
@@ -133,6 +135,7 @@ impl std::fmt::Debug for Startup {
             .field("history_dir", &self.history_dir)
             .field("ai", &self.ai)
             .field("plugins", &self.plugins)
+            .field("export_sources", &self.export_sources.len())
             .finish_non_exhaustive()
     }
 }
@@ -320,7 +323,8 @@ impl WorkspaceView {
             .with_drivers(startup.connector.driver_ids())
             .with_workbench(&startup.workbench.load)
             .with_ai(crate::ai::AiState::from_startup(&startup.ai))
-            .with_plugins(&startup.plugins);
+            .with_plugins(&startup.plugins)
+            .with_export_sources(startup.export_sources);
         ws.set_system_appearance(appearance_of(window.appearance()));
         apply(ws.appearance(), ws.settings().settings().ui_font_size, cx);
         // Follow the OS while the preference is "follow system". Nothing changes in the

@@ -420,6 +420,7 @@ mod tests {
                 factory: Arc::new(NoProviders),
             },
             plugins,
+            export_sources: Vec::new(),
         };
         let (view, cx) =
             cx.add_window_view(move |window, cx| WorkspaceView::new(startup, window, cx));

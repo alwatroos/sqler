@@ -139,6 +139,7 @@ fn run(
     let spec = WriteSpec {
         format_id: a.format.clone(),
         options,
+        formats: Arc::new(Registry::with_builtin()),
         path,
         job: 0,
     };
