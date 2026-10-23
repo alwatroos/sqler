@@ -60,6 +60,20 @@ struct Fixture {
 
 /// `plugins`: (id, capabilities). Every one runs the `ok` fixture and is approved what it declares.
 fn fixture(test: &str, plugins: &[(&str, &[&str])], limits: &Limits) -> Fixture {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    fixture_on(rt, test, plugins, limits)
+}
+
+/// Like [`fixture`], on the given runtime.
+fn fixture_on(
+    rt: tokio::runtime::Runtime,
+    test: &str,
+    plugins: &[(&str, &[&str])],
+    limits: &Limits,
+) -> Fixture {
     let root = std::env::temp_dir().join(format!("sqler-host-unit-{}-{test}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     let scratch = Scratch(root.clone());
@@ -91,10 +105,6 @@ fn fixture(test: &str, plugins: &[(&str, &[&str])], limits: &Limits) -> Fixture 
             .map(|p| (p.key.clone(), p.manifest.capabilities().clone()))
             .collect(),
     ));
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
     let host = PluginHost::new(HostOptions {
         runtime: rt.handle().clone(),
         grants: Arc::new(grants),
@@ -401,4 +411,34 @@ fn the_wasi_resource_table_is_capped() {
     let pushed = block_on(&f, f.host.run(&id("alpha"), CallKind::Command, probe)).unwrap();
     assert_eq!(pushed, super::state::MAX_RESOURCES);
     f.host.shutdown();
+}
+
+#[test]
+fn wait_blocking_returns_to_a_plain_thread_while_the_host_runtime_runs_the_call() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let f = fixture_on(rt, "wait-blocking", &[("alpha", &[])], &limits());
+    // This test thread is not a thread of the host's runtime.
+    let ok = f
+        .host
+        .wait_blocking(f.host.run(&id("alpha"), CallKind::Command, succeeds()));
+    assert_eq!(ok, Ok(()));
+    let bad = f.host.wait_blocking(f.host.run(
+        &id("alpha"),
+        CallKind::Command,
+        fails(Trap::UnreachableCodeReached),
+    ));
+    assert!(matches!(bad, Err(CallError::Trap { .. })), "{bad:?}");
+    let missing = f
+        .host
+        .wait_blocking(f.host.run(&id("nobody"), CallKind::Command, succeeds()));
+    assert_eq!(missing, Err(CallError::NotFound));
+    f.host.shutdown();
+    let after = f
+        .host
+        .wait_blocking(f.host.run(&id("alpha"), CallKind::Command, succeeds()));
+    assert!(after.is_err(), "{after:?}");
 }

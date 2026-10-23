@@ -14,6 +14,7 @@ mod completion;
 mod data;
 mod dirs;
 pub(crate) mod drivers;
+pub(crate) mod exporters;
 mod settings;
 mod ui;
 

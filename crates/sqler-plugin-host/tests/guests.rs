@@ -18,6 +18,8 @@ mod completion;
 mod data;
 #[path = "guests/driver.rs"]
 mod driver;
+#[path = "guests/exporter.rs"]
+mod exporter;
 
 use std::convert::Infallible;
 use std::fs;
@@ -49,15 +51,17 @@ fn fixtures(test: &str) -> Option<PathBuf> {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(d)
         }
     });
-    let complete = resolved
-        .as_ref()
-        .filter(|d| d.join("probe/probe.wasm").is_file() && d.join("smoke/smoke.wasm").is_file());
+    let complete = resolved.as_ref().filter(|d| {
+        d.join("probe/probe.wasm").is_file()
+            && d.join("smoke/smoke.wasm").is_file()
+            && d.join("exporter-fixture/exporter.wasm").is_file()
+    });
     if let Some(d) = complete {
         return Some(d.clone());
     }
     assert!(
         !required,
-        "{test}: SQLER_TEST_REQUIRE_PLUGINS=1 but SQLER_PLUGIN_FIXTURES is unset or lacks the built probe and smoke \
+        "{test}: SQLER_TEST_REQUIRE_PLUGINS=1 but SQLER_PLUGIN_FIXTURES is unset or lacks the built probe, smoke and exporter \
          plugins (run `cargo run -p xtask -- plugins build`)"
     );
     eprintln!(

@@ -114,7 +114,10 @@ sqler-cli export --format sql --table users --output users.sql app.db "select * 
 
 - `--format <FMT>` is required: `csv`, `json`, `sql` (`INSERT` statements) or `markdown`. A format
   that is not in this build (`parquet`, `xlsx`, when built without the matching `export-parquet` or
-  `export-xlsx` feature) is refused with exit code 2 and a message saying so.
+  `export-xlsx` feature) is refused with exit code 2 and a message saying so. In a build with the
+  `plugins` feature, `--format plugin-<plugin id>:<exporter id>` uses the export format of an approved
+  plugin in `<config>/plugins`; it is a binary format for `--output -`, and a format that is not found
+  is an unknown format (exit code 2).
 - `--output <PATH>` is required. `-` writes to stdout and is allowed for the text formats only; a
   binary format to `-` is a usage error. A short summary such as `(2 rows, 41 bytes) to users.csv`
   goes to stderr.

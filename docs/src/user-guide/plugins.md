@@ -36,6 +36,7 @@ manifest; none is added for a plugin that is off, has failed or whose permission
   tab (command **View: Show Plugin Panels**, and `View: Show <panel> (<plugin>)` per panel). If a panel cannot be shown,
   the tab says why and has a **Reload** button. A panel shows the plugin name above its content. A table is drawn up to a
   fixed number of cells; the rest shows as "N more rows not shown".
+- **Export formats.** A plugin that declares an exporter adds a file format to **Export Results...** (listed after the built-in ones as `<plugin name> (plugin): <label>`) and to `sqler-cli export --format plugin-<id>:<fmt>`. The plugin only turns rows into bytes; SQLer writes the file, so a cancelled or failed export leaves no file. It receives column names, types and the exported rows, and needs no permission. Cancel can take up to 5 s to act while a plugin call runs.
 
 ![A plugin panel in the bottom panel, light theme](../screenshots/after/plugins-panel-light.png)
 

@@ -33,6 +33,8 @@ mod catalog;
 mod completion;
 #[cfg(feature = "runtime")]
 mod driver;
+#[cfg(feature = "runtime")]
+mod export;
 #[cfg(feature = "net")]
 pub mod net;
 #[cfg(feature = "runtime")]
@@ -61,6 +63,8 @@ pub use status::{CallKind, DisableReason, PluginState, PluginStatus};
 
 #[cfg(feature = "runtime")]
 pub use driver::{HostEngines, PluginDrivers};
+#[cfg(feature = "runtime")]
+pub use export::PluginExporters;
 #[cfg(feature = "runtime")]
 pub use query::{
     ApprovalStage, DataError, DataService, Decision, MAX_CATALOG_ITEMS, MAX_PARAMS,

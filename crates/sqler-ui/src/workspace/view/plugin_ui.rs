@@ -636,6 +636,7 @@ mod tests {
                 factory: Arc::new(NoProviders),
             },
             plugins,
+            export_sources: Vec::new(),
         };
         // `Root` hosts the notifications a failing command or a pushed message shows.
         let shared = std::rc::Rc::new(std::cell::RefCell::new(None));

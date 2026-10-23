@@ -192,6 +192,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqler-fixture-exporter"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.63.0",
+]
+
+[[package]]
 name = "sqler-fixture-probe"
 version = "0.1.0"
 dependencies = [

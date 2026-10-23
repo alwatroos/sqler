@@ -198,6 +198,7 @@ fn spec(dir: &Scratch, id: &str, ext: &str) -> WriteSpec {
     WriteSpec {
         format_id: id.to_owned(),
         options: options(),
+        formats: Arc::new(Registry::with_builtin()),
         path: dir.0.join(format!("out.{ext}")),
         job: 3,
     }
