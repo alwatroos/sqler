@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// Guarded query execution. Reads need `db.read`, other statements `db.write` (ADR-0056).
+interface query {
+    use types.{value, column, plugin-error};
+
+    /// A query to run.
+    record query-request {
+        connection: string,
+        sql: string,
+        params: list<value>,
+        max-rows: option<u32>,
+        timeout-ms: option<u32>,
+    }
+
+    /// The outcome of a query.
+    record query-result {
+        columns: list<column>,
+        rows: list<list<value>>,
+        truncated: bool,
+        rows-affected: option<u64>,
+    }
+
+    /// Runs a statement through the host gate.
+    run: func(request: query-request) -> result<query-result, plugin-error>;
+}

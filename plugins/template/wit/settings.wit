@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// Plugin settings declared in the manifest.
+interface settings {
+    /// A setting value.
+    variant setting-value {
+        boolean(bool),
+        integer(s64),
+        float(f64),
+        text(string),
+    }
+
+    /// Reads a setting; `none` when it is unknown.
+    get: func(key: string) -> option<setting-value>;
+}

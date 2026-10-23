@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// Read access to the catalog. Needs `db.read`.
+interface catalog {
+    use types.{connection-info, object-path, db-object, column-info, plugin-error};
+
+    /// The saved connections.
+    connections: func() -> result<list<connection-info>, plugin-error>;
+
+    /// The children of a catalog path.
+    children: func(connection: string, parent: object-path) -> result<list<db-object>, plugin-error>;
+
+    /// The columns of a table.
+    columns: func(connection: string, table: object-path, name: string) -> result<list<column-info>, plugin-error>;
+}

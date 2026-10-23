@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+
+/// The SQLer plugin ABI (ADR-0055). The package line appears only in this file.
+/// Additive change: a new interface in a new file, import/export lines here, and a bump of the version below.
+package sqler:plugin@0.1.1;
+
+/// Everything the host offers to a plugin. The host links all of it and denies ungranted calls at runtime.
+world imports {
+    import log;
+    import settings;
+    import catalog;
+    import query;
+    import ui;
+}
+
+/// The minimum every plugin implements.
+world base {
+    include imports;
+    export lifecycle;
+}
+
+/// A plugin with panels, commands and status items.
+world ui-plugin {
+    include base;
+    export ui-handler;
+}
+
+/// A plugin that contributes AI tools.
+world ai-tool-plugin {
+    include base;
+    export ai-tools;
+}
+
+/// A plugin that contributes export formats.
+world exporter-plugin {
+    include base;
+    export exporter;
+}
+
+/// A plugin that contributes completion items.
+world completion-plugin {
+    include base;
+    export completion;
+}
+
+/// A plugin that implements a database driver as a guest.
+world driver-plugin {
+    include base;
+    export driver;
+}
+
+/// A guest driver that also lets the app browse its schema (0.1.1).
+world driver-catalog-plugin {
+    include driver-plugin;
+    export driver-catalog;
+}
+
+/// Every export. The host does not instantiate a component through this world: a component that lacks an export would
+/// fail to instantiate. It looks up each export separately, per feature world.
+world full {
+    include base;
+    export ui-handler;
+    export ai-tools;
+    export exporter;
+    export completion;
+    export driver;
+    export driver-catalog;
+}

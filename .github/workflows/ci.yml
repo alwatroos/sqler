@@ -110,6 +110,7 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - 'deny.toml'
+              - 'docs/src/plugin-development/wit-reference.md'
               - '.github/workflows/ci.yml'
       - name: Resolve outputs
         id: out
@@ -435,6 +436,26 @@ jobs:
         if: needs.changes.outputs.plugins == 'true'
         shell: bash
         run: test -f target/plugins/release/smoke/smoke.wasm && test -f target/plugins/release/smoke/sqler.toml
+      # The plugin template (plugins/template): generated outside the checkout (cargo-generate may add a crate
+      # generated inside a workspace to its members), then built like a plugin developer would.
+      - uses: taiki-e/install-action@v2
+        if: needs.changes.outputs.plugins == 'true'
+        with:
+          tool: cargo-generate@0.25.1
+      - name: Template (generate and build)
+        if: needs.changes.outputs.plugins == 'true'
+        shell: bash
+        run: |
+          cargo generate --path plugins/template --name template-check --define display_name="Template check" --destination "$RUNNER_TEMP" --vcs none --silent
+          cargo build --release --target wasm32-wasip2 --manifest-path "$RUNNER_TEMP/template-check/Cargo.toml" --target-dir target/plugins/template
+          wasm=target/plugins/template/wasm32-wasip2/release/template_check.wasm
+          test -f "$wasm"
+          magic=$(od -An -tx1 -N8 "$wasm" | tr -d ' \n')
+          test "$magic" = "0061736d0d000100" || { echo "not a component: $magic"; exit 1; }
+      - name: Template and WIT reference tests
+        if: needs.changes.outputs.plugins == 'true'
+        shell: bash
+        run: cargo test --locked -p xtask --test template --test wit_reference
       # End-to-end: the host runs the staged debug guests. A missing fixture is a failure here, not a skip.
       - name: Guest tests (plugin host)
         if: needs.changes.outputs.plugins == 'true'

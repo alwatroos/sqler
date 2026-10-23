@@ -1,0 +1,8 @@
+[template]
+cargo_generate_version = ">=0.23.0"
+exclude = ["wit/*.wit"]
+
+[placeholders.display_name]
+type = "string"
+prompt = "Name shown in SQLer (not the plugin id)"
+default = "My SQLer plugin"

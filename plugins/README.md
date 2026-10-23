@@ -13,6 +13,7 @@ would join every host build and the root `Cargo.lock`. Built `.wasm` files are n
 - Examples (small, copyable, no test-only behaviour; each has a README):
   - `hello-panel`: `sqler-example-hello-panel`, plugin id `hello-panel`, world `ui-plugin`: a panel with a click counter, a command and a status item (capability `ui.panel`).
   - `exporter-markdown`: `sqler-example-exporter-markdown`, plugin id `exporter-markdown`, exporter id `markdown`, world `exporter-plugin`: a Markdown table with right-aligned number columns (no capability). Driven, like `hello-panel`, by `crates/sqler-plugin-host/tests/guests/`.
+- `template`: the `cargo generate` template for a standalone `ui-plugin` crate (own workspace, own copy of the WIT, no capability). Not a member of this workspace and not built by `xtask plugins`; CI generates and builds it, and `xtask/tests/template.rs` keeps its WIT copy, toolchain file and `wit-bindgen` pin in line with the repository.
 - Fixtures, for the host tests only (`fixtures/*`):
 - `fixtures/smoke`: the smoke fixture (`sqler-fixture-smoke`, plugin id `smoke`): the `base` world, `init` logs one line.
 - `fixtures/probe`: the probe fixture (`sqler-fixture-probe`, plugin id `probe`, world `ui-plugin`): commands that panic, trap, run out of memory, spin, sleep and flood the log, and status items that report what the sandbox exposes (environment, scoped and escaping file reads, HTTP). Driven by `crates/sqler-plugin-host/tests/guests.rs`; `wasip2` provides the wasi:http client types.
