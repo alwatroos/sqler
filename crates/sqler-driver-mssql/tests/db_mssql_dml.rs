@@ -149,3 +149,49 @@ fn cancel_rolls_back_an_open_transaction() {
         assert!(rolled_back, "the open transaction was not rolled back");
     });
 }
+
+#[test]
+fn dates_bind_the_same_under_dmy() {
+    const SCHEMA: &str = "sqler_t_dml_dmy";
+    let Some(url) = url() else { return };
+    run(async {
+        let mut s = connect(&url).await;
+        fresh_schema(&mut *s, SCHEMA).await;
+        sql(
+            &mut *s,
+            &format!(
+                "create table {SCHEMA}.t (d date, dt datetime, sdt smalldatetime, dt2 datetime2(3), \
+                 dto datetimeoffset(3))"
+            ),
+        )
+        .await;
+        // The values come from the server, so they are the driver's own date and timestamp types.
+        let src = sql(
+            &mut *s,
+            "select cast('2024-03-05' as date), cast('2024-03-05T10:20:00' as datetime), \
+             cast('2024-03-05T10:20:00' as smalldatetime), cast('2024-03-05T10:20:00.123' as datetime2(3)), \
+             cast('2024-03-05T10:20:00.123+02:00' as datetimeoffset(3))",
+        )
+        .await;
+        let params = src.rows()[0].0.clone();
+        sql(&mut *s, "set language british; set dateformat dmy").await;
+        sql_params(
+            &mut *s,
+            &format!("insert into {SCHEMA}.t values (@P1, @P2, @P3, @P4, @P5)"),
+            params,
+        )
+        .await;
+        sql(&mut *s, "set language us_english").await;
+        let rs = sql(
+            &mut *s,
+            &format!(
+                "select count(*) from {SCHEMA}.t where d = '20240305' and dt = '20240305 10:20:00' \
+                 and sdt = '20240305 10:20:00' and dt2 = '2024-03-05T10:20:00.123' \
+                 and dto = '2024-03-05T10:20:00.123+02:00'"
+            ),
+        )
+        .await;
+        assert_eq!(count(&rs), Value::Int(1));
+        s.close().await.unwrap();
+    });
+}

@@ -109,6 +109,10 @@ enum Request {
 fn error_text(e: &tiberius::error::Error) -> String {
     match e {
         tiberius::error::Error::Server(te) => format!("{} (error {})", te.message(), te.code()),
+        // A routing error names the host the server wants the client to use.
+        tiberius::error::Error::Routing { .. } => {
+            "the server asked the client to connect elsewhere, which is not supported".to_owned()
+        }
         other => other.to_string(),
     }
 }
@@ -273,5 +277,20 @@ impl Session for MssqlSession {
             }
             done.await.unwrap_or(Ok(()))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_routing_error_does_not_name_the_other_host() {
+        let e = tiberius::error::Error::Routing {
+            host: "other.internal".to_owned(),
+            port: 1433,
+        };
+        assert!(!error_text(&e).contains("other.internal"));
+        assert!(!connect_text(&e).contains("1433"));
     }
 }

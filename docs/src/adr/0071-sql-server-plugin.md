@@ -60,6 +60,12 @@ reversible: an upstream issue asking `tiberius` to drop the default features, or
 - The database tests follow [ADR-0009](0009-postgres-driver-tls-db-tests.md): a script starts a TLS-forced container
   (`sqler-test-mssql`), tests skip without `SQLER_TEST_MSSQL_URL`, and the CI `db` job requires `mssql`.
 - The scrub of plugin error text learns the SQL Server wording ("was denied", "principal").
+  It covers guest driver errors and, through the host-engine wrapper (`HostEngineDriver`), the native engine's
+  connect, query, stream and catalog errors: a login failure or a denial becomes the fixed text, and accounts, hosts
+  and paths are replaced. The engine itself replaces the dial host and a routing redirect target. Row data is not
+  scrubbed.
+- Date and timestamp parameters are bound as `YYYYMMDD` and ISO 8601 with `T`, so the session `DATEFORMAT` and language
+  do not change them.
 
 ## Consequences
 

@@ -295,14 +295,28 @@ pub(crate) fn bind(query: &mut tiberius::Query<'static>, value: &Value) {
         Value::Int(i) => query.bind(*i),
         Value::Float(f) => query.bind(*f),
         Value::Bytes(b) => query.bind(Cow::<'static, [u8]>::Owned(b.clone())),
-        Value::Time(t) => query.bind(Cow::<'static, str>::Owned(trim_fraction(&t.to_string()))),
-        Value::Timestamp(t) => {
-            query.bind(Cow::<'static, str>::Owned(trim_fraction(&t.to_string())));
-        }
-        Value::TimestampTz(t) => {
-            query.bind(Cow::<'static, str>::Owned(trim_fraction(&t.to_string())));
-        }
-        other => query.bind(Cow::<'static, str>::Owned(other.to_string())),
+        other => query.bind(Cow::<'static, str>::Owned(text_param(other))),
+    }
+}
+
+/// The text a value without a direct tiberius type is bound as. Dates and timestamps use forms that
+/// do not depend on the session `DATEFORMAT` or language: `YYYYMMDD` for a date and ISO 8601 with a
+/// `T` for a timestamp (`2024-03-05 10:00:00` would read as year-day-month under `dmy`).
+fn text_param(value: &Value) -> String {
+    match value {
+        Value::Date(d) => d.to_string().replace('-', ""),
+        Value::Time(t) => trim_fraction(&t.to_string()),
+        Value::Timestamp(t) => iso_timestamp(&trim_fraction(&t.to_string())),
+        Value::TimestampTz(t) => iso_timestamp(&trim_fraction(&t.to_string())),
+        other => other.to_string(),
+    }
+}
+
+/// `2024-03-05 10:00:00` as `2024-03-05T10:00:00`.
+fn iso_timestamp(text: &str) -> String {
+    match text.split_once(' ') {
+        Some((date, rest)) => format!("{date}T{rest}"),
+        None => text.to_owned(),
     }
 }
 
@@ -457,6 +471,29 @@ mod tests {
             west, -300,
         ))));
         assert_eq!(v.to_string(), "2023-12-31 19:01:00-05:00");
+    }
+
+    #[test]
+    fn dates_and_timestamps_bind_in_locale_proof_forms() {
+        let date = ok(&ColumnData::Date(Some(TdsDate::new(738_944))));
+        assert_eq!(text_param(&date), "20240229");
+        let dt2 = DateTime2::new(TdsDate::new(738_944), TdsTime::new(5_000_000, 7));
+        assert_eq!(
+            text_param(&ok(&ColumnData::DateTime2(Some(dt2)))),
+            "2024-02-29T00:00:00.5"
+        );
+        let legacy = ok(&ColumnData::DateTime(Some(tiberius::time::DateTime::new(
+            36_524,
+            12 * 3600 * 300,
+        ))));
+        assert_eq!(text_param(&legacy), "2000-01-01T12:00:00");
+        let utc = DateTime2::new(TdsDate::new(738_885), TdsTime::new(23 * 3600 + 30 * 60, 0));
+        let tz = ok(&ColumnData::DateTimeOffset(Some(DateTimeOffset::new(
+            utc, 120,
+        ))));
+        assert_eq!(text_param(&tz), "2024-01-02T01:30:00+02:00");
+        let time = ok(&ColumnData::Time(Some(TdsTime::new(123, 2))));
+        assert_eq!(text_param(&time), "00:00:01.23");
     }
 
     #[test]
