@@ -134,17 +134,26 @@ Errors are a fixed enum with fixed texts that never contain a URL: `NotConfigure
 
 ## Note 2026-10-23: production key (R17)
 
-The production key now exists and is committed as `crates/sqler-update/keys/efe45a1253fd9347.pub`, so builds are
+The production key now exists and is committed as `crates/sqler-update/keys/9735ae5e612eaa24.pub`, so builds are
 configured and `check()` no longer returns `NotConfigured` (the empty-list behaviour remains and is tested).
 
-- Key id: `efe45a1253fd9347`.
-- Fingerprint (SHA-256 of the raw public key): `efe45a1253fd934792dea0989d12ce98ed74acea6acb8832fa00362341fc394b`.
+- Key id: `9735ae5e612eaa24`.
+- Fingerprint (SHA-256 of the raw public key): `9735ae5e612eaa24353b605a6569138bed289cb95f9ce0b4daf237f98767108c`.
 - The private key is the secret `SQLER_UPDATE_SIGNING_KEY` of the GitHub environment `release`: one line, standard
   base64 of the 32-byte Ed25519 seed (`ring` `Ed25519KeyPair::from_seed_unchecked`). It is not stored in the
   repository.
 - A sample manifest signed with it verified with `sqler-update` against the committed key before the scratch files
   were deleted.
 - Rotation: follow the rotation rule above; the page `releasing/update-feed.md` lists the current key.
+
+## Note 2026-10-24: key rotated before 1.0 (R17b)
+
+The key of the previous note was replaced before any release. Nothing was ever signed with the old key, so it was
+removed outright instead of being kept beside the new one; the key id and fingerprint above are those of the new key.
+A backup of the private key is kept in the owner's login keychain under the service `sqler-update-signing-key`
+(account `sqler`). To restore the environment secret from it, pipe the keychain value into `gh secret set` without
+printing it: `security find-generic-password -s sqler-update-signing-key -a sqler -w | gh secret set
+SQLER_UPDATE_SIGNING_KEY --env release`.
 
 ## Note 2026-10-23: settings and notice (R4)
 
