@@ -78,13 +78,22 @@ pub(crate) fn tx_effect(dialect: Dialect, sql: &str) -> TxEffect {
     let mut held: Option<TxEffect> = None;
     // T-SQL nesting, folded over the statements of the script.
     let (mut reset, mut delta, mut floor) = (false, 0i32, 0u32);
+    let mut effects = Vec::new();
     for segment in split(dialect, sql) {
         if segment.kind != SegmentKind::Statement {
             continue;
         }
         any = true;
         let body = sql.get(segment.body.clone()).unwrap_or("");
-        match statement_effect(dialect, body) {
+        effects.extend(statement_effects(dialect, body));
+    }
+    if !any {
+        // No statement found: read the whole text, so no keyword is lost to the splitter.
+        effects = statement_effects(dialect, sql);
+    }
+    // One segment can hold several statements (T-SQL): every effect counts, in source order.
+    for effect in effects {
+        match effect {
             TxEffect::None => {}
             effect => {
                 match effect {
@@ -141,10 +150,6 @@ pub(crate) fn tx_effect(dialect: Dialect, sql: &str) -> TxEffect {
         // `COMMIT` or `BEGIN` after `SET autocommit = 0`: the next transaction is open.
         return TxEffect::AutocommitOff;
     }
-    if !any {
-        // No statement found: read the whole text, so no keyword is lost to the splitter.
-        return statement_effect(dialect, sql);
-    }
     result
 }
 
@@ -191,117 +196,169 @@ fn is(t: &[Tok], i: usize, word: &str) -> bool {
     matches!(t.get(i), Some(Tok::Word(w)) if w == word)
 }
 
-fn statement_effect(dialect: Dialect, body: &str) -> TxEffect {
+/// The effects of one statement text, in source order (several for T-SQL, see [`tsql_effects`]).
+fn statement_effects(dialect: Dialect, body: &str) -> Vec<TxEffect> {
     let mut t = Vec::new();
     push_tokens(dialect, body, &mut t, 0);
+    if !matches!(t.first(), Some(Tok::Word(_))) {
+        return vec![TxEffect::None];
+    }
+    if dialect == Dialect::TSql {
+        return tsql_effects(&t);
+    }
+    vec![statement_effect(dialect, &t)]
+}
+
+fn statement_effect(dialect: Dialect, t: &[Tok]) -> TxEffect {
     let Some(Tok::Word(first)) = t.first() else {
         return TxEffect::None;
     };
-    if dialect == Dialect::TSql {
-        return tsql_effect(&t);
-    }
     match first.as_str() {
         "BEGIN" | "SAVEPOINT" => TxEffect::Begin,
-        "START" if is(&t, 1, "TRANSACTION") => TxEffect::Begin,
-        "COMMIT" | "ROLLBACK" => finish(&t, TxEffect::End),
-        "END" if matches!(dialect, Dialect::Postgres | Dialect::Sqlite) => {
-            finish(&t, TxEffect::End)
-        }
-        "ABORT" if dialect == Dialect::Postgres => finish(&t, TxEffect::End),
-        "PREPARE" if dialect == Dialect::Postgres && is(&t, 1, "TRANSACTION") => TxEffect::End,
-        "XA" if is(&t, 1, "START") || is(&t, 1, "BEGIN") => TxEffect::Begin,
-        "XA" if is(&t, 1, "COMMIT") || is(&t, 1, "ROLLBACK") => TxEffect::End,
-        "SET" => set_effect(dialect, &t),
+        "START" if is(t, 1, "TRANSACTION") => TxEffect::Begin,
+        "COMMIT" | "ROLLBACK" => finish(t, TxEffect::End),
+        "END" if matches!(dialect, Dialect::Postgres | Dialect::Sqlite) => finish(t, TxEffect::End),
+        "ABORT" if dialect == Dialect::Postgres => finish(t, TxEffect::End),
+        "PREPARE" if dialect == Dialect::Postgres && is(t, 1, "TRANSACTION") => TxEffect::End,
+        "XA" if is(t, 1, "START") || is(t, 1, "BEGIN") => TxEffect::Begin,
+        "XA" if is(t, 1, "COMMIT") || is(t, 1, "ROLLBACK") => TxEffect::End,
+        "SET" => set_effect(dialect, t),
         _ => TxEffect::None,
     }
 }
 
-/// T-SQL: every `BEGIN TRAN[SACTION]` or `BEGIN DISTRIBUTED` anywhere in the statement (inside an
-/// `IF`, say) adds a nesting level, as `@@TRANCOUNT` does; `BEGIN TRY` and a plain `BEGIN` block do
-/// not. `SAVE` counts as a transaction. `COMMIT [TRAN|TRANSACTION|WORK] [name]` takes one level
-/// off, so only the outermost ends the transaction; a bare `ROLLBACK [TRAN|TRANSACTION|WORK]` ends
-/// all of them. A `ROLLBACK` with a name goes back to a savepoint (or names the transaction) and
-/// leaves the state alone.
-/// `SET IMPLICIT_TRANSACTIONS ON` switches the autocommit mode off; `OFF` only switches it back
-/// on and commits nothing (see [`TxEffect::ImplicitOff`]).
-fn tsql_effect(t: &[Tok]) -> TxEffect {
-    let Some(Tok::Word(first)) = t.first() else {
-        return TxEffect::None;
+/// Words that start a statement: after a `ROLLBACK [TRAN]` they show it was not given a name.
+const STATEMENT_STARTS: &[&str] = &[
+    "SELECT", "INSERT", "UPDATE", "DELETE", "MERGE", "SET", "BEGIN", "COMMIT", "ROLLBACK", "SAVE",
+    "IF", "WHILE", "EXEC", "EXECUTE", "DECLARE", "PRINT", "CREATE", "DROP", "ALTER", "TRUNCATE",
+    "USE", "WITH", "RETURN", "THROW", "GO",
+];
+
+/// Whether the word at `i` can start a statement: first in the text, or after something that
+/// cannot take it as a name (`SELECT commit FROM t`, `a, commit`, `t.commit` are not statements).
+fn starts_statement(t: &[Tok], i: usize) -> bool {
+    match i.checked_sub(1).and_then(|p| t.get(p)) {
+        Some(Tok::Other(c)) => !matches!(c.as_str(), "," | "." | "=" | "(" | "<>" | "!=" | "+"),
+        None | Some(Tok::Quoted(_)) => true,
+        Some(Tok::Word(w)) => !matches!(
+            w.as_str(),
+            "SELECT"
+                | "AS"
+                | "FROM"
+                | "ON"
+                | "BY"
+                | "INTO"
+                | "TABLE"
+                | "JOIN"
+                | "WHERE"
+                | "AND"
+                | "OR"
+                | "NOT"
+                | "WHEN"
+                | "THEN"
+                | "ELSE"
+                | "SET"
+                | "UPDATE"
+                | "DISTINCT"
+                | "TOP"
+        ),
+    }
+}
+
+/// T-SQL needs no terminator, so one segment can hold several statements. Every transaction
+/// statement in it counts, in source order, as if it stood alone: `BEGIN TRAN[SACTION]` and
+/// `BEGIN DISTRIBUTED` (anywhere, inside an `IF` say) add a nesting level as `@@TRANCOUNT` does,
+/// while `BEGIN TRY` and a plain `BEGIN` block do not; `COMMIT [TRAN|TRANSACTION|WORK] [name]`
+/// takes one off; a bare `ROLLBACK [TRAN|TRANSACTION|WORK]` ends all of them, and one with a name
+/// goes back to a savepoint (or names the transaction) and leaves the state alone; `SAVE` counts
+/// as a transaction. `SET opt [, opt]* ON|OFF` naming `IMPLICIT_TRANSACTIONS` switches the mode
+/// (see [`TxEffect::ImplicitOff`]). The caller folds the effects like separate statements.
+fn tsql_effects(t: &[Tok]) -> Vec<TxEffect> {
+    let nest = |delta| TxEffect::Tran {
+        reset: false,
+        delta,
+        floor: 0,
     };
-    let mut rest = 1;
-    if is(t, rest, "WORK") || is(t, rest, "TRANSACTION") || is(t, rest, "TRAN") {
-        rest += 1;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < t.len() {
+        let Tok::Word(w) = &t[i] else {
+            i += 1;
+            continue;
+        };
+        match w.as_str() {
+            "BEGIN"
+                if matches!(t.get(i + 1), Some(Tok::Word(b))
+                    if matches!(b.as_str(), "TRAN" | "TRANSACTION" | "DISTRIBUTED")) =>
+            {
+                out.push(nest(1));
+                i += 2;
+                continue;
+            }
+            "SAVE" if starts_statement(t, i) => out.push(TxEffect::Begin),
+            "COMMIT" if starts_statement(t, i) => out.push(nest(-1)),
+            "ROLLBACK" if starts_statement(t, i) => {
+                let mut rest = i + 1;
+                if is(t, rest, "WORK") || is(t, rest, "TRANSACTION") || is(t, rest, "TRAN") {
+                    rest += 1;
+                }
+                let bare = match t.get(rest) {
+                    None => true,
+                    Some(Tok::Word(n)) => STATEMENT_STARTS.contains(&n.as_str()),
+                    Some(_) => false,
+                };
+                if bare {
+                    out.push(TxEffect::Tran {
+                        reset: true,
+                        delta: 0,
+                        floor: 0,
+                    });
+                }
+            }
+            "SET" => {
+                if let Some((effect, end)) = implicit_option(t, i) {
+                    out.push(effect);
+                    i = end;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
     }
-    // Every `BEGIN TRAN[SACTION]` and `BEGIN DISTRIBUTED` adds a level; `BEGIN TRY` and a plain
-    // `BEGIN` block open none.
-    let begins = t
-        .windows(2)
-        .filter(|w| {
-            matches!(&w[0], Tok::Word(a) if a == "BEGIN")
-                && matches!(&w[1], Tok::Word(b)
-                    if matches!(b.as_str(), "TRAN" | "TRANSACTION" | "DISTRIBUTED"))
-        })
-        .count();
-    let begins = i32::try_from(begins).unwrap_or(i32::MAX);
-    match first.as_str() {
-        "SAVE" => TxEffect::Begin,
-        "COMMIT" => TxEffect::Tran {
-            reset: false,
-            delta: begins - 1,
-            floor: 0,
-        },
-        "ROLLBACK" if t.len() == rest => TxEffect::Tran {
-            reset: true,
-            delta: begins,
-            floor: 0,
-        },
-        _ if let Some(effect) = set_implicit_option(t) => effect,
-        _ if begins > 0 => TxEffect::Tran {
-            reset: false,
-            delta: begins,
-            floor: 0,
-        },
-        _ => TxEffect::None,
-    }
+    out
 }
 
-/// Every `SET opt [, opt]* ON|OFF` option list in the statement. T-SQL needs no terminator, so
-/// several statements can share one batch text; the scan walks all of them and the last list that
-/// names `IMPLICIT_TRANSACTIONS` decides. A `SET` that is not an option list (`UPDATE .. SET a = 1`)
-/// is skipped. `None` when no list names the option.
-fn set_implicit_option(t: &[Tok]) -> Option<TxEffect> {
-    let mut found = None;
-    for start in 0..t.len() {
-        if !is(t, start, "SET") {
-            continue;
-        }
-        let mut i = start + 1;
-        let mut implicit = false;
-        let mut opts = 0;
-        while let Some(tok) = t.get(i) {
-            match tok {
-                Tok::Word(w) if matches!(w.as_str(), "ON" | "OFF") && opts > 0 => {
-                    if implicit {
-                        found = Some(if w == "ON" {
-                            TxEffect::AutocommitOff
-                        } else {
-                            TxEffect::ImplicitOff
-                        });
-                    }
-                    break;
-                }
-                Tok::Word(w) => {
-                    implicit |= w == "IMPLICIT_TRANSACTIONS";
-                    opts += 1;
-                }
-                Tok::Quoted(_) => opts += 1,
-                Tok::Other(c) if c == "," => {}
-                Tok::Other(_) => break,
+/// The option list `SET opt [, opt]* ON|OFF` that starts at `start`, if it names
+/// `IMPLICIT_TRANSACTIONS`: its effect and the index after it. A `SET` that is not an option list
+/// (`UPDATE .. SET a = 1`) gives `None`.
+fn implicit_option(t: &[Tok], start: usize) -> Option<(TxEffect, usize)> {
+    let mut i = start + 1;
+    let mut implicit = false;
+    let mut opts = 0;
+    while let Some(tok) = t.get(i) {
+        match tok {
+            Tok::Word(w) if matches!(w.as_str(), "ON" | "OFF") && opts > 0 => {
+                return implicit.then(|| {
+                    let effect = if w == "ON" {
+                        TxEffect::AutocommitOff
+                    } else {
+                        TxEffect::ImplicitOff
+                    };
+                    (effect, i + 1)
+                });
             }
-            i += 1;
+            Tok::Word(w) => {
+                implicit |= w == "IMPLICIT_TRANSACTIONS";
+                opts += 1;
+            }
+            Tok::Quoted(_) => opts += 1,
+            Tok::Other(c) if c == "," => {}
+            Tok::Other(_) => return None,
         }
+        i += 1;
     }
-    found
+    None
 }
 
 /// `COMMIT`, `ROLLBACK`, `END` and `ABORT`: `AND CHAIN` starts the next transaction at once,
@@ -403,6 +460,51 @@ mod tests {
                 "begin tran; set nocount, implicit_transactions on; set nocount, implicit_transactions off",
                 nest(1),
             ),
+        ];
+        for (sql, expected) in table {
+            assert_eq!(tx_effect(Dialect::TSql, sql), *expected, "{sql}");
+        }
+    }
+
+    #[test]
+    fn t_sql_segment_with_several_statements_composes_all_effects() {
+        let nest = |delta| Tran {
+            reset: false,
+            delta,
+            floor: 0,
+        };
+        let all = Tran {
+            reset: true,
+            delta: 0,
+            floor: 0,
+        };
+        let table: &[(&str, TxEffect)] = &[
+            (
+                "begin tran\ninsert into t values (1)\nset implicit_transactions off",
+                nest(1),
+            ),
+            ("commit\nset implicit_transactions on", AutocommitOff),
+            ("rollback\nset implicit_transactions on", AutocommitOff),
+            ("begin tran commit begin tran", nest(1)),
+            ("begin tran; commit; begin tran", nest(1)),
+            (
+                "set implicit_transactions on\nbegin tran\ncommit",
+                AutocommitOff,
+            ),
+            ("begin tran\ncommit\nset implicit_transactions off", nest(0)),
+            ("begin tran\nrollback\nset implicit_transactions off", all),
+            ("rollback\ninsert into t values (1)", all),
+            ("begin tran\ninsert into t values (1)\ncommit", nest(0)),
+            (
+                "commit begin tran",
+                Tran {
+                    reset: false,
+                    delta: 0,
+                    floor: 1,
+                },
+            ),
+            ("select commit from t", Nothing),
+            ("select a, rollback from t", Nothing),
         ];
         for (sql, expected) in table {
             assert_eq!(tx_effect(Dialect::TSql, sql), *expected, "{sql}");
