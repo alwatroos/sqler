@@ -15,6 +15,7 @@ Available now:
 - [SSH tunnels](ssh-tunnels.md): connecting through a bastion host
 - [Object browser](object-browser.md): the lazy schema tree, context menus, DDL and the guarded DROP
 - [DDL and scripts](ddl.md): generated CREATE, SELECT, INSERT and DROP statements
+- [Migrating from other tools](migrating/index.md): bring your connections from Beekeeper Studio, Azure Data Studio or pgAdmin, with a feature map for each
 
 Planned topics:
 
