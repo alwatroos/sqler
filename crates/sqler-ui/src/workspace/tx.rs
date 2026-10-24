@@ -49,6 +49,9 @@ pub(crate) enum TxEffect {
     AutocommitOff,
     /// `SET autocommit = 1` on `MySQL`: no transaction is open and none starts by itself.
     AutocommitOn,
+    /// T-SQL `SET IMPLICIT_TRANSACTIONS OFF`: the autocommit mode is back, but an open
+    /// transaction stays open until `COMMIT` or `ROLLBACK` (SQL Server does not commit it).
+    ImplicitOff,
 }
 
 /// One significant token, reduced to what the rules look at.
@@ -84,10 +87,15 @@ pub(crate) fn tx_effect(dialect: Dialect, sql: &str) -> TxEffect {
             effect => {
                 match effect {
                     TxEffect::AutocommitOff => off = true,
-                    TxEffect::AutocommitOn => off = false,
+                    TxEffect::AutocommitOn | TxEffect::ImplicitOff => off = false,
                     _ => {}
                 }
-                result = if let TxEffect::Tran {
+                result = if effect == TxEffect::ImplicitOff
+                    && matches!(result, TxEffect::Begin | TxEffect::Tran { .. })
+                {
+                    // Switching the mode never ends a transaction: keep what the script opened.
+                    result
+                } else if let TxEffect::Tran {
                     reset: r, delta: d, ..
                 } = effect
                 {
@@ -208,7 +216,8 @@ fn statement_effect(dialect: Dialect, body: &str) -> TxEffect {
 /// off, so only the outermost ends the transaction; a bare `ROLLBACK [TRAN|TRANSACTION|WORK]` ends
 /// all of them. A `ROLLBACK` with a name goes back to a savepoint (or names the transaction) and
 /// leaves the state alone.
-/// `SET IMPLICIT_TRANSACTIONS ON|OFF` switches the autocommit mode.
+/// `SET IMPLICIT_TRANSACTIONS ON` switches the autocommit mode off; `OFF` only switches it back
+/// on and commits nothing (see [`TxEffect::ImplicitOff`]).
 fn tsql_effect(t: &[Tok]) -> TxEffect {
     let Some(Tok::Word(first)) = t.first() else {
         return TxEffect::None;
@@ -242,7 +251,7 @@ fn tsql_effect(t: &[Tok]) -> TxEffect {
         },
         "SET" if is(t, 1, "IMPLICIT_TRANSACTIONS") => match t.get(2) {
             Some(Tok::Word(v)) if v == "ON" => TxEffect::AutocommitOff,
-            Some(Tok::Word(v)) if v == "OFF" => TxEffect::AutocommitOn,
+            Some(Tok::Word(v)) if v == "OFF" => TxEffect::ImplicitOff,
             _ => TxEffect::None,
         },
         _ if begins > 0 => TxEffect::Tran {
@@ -320,7 +329,7 @@ mod tests {
     const MY: Dialect = Dialect::MySql;
     const LITE: Dialect = Dialect::Sqlite;
 
-    use TxEffect::{AutocommitOff, AutocommitOn, Begin, End, None as Nothing, Tran};
+    use TxEffect::{AutocommitOff, AutocommitOn, Begin, End, ImplicitOff, None as Nothing, Tran};
 
     #[test]
     fn table_of_t_sql_statements() {
@@ -395,7 +404,16 @@ mod tests {
             ("ROLLBACK TRANSACTION savepoint1", Nothing),
             ("ROLLBACK s", Nothing),
             ("SET IMPLICIT_TRANSACTIONS ON", AutocommitOff),
-            ("set implicit_transactions off", AutocommitOn),
+            ("set implicit_transactions off", ImplicitOff),
+            ("begin tran; set implicit_transactions off", nest(1)),
+            (
+                "set implicit_transactions on; select 1; set implicit_transactions off",
+                ImplicitOff,
+            ),
+            (
+                "set implicit_transactions on; begin tran; set implicit_transactions off",
+                nest(1),
+            ),
             ("SET NOCOUNT ON", Nothing),
             ("SELECT 'BEGIN TRAN'", Nothing),
             ("SELECT [begin] FROM t", Nothing),

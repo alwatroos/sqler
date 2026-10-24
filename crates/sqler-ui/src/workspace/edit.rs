@@ -284,6 +284,8 @@ impl EditFlow {
                 self.tran_depth.remove(&tab);
                 self.in_tx.remove(&tab) || off
             }
+            // T-SQL: the mode is off, an open transaction stays open (no commit happens).
+            TxEffect::ImplicitOff if finished => self.autocommit_off.remove(&tab),
             _ => false,
         }
     }

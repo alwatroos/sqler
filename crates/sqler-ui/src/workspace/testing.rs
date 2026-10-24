@@ -1020,6 +1020,24 @@ mod flow {
     }
 
     #[test]
+    fn t_sql_implicit_transactions_off_never_closes_an_open_transaction() {
+        let mut f = Flow::new(None);
+        let tab = f.open();
+        follow_script(&mut f, tab, "begin tran");
+        follow_script(&mut f, tab, "set implicit_transactions off");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "commit");
+        assert!(!f.w.in_transaction(tab));
+        // The mode on opens one; turning it off leaves it open until the `COMMIT`.
+        follow_script(&mut f, tab, "set implicit_transactions on");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "set implicit_transactions off");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "commit");
+        assert!(!f.w.in_transaction(tab));
+    }
+
+    #[test]
     fn debug_of_the_dialogs_and_the_job_shows_no_values_or_sql() {
         let mut f = Flow::new(Some(Environment::Prod));
         let (_, key, mut grid) = editable(&mut f);

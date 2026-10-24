@@ -112,6 +112,8 @@ that plugin's own connections, as a wrong built-in driver would. A plugin with a
 - `tx_effect` follows `@@TRANCOUNT` for `sqlserver`: `BEGIN TRAN` adds a level, `COMMIT` takes one off (only the
   outermost ends the transaction), a bare `ROLLBACK` ends all of them, `ROLLBACK name` leaves the state alone. The count
   is clamped at zero at every statement of a script (`commit; commit; begin tran` from depth 1 ends at 1).
+- `SET IMPLICIT_TRANSACTIONS ON` is the autocommit-off mode; `SET IMPLICIT_TRANSACTIONS OFF` only ends the mode and never
+  closes an open transaction (SQL Server commits nothing then), so it stays open until `COMMIT` or `ROLLBACK`.
 - `SAVE TRAN` does not change `@@TRANCOUNT`: after a `BEGIN TRAN` in the same script it leaves the count as it is, and
   alone it counts as an open transaction. When the model is unsure it errs toward "a transaction is open".
 - Known limitation (all dialects, older than this ADR): an error in the middle of a script that is net zero
