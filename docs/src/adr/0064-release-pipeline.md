@@ -150,11 +150,17 @@ Release feature set, S2 dry run (filled in from the `full-ci` run of the S2 pull
 
 | OS (target) | Binary bytes | Archive bytes | Budget | Headroom |
 | ----------- | ------------ | ------------- | ------ | -------- |
-| macOS arm64 | TBD | TBD | 83,886,080 | TBD |
-| macOS x86_64 | TBD | TBD | 83,886,080 | TBD |
-| Linux x86_64 | 80,988,136 | 20,674,952 | 83,886,080 | 2,897,944 |
-| Linux aarch64 | TBD | TBD | 83,886,080 | TBD |
-| Windows x86_64 | TBD | TBD | 83,886,080 | TBD |
+| macOS arm64 | 51,921,008 | 13,725,756 | 83,886,080 | 31,965,072 |
+| macOS x86_64 | 58,434,600 | 15,920,380 | 83,886,080 | 25,451,480 |
+| Linux x86_64 | 81,176,680 | 20,724,964 | 83,886,080 | 2,709,400 |
+| Linux aarch64 | 68,182,120 | 17,832,468 | 83,886,080 | 15,703,960 |
+| Windows x86_64 | 71,068,672 | 25,901,525 | 83,886,080 | 12,817,408 |
+
+All five rows come from the same `full-ci` run, on the merge of `main` into the S2 branch. Every binary is under the
+budget; Linux x86_64 is the tightest, with 2,709,400 bytes (3.2 percent) of headroom. The `ldd`-style linkage of the
+Linux binaries (`dist build --print=linkage`) lists only `libc`, `libm`, `libgcc_s`, `libxcb`, `libxcb-xkb`,
+`libxkbcommon`, `libxkbcommon-x11` and their dependencies `libXau`, `libXdmcp`, `libbsd` and `libmd`; the macOS binaries
+link system libraries and frameworks only; the Windows binary links no non-system library.
 
 ## Measurements
 

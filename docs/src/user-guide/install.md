@@ -47,11 +47,12 @@ xattr -dr com.apple.quarantine <path-to-sqler>
 
 ### Linux: runtime libraries
 
-The window needs the usual desktop libraries on the machine. This list is provisional until it is checked against the release binary:
+The window needs the usual desktop libraries on the machine. The release binary (x86_64 and aarch64) is linked against these shared libraries, which the loader needs at start:
 
-- X11 and Wayland client libraries: `libxcb`, `libxkbcommon`, `libxkbcommon-x11`, `libwayland-client`
-- a Vulkan driver (`libvulkan1` and a Mesa or vendor driver)
-- `libfontconfig` and `libfreetype`
+- the C runtime: `libc`, `libm` and `libgcc_s`
+- X11 client libraries: `libxcb`, `libxcb-xkb`, `libxkbcommon` and `libxkbcommon-x11`, with their dependencies `libXau`, `libXdmcp`, `libbsd` and `libmd`
+
+Libraries that the binary loads at run time instead (a Wayland client library, a Vulkan driver such as `libvulkan1` with a Mesa or vendor driver, `libfontconfig` and `libfreetype`) do not appear in that list. Install them with the desktop; the window needs a graphics driver.
 
 ## Windows
 
