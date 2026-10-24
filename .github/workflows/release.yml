@@ -28,6 +28,11 @@ on:
       - "packaging/macos/**"
       - "crates/sqler-app/Cargo.toml"
       - "crates/sqler-app/wix/**"
+      - "about.toml"
+      - "about.hbs"
+      - "NOTICE"
+      - "licenses/**"
+      - ".github/scripts/third-party-licenses.sh"
       - "xtask/src/release/**"
       - "crates/sqler-update/keys/**"
   workflow_dispatch:
@@ -85,6 +90,20 @@ jobs:
           name: cargo-dist-cache
           path: ${{ runner.temp }}/dist/bin/dist
           retention-days: 1
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2
+        with:
+          tool: cargo-about@0.9.2
+      # R14: generated once, here, so every target and installer ships the same bytes. Before `dist plan`, which
+      # checks that the `include` files exist. The script rejects driver-duckdb and any DuckDB text in the output.
+      - name: Third-party licences
+        shell: bash
+        run: sh .github/scripts/third-party-licenses.sh THIRD-PARTY-LICENSES.txt
+      - name: Upload the third-party licences
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: third-party-licenses
+          path: THIRD-PARTY-LICENSES.txt
+          retention-days: 7
       - id: mode
         shell: bash
         run: |
@@ -202,6 +221,12 @@ jobs:
           bin="$RUNNER_TEMP/dist/bin"
           if command -v cygpath >/dev/null 2>&1; then bin=$(cygpath -w "$bin"); fi
           echo "$bin" >> "$GITHUB_PATH"
+      # R14: the file generated once in the plan job; cargo-dist's `include` puts it into the archive and the MSI.
+      - name: Fetch the third-party licences
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: third-party-licenses
+          path: .
       - name: Build artifacts
         shell: bash
         run: |
@@ -236,6 +261,25 @@ jobs:
         env:
           BIN: ${{ steps.extract.outputs.bin }}
         run: sh .github/scripts/release-guard.sh binary "$BIN"
+      # R14: the licence bundle sits next to the binary in the archive, and in the MSI on Windows.
+      - name: Licence bundle
+        shell: bash
+        env:
+          BIN: ${{ steps.extract.outputs.bin }}
+        run: |
+          dir=$(dirname "$BIN")
+          for f in LICENSE NOTICE THIRD-PARTY-LICENSES.txt licenses/LUCIDE-ISC.txt; do
+            if [ ! -s "$dir/$f" ]; then
+              echo "::error title=Licence bundle::$f is missing from the archive"
+              exit 1
+            fi
+          done
+          echo "archive bundle ok: $dir"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            msi=$(find target/distrib -name '*.msi' | head -n 1)
+            test -n "$msi"
+            sh .github/scripts/msi-licence-check.sh "$msi"
+          fi
       # Windows builds the GUI subsystem, so the output goes to a file instead of the console.
       - name: Smoke check (--version)
         shell: bash
@@ -497,24 +541,28 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
-      # One SBOM per release, for the shipped package only (per-artifact SBOMs are a follow-up, ADR-0064). It uses
-      # the feature list of dist-workspace.toml, so it describes what is shipped.
+      # R14: one SBOM per target (the Windows .zip and .msi share one), for the shipped package only. Each uses the
+      # feature list of dist-workspace.toml, so it describes what is shipped for that target.
       - id: cargo-cyclonedx
         name: SBOM
         shell: bash
         run: |
           feats=$(sed -n 's/^features *= *\[\([^]]*\)\].*/\1/p' dist-workspace.toml | tr -d '" ')
-          if [ -n "$feats" ]; then
-            cargo cyclonedx -v --manifest-path crates/sqler-app/Cargo.toml --features "$feats"
-          else
-            cargo cyclonedx -v --manifest-path crates/sqler-app/Cargo.toml
-          fi
-          # Keep sqler-app.cdx.xml only, and move it next to the other artifacts.
-          find . -name '*.cdx.xml' ! -name 'sqler-app.cdx.xml' -delete
-          find . -name 'sqler-app.cdx.xml' -not -path './target/distrib/*' -exec mv '{}' target/distrib/ ';'
-          test -f target/distrib/sqler-app.cdx.xml
+          targets=$(sed -n 's/^targets *= *\[\([^]]*\)\].*/\1/p' dist-workspace.toml | tr -d '" ' | tr ',' ' ')
+          test -n "$targets"
           echo "paths<<EOF" >> "$GITHUB_OUTPUT"
-          echo "target/distrib/sqler-app.cdx.xml" >> "$GITHUB_OUTPUT"
+          for t in $targets; do
+            if [ -n "$feats" ]; then
+              cargo cyclonedx -v --manifest-path crates/sqler-app/Cargo.toml --features "$feats" --target "$t" --target-in-filename
+            else
+              cargo cyclonedx -v --manifest-path crates/sqler-app/Cargo.toml --target "$t" --target-in-filename
+            fi
+            # Keep sqler-app_<target>.cdx.xml only, and move it next to the other artifacts.
+            find . -name '*.cdx.xml' ! -name 'sqler-app_*' -delete
+            find . -name "sqler-app_$t.cdx.xml" -not -path './target/distrib/*' -exec mv '{}' target/distrib/ ';'
+            test -f "target/distrib/sqler-app_$t.cdx.xml"
+            echo "target/distrib/sqler-app_$t.cdx.xml" >> "$GITHUB_OUTPUT"
+          done
           echo "EOF" >> "$GITHUB_OUTPUT"
       - name: Guard (no DuckDB in the artifacts)
         shell: bash

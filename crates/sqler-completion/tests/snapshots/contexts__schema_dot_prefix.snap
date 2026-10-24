@@ -15,3 +15,7 @@ context: Qualified, replace: 20..21 "l", items: 1
 == sqlite ==
 context: Qualified, replace: 20..21 "l", items: 1
  1. "log" [Table] insert="log" detail="audit · table"
+
+== tsql ==
+context: Qualified, replace: 20..21 "l", items: 1
+ 1. "log" [Table] insert="log" detail="audit · table"

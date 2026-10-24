@@ -72,26 +72,30 @@ pub enum TxStep {
 }
 
 /// The SQL of a transaction step: `START TRANSACTION` (`MySQL` begin) or `BEGIN`, `COMMIT`,
-/// `ROLLBACK`.
+/// `ROLLBACK`; on T-SQL `BEGIN TRANSACTION`, `COMMIT TRANSACTION` and `ROLLBACK TRANSACTION`.
 #[must_use]
 pub fn transaction_sql(dialect: Dialect, step: TxStep) -> &'static str {
-    match step {
-        TxStep::Begin if dialect == Dialect::MySql => "START TRANSACTION",
-        TxStep::Begin => "BEGIN",
-        TxStep::Commit => "COMMIT",
-        TxStep::Rollback => "ROLLBACK",
+    match (dialect, step) {
+        (Dialect::TSql, TxStep::Begin) => "BEGIN TRANSACTION",
+        (Dialect::TSql, TxStep::Commit) => "COMMIT TRANSACTION",
+        (Dialect::TSql, TxStep::Rollback) => "ROLLBACK TRANSACTION",
+        (Dialect::MySql, TxStep::Begin) => "START TRANSACTION",
+        (_, TxStep::Begin) => "BEGIN",
+        (_, TxStep::Commit) => "COMMIT",
+        (_, TxStep::Rollback) => "ROLLBACK",
     }
 }
 
 /// The marker of the `k`-th (1-based) parameter in the SQL the generators write: `$k` on
-/// `PostgreSQL`, `?k` on `SQLite`, `?` on `MySQL`. The single source of the marker format; the
-/// apply preview calls it instead of keeping a copy.
+/// `PostgreSQL`, `?k` on `SQLite`, `?` on `MySQL`, `@P{k}` on T-SQL. The single source of the
+/// marker format; the apply preview calls it instead of keeping a copy.
 #[must_use]
 pub fn param_marker(dialect: Dialect, k: usize) -> String {
     match dialect {
         Dialect::Postgres => format!("${k}"),
         Dialect::Sqlite => format!("?{k}"),
         Dialect::MySql => "?".to_owned(),
+        Dialect::TSql => format!("@P{k}"),
     }
 }
 
@@ -358,7 +362,8 @@ fn quoted_type(native: &str) -> Option<String> {
 
 /// Why a value cannot be written to this column safely, or `None` if it can.
 ///
-/// Only `PostgreSQL` has such columns:
+/// Only `PostgreSQL` has such columns, and on T-SQL the `timestamp` (`rowversion`) type, which the
+/// server fills itself and refuses to write.
 ///
 /// - `"char"` (the one-byte internal type): assigning text keeps the first byte, so a longer value
 ///   is cut with no error, and an explicit cast does the same.
@@ -369,6 +374,12 @@ fn quoted_type(native: &str) -> Option<String> {
 /// Both are refused for `UPDATE` and `INSERT`; the grid marks such a result read-only.
 #[must_use]
 pub fn unwritable_reason(dialect: Dialect, column: &ColumnInfo) -> Option<&'static str> {
+    if dialect == Dialect::TSql {
+        let native = column.native_type.as_deref()?.trim();
+        return (native.eq_ignore_ascii_case("timestamp")
+            || native.eq_ignore_ascii_case("rowversion"))
+        .then_some("a rowversion column is filled by the server and cannot be written");
+    }
     if dialect != Dialect::Postgres {
         return None;
     }
@@ -728,7 +739,9 @@ impl SqlIdent {
         }
         match dialect {
             Dialect::Postgres => self.text.to_ascii_lowercase() == name,
-            _ => self.text.eq_ignore_ascii_case(name),
+            Dialect::MySql | Dialect::Sqlite | Dialect::TSql => {
+                self.text.eq_ignore_ascii_case(name)
+            }
         }
     }
 }
@@ -761,7 +774,9 @@ pub struct SourceTable {
 pub fn same_column(dialect: Dialect, result_name: &str, table_column: &str) -> bool {
     match dialect {
         Dialect::Postgres => result_name == table_column,
-        _ => result_name.eq_ignore_ascii_case(table_column),
+        Dialect::MySql | Dialect::Sqlite | Dialect::TSql => {
+            result_name.eq_ignore_ascii_case(table_column)
+        }
     }
 }
 
@@ -873,15 +888,16 @@ fn ident_of(dialect: Dialect, tok: &Token, src: &str, after_dot: bool) -> Option
         TokenKind::QuotedIdent { terminated: true } => {
             let (open, close) = match text.chars().next()? {
                 '"' if dialect != Dialect::MySql => ('"', '"'),
-                '`' if dialect != Dialect::Postgres => ('`', '`'),
-                '[' if dialect == Dialect::Sqlite => ('[', ']'),
+                '`' if matches!(dialect, Dialect::MySql | Dialect::Sqlite) => ('`', '`'),
+                '[' if matches!(dialect, Dialect::Sqlite | Dialect::TSql) => ('[', ']'),
                 _ => return None,
             };
             let inner = text.strip_prefix(open)?.strip_suffix(close)?;
             if inner.is_empty() {
                 return None;
             }
-            let text = if open == '[' {
+            // `SQLite` brackets do not double; every other quote doubles its closing char.
+            let text = if open == '[' && dialect == Dialect::Sqlite {
                 inner.to_owned()
             } else {
                 let double: String = [close, close].iter().collect();
@@ -925,7 +941,20 @@ pub fn single_table_source(dialect: Dialect, sql: &str) -> Option<SourceTable> {
     if !it.next()?.is_keyword(sql, "SELECT") {
         return None;
     }
-    let first = it.next()?;
+    let mut first = it.next()?;
+    if dialect == Dialect::TSql && first.is_keyword(sql, "TOP") {
+        // `TOP (n)` or `TOP n`, with a plain number: no percent, no ties, no expression.
+        let mut count = it.next()?;
+        if is_punct(count, sql, "(") {
+            count = it.next()?;
+            if count.kind != TokenKind::Number || !is_punct(it.next()?, sql, ")") {
+                return None;
+            }
+        } else if count.kind != TokenKind::Number {
+            return None;
+        }
+        first = it.next()?;
+    }
     let columns = if first.kind == TokenKind::Op && first.text(sql) == "*" {
         SelectList::Star
     } else {
@@ -984,6 +1013,7 @@ mod tests {
     const PG: Dialect = Dialect::Postgres;
     const MY: Dialect = Dialect::MySql;
     const LITE: Dialect = Dialect::Sqlite;
+    const TS: Dialect = Dialect::TSql;
 
     fn table() -> Table {
         let object = DbObject::new(
@@ -1546,10 +1576,103 @@ mod tests {
         assert_eq!(transaction_sql(MY, TxStep::Begin), "START TRANSACTION");
         assert_eq!(transaction_sql(PG, TxStep::Begin), "BEGIN");
         assert_eq!(transaction_sql(LITE, TxStep::Begin), "BEGIN");
-        for d in Dialect::ALL {
+        for d in [PG, MY, LITE] {
             assert_eq!(transaction_sql(d, TxStep::Commit), "COMMIT");
             assert_eq!(transaction_sql(d, TxStep::Rollback), "ROLLBACK");
         }
+        assert_eq!(transaction_sql(TS, TxStep::Begin), "BEGIN TRANSACTION");
+        assert_eq!(transaction_sql(TS, TxStep::Commit), "COMMIT TRANSACTION");
+        assert_eq!(
+            transaction_sql(TS, TxStep::Rollback),
+            "ROLLBACK TRANSACTION"
+        );
+        // Every generated step is itself classified as transaction control.
+        for step in [TxStep::Begin, TxStep::Commit, TxStep::Rollback] {
+            assert_eq!(
+                crate::classify(TS, transaction_sql(TS, step)),
+                StatementClass::Other
+            );
+        }
+    }
+
+    #[test]
+    fn param_markers() {
+        assert_eq!(param_marker(PG, 3), "$3");
+        assert_eq!(param_marker(MY, 3), "?");
+        assert_eq!(param_marker(LITE, 3), "?3");
+        assert_eq!(param_marker(TS, 3), "@P3");
+    }
+
+    #[test]
+    fn tsql_dml_and_rowversion() {
+        let table = Table::new(DbObject::new(
+            ObjectKind::Table,
+            ObjectPath::root().in_schema("dbo"),
+            "t",
+        ))
+        .with_columns(vec![
+            ColumnInfo::new("id", DataType::Integer),
+            ColumnInfo::new("a]", DataType::Text),
+        ]);
+        let v = Value::Int(1);
+        let t = Value::Text("x".into());
+        let q = update(TS, &table, &[("a]", &t)], &[("id", &v)]).unwrap();
+        assert_eq!(q.sql, "UPDATE [dbo].[t] SET [a]]] = @P1 WHERE [id] = @P2");
+        let q = insert(TS, &table, &[("id", &v), ("a]", &t)]).unwrap();
+        assert_eq!(
+            q.sql,
+            "INSERT INTO [dbo].[t] ([id], [a]]]) VALUES (@P1, @P2)"
+        );
+        let q = delete(TS, &table, &[("id", &v)]).unwrap();
+        assert_eq!(q.sql, "DELETE FROM [dbo].[t] WHERE [id] = @P1");
+        for native in ["timestamp", "ROWVERSION", " rowversion "] {
+            let c = ColumnInfo::new("rv", DataType::Binary).with_native_type(native);
+            assert!(unwritable_reason(TS, &c).is_some(), "{native}");
+        }
+        for native in ["datetime2", "varbinary", "timestamp_x"] {
+            let c = ColumnInfo::new("rv", DataType::Binary).with_native_type(native);
+            assert!(unwritable_reason(TS, &c).is_none(), "{native}");
+        }
+        // The type spelling that is refused on T-SQL is an ordinary one elsewhere.
+        let c = ColumnInfo::new("rv", DataType::Timestamp).with_native_type("timestamp");
+        assert!(unwritable_reason(PG, &c).is_none());
+        assert!(unwritable_reason(MY, &c).is_none());
+        assert!(unwritable_reason(LITE, &c).is_none());
+    }
+
+    #[test]
+    fn tsql_single_table_sources() {
+        let s = src(TS, "select * from [dbo].[t]]x]").unwrap();
+        assert_eq!(s.schema, Some(id("dbo", true)));
+        assert_eq!(s.name, id("t]x", true));
+        let s = src(TS, "SELECT TOP (100) *\nFROM [dbo].[t];\n").unwrap();
+        assert_eq!(s.name, id("t", true));
+        assert_eq!(s.columns, SelectList::Star);
+        let s = src(TS, "select top 5 [a], \"b\" from t where a = 1").unwrap();
+        assert_eq!(
+            s.columns,
+            SelectList::Columns(vec![id("a", true), id("b", true)])
+        );
+        assert!(src(TS, "select top (5) percent * from t").is_none());
+        assert!(src(TS, "select top (5) with ties * from t").is_none());
+        assert!(src(TS, "select top (x) * from t").is_none());
+        assert!(src(TS, "select top (@n) * from t").is_none());
+        assert!(src(TS, "select top (5 * from t").is_none());
+        assert!(src(TS, "select top * from t").is_none());
+        assert!(src(TS, "select * from t with (nolock)").is_none());
+        // TOP is T-SQL syntax only.
+        for d in [PG, MY, LITE] {
+            assert!(src(d, "select top (5) * from t").is_none(), "{d:?}");
+        }
+        // A backtick name is no T-SQL identifier.
+        assert!(src(TS, "select * from `t`").is_none());
+        assert!(src(TS, "select * from \"t\"").is_some());
+        assert!(src(PG, "select * from [t]").is_none());
+        assert!(src(MY, "select * from [t]").is_none());
+        assert!(src(LITE, "select * from [t]").is_some());
+        // T-SQL names compare without regard to case.
+        assert!(id("Users", false).matches(TS, "users"));
+        assert!(same_column(TS, "ID", "id"));
     }
 
     fn src(d: Dialect, sql: &str) -> Option<SourceTable> {

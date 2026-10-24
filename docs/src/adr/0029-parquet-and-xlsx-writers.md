@@ -83,7 +83,7 @@ Limits, each an `ExportError::Limit` whose message suggests `CSV` or `Parquet` (
 
 ### Measured cost
 
-All numbers are real, taken on 2026-10-21 with `rustc 1.99.1`, `cargo build --release --locked` with the workspace `[profile.release]` of T14 (`strip = "symbols"`, `codegen-units = 1`, no LTO), re-measured after merging `main` (the first measurement, before T14, had the default profile: symbols kept, 16 codegen units). macOS: Apple M4 Pro, 14 cores, arm64. Linux: Docker image `rust:1.99.1` (Debian, `aarch64` because the host is arm64; no `x86_64` build was run), container `sqler-t3-w4-linux`. `sqler-export` has no GPUI, so the system libraries `sqler-app` needs are not involved.
+All numbers are real, taken on 2026-10-21 with `rustc 1.99.1`, `cargo build --release --locked` with the workspace `[profile.release]` of T14 (`strip = "symbols"`, `codegen-units = 1`, no LTO), re-measured after merging `main` (the first measurement, before T14, had the default profile: symbols kept, 16 codegen units). macOS: arm64 (reference machine class). Linux: Docker image `rust:1.99.1` (Debian, `aarch64` because the host is arm64; no `x86_64` build was run), container `sqler-t3-w4-linux`. `sqler-export` has no GPUI, so the system libraries `sqler-app` needs are not involved.
 
 Binary size: the `export_throughput` bench binary (it links the whole `Registry`, so every enabled format is live code), built with `cargo build --release -p sqler-export --bench export_throughput <features>`. `strip` is `strip` on a copy.
 

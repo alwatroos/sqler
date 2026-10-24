@@ -18,3 +18,8 @@ context: Relation, replace: 14..16 "us", items: 2
 context: Relation, replace: 14..16 "us", items: 2
  1. "users" [Table] insert="users" detail="main · table"
  2. "active_users" [View] insert="active_users" detail="main · view"
+
+== tsql ==
+context: Relation, replace: 14..16 "us", items: 2
+ 1. "users" [Table] insert="users" detail="dbo · table"
+ 2. "active_users" [View] insert="active_users" detail="dbo · view"

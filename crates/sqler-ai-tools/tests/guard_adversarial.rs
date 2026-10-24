@@ -449,3 +449,166 @@ async fn plain_explain_still_runs_without_approval() {
         assert_eq!(log.lock().unwrap().len(), 1);
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// A plugin driver that declares the T-SQL dialect (`sqlserver`, ADR-0073)
+// ---------------------------------------------------------------------------------------------------------------
+
+fn tsql_rig(env: Option<Environment>) -> (Arc<Source>, Arc<Mutex<Vec<String>>>) {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let info = ConnectionInfo::new("db", "db", DriverId::new("sqlserver").unwrap(), env)
+        .with_dialect(Some(sqler_sql::Dialect::TSql));
+    (
+        Arc::new(Source {
+            info,
+            log: log.clone(),
+            acquires: AtomicUsize::new(0),
+        }),
+        log,
+    )
+}
+
+/// Runs `sql` on the T-SQL rig with a denying approver; returns (asked, executed).
+async fn tsql_deny_run(env: Option<Environment>, sql: &str) -> (usize, Vec<String>) {
+    let (src, log) = tsql_rig(env);
+    let approver = ScriptedApprover::always(Decision::Deny);
+    let ts = ToolSet::new(src, limits()).with_approver(approver.clone());
+    let _ = call(&ts, names::RUN_QUERY, q(sql)).await;
+    let asked = approver.requests().len();
+    let ran = log.lock().unwrap().clone();
+    (asked, ran)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tsql_reads_run_without_asking_in_every_environment() {
+    for env in [None, Some(Environment::Prod)] {
+        for sql in [
+            "select 1",
+            "select top (5) * from [dbo].[t] with (nolock) option (recompile)",
+            "select @@rowcount, @x, $5, 0x0A from #t",
+            "select getdate(), isnull(a, 0) from [dbo].[t]",
+            "select '; GO\ndelete from t'",
+            "select [a]] ; drop table t; --]",
+            "select 1 /* /* */ ; drop table t; */",
+        ] {
+            let (asked, ran) = tsql_deny_run(env, sql).await;
+            assert_eq!((asked, ran.len()), (0, 1), "[{env:?}] {sql:?}");
+        }
+    }
+}
+
+/// Every one of these hides or is a write (or cannot be proven a read): nothing may reach the driver unapproved.
+#[tokio::test(flavor = "current_thread")]
+async fn tsql_hidden_writes_never_run_unapproved() {
+    let cases = [
+        "select 1\nGO\ndelete from t",
+        "select 1\r\ngo\r\ndelete from t",
+        "select 1\nGO 2\ndelete from t",
+        "select 1; delete from t",
+        "select 1 delete from t",
+        "select * from t with (updlock)",
+        "with c as (select 1 a) delete from c",
+        "update t set a=1 output inserted.* into log",
+        "select next value for s",
+        "select a into #t from b",
+        "waitfor (receive top(1) * from q)",
+        "dbcc checkdb",
+        "backup database d to disk='x'",
+        "exec sp_who",
+        "EXECUTE('drop table t')",
+        "exec sp_executesql N'delete from t'",
+        "insert into t exec p",
+        "sp_who",
+        "[dbo].[p]",
+        "select dbo.f(1)",
+        "select * from openquery(s,'delete t')",
+        "begin delete from t end",
+        "begin try select 1 end try begin catch end catch",
+        "if 1=1 delete from t",
+        "select [unterminated",
+        "select `x`",
+        "create procedure p as select 1; delete from t",
+        "truncate table t",
+        "deny select on t to u",
+        "set nocount on",
+        "use master",
+        "declare @x int = 1",
+        "select 1 kill 52",
+    ];
+    for env in [None, Some(Environment::Prod)] {
+        for sql in cases {
+            let (asked, ran) = tsql_deny_run(env, sql).await;
+            assert!(
+                ran.is_empty(),
+                "[{env:?}] reached the driver unapproved: {sql:?} -> {ran:?}"
+            );
+            assert!(asked >= 1, "[{env:?}] approver never asked: {sql:?}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tsql_sample_rows_uses_top_and_explain_is_unsupported() {
+    let (src, log) = tsql_rig(None);
+    let ts = ToolSet::new(src, limits()).with_approver(ScriptedApprover::always(Decision::Deny));
+    let (_, v) = call(
+        &ts,
+        names::SAMPLE_ROWS,
+        json!({"connection": "db", "table": "t]x", "schema": "dbo", "limit": 7}),
+    )
+    .await;
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        ["SELECT TOP (7) * FROM [dbo].[t]]x]"],
+        "{v}"
+    );
+
+    for analyze in [false, true] {
+        let (src, log) = tsql_rig(None);
+        let approver = ScriptedApprover::always(Decision::Deny);
+        let ts = ToolSet::new(src, limits()).with_approver(approver.clone());
+        let (_, v) = call(
+            &ts,
+            names::EXPLAIN_QUERY,
+            json!({"connection": "db", "sql": "select 1", "analyze": analyze}),
+        )
+        .await;
+        assert_eq!(v["error"]["code"], "unsupported", "{v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.ends_with("explain_query is not supported for T-SQL")),
+            "{v}"
+        );
+        assert!(log.lock().unwrap().is_empty());
+        assert_eq!(approver.requests().len(), 0);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tsql_approval_reasons_and_the_prod_second_stage() {
+    use sqler_ai_tools::{ApprovalReason, ApprovalStage};
+    for (sql, reason) in [
+        ("update t set a = 1", ApprovalReason::Write),
+        ("exec p", ApprovalReason::Unknown),
+        ("deny select on t to u", ApprovalReason::Ddl),
+        ("set nocount on", ApprovalReason::Other),
+    ] {
+        let (src, log) = tsql_rig(None);
+        let approver = ScriptedApprover::always(Decision::Approve);
+        let ts = ToolSet::new(src, limits()).with_approver(approver.clone());
+        let _ = call(&ts, names::RUN_QUERY, q(sql)).await;
+        let asked = approver.requests();
+        assert_eq!(asked.len(), 1, "{sql}");
+        assert_eq!(asked[0].reason, reason, "{sql}");
+        assert_eq!(asked[0].stage, ApprovalStage::Confirm);
+        assert_eq!(log.lock().unwrap().as_slice(), [sql]);
+    }
+    let (src, log) = tsql_rig(Some(Environment::Prod));
+    let approver = ScriptedApprover::always(Decision::Approve);
+    let ts = ToolSet::new(src, limits()).with_approver(approver.clone());
+    let _ = call(&ts, names::RUN_QUERY, q("exec p")).await;
+    let stages: Vec<_> = approver.requests().iter().map(|r| r.stage).collect();
+    assert_eq!(stages, [ApprovalStage::Confirm, ApprovalStage::ProdSecond]);
+    assert_eq!(log.lock().unwrap().len(), 1);
+}

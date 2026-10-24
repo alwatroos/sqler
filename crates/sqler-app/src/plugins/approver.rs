@@ -38,6 +38,7 @@ fn ui_request(request: &WriteRequest) -> PluginWriteRequest {
         request.sql.clone(),
         stage,
     )
+    .with_dialect(request.connection.dialect)
     .with_param_count(request.params.len())
 }
 

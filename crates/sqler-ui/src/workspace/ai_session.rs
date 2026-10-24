@@ -184,6 +184,7 @@ impl Workspace {
             spec.driver.clone(),
             spec.environment,
         )
+        .with_dialect(self.dialect_of(&spec.driver))
         .with_send_rows(profile.ai_sends_rows());
         let status = ai_status(self.ai.config(), Some(spec));
         let connection = tab_connection(self.sidebar.entries()[index].config());
@@ -469,9 +470,9 @@ impl Workspace {
                 self.notice = Some(STALE_ANSWER.to_owned());
                 return;
             }
-            let driver = ask.request.connection.driver.clone();
+            let dialect = ask.request.connection.dialect;
             let opened = match self.queries.get_mut(&tab) {
-                Some(gate) => open_prod_gate(gate, &driver, &ask.request.sql),
+                Some(gate) => open_prod_gate(gate, dialect, &ask.request.sql),
                 None => Err(TAB_CLOSED),
             };
             if let Err(message) = opened {

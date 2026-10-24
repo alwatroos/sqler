@@ -52,11 +52,11 @@ CI `db` job; `DuckDB` runs in the manually dispatched `duckdb` job only.
   stream, cancel and catalog calls through the `Driver` trait, and the guards of the built-in drivers (production gate,
   AI approval) applied unchanged.
 - What it could not express (the gaps, from [Plugin drivers](../plugin-development/drivers.md#sql-server)):
-  - no T-SQL dialect (`Dialect::from_driver_id("sqlserver")` is `None`; the manifest `dialect` key has no consumer):
+  - (fixed by [ADR-0073](0073-tsql-dialect-and-manifest-dialect.md)) no T-SQL dialect (`Dialect::from_driver_id("sqlserver")` was `None`; the manifest `dialect` key had no consumer):
     statements are not split, not classified and have no placeholders, so **every statement asks for confirmation on a
     `prod` connection**, even `select 1`, and the fresh-run export, the SQL `INSERT` export and the AI query tools
     refuse the driver;
-  - `rows_affected` is `None` (the stream does not expose the `DONE` counts), so **inline grid editing cannot be applied
+  - (fixed by [ADR-0071](0071-sql-server-plugin.md) amendment 2, S4) `rows_affected` is `None` (the stream does not expose the `DONE` counts), so **inline grid editing cannot be applied
     on SQL Server**: the apply path rolls back safely and writes nothing;
   - a host-driver plugin cannot supply catalog SQL (the engine reads `sys.*` itself and browses the current database);
   - (fixed by S5, see [ADR-0071](0071-sql-server-plugin.md) Amendment 1) the connect pipeline injects the keychain password and opens the SSH tunnel for `sqlserver://`;
@@ -74,7 +74,7 @@ CI `db` job; `DuckDB` runs in the manually dispatched `duckdb` job only.
 - Why not core: the bundled C++ engine adds **+43.3 MiB** (45,422,544 bytes on macOS), which puts a `plugins` build
   21,779,904 bytes over the budget, and about 8 CPU minutes of build time uncached; the CI `duckdb` job is manual-only
   for that reason. A core crate in the default build is impossible inside 70 MB.
-- API gaps found (from [Plugin drivers](../plugin-development/drivers.md#api-gaps)): G1 the manifest `dialect` key has no
+- API gaps found (from [Plugin drivers](../plugin-development/drivers.md#api-gaps)): G1 (fixed by [ADR-0073](0073-tsql-dialect-and-manifest-dialect.md) for the named dialects) the manifest `dialect` key had no
   consumer (no splitting, no placeholders, class `Unknown`, so every run on `prod` asks for confirmation; fresh-run
   export, SQL `INSERT` export and AI query tools refuse the driver); G2 a host-engine plugin is purely declarative
   (catalog SQL, type mapping and sandbox live in the engine crate); G3 no session read-only statement; G4 `sqler-core`
@@ -87,9 +87,9 @@ CI `db` job; `DuckDB` runs in the manually dispatched `duckdb` job only.
 
 For either engine, in this order:
 
-1. A dialect in `sqler-sql` (`Dialect` variant, lexer rules, statement classification, quoting, placeholders, DDL), then
+1. A dialect in `sqler-sql` (done for T-SQL by ADR-0073; `Dialect` variant, lexer rules, statement classification, quoting, placeholders, DDL), then
    wiring the manifest `dialect` key (G1) so the production gate classifies instead of always asking.
-2. `rows_affected` in the driver stream for SQL Server (inline editing); a read-only session guard (G3) for `DuckDB`.
+2. (fixed by [ADR-0071](0071-sql-server-plugin.md) amendment 2, S4) `rows_affected` in the driver stream for SQL Server (inline editing); a read-only session guard (G3) for `DuckDB`.
 3. Core value types for the types that arrive as text today (G4, `DuckDB`), and decimal for `money` (SQL Server).
 4. (Done by S5, ADR-0071 Amendment 1.) The connect pipeline: keychain password injection and the SSH tunnel for `sqlserver://`.
 5. A size answer: SQL Server fits (+1.08 MB macOS); `DuckDB` does not, so a promotion means a separate build or download,
@@ -102,4 +102,4 @@ For either engine, in this order:
   ([ADR-0060](0060-plugins-in-the-workbench.md), [ADR-0069](0069-binary-size-budget-70-mb.md)) are unchanged.
 - The M6 DoD wording "promoted if the API proves insufficient" is answered: the API was insufficient in places (the
   gaps), but promotion would not fix them, because they are core-side; they are listed for M7 and later.
-- Users of SQL Server get connect, browse and run, with a confirmation on every `prod` statement and no inline editing.
+- Users of SQL Server get connect, browse and run, with a confirmation on every `prod` statement and no inline editing (inline editing applies since ADR-0071 amendment 2).

@@ -22,10 +22,31 @@
 //! Only the database the session is connected to can be browsed.
 //!
 //! # Limits
-//! `rows_affected` is always `None`: statements run through `tiberius`' `query`, whose stream does
-//! not expose the `DONE` counts. A statement with parameters runs through `sp_executesql`, so a
-//! `USE` or `SET` inside it does not outlive it; a statement without parameters runs as a plain
-//! batch and keeps its session state.
+//! - **Rows affected.** `tiberius`' `query` stream hides the `DONE` counts, so a text that is
+//!   confidently one DML statement runs as `sp_executesql` (an RPC) and reports its single count,
+//!   `Some(0)` included; its rows (an `OUTPUT` clause) still stream. The routing rule: the text
+//!   starts with `INSERT`, `UPDATE` (not `UPDATE STATISTICS`), `DELETE`, `MERGE` or `WITH`, and
+//!   has no `;` followed by more text, no statement-starting word that changes state or flow
+//!   (`USE`, `DECLARE`, `CREATE`, `ALTER`, `DROP`, `EXEC`, `BEGIN`, `IF`, `WHILE`, ...), no extra
+//!   `SET` beyond the `UPDATE ... SET`s, and no `INTO` other than `INSERT INTO`/`MERGE INTO`
+//!   (`SELECT ... INTO #tmp`). Strings, comments and quoted names are not looked at. A text
+//!   that fails the rule keeps the plain-batch route and reports `None`. The count is also `None`,
+//!   never a guess, when the session has `SET NOCOUNT ON` (no count is sent), when a trigger
+//!   counts its own statements (several counts), when a batch or procedure produces several
+//!   counts, and for every other statement (`SELECT`, DDL, `SET`, `EXEC`, ...). A `WITH ...
+//!   SELECT` reports the number of rows it returns. A caller that needs a certain count, such as
+//!   an inline edit, treats `None` as a failure (the grid apply rolls back).
+//! - **Session state.** A text routed as DML runs whole inside `sp_executesql`, so a `SET`, `USE`
+//!   or `#temp` table it creates ends with the call; the rule above sends any text that could
+//!   do so to the plain batch, which keeps it. The check is conservative, not a parser: an
+//!   unusual text may take the batch route and report `None`. A statement with parameters that
+//!   is not DML also runs through `sp_executesql`, so a `USE` or `SET` inside it does not
+//!   outlive it; any other statement without parameters runs as a plain batch.
+//! - **One result set per statement.** Later sets are read and dropped; the event stream has no
+//!   message channel to say so.
+//! - **`money` and `smallmoney`** arrive as a float because `tiberius` decodes them to `f64`;
+//!   `CAST(x AS decimal(19,4))` returns the exact value.
+//! - **Cancel closes the connection** (the session ends, an open transaction rolls back).
 //!
 //! # Runtime
 //! `tiberius` runs on Tokio here: the futures returned by the driver must be polled inside a Tokio

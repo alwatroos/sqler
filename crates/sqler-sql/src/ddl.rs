@@ -68,6 +68,8 @@ pub fn supports(dialect: Dialect, kind: ObjectKind, script: Script) -> bool {
                     | K::Sequence
             ),
             Dialect::Sqlite => matches!(kind, K::Table | K::View | K::Trigger | K::Index),
+            // T-SQL scripts come from the server's definitions, not from this generator.
+            Dialect::TSql => false,
         },
         Script::SelectStar => {
             matches!(kind, K::Table | K::View)
@@ -147,6 +149,16 @@ fn column_type(dialect: Dialect, column: &ColumnInfo) -> Option<String> {
         (Dialect::Sqlite, DataType::Json) => "JSON",
         // SQLite columns may have no type.
         (Dialect::Sqlite, _) => return None,
+        (Dialect::TSql, DataType::Boolean) => "BIT",
+        (Dialect::TSql, DataType::Integer) => "BIGINT",
+        (Dialect::TSql, DataType::Float) => "FLOAT",
+        (Dialect::TSql, DataType::Decimal) => "DECIMAL(38,10)",
+        (Dialect::TSql, DataType::Binary) => "VARBINARY(MAX)",
+        (Dialect::TSql, DataType::Date) => "DATE",
+        (Dialect::TSql, DataType::Time) => "TIME(7)",
+        (Dialect::TSql, DataType::Timestamp) => "DATETIME2(7)",
+        (Dialect::TSql, DataType::TimestampTz) => "DATETIMEOFFSET(7)",
+        (Dialect::TSql, _) => "NVARCHAR(MAX)",
     };
     Some(fallback.to_owned())
 }
@@ -348,20 +360,23 @@ pub fn create_script(
     }
 }
 
-/// `SELECT * FROM <object> LIMIT <limit>`.
+/// `SELECT * FROM <object> LIMIT <limit>`; on T-SQL `SELECT TOP (<limit>) * FROM <object>`.
 ///
 /// # Errors
 ///
 /// [`DdlError::Unsupported`] or [`DdlError::InvalidIdentifier`].
 pub fn select_star(dialect: Dialect, object: &DbObject, limit: u32) -> Result<String, DdlError> {
     check(dialect, object.kind, Script::SelectStar)?;
-    Ok(format!(
-        "SELECT *\nFROM {}\nLIMIT {limit};\n",
-        qualified_name(dialect, object)?
-    ))
+    let name = qualified_name(dialect, object)?;
+    Ok(match dialect {
+        Dialect::TSql => format!("SELECT TOP ({limit}) *\nFROM {name};\n"),
+        Dialect::Postgres | Dialect::MySql | Dialect::Sqlite => {
+            format!("SELECT *\nFROM {name}\nLIMIT {limit};\n")
+        }
+    })
 }
 
-/// An `INSERT` with every column and the dialect's bind placeholders (`$1` or `?`).
+/// An `INSERT` with every column and the dialect's bind placeholders (`$1`, `?` or `@P1`).
 ///
 /// # Errors
 ///
@@ -372,14 +387,17 @@ pub fn insert_template(dialect: Dialect, table: &Table) -> Result<String, DdlErr
     if table.columns.is_empty() {
         return Ok(match dialect {
             Dialect::MySql => format!("INSERT INTO {name} () VALUES ();\n"),
-            _ => format!("INSERT INTO {name} DEFAULT VALUES;\n"),
+            Dialect::Postgres | Dialect::Sqlite | Dialect::TSql => {
+                format!("INSERT INTO {name} DEFAULT VALUES;\n")
+            }
         });
     }
     let names: Vec<String> = table.columns.iter().map(|c| c.name.clone()).collect();
     let placeholders: Vec<String> = (1..=names.len())
         .map(|i| match dialect {
             Dialect::Postgres => format!("${i}"),
-            _ => "?".to_owned(),
+            Dialect::TSql => crate::param_marker(dialect, i),
+            Dialect::MySql | Dialect::Sqlite => "?".to_owned(),
         })
         .collect();
     Ok(format!(
@@ -559,15 +577,66 @@ mod tests {
         let t = Table::new(obj(ObjectKind::Table, "t"))
             .with_columns(vec![ColumnInfo::new("a\0", DataType::Text)]);
         for d in Dialect::ALL {
-            assert!(matches!(
-                create_table(d, &t, &[]),
-                Err(DdlError::InvalidIdentifier { .. })
-            ));
+            // T-SQL has no create script: the kind check fails before the name is looked at.
+            if d == Dialect::TSql {
+                assert!(matches!(
+                    create_table(d, &t, &[]),
+                    Err(DdlError::Unsupported { .. })
+                ));
+            } else {
+                assert!(matches!(
+                    create_table(d, &t, &[]),
+                    Err(DdlError::InvalidIdentifier { .. })
+                ));
+            }
             assert!(matches!(
                 insert_template(d, &t),
                 Err(DdlError::InvalidIdentifier { .. })
             ));
         }
+    }
+
+    #[test]
+    fn tsql_scripts() {
+        let d = Dialect::TSql;
+        for kind in ObjectKind::ALL {
+            assert!(!supports(d, kind, Script::Create), "{kind:?}");
+            assert!(!supports(d, kind, Script::Drop), "{kind:?}");
+        }
+        assert!(supports(d, ObjectKind::Table, Script::SelectStar));
+        assert!(supports(d, ObjectKind::View, Script::SelectStar));
+        assert!(!supports(
+            d,
+            ObjectKind::MaterializedView,
+            Script::SelectStar
+        ));
+        assert!(supports(d, ObjectKind::Table, Script::InsertTemplate));
+        let t = obj(ObjectKind::Table, "t]x");
+        assert_eq!(
+            select_star(d, &t, 100).unwrap(),
+            "SELECT TOP (100) *\nFROM [s].[t]]x];\n"
+        );
+        assert!(matches!(
+            drop_script(d, &t),
+            Err(DdlError::Unsupported { .. })
+        ));
+        assert!(matches!(
+            create_script(d, &t, Some("create table t (a int)")),
+            Err(DdlError::Unsupported { .. })
+        ));
+        let table = Table::new(t.clone()).with_columns(vec![
+            ColumnInfo::new("a", DataType::Integer),
+            ColumnInfo::new("b]", DataType::Text),
+        ]);
+        assert_eq!(
+            insert_template(d, &table).unwrap(),
+            "INSERT INTO [s].[t]]x] ([a], [b]]])\nVALUES (@P1, @P2);\n"
+        );
+        let empty = Table::new(t);
+        assert_eq!(
+            insert_template(d, &empty).unwrap(),
+            "INSERT INTO [s].[t]]x] DEFAULT VALUES;\n"
+        );
     }
 
     #[test]

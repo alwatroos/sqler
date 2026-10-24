@@ -18,3 +18,8 @@ context: Qualified, replace: 55..55 "", items: 2
 context: Qualified, replace: 55..55 "", items: 2
  1. "id" [Column] insert="id" detail="r"
  2. "total" [Column] insert="total" detail="r"
+
+== tsql ==
+context: Qualified, replace: 55..55 "", items: 2
+ 1. "id" [Column] insert="id" detail="r"
+ 2. "total" [Column] insert="total" detail="r"

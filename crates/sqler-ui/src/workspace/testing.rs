@@ -954,6 +954,90 @@ mod flow {
     }
 
     #[test]
+    fn t_sql_commit_ends_the_transaction_only_at_the_outermost_level() {
+        use super::super::tx::TxEffect::Tran;
+        let nest = |delta| Tran {
+            reset: false,
+            delta,
+            floor: 0,
+        };
+        let mut f = Flow::new(None);
+        let tab = f.open();
+        assert!(f.w.edit.follow(tab, nest(1), true, true, true));
+        f.w.edit.follow(tab, nest(1), true, true, true);
+        assert!(f.w.in_transaction(tab));
+        // The inner `COMMIT` leaves one level.
+        f.w.edit.follow(tab, nest(-1), true, true, true);
+        assert!(f.w.in_transaction(tab));
+        assert!(f.w.edit.follow(tab, nest(-1), true, true, true));
+        assert!(!f.w.in_transaction(tab));
+        // A bare `ROLLBACK` ends every level.
+        f.w.edit.follow(tab, nest(2), true, true, true);
+        let all = Tran {
+            reset: true,
+            delta: 0,
+            floor: 0,
+        };
+        assert!(f.w.edit.follow(tab, all, true, true, true));
+        assert!(!f.w.in_transaction(tab));
+        // A `COMMIT` with nothing open (or a `BEGIN TRY` that never counted) stays out.
+        assert!(!f.w.edit.follow(tab, nest(-1), true, true, true));
+        assert!(!f.w.in_transaction(tab));
+    }
+
+    /// Runs `sql` as T-SQL statements through the same path the run flow uses.
+    fn follow_script(f: &mut Flow, tab: TabId, sql: &str) {
+        let effect = super::super::tx::tx_effect(sqler_sql::Dialect::TSql, sql);
+        f.w.edit.follow(tab, effect, true, true, true);
+    }
+
+    #[test]
+    fn t_sql_save_tran_never_loses_the_nesting_count() {
+        let mut f = Flow::new(None);
+        let tab = f.open();
+        // Two levels and a savepoint: `@@TRANCOUNT` is 2, and one `COMMIT` leaves it open.
+        follow_script(&mut f, tab, "begin tran; begin tran; save tran s");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "commit");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "commit");
+        assert!(!f.w.in_transaction(tab));
+        // A named rollback leaves the state alone; a bare one resets it.
+        follow_script(&mut f, tab, "begin tran; save tran s; rollback tran s");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "rollback");
+        assert!(!f.w.in_transaction(tab));
+        // A `COMMIT` with nothing open stops at zero: `commit; commit; begin tran` from depth 1
+        // ends at depth 1.
+        follow_script(&mut f, tab, "begin tran");
+        follow_script(&mut f, tab, "commit; commit; begin tran");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "commit");
+        assert!(!f.w.in_transaction(tab));
+        // A lone `SAVE TRAN` is taken for an open transaction.
+        follow_script(&mut f, tab, "save tran s");
+        assert!(f.w.in_transaction(tab));
+    }
+
+    #[test]
+    fn t_sql_implicit_transactions_off_never_closes_an_open_transaction() {
+        let mut f = Flow::new(None);
+        let tab = f.open();
+        follow_script(&mut f, tab, "begin tran");
+        follow_script(&mut f, tab, "set implicit_transactions off");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "commit");
+        assert!(!f.w.in_transaction(tab));
+        // The mode on opens one; turning it off leaves it open until the `COMMIT`.
+        follow_script(&mut f, tab, "set implicit_transactions on");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "set implicit_transactions off");
+        assert!(f.w.in_transaction(tab));
+        follow_script(&mut f, tab, "commit");
+        assert!(!f.w.in_transaction(tab));
+    }
+
+    #[test]
     fn debug_of_the_dialogs_and_the_job_shows_no_values_or_sql() {
         let mut f = Flow::new(Some(Environment::Prod));
         let (_, key, mut grid) = editable(&mut f);
@@ -5012,4 +5096,29 @@ mod agent_flow {
         assert!(desk.runs.is_empty());
         desk.finish();
     }
+}
+
+/// `workspace` with a plugin manager that has loaded `rows`.
+#[allow(clippy::expect_used)] // test fixture
+pub(crate) fn with_plugin_rows(
+    workspace: super::Workspace,
+    rows: Vec<crate::plugins::PluginRow>,
+) -> super::Workspace {
+    use crate::plugins::PluginsStartup;
+    use crate::plugins::backend::{FakeBackend, PluginSnapshot};
+    use crate::plugins::grant::GrantBook;
+
+    let book = Arc::new(GrantBook::in_memory());
+    let fake = FakeBackend::new(PluginSnapshot {
+        rows,
+        problems: Vec::new(),
+    });
+    let startup = PluginsStartup::new(Some(fake.clone()), Arc::clone(&book));
+    let mut ws = workspace.with_plugins(&startup);
+    let super::state::Effect::Plugins(load) = ws.plugins_first_frame() else {
+        panic!("expected a load");
+    };
+    let done = load.run_blocking(&*fake, &book);
+    let _ = ws.plugin_finished(done);
+    ws
 }

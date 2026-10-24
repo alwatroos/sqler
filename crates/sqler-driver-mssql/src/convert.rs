@@ -6,6 +6,7 @@
 //! Temporal values are decoded from the raw day and increment fields of the TDS wire format.
 
 use std::borrow::Cow;
+use std::fmt::Write as _;
 use std::str::FromStr as _;
 
 use sqler_driver_api::DriverError;
@@ -299,6 +300,43 @@ pub(crate) fn bind(query: &mut tiberius::Query<'static>, value: &Value) {
     }
 }
 
+/// Binds `value` to the named parameter `name` of an RPC command. It binds exactly what [`bind`]
+/// binds: the same values and the same text forms.
+pub(crate) fn bind_named(cmd: &mut tiberius::Command<'static>, name: String, value: &Value) {
+    match value {
+        Value::Null => cmd.bind_param(name, Option::<Cow<'static, str>>::None),
+        Value::Bool(b) => cmd.bind_param(name, *b),
+        Value::Int(i) => cmd.bind_param(name, *i),
+        Value::Float(f) => cmd.bind_param(name, *f),
+        Value::Bytes(b) => cmd.bind_param(name, Cow::<'static, [u8]>::Owned(b.clone())),
+        other => cmd.bind_param(name, Cow::<'static, str>::Owned(text_param(other))),
+    }
+}
+
+/// The `@params` declaration of `sp_executesql` for `params` bound as `@P1`, `@P2`, ... It mirrors
+/// the type names tiberius derives from the bound data (`ColumnData::type_name`), with a comma and
+/// no space between entries.
+pub(crate) fn declaration(params: &[Value]) -> String {
+    let mut out = String::new();
+    for (i, param) in params.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let ty = match param {
+            Value::Null => "nvarchar(4000)",
+            Value::Bool(_) => "bit",
+            Value::Int(_) => "bigint",
+            Value::Float(_) => "float(53)",
+            Value::Bytes(b) if b.len() <= 8000 => "varbinary(8000)",
+            Value::Bytes(_) => "varbinary(max)",
+            other if text_param(other).len() <= 4000 => "nvarchar(4000)",
+            _ => "nvarchar(max)",
+        };
+        let _ = write!(out, "@P{} {ty}", i + 1);
+    }
+    out
+}
+
 /// The text a value without a direct tiberius type is bound as. Dates and timestamps use forms that
 /// do not depend on the session `DATEFORMAT` or language: `YYYYMMDD` for a date and ISO 8601 with a
 /// `T` for a timestamp (`2024-03-05 10:00:00` would read as year-day-month under `dmy`).
@@ -494,6 +532,40 @@ mod tests {
         assert_eq!(text_param(&tz), "2024-01-02T01:30:00+02:00");
         let time = ok(&ColumnData::Time(Some(TdsTime::new(123, 2))));
         assert_eq!(text_param(&time), "00:00:01.23");
+    }
+
+    #[test]
+    fn declaration_per_value_kind() {
+        let one = |v: Value| declaration(&[v]);
+        assert_eq!(one(Value::Null), "@P1 nvarchar(4000)");
+        assert_eq!(one(Value::Bool(true)), "@P1 bit");
+        assert_eq!(one(Value::Int(1)), "@P1 bigint");
+        assert_eq!(one(Value::Float(1.5)), "@P1 float(53)");
+        assert_eq!(one(Value::Bytes(vec![1])), "@P1 varbinary(8000)");
+        assert_eq!(one(Value::Text("a".to_owned())), "@P1 nvarchar(4000)");
+        let date = ok(&ColumnData::Date(Some(TdsDate::new(738_944))));
+        assert_eq!(one(date), "@P1 nvarchar(4000)");
+    }
+
+    #[test]
+    fn declaration_thresholds() {
+        let one = |v: Value| declaration(&[v]);
+        assert_eq!(one(Value::Bytes(vec![0; 8000])), "@P1 varbinary(8000)");
+        assert_eq!(one(Value::Bytes(vec![0; 8001])), "@P1 varbinary(max)");
+        assert_eq!(one(Value::Text("a".repeat(4000))), "@P1 nvarchar(4000)");
+        assert_eq!(one(Value::Text("a".repeat(4001))), "@P1 nvarchar(max)");
+        // The length is in UTF-8 bytes, as tiberius counts it.
+        assert_eq!(one(Value::Text("é".repeat(2001))), "@P1 nvarchar(max)");
+    }
+
+    #[test]
+    fn declaration_joins_with_commas_and_no_spaces() {
+        let params = [Value::Int(1), Value::Text("x".to_owned()), Value::Null];
+        assert_eq!(
+            declaration(&params),
+            "@P1 bigint,@P2 nvarchar(4000),@P3 nvarchar(4000)"
+        );
+        assert_eq!(declaration(&[]), "");
     }
 
     #[test]

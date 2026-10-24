@@ -128,7 +128,7 @@ and reports both and the delta per OS. Measured figures:
 | `--features plugins` | 49,272,272 bytes (47.0 MiB) | `size.yml` of the PR (expected about +14 MB, ADR-0054 measured +14.5 MB for `cl`) | `size.yml` of the PR |
 | delta | +11,085,680 bytes (+10.6 MiB) | CI | CI |
 
-The macOS figures were measured on the development machine (macOS 27.0.1 arm64) on the uncommitted tree of this item; the
+The macOS figures were measured on the development machine (macOS arm64, reference machine class) on the uncommitted tree of this item; the
 Linux and Windows figures come from the `Binary size` workflow of the pull request, which builds both flavours and
 reports both (see the PR). **Decision: off by default.** The Linux binary without the host is already 402,200 bytes under
 the budget, less than the 1 MiB reserve, so the rule fails on Linux for any delta, and `cl` alone adds about 10 to 14 MB.

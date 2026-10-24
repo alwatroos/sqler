@@ -35,3 +35,6 @@ context: Expression, replace: 7..11 "json", items: 9
  6. "json_extract" [Function] insert="json_extract($1)" snippet detail="json_extract(json, path, ...) -> value"
  7. "json_group_array" [Function] insert="json_group_array($1)" snippet detail="json_group_array(expr) -> text"
  8. "json_array_length" [Function] insert="json_array_length($1)" snippet detail="json_array_length(json [, path]) -> integer"
+
+== tsql ==
+context: Expression, replace: 7..11 "json", items: 0
