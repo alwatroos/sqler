@@ -13,7 +13,6 @@ on:
       - "crates/**"
       - "!crates/sqler-cli/**"
       - "!crates/sqler-driver-duckdb/**"
-      - "!crates/sqler-driver-mssql/**"
       - "!crates/**/tests/**"
       - "!crates/**/benches/**"
       - "!crates/**/*.md"
@@ -21,6 +20,8 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "vendor/**"
+      # Compiled into the binary as the built-in SQL Server plugin manifest.
+      - "plugins/sqlserver/sqler.toml"
       - ".github/workflows/size.yml"
 
 # Cancel superseded runs on pull requests only; every main run completes (own group per run).
@@ -73,8 +74,9 @@ jobs:
           bin=target/release/sqler
           if [ "$RUNNER_OS" = "Windows" ]; then bin=target/release/sqler.exe; fi
           cp "$bin" "$RUNNER_TEMP/sqler-default"
-      - name: Build release binary with plugin support
-        run: cargo build --release -p sqler-app --features plugins --locked
+      # The release feature set (dist-workspace.toml, ADR-0064): this is the binary users download.
+      - name: Build release binary with the release feature set
+        run: cargo build --release -p sqler-app --features plugins,driver-mssql --locked
       - name: Report size
         shell: bash
         run: |
@@ -87,15 +89,18 @@ jobs:
           limit=$((budget - reserve))
           delta=$((on - off))
           mib() { awk -v b="$1" 'BEGIN { printf "%.1f", b / 1048576 }'; }
-          line="sqler release binary on $RUNNER_OS: default $off bytes = $(mib $off) MiB; with --features plugins $on bytes = $(mib $on) MiB; delta $delta bytes (budget 80 MB = $budget; plugins default needs the with-plugins size below $limit)"
+          line="sqler release binary on $RUNNER_OS: default $off bytes = $(mib $off) MiB; release set (plugins,driver-mssql) $on bytes = $(mib $on) MiB; delta $delta bytes (budget 80 MB = $budget; plugins default needs the release-set size below $limit)"
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
           echo "plugins_size_ok_$RUNNER_OS=$([ "$on" -lt "$limit" ] && echo yes || echo no)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$on" -gt "$budget" ]; then
+            echo "::warning title=Binary size::the release set of sqler on $RUNNER_OS is $on bytes ($(mib $on) MiB), over the 80 MB budget"
+          fi
           if [ "$off" -gt "$budget" ]; then
-            echo "::warning title=Binary size::sqler on $RUNNER_OS is $off bytes ($(mib $off) MiB), over the 80 MB budget"
+            echo "::warning title=Binary size::sqler (default features) on $RUNNER_OS is $off bytes ($(mib $off) MiB), over the 80 MB budget"
           fi
           if [ "$on" -ge "$limit" ]; then
-            echo "::notice title=Plugins feature::with --features plugins sqler on $RUNNER_OS is $on bytes: plugins stay off by default (ADR-0060 rule: every OS below $limit)"
+            echo "::notice title=Plugins feature::with the release set sqler on $RUNNER_OS is $on bytes: plugins stay off by default (ADR-0060 rule: every OS below $limit)"
           fi
       # Diagnostics, report only (never a gate). The release profile strips symbols, so the section table
       # comes from the shipped binary and the per-crate table from a separate unstripped build.

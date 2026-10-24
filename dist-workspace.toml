@@ -20,6 +20,6 @@ install-path = "~/.sqler/bin"
 install-updater = false
 cargo-cyclonedx = true
 github-attestations = false
-# THE release feature set, one line. PENDING THE OWNER'S DECISION (ADR-0064): default features of sqler-app are
-# assumed. `.github/scripts/release-guard.sh features` rejects `driver-duckdb` in this list whatever else it holds.
-features = []
+# THE release feature set, one line: release set per owner decision 12 (ADR-0064 amendment).
+# `.github/scripts/release-guard.sh features` rejects `driver-duckdb` whatever else the line holds.
+features = ["plugins", "driver-mssql"]
