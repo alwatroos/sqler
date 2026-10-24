@@ -11603,9 +11603,15 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "ring",
+ "serde",
+ "serde_json",
  "sqler-plugin-api",
+ "sqler-update",
  "toml 1.1.8+spec-1.1.0",
  "wit-parser 0.262.0",
+ "zeroize",
 ]
 
 [[package]]
