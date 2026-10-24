@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Docs completeness (R11): user-guide pages for the command palette, themes, export and copy, and inline editing; the SQL Server page completed; the driver list stated once with a single "Not in 1.0" note; stale milestone and status wording removed; an ADR-index check (`.github/scripts/check-adr-index.sh`) in the CI docs job.
 - Migration guides (R10): `user-guide/migrating/` with pages for Beekeeper Studio, Azure Data Studio and pgAdmin: where each tool keeps its connections, importing with the wizard, what is and is not imported, and a feature map.
 - Licence audit and bundle for the release feature set (ADR-0064 amendment 2, R14): every archive and the MSI now ship `LICENSE`, `NOTICE`, `licenses/` and a generated `THIRD-PARTY-LICENSES.txt` (cargo-about 0.9.2; all third-party crate licences of the `plugins` + `driver-mssql` build for the five targets, upstream NOTICE files, the licence files of `ring` and `aws-lc-sys`), generated once in the plan job by `.github/scripts/third-party-licenses.sh`; the SBOM is now one CycloneDX file per target (`sqler-app_<triple>.cdx.xml`). `NOTICE` gains the Apache Software Foundation line. No new licence, `deny.toml` exception or advisory ignore. New page `licenses.md`; DuckDB is in no artifact and the script fails if it appears.
 

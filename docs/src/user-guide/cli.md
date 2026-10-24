@@ -3,7 +3,10 @@
 `sqler-cli` is the headless front end of SQLer. It connects to a database through a driver, runs one
 SQL statement and prints the result, or exports it to a file. It does not depend on the UI crates.
 
-Status: the `SQLite` and `PostgreSQL` drivers are available.
+Status: SQLer 1.0 connects to: SQLite, PostgreSQL, MySQL/MariaDB, SQL Server. `sqler-cli` is not part of the 1.0
+downloads: you build it yourself. The `SQLite`, `PostgreSQL` and `MySQL`/`MariaDB` drivers are in its default build.
+SQL Server is a plugin driver, so it needs the `plugins` and `driver-mssql` features of `sqler-cli` and an approved
+plugin (see [SQL Server](databases/sqlserver.md)).
 
 ## Install
 

@@ -7,11 +7,15 @@ It is tested against SQL Server 2022. A run against a real SQL Server instance i
 
 ## Set up
 
-1. Open the Plugins view: "SQL Server" is listed.
-2. Approve the permission `driver.host:mssql`.
-3. Add a connection.
+1. Open the **Plugins** view (the plug icon in the activity bar). "SQL Server" is listed; SQLer also opens the
+   permission dialog "Allow plugin SQL Server?" the first time.
+2. Approve the permission `driver.host:mssql` ("Use a built-in database engine"). Click **Approve** with the mouse
+   or type the plugin id `sqlserver` in the confirmation field and press **Enter**. No key is bound to **Approve**;
+   see [Answering](../plugins.md#answering).
+3. Add a connection and choose the driver "SQL Server".
 
-A `sqlserver` folder in `<config>/plugins` or under `--plugin-dir` replaces the built-in one.
+Until you approve, the driver is not offered. A `sqlserver` folder in `<config>/plugins` or under
+`--plugin-dir` replaces the built-in one.
 
 ## Targets
 
@@ -24,16 +28,20 @@ login. User, password and database may be percent-encoded. `?user=name` also wor
 into the target before connecting. Any other query part (`?key=value`) is refused. Windows
 authentication and Azure AD are not supported.
 
-Keep the password out of the target: save it in the keychain with the connection, and SQLer adds it
-(percent-encoded) when it connects. A password typed into the target still works.
+## Passwords and keychain
+
+Keep the password out of the target: type it in the password field of the connection form and SQLer saves it
+in the system keychain (see [Secrets](../secrets.md)). SQLer adds it (percent-encoded) to the target when it
+connects. As for every driver, a saved target that holds a password is rejected (see
+[Target rule](../connections.md#target-rule)).
 
 ## SSH tunnel
 
-A connection can use an SSH tunnel. The default port is 1433 when the target has none. SQLer dials
-`127.0.0.1` on the tunnel's local port, and the name used for the TLS check is the original host, so
-`verify-full` checks the certificate against that host. On Windows, `verify-full` through a tunnel
-is refused before anything opens. A real check through an SSH tunnel against a real SQL Server
-instance is still pending (maintainer).
+A connection can use an SSH tunnel (see [SSH tunnels](../ssh-tunnels.md)). The default port is 1433 when the
+target has none. SQLer dials `127.0.0.1` on the tunnel's local port, and the name used for the TLS check is the
+original host, so `verify-full` checks the certificate against that host. On Windows, `verify-full` through a
+tunnel is refused before anything opens. A real check through an SSH tunnel against a real SQL Server
+instance is still pending.
 
 ## TLS
 
@@ -51,6 +59,35 @@ The modes are those of [TLS modes](index.md#tls-modes); no setting means `prefer
 against that name instead of the host you dial. Client certificates and keys are not supported, and
 `verify-ca` is refused with a message that points to `verify-full` or `require`.
 
+## Production confirmation
+
+On a connection marked `prod`, a plain read (`select`, also with `top`, `with (nolock)` or `option (..)`)
+runs without asking. Every other statement asks once: the "Run on production?" dialog lists the exact
+statements of the run and Cancel is focused (see
+[Production connections](../running-queries.md#production-connections)). The check is deliberately strict:
+`exec` or `execute` anywhere, `kill`, `checkpoint`, `waitfor` (except a leading `waitfor delay`/`time`),
+`dbcc`, lock hints such as `updlock` or `holdlock`, `select .. into` and `begin` blocks all ask. A column or
+alias named `move`, `send`, `receive` or `enable` also asks unless it is written in brackets (`[move]`). A
+select that uses `apply`, `pivot`, `tablesample` or a table hint in the old form `from t (nolock)` asks too.
+
+The editor asks once. A statement that a plugin runs for you is different: you approve it in the plugin's own
+dialog and then confirm it again on `prod` (see [Plugin writes](../plugins.md#plugin-writes)).
+
+## Export
+
+Export of the results works as for the other databases, including a fresh run
+([Export and copy](../results-grid.md#export)). `INSERT` statements hold at most 1000 rows each, and text is
+written as `N'..'`. The AI query tools work too; the AI sampling tool uses `select top (n)`.
+
+## Inline editing
+
+Inline editing in the results grid is applied on SQL Server ([Editing](../results-grid.md#editing)). The
+number of rows changed by `insert`, `update`, `delete` and `merge` (and a statement that starts with `with`) is
+shown. The count is unknown, and shown as such, for other statements, after `SET NOCOUNT ON`, when a trigger
+counts its own statements (add `SET NOCOUNT ON` as its first statement), and for a batch or procedure with
+several counts. When the count of an inline edit is unknown the apply is rolled back and nothing is written;
+this is the safe default.
+
 ## Behaviour to know
 
 - **Cancel closes the connection.** Cancelling a running statement ends the session; the server rolls
@@ -61,22 +98,6 @@ against that name instead of the host you dial. Client certificates and keys are
   allowed); `GO 5` is not a separator and stays in the statement, so the server reports it. Identifiers
   are quoted as `[name]`, and parameters are bound as `@P1`, `@P2`, and so on (other `@x` names are
   your own variables).
-- **Production confirmation.** On a production connection a plain read (`select`, also with `top`,
-  `with (nolock)` or `option (..)`) runs without asking; every other statement asks for
-  confirmation, twice. The check is deliberately strict: `exec` or `execute` anywhere, `kill`,
-  `checkpoint`, `waitfor` (except a leading `waitfor delay`/`time`), `dbcc`, lock hints such as
-  `updlock` or `holdlock`, `select .. into` and `begin` blocks all ask. A column or alias named
-  `move`, `send`, `receive` or `enable` also asks unless it is written in brackets (`[move]`). A select
-  that uses `apply`, `pivot`, `tablesample` or a table hint in the old form `from t (nolock)` asks too.
-- **Export and AI tools.** Fresh-run export, the SQL `INSERT` export and the AI query tools work
-  (`INSERT` statements hold at most 1000 rows each, text is written as `N'..'`). The AI sampling tool
-  uses `select top (n)`; `explain` is not available on SQL Server, in the editor or for the AI.
-- **Rows affected.** The number of rows changed by `insert`, `update`, `delete` and `merge` (and a
-  statement that starts with `with`) is shown, and inline editing in the results grid is applied on
-  SQL Server. The count is unknown, and shown as such, for other statements, after `SET NOCOUNT ON`,
-  when a trigger counts its own statements (add `SET NOCOUNT ON` as its first statement), and for a
-  batch or procedure with several counts. When the count of an inline edit is unknown the apply is
-  rolled back and nothing is written; this is the safe default.
 - **Result sets.** Only the first result set of a statement is shown; later ones are dropped, and the
   result does not say so. The driver reports one result per statement. A script split at `;` or `GO`
   loses nothing; only a procedure or batch that returns several sets is cut.
@@ -97,3 +118,14 @@ against that name instead of the host you dial. Client certificates and keys are
 The browser lists the current database only: schemas, tables, views, functions, procedures,
 triggers, sequences, types, indexes and roles. Materialized views and extensions do not exist in
 SQL Server. Databases are listed but not browsed across.
+
+## Limits
+
+- SQL login only: no Windows authentication, no Azure AD.
+- TLS: no `verify-ca`, no client certificates or keys.
+- No Explain, in the editor or for the AI.
+- Only the first result set of a statement is shown.
+- `money` and `smallmoney` arrive as a float.
+- The object browser covers the current database only.
+- A cancel closes the session; connect again.
+- A run against a real SQL Server instance (and through an SSH tunnel) is still pending.

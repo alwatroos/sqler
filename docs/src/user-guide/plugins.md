@@ -5,17 +5,18 @@ allow. See [Plugin development](../plugin-development/index.md) to write one.
 
 ## What exists
 
-- **Plugin support is a build option.** The download you get by default has no plugin support (it would not fit the
-  size budget, [ADR-0060](../adr/0060-plugins-in-the-workbench.md)). A build with the `plugins` feature
-  (`cargo build --release -p sqler-app --features plugins`) has it. In a build without it the **Plugins** view says
-  "This build has no plugin support" and `--plugin-dir` is refused.
+- **Every 1.0 download has the plugin host** and a built-in SQL Server plugin; approve its permission
+  `driver.host:mssql` once (see [SQL Server](databases/sqlserver.md)). A local `cargo build` without
+  `--features plugins` has no plugin support: the **Plugins** view then says "This build has no plugin support" and
+  `--plugin-dir` is refused ([ADR-0060](../adr/0060-plugins-in-the-workbench.md)).
 - **Where plugins are found.** Each folder below `plugins/` in the [configuration directory](settings.md) is a
   plugin, named after its id and holding `sqler.toml` and the component. For development, `--plugin-dir <PATH>`
   (repeatable) adds a folder that holds `sqler.toml` (one plugin) or whose children are plugins. These paths are the
   only extra places SQLer looks; it never searches a build output folder such as `target/plugins`. A development
   plugin with the id of an installed one replaces it.
 - **Database drivers.** The databases of version 1.0 are listed in [Connections](connections.md#supported-databases).
-  No plugin that ships with SQLer adds a database driver.
+  The one plugin that ships with SQLer adds a database driver: SQL Server. Other plugins can add drivers too, see
+  [Plugin development](../plugin-development/drivers.md).
 - **Nothing runs at start.** The window appears first. Only then SQLer scans the folders; a plugin is compiled and
   started only when it is switched on and you have allowed it. Plugins run on their own threads, apart from your
   database work.
@@ -39,6 +40,12 @@ manifest; none is added for a plugin that is off, has failed or whose permission
   the tab says why and has a **Reload** button. A panel shows the plugin name above its content. A table is drawn up to a
   fixed number of cells; the rest shows as "N more rows not shown".
 - **Export formats.** A plugin that declares an exporter adds a file format to **Export Results...** (listed after the built-in ones as `<plugin name> (plugin): <label>`) and to `sqler-cli export --format plugin-<id>:<fmt>`. The plugin only turns rows into bytes; SQLer writes the file, so a cancelled or failed export leaves no file. It receives column names, types and the exported rows, and needs no permission. Cancel can take up to 5 s to act while a plugin call runs.
+
+- **Completion rows.** A plugin that declares a completion provider adds its own rows to the editor's suggestion list,
+  next to the built-in ones. See [Completion](../plugin-development/completion.md).
+- **Database drivers.** A plugin that declares a driver adds a database to the connection form. SQL Server is built in
+  this way. A driver that runs inside the plugin needs the `driver.guest` permission; one that uses a built-in engine
+  needs `driver.host:<engine>`. See [Drivers](../plugin-development/drivers.md).
 
 ![A plugin panel in the bottom panel, light theme](../screenshots/after/plugins-panel-light.png)
 

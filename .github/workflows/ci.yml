@@ -585,6 +585,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: mdbook@0.5.4
+      - name: ADR index
+        run: sh .github/scripts/check-adr-index.sh
       - name: mdBook
         run: mdbook build docs
 

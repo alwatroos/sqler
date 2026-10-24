@@ -96,6 +96,7 @@ cargo test $WS
 cargo nextest run $WS --no-tests=pass
 cargo deny check
 mdbook build docs
+sh .github/scripts/check-adr-index.sh   # every adr/NNNN file is in adr/index.md and SUMMARY.md, ascending
 sh .github/scripts/check-spdx.sh
 cargo tree --workspace -i sqler-ui
 cargo run -p sqler-cli -- run :memory: "select 1"

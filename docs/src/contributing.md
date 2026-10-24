@@ -38,3 +38,8 @@ The rules are in [ADR-0068](adr/0068-ci-pipeline-speed.md). In short:
 
 An ADR comes before code for framework, plugin ABI, AI tool contract and storage format decisions.
 See [ADR-0000](adr/0000-adr-process.md).
+
+Every ADR file has a row in the [ADR index](adr/index.md) and an entry in `docs/src/SUMMARY.md`, in ascending order,
+and a number without a file is named on the index's "Unused numbers:" line. Check it with
+`sh .github/scripts/check-adr-index.sh`; it prints one line per problem and exits 1, and prints nothing when clean. The
+`docs` job in CI runs it.

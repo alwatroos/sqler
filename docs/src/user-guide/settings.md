@@ -1,6 +1,6 @@
 # Settings
 
-SQLer keeps its files in one config directory: three settings files (`settings.toml`, `connections.toml`, `keymap.toml`), the saved queries (`queries.toml`, also TOML) and the query history (`history.jsonl`). You can edit the TOML files by hand. A missing file is
+SQLer keeps its files in one config directory: three settings files (`settings.toml`, `keybindings.toml`, `connections.toml`), the saved queries (`queries.toml`, also TOML) and the query history (`history.jsonl`). You can edit the TOML files by hand. A missing file is
 fine: SQLer then uses the defaults. A wrong key or value is reported with the file name and the
 problem; it is never silently ignored.
 
@@ -12,7 +12,7 @@ problem; it is never silently ignored.
 | macOS | `~/Library/Application Support/SQLer` |
 | Windows | `%APPDATA%\SQLer` |
 
-Files in that directory: `settings.toml`, `keybindings.toml`, `connections.toml`, `history.jsonl`, `queries.toml`, `plugin-grants.toml` (plugin permissions, see [Plugins](plugins.md)), `plugin-prefs.toml` (which plugins are switched off and their setting values, see [Plugins](plugins.md)).
+Files in that directory: `settings.toml`, `keybindings.toml`, `connections.toml`, `history.jsonl`, `queries.toml`, `ai.toml` (AI providers and limits, see [AI](ai.md)), `workbench.toml` (panel layout, window size and recent commands, see [Workspace](workspace.md#window-and-layout-memory)), `update-state.toml` (see [Updates](#updates)), `plugin-grants.toml` (plugin permissions, see [Plugins](plugins.md)), `plugin-prefs.toml` (which plugins are switched off and their setting values, see [Plugins](plugins.md)).
 
 ## settings.toml
 
@@ -27,10 +27,9 @@ result_page_rows = 100000
 | `theme` | `light`, `dark`, `system` (follow the OS) | `system` |
 | `ui_font_size` | whole points, 8 to 48 | `14` |
 | `result_page_rows` | whole rows per result page, 1000 to 10000000 | `100000` |
-
 | `check_for_updates` | `true`, `false` (see [Updates](#updates)) | `false` |
 
-`result_page_rows` is how many rows a query result loads before it pauses and offers **Fetch more** (see [Results grid](results-grid.md)). It is set in this file only; the Settings tab has no control for it.
+`theme` and `ui_font_size` are described in [Themes](themes.md). `result_page_rows` is how many rows a query result loads before it pauses and offers **Fetch more** (see [Results grid](results-grid.md#pages-and-paused-results)). It is set in this file only; the Settings tab has no control for it.
 
 Unknown keys and values outside the range are errors.
 
@@ -52,7 +51,7 @@ Unknown keys and values outside the range are errors.
   `tab`, `space`, `backspace`, `delete`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`,
   `left`, `right` and `f1` to `f24`. Aliases: `return` for `enter`, `esc` for `escape`.
 
-Default bindings (`mod` shown as written; it resolves per platform):
+A few default bindings (`mod` shown as written; it resolves per platform). The full list is on the [Keybindings](keybindings.md#default-shortcuts) page:
 
 | Command | Chords |
 | ------- | ------ |
@@ -159,19 +158,17 @@ Unknown keys are errors. The list shows queries in file order, and a new query g
 SQLer writes the whole file when you save, so comments and spacing in a hand-edited file are not
 kept. If the file cannot be read, SQLer reports the problem and leaves the file as it is.
 
-## Settings tab and themes
+## Settings tab
 
-SQLer has a Settings tab, so you do not need to edit `settings.toml` by hand.
+SQLer has a Settings tab, so you do not need to edit `settings.toml` by hand. It has the sections **Appearance** (theme and UI font size, see [Themes](themes.md)), **AI** and **Updates**.
 
 ### Opening it
 
-- Click the **Settings** button at the right end of the tab strip.
+- Click the **Settings** icon (the gear) at the bottom of the activity bar.
 - Run the command `settings:open` ("Open Settings").
-- Press `mod+,` (Cmd+, on macOS, Ctrl+, elsewhere), or pick it from the [command palette](keybindings.md).
+- Press `mod+,` (Cmd+, on macOS, Ctrl+, elsewhere), or pick it from the [command palette](command-palette.md).
 
-The Settings tab is one tab. While it is open, it replaces the tab body, and the Settings header in
-the tab strip has a **×** button that closes it (the command `tab:close` closes it as well). Your
-connection tabs stay open behind it.
+The Settings tab is one tab. While it is open, a Settings tab is shown at the right end of the tab strip of the first group, with a **×** button that closes it. Your connection tabs stay open behind it.
 
 ### AI
 
@@ -194,36 +191,12 @@ To turn it off, switch **Check for updates** off, set `check_for_updates = false
 
 ### Theme
 
-The tab offers three choices:
-
-| Choice | Effect |
-| ------ | ------ |
-| Light | Always the light theme. |
-| Dark | Always the dark theme. |
-| Follow system | Light or dark, as the OS appearance says. |
-
-Light and dark are the two SQLer looks, "SQLer Light" and "SQLer Dark": flat surfaces, thin borders,
-one blue accent and Lucide line icons.
-
-"Follow system" also follows OS changes while SQLer is running. On Linux this depends on the desktop
-portal. Without it, SQLer cannot read the OS appearance and uses the light theme.
-
-The **Dark** / **Light** button at the right end of the tab strip switches to the other mode. It runs
-the command `theme:toggle-mode` ("Toggle Light/Dark Theme"). The command stores an explicit `light`
-or `dark`, the opposite of what you see now, so it leaves "Follow system". Choose "Follow system" in
-the Settings tab to go back.
+See [Themes](themes.md#theme): **Light**, **Dark** or **Follow system**, and the command `theme:toggle-mode`.
 
 ### UI font size
 
-Use the **−** and **+** buttons to change the size of the interface text. The size is in whole
-points, from 8 to 48 (default 14).
+See [Themes](themes.md#ui-font-size).
 
 ### Saving
 
-A change applies at once, without a restart, and is saved to `settings.toml` at once. There is no
-Save button. The next start restores the theme and font size.
-
-If `settings.toml` cannot be read (for example, it has a wrong key) or SQLer finds no config
-directory, SQLer uses the defaults and does not write the file, so your hand-edited file is not
-overwritten. The Settings tab then shows the problem and the line "Changes apply to this session
-only." If a save fails, the tab shows the error. A later successful save clears it.
+See [Themes](themes.md#saving): a change applies and is saved at once.

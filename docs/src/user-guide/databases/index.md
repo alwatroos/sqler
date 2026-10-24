@@ -1,5 +1,8 @@
 # Databases
 
+SQLer 1.0 connects to: SQLite, PostgreSQL, MySQL/MariaDB, SQL Server. For what is left out, see
+[Not in 1.0](../connections.md#not-in-10).
+
 SQLer talks to databases through drivers. This page lists what each driver offers. The pages below
 describe one driver each.
 
@@ -13,25 +16,26 @@ describe one driver each.
 The object browser and the DDL view ask the driver which kinds of object exist. A kind the database
 does not have is reported as unsupported, not as an error.
 
-| Kind | `SQLite` | `PostgreSQL` | `MySQL` |
-| ---- | -------- | ------------ | ------- |
-| Database | no | yes | no |
-| Schema | yes (`main`, `temp`, attached) | yes | yes (the databases) |
-| Table | yes | yes | yes |
-| View | yes | yes | yes |
-| Materialized view | no | yes | no |
-| Function | no | yes | yes |
-| Procedure | no | yes | yes |
-| Trigger | yes | yes | yes |
-| Sequence | no | yes | no |
-| Type | no | yes | no |
-| Index | yes | yes | yes |
-| Extension | no | yes | no |
-| Role | no | yes | yes (accounts) |
+| Kind | `SQLite` | `PostgreSQL` | `MySQL` | `SQL Server` |
+| ---- | -------- | ------------ | ------- | ------------ |
+| Database | no | yes | no | yes (listed, not browsed across) |
+| Schema | yes (`main`, `temp`, attached) | yes | yes (the databases) | yes |
+| Table | yes | yes | yes | yes |
+| View | yes | yes | yes | yes |
+| Materialized view | no | yes | no | no |
+| Function | no | yes | yes | yes |
+| Procedure | no | yes | yes | yes |
+| Trigger | yes | yes | yes | yes |
+| Sequence | no | yes | no | yes |
+| Type | no | yes | no | yes |
+| Index | yes | yes | yes | yes |
+| Extension | no | yes | no | no |
+| Role | no | yes | yes (accounts) | yes |
 
 The `MySQL` column also holds `MariaDB`; a `MySQL` database is a schema, so there is no database
 level. See [MySQL and MariaDB](mysql.md). The `PostgreSQL` driver lists only the current database;
-see [PostgreSQL](postgresql.md).
+see [PostgreSQL](postgresql.md). The `SQL Server` driver also lists the current database only; see
+[SQL Server](sqlserver.md#object-browser).
 
 ## How values display
 
@@ -55,7 +59,7 @@ shown as text.
 ## TLS modes
 
 Network drivers read the TLS mode of a connection. File-based databases such as `SQLite` ignore it.
-Settings for it in the UI and in the connections file come in a later release.
+You set it in the connection form and in `connections.toml` (see [Connections](../connections.md#connectiontls)).
 
 | Mode | Meaning |
 | ---- | ------- |

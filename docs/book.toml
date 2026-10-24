@@ -5,6 +5,9 @@ description = "A lightweight, native, open-source SQL IDE written in Rust."
 language = "en"
 src = "src"
 
+[output.html]
+site-url = "/sqler/"
+
 [build]
 build-dir = "../target/book"
 create-missing = false

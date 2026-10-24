@@ -19,7 +19,7 @@ same shape with a panel.
 cargo install cargo-generate --version 0.25.1 --locked
 ```
 
-- A SQLer build with plugin support. Plugin support is a build option that is off by default
+- A SQLer build with plugin support. Release builds have it; a local `cargo build` needs `--features plugins`
   ([Plugins](../user-guide/plugins.md)). You build it in step 5.
 
 ## Try the example first
@@ -190,7 +190,7 @@ The panel appears in the **Plugins** bottom tab. For buttons and click events se
   the `[entry]` file is not in the folder, or the folder name is not the plugin id.
 - **The id is refused.** It must match `[a-z][a-z0-9]*(-[a-z0-9]+)*` and must not be a reserved Windows name such as
   `con`, `nul`, `aux` or `prn`.
-- **The plugin is not listed at all.** Check that your SQLer build has the `plugins` feature (the Plugins view would say
+- **The plugin is not listed at all.** Check that your SQLer build has the `plugins` feature (release builds do; a local build needs `--features plugins`; the Plugins view would say
   "This build has no plugin support").
 - **A command does nothing.** The plugin may be switched off, failed or not approved. Contributions of such a plugin are
   removed ([Plugins](../user-guide/plugins.md)).

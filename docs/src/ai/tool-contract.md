@@ -55,7 +55,8 @@ A host can add tools of its own with `ToolSet::with_external_tools(Arc<dyn Exter
 - On a `prod` connection every such statement is confirmed twice.
 - Without an `Approver` the call is refused (`no_approver`). A `read_only` connection refuses (`read_only`).
 - `EXPLAIN ANALYZE` executes the statement, so it needs approval; SQLite has no `ANALYZE` form and answers `unsupported`.
-- Drivers without a dialect (SQL Server, `DuckDB`): `run_query` asks approval for the whole text as one unknown statement; `sample_rows` and `explain_query` answer `unsupported`.
+- SQL Server has the `tsql` dialect ([ADR-0073](../adr/0073-tsql-dialect-and-manifest-dialect.md)): its statements are classified, `sample_rows` uses `select top (n)`, and `explain_query` answers `unsupported`.
+- A driver without a dialect: `run_query` asks approval for the whole text as one unknown statement; `sample_rows` and `explain_query` answer `unsupported`.
 
 ## Limits
 
