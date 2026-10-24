@@ -72,7 +72,8 @@ pub(crate) fn startup(
             dev,
             std::env::home_dir(),
         )
-        .with_services(services(Arc::clone(&data), writes, ui_sender)),
+        .with_services(services(Arc::clone(&data), writes, ui_sender))
+        .with_builtins(),
     );
     // The AI surfaces list the plugins' tools; each call lends the plugin its own data and approver (ADR-0062).
     let ai_tools = AppAiTools::new(Arc::clone(&backend), data);
