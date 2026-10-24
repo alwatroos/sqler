@@ -8,6 +8,7 @@ use sqler_driver_api::sqler_core::{DriverId, Environment};
 
 use super::dialog::Dialog;
 use super::form::{FormField, SecretSlot, SshAuthKind};
+use super::import::ImportAction;
 use crate::command::{Command, CommandError, CommandId, CommandRegistry};
 use crate::workspace::Workspace;
 
@@ -87,6 +88,8 @@ pub enum ConnectionAction {
     TrustHostKey,
     /// Do not trust the SSH host key.
     RejectHostKey,
+    /// A step of the import wizard.
+    Import(ImportAction),
 }
 
 /// The commands: ID and title.
@@ -108,6 +111,16 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "connection-group:toggle",
         "Expand or Collapse Connection Group",
     ),
+    ("connection:import", "Import Connections"),
+    ("connection-import:cursor-up", "Import: Previous Item"),
+    ("connection-import:cursor-down", "Import: Next Item"),
+    ("connection-import:choose-file", "Import: Choose File"),
+    ("connection-import:next", "Import: Next Step"),
+    ("connection-import:back", "Import: Previous Step"),
+    ("connection-import:toggle-entry", "Import: Toggle Entry"),
+    ("connection-import:select-all", "Import: Select All"),
+    ("connection-import:select-none", "Import: Select None"),
+    ("connection-import:apply", "Import: Import Selected"),
 ];
 
 impl ConnectionAction {
@@ -146,6 +159,20 @@ impl ConnectionAction {
             Self::RenameGroup(_) => "connection-group:rename",
             Self::DeleteGroup(_) => "connection-group:delete",
             Self::ToggleGroup(_) | Self::SelectGroup(_) => "connection-group:toggle",
+            Self::Import(action) => match action {
+                ImportAction::Open
+                | ImportAction::SetCursor(_)
+                | ImportAction::SetSecret { .. } => "connection:import",
+                ImportAction::CursorUp => "connection-import:cursor-up",
+                ImportAction::CursorDown => "connection-import:cursor-down",
+                ImportAction::ChooseFile => "connection-import:choose-file",
+                ImportAction::Next => "connection-import:next",
+                ImportAction::Back => "connection-import:back",
+                ImportAction::ToggleEntry => "connection-import:toggle-entry",
+                ImportAction::SelectAll => "connection-import:select-all",
+                ImportAction::SelectNone => "connection-import:select-none",
+                ImportAction::Apply => "connection-import:apply",
+            },
         };
         CommandId::new(id).expect("constant command ID is valid")
     }
@@ -171,7 +198,19 @@ pub fn action_for(id: &CommandId, ws: &Workspace) -> Option<ConnectionAction> {
     let group = ws.sidebar().selected_group().cloned();
     let form_open = matches!(ws.dialog(), Some(Dialog::Form(_)));
     let host_key_open = matches!(ws.dialog(), Some(Dialog::TrustHostKey { .. }));
+    let import_open = matches!(ws.dialog(), Some(Dialog::Import(_)));
+    let import = |action: ImportAction| import_open.then_some(ConnectionAction::Import(action));
     match id.as_str() {
+        "connection:import" => Some(ConnectionAction::Import(ImportAction::Open)),
+        "connection-import:cursor-up" => import(ImportAction::CursorUp),
+        "connection-import:cursor-down" => import(ImportAction::CursorDown),
+        "connection-import:choose-file" => import(ImportAction::ChooseFile),
+        "connection-import:next" => import(ImportAction::Next),
+        "connection-import:back" => import(ImportAction::Back),
+        "connection-import:toggle-entry" => import(ImportAction::ToggleEntry),
+        "connection-import:select-all" => import(ImportAction::SelectAll),
+        "connection-import:select-none" => import(ImportAction::SelectNone),
+        "connection-import:apply" => import(ImportAction::Apply),
         "connection:new" => Some(ConnectionAction::New),
         "connection:edit" => selected.map(ConnectionAction::Edit),
         "connection:delete" => selected.map(ConnectionAction::Delete),
@@ -248,6 +287,22 @@ mod tests {
             ConnectionAction::SelectGroup(g),
             ConnectionAction::TrustHostKey,
             ConnectionAction::RejectHostKey,
+            ConnectionAction::Import(ImportAction::Open),
+            ConnectionAction::Import(ImportAction::SetCursor(0)),
+            ConnectionAction::Import(ImportAction::CursorUp),
+            ConnectionAction::Import(ImportAction::CursorDown),
+            ConnectionAction::Import(ImportAction::ChooseFile),
+            ConnectionAction::Import(ImportAction::Next),
+            ConnectionAction::Import(ImportAction::Back),
+            ConnectionAction::Import(ImportAction::ToggleEntry),
+            ConnectionAction::Import(ImportAction::SelectAll),
+            ConnectionAction::Import(ImportAction::SelectNone),
+            ConnectionAction::Import(ImportAction::SetSecret {
+                index: 0,
+                kind: sqler_config::ProfileSecretKind::DbPassword,
+                text: crate::connections::SecretText::new("x".into()),
+            }),
+            ConnectionAction::Import(ImportAction::Apply),
         ]
     }
 

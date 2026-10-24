@@ -255,9 +255,7 @@ fn tsql_effect(t: &[Tok]) -> TxEffect {
             delta: begins,
             floor: 0,
         },
-        "SET" if set_implicit_option(t).is_some() => {
-            set_implicit_option(t).unwrap_or(TxEffect::None)
-        }
+        _ if let Some(effect) = set_implicit_option(t) => effect,
         _ if begins > 0 => TxEffect::Tran {
             reset: false,
             delta: begins,
@@ -267,34 +265,43 @@ fn tsql_effect(t: &[Tok]) -> TxEffect {
     }
 }
 
-/// `SET opt [, opt]* ON|OFF` where `IMPLICIT_TRANSACTIONS` is one of the options. The value ends
-/// the option list; T-SQL needs no terminator, so whatever follows it is another statement and is
-/// ignored. `None` when the statement does not name the option.
+/// Every `SET opt [, opt]* ON|OFF` option list in the statement. T-SQL needs no terminator, so
+/// several statements can share one batch text; the scan walks all of them and the last list that
+/// names `IMPLICIT_TRANSACTIONS` decides. A `SET` that is not an option list (`UPDATE .. SET a = 1`)
+/// is skipped. `None` when no list names the option.
 fn set_implicit_option(t: &[Tok]) -> Option<TxEffect> {
-    let mut i = 1;
-    let mut implicit = false;
-    loop {
-        match t.get(i)? {
-            Tok::Word(w) if matches!(w.as_str(), "ON" | "OFF") && i > 1 => {
-                if !implicit {
-                    return None;
-                }
-                return Some(if w == "ON" {
-                    TxEffect::AutocommitOff
-                } else {
-                    TxEffect::ImplicitOff
-                });
-            }
-            Tok::Word(w) => implicit |= w == "IMPLICIT_TRANSACTIONS",
-            Tok::Quoted(_) => {}
-            Tok::Other(_) => return implicit.then_some(TxEffect::None),
+    let mut found = None;
+    for start in 0..t.len() {
+        if !is(t, start, "SET") {
+            continue;
         }
-        match t.get(i + 1) {
-            Some(Tok::Other(c)) if c == "," => i += 2,
-            Some(Tok::Word(_)) => i += 1,
-            _ => return implicit.then_some(TxEffect::None),
+        let mut i = start + 1;
+        let mut implicit = false;
+        let mut opts = 0;
+        while let Some(tok) = t.get(i) {
+            match tok {
+                Tok::Word(w) if matches!(w.as_str(), "ON" | "OFF") && opts > 0 => {
+                    if implicit {
+                        found = Some(if w == "ON" {
+                            TxEffect::AutocommitOff
+                        } else {
+                            TxEffect::ImplicitOff
+                        });
+                    }
+                    break;
+                }
+                Tok::Word(w) => {
+                    implicit |= w == "IMPLICIT_TRANSACTIONS";
+                    opts += 1;
+                }
+                Tok::Quoted(_) => opts += 1,
+                Tok::Other(c) if c == "," => {}
+                Tok::Other(_) => break,
+            }
+            i += 1;
         }
     }
+    found
 }
 
 /// `COMMIT`, `ROLLBACK`, `END` and `ABORT`: `AND CHAIN` starts the next transaction at once,
@@ -429,6 +436,32 @@ mod tests {
                 AutocommitOff,
             ),
             ("SET NOCOUNT ON SELECT 1", Nothing),
+            ("SET NOCOUNT ON SET IMPLICIT_TRANSACTIONS ON", AutocommitOff),
+            (
+                "SET XACT_ABORT ON\nSET IMPLICIT_TRANSACTIONS ON",
+                AutocommitOff,
+            ),
+            (
+                "SET XACT_ABORT ON SET NOCOUNT OFF SET IMPLICIT_TRANSACTIONS ON",
+                AutocommitOff,
+            ),
+            (
+                "SET IMPLICIT_TRANSACTIONS ON SET IMPLICIT_TRANSACTIONS OFF",
+                ImplicitOff,
+            ),
+            (
+                "SET IMPLICIT_TRANSACTIONS OFF SET IMPLICIT_TRANSACTIONS ON",
+                AutocommitOff,
+            ),
+            (
+                "UPDATE t SET a = 1 SET IMPLICIT_TRANSACTIONS ON",
+                AutocommitOff,
+            ),
+            ("UPDATE t SET a = 1, b = 2", Nothing),
+            (
+                "SET NOCOUNT ON -- c\n/* x */ SET IMPLICIT_TRANSACTIONS ON",
+                AutocommitOff,
+            ),
         ];
         for (sql, expected) in table {
             assert_eq!(tx_effect(Dialect::TSql, sql), *expected, "{sql}");
