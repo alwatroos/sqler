@@ -10,6 +10,8 @@ name: Release
 #   artifacts and the SBOM.
 # - workflow_dispatch: always a full dry run, never publishes. It needs this file on the default branch.
 # - Tag `vX.Y.Z`: the full run, then `host` creates the GitHub Release. Nothing else ever publishes.
+# - `sign (macOS)` (ADR-0065) runs on tags only, in the environment `release`, between `build` and `global`: it
+#   signs and notarises the macOS archives when the APPLE_* secrets exist and re-uploads them; `global` hashes after it.
 #
 # The release feature set is the single `features = [...]` line in dist-workspace.toml, pending the owner's decision
 # (ADR-0064). `release-guard.sh` rejects `driver-duckdb` whatever that line holds (ADR-0070).
@@ -19,6 +21,8 @@ on:
       - "dist-workspace.toml"
       - ".github/workflows/release.yml"
       - ".github/scripts/release-guard.sh"
+      - ".github/scripts/sign-macos.sh"
+      - "packaging/macos/**"
       - "crates/sqler-app/Cargo.toml"
       - "crates/sqler-app/wix/**"
   workflow_dispatch:
@@ -252,17 +256,17 @@ jobs:
           if [ "$bin_bytes" -gt "$budget" ]; then
             echo "::warning title=Binary size::sqler on $RUNNER_OS is $bin_bytes bytes, over the 80 MB budget"
           fi
-      # R2 replaces this placeholder with codesign and notarisation (ADR-0065). Until then the macOS build is unsigned.
-      - name: macOS notarisation (R2)
+      # No secret here: this job also runs on pull requests. Signing happens in `sign (macOS)` (ADR-0065).
+      - name: macOS signing (ADR-0065)
         if: runner.os == 'macOS'
         shell: bash
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          PUBLISHING: ${{ needs.plan.outputs.publishing }}
         run: |
-          if [ -z "$APPLE_CERTIFICATE" ]; then
-            echo "::notice title=Unsigned macOS build::no Apple signing secret; the macOS archive is unsigned (ADR-0064, owner decision 1)"
+          if [ "$PUBLISHING" = "true" ]; then
+            echo "::notice title=Unsigned macOS build::signed in sign (macOS) when the APPLE_* secrets are set (ADR-0065)"
           else
-            echo "Apple signing secret present; signing and notarisation arrive with R2"
+            echo "::notice title=Unsigned macOS build::dry run; macOS signing runs only in sign (macOS) on v* tag runs (ADR-0065)"
           fi
       - id: cargo-dist
         name: Collect the upload list
@@ -287,13 +291,162 @@ jobs:
             ${{ env.BUILD_MANIFEST_NAME }}
           retention-days: 7
 
+  # Signs and notarises the two macOS archives (ADR-0065). The only job that reads the APPLE_* secrets, and it runs
+  # on a `v*` tag push only, in the environment `release` (deployment rule: tags `v*`; it also holds the update
+  # signing key). Without the secrets it only prints notices and uploads nothing, so the archives stay as built.
+  # With the secrets set, a failed signing or notarisation FAILS this job and nothing publishes (fail closed). Only the
+  # repository variable SQLER_ALLOW_UNSIGNED_FALLBACK == 'true' restores warn-and-ship-that-target-unsigned.
+  sign-macos:
+    name: sign (macOS)
+    needs:
+      - plan
+      - build
+    if: ${{ needs.plan.outputs.publishing == 'true' }}
+    runs-on: macos-14
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # Only whether the secrets exist is exposed to this step, never their values.
+      - id: secrets
+        name: Check the Apple secrets
+        shell: bash
+        env:
+          HAVE_SIGN: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
+          HAVE_NOTARY: ${{ secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' }}
+        run: |
+          sign=false
+          notarise=false
+          [ "$HAVE_SIGN" = "true" ] && sign=true
+          [ "$HAVE_NOTARY" = "true" ] && notarise=true
+          echo "sign=$sign" >> "$GITHUB_OUTPUT"
+          echo "notarise=$notarise" >> "$GITHUB_OUTPUT"
+          if [ "$sign" != "true" ]; then
+            echo "::notice title=Unsigned macOS build::no APPLE_CERTIFICATE/APPLE_CERTIFICATE_PASSWORD; the macOS archives stay unsigned (ADR-0065, owner decision 1)"
+          fi
+          if [ "$notarise" != "true" ]; then
+            echo "::notice title=Not notarised::no APPLE_API_KEY/APPLE_API_KEY_ID/APPLE_API_ISSUER (ADR-0065)"
+          fi
+      - name: Fetch the arm64 archive
+        if: steps.secrets.outputs.sign == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: artifacts-build-local-aarch64-apple-darwin
+          path: ${{ runner.temp }}/macos/aarch64-apple-darwin
+      - name: Fetch the x86_64 archive
+        if: steps.secrets.outputs.sign == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: artifacts-build-local-x86_64-apple-darwin
+          path: ${{ runner.temp }}/macos/x86_64-apple-darwin
+      - id: sign-arm64
+        name: Sign and notarise (aarch64)
+        if: steps.secrets.outputs.sign == 'true'
+        continue-on-error: ${{ vars.SQLER_ALLOW_UNSIGNED_FALLBACK == 'true' }}
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          DIR: ${{ runner.temp }}/macos/aarch64-apple-darwin
+          TARGET: aarch64-apple-darwin
+        run: sh .github/scripts/sign-macos.sh "$DIR/sqler-app-$TARGET.tar.xz" "$DIR/$TARGET-dist-manifest.json"
+      - id: sign-x64
+        name: Sign and notarise (x86_64)
+        if: steps.secrets.outputs.sign == 'true'
+        continue-on-error: ${{ vars.SQLER_ALLOW_UNSIGNED_FALLBACK == 'true' }}
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          DIR: ${{ runner.temp }}/macos/x86_64-apple-darwin
+          TARGET: x86_64-apple-darwin
+        run: sh .github/scripts/sign-macos.sh "$DIR/sqler-app-$TARGET.tar.xz" "$DIR/$TARGET-dist-manifest.json"
+      - name: Report failed signing
+        if: steps.secrets.outputs.sign == 'true'
+        shell: bash
+        env:
+          ARM64: ${{ steps.sign-arm64.outcome }}
+          X64: ${{ steps.sign-x64.outcome }}
+        run: |
+          if [ "$ARM64" = "failure" ]; then
+            echo "::warning title=macOS signing failed::aarch64-apple-darwin ships unsigned (SQLER_ALLOW_UNSIGNED_FALLBACK)"
+          fi
+          if [ "$X64" = "failure" ]; then
+            echo "::warning title=macOS signing failed::x86_64-apple-darwin ships unsigned (SQLER_ALLOW_UNSIGNED_FALLBACK)"
+          fi
+      # A signed target is checked again from the files that will be uploaded, then replaces the build artifact.
+      - name: Verify the signed aarch64 archive
+        if: steps.sign-arm64.outcome == 'success'
+        shell: bash
+        env:
+          DIR: ${{ runner.temp }}/macos/aarch64-apple-darwin
+          TARGET: aarch64-apple-darwin
+        run: |
+          out="$RUNNER_TEMP/verify-$TARGET"
+          rm -rf "$out"
+          mkdir -p "$out"
+          tar -xJf "$DIR/sqler-app-$TARGET.tar.xz" -C "$out"
+          bin=$(find "$out" -type f -name sqler | head -n 1)
+          test -n "$bin"
+          codesign --verify --strict --verbose=2 "$bin"
+          codesign -dv --verbose=2 "$bin" 2>&1 | grep -Eq 'flags=0x[0-9a-f]+\(.*runtime'
+          sh .github/scripts/release-guard.sh binary "$bin"
+          "$bin" --version | grep -Eq '^sqler [0-9]'
+          (cd "$DIR" && shasum -a 256 -c "sqler-app-$TARGET.tar.xz.sha256")
+          sh .github/scripts/release-guard.sh artifacts "$DIR"
+      - name: Verify the signed x86_64 archive
+        if: steps.sign-x64.outcome == 'success'
+        shell: bash
+        env:
+          DIR: ${{ runner.temp }}/macos/x86_64-apple-darwin
+          TARGET: x86_64-apple-darwin
+        run: |
+          out="$RUNNER_TEMP/verify-$TARGET"
+          rm -rf "$out"
+          mkdir -p "$out"
+          tar -xJf "$DIR/sqler-app-$TARGET.tar.xz" -C "$out"
+          bin=$(find "$out" -type f -name sqler | head -n 1)
+          test -n "$bin"
+          codesign --verify --strict --verbose=2 "$bin"
+          codesign -dv --verbose=2 "$bin" 2>&1 | grep -Eq 'flags=0x[0-9a-f]+\(.*runtime'
+          sh .github/scripts/release-guard.sh binary "$bin"
+          (cd "$DIR" && shasum -a 256 -c "sqler-app-$TARGET.tar.xz.sha256")
+          sh .github/scripts/release-guard.sh artifacts "$DIR"
+      - name: Upload the signed aarch64 artifacts
+        if: steps.sign-arm64.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: artifacts-build-local-aarch64-apple-darwin
+          path: ${{ runner.temp }}/macos/aarch64-apple-darwin/*
+          overwrite: true
+          retention-days: 7
+      - name: Upload the signed x86_64 artifacts
+        if: steps.sign-x64.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: artifacts-build-local-x86_64-apple-darwin
+          path: ${{ runner.temp }}/macos/x86_64-apple-darwin/*
+          overwrite: true
+          retention-days: 7
+
   # Platform-agnostic artifacts: the unified checksum file, the source archive, the installers and the SBOM.
   global:
     name: global artifacts
     needs:
       - plan
       - build
-    if: ${{ needs.plan.outputs.full == 'true' }}
+      - sign-macos
+    if: ${{ always() && needs.plan.result == 'success' && needs.build.result == 'success' && (needs.sign-macos.result == 'success' || needs.sign-macos.result == 'skipped') && needs.plan.outputs.full == 'true' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
@@ -378,8 +531,9 @@ jobs:
       - plan
       - guard
       - build
+      - sign-macos
       - global
-    if: ${{ always() && needs.plan.outputs.publishing == 'true' && needs.plan.result == 'success' && needs.guard.result == 'success' && needs.build.result == 'success' && needs.global.result == 'success' }}
+    if: ${{ always() && needs.plan.outputs.publishing == 'true' && needs.plan.result == 'success' && needs.guard.result == 'success' && needs.build.result == 'success' && needs.sign-macos.result == 'success' && needs.global.result == 'success' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     permissions:
