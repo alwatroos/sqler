@@ -189,12 +189,13 @@ The in-repo plugin `plugins/sqlserver` is a host-driver shell around the native 
 (`crates/sqler-driver-mssql`, `tiberius` with `rustls`). It is the worked example of a host
 driver; the decisions are in [ADR-0071](../adr/0071-sql-server-plugin.md).
 
-**Build.** The engine is linked only when `sqler-app` or `sqler-cli` is built with the feature
-`driver-mssql` (default off; it implies `plugins`). The plugin itself is staged by
-`cargo run -p xtask -- plugins build` as `target/plugins/<profile>/sqlserver/sqler.toml` (no
-component). Copy that folder to `<config>/plugins/sqlserver/` and approve `driver.host:mssql`.
-Without the feature the driver is listed as unavailable with the fixed "engine, which this build
-does not include" text.
+**Build.** The engine is linked with the feature `driver-mssql` (it implies `plugins`), and release
+builds enable it ([ADR-0064](../adr/0064-release-pipeline.md)). The app offers the in-repo manifest as a
+built-in plugin (`plugins/dirs.rs`), and a copy on disk wins. `sqler-cli` (not released) still needs the
+staged folder: build it with `cargo run -p xtask -- plugins build` as
+`target/plugins/<profile>/sqlserver/sqler.toml` (no component), copy it to
+`<config>/plugins/sqlserver/` and approve `driver.host:mssql`. Without the feature the driver is listed as
+unavailable with the fixed "engine, which this build does not include" text.
 
 **Manifest.**
 

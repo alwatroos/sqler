@@ -6,12 +6,88 @@
 //!
 //! Development paths come from `--plugin-dir` and nowhere else. In particular `target/plugins`, where the probe
 //! component is staged, is never searched, in any build profile.
+//!
+//! Built-in plugins are a third source after `--plugin-dir` and `<config>/plugins`: a manifest compiled into the app
+//! (the SQL Server one, under `driver-mssql`) is offered when no plugin of that id was found on disk. It goes through
+//! the normal grant flow and nothing is written for it.
 
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use sqler_plugin_host::PluginDirs;
+#[cfg(feature = "driver-mssql")]
+use std::sync::Arc;
+
+#[cfg(feature = "driver-mssql")]
+use sqler_plugin_api::{API_VERSION, FsRoots, Manifest};
+#[cfg(feature = "driver-mssql")]
+use sqler_plugin_host::{DiscoveredPlugin, LoadError, LoadProblem, PluginSource};
+use sqler_plugin_host::{Discovery, PluginDirs};
+
+/// The in-repo SQL Server manifest, byte for byte, so its grant key equals the one of a copy staged by `xtask`.
+#[cfg(feature = "driver-mssql")]
+pub(super) const SQLSERVER_MANIFEST: &str =
+    include_str!("../../../../plugins/sqlserver/sqler.toml");
+
+/// Built-in plugins whose id is not already in `found`: none without `config_plugins` or without `driver-mssql`.
+///
+/// The directory is `<config_plugins>/<id>`, stable across refreshes and never created.
+#[cfg_attr(not(feature = "driver-mssql"), allow(unused_variables))]
+pub(super) fn builtin_plugins(dirs: &PluginDirs, found: &Discovery) -> Discovery {
+    #[cfg_attr(not(feature = "driver-mssql"), allow(unused_mut))]
+    let mut out = Discovery::default();
+    #[cfg(feature = "driver-mssql")]
+    if let Some(root) = &dirs.config_plugins {
+        let dir = root.join("sqlserver");
+        match build_sqlserver(&dir, dirs) {
+            Ok(p) => {
+                if !found
+                    .plugins
+                    .iter()
+                    .any(|f| f.manifest.id() == p.manifest.id())
+                {
+                    out.plugins.push(p);
+                }
+            }
+            Err((id, error)) => out.problems.push(LoadProblem { dir, id, error }),
+        }
+    }
+    out
+}
+
+#[cfg(feature = "driver-mssql")]
+fn build_sqlserver(
+    dir: &Path,
+    dirs: &PluginDirs,
+) -> Result<DiscoveredPlugin, (Option<sqler_plugin_api::PluginId>, LoadError)> {
+    let manifest =
+        Manifest::parse(SQLSERVER_MANIFEST).map_err(|e| (None, LoadError::Manifest(e)))?;
+    let id = manifest.id().clone();
+    manifest
+        .check_api(API_VERSION)
+        .map_err(|e| (Some(id.clone()), LoadError::Incompatible(e)))?;
+    let key = manifest.grant_key(None).map_err(|e| {
+        (
+            Some(id.clone()),
+            LoadError::Io {
+                path: dir.to_path_buf(),
+                message: format!("no grant key: {e}"),
+            },
+        )
+    })?;
+    Ok(DiscoveredPlugin {
+        manifest: Arc::new(manifest),
+        dir: dir.to_path_buf(),
+        source: PluginSource::Config,
+        component: None,
+        key,
+        roots: FsRoots {
+            plugin_dir: dir.to_path_buf(),
+            data_dir: dir.join("data"),
+            home_dir: dirs.home.clone(),
+        },
+    })
+}
 
 /// The directories discovery uses.
 ///
@@ -191,6 +267,52 @@ mod tests {
                 .is_symlink()
         );
         assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+    }
+
+    #[cfg(feature = "driver-mssql")]
+    mod builtin {
+        use super::*;
+
+        #[test]
+        fn the_embedded_manifest_is_the_sqlserver_shell() {
+            let m = Manifest::parse(SQLSERVER_MANIFEST).unwrap();
+            m.check_api(API_VERSION).unwrap();
+            assert_eq!(m.id().as_str(), "sqlserver");
+            let caps: Vec<String> = m.capabilities().iter().map(ToString::to_string).collect();
+            assert_eq!(caps, vec!["driver.host:mssql".to_owned()]);
+            assert!(m.entry().is_none());
+        }
+
+        #[test]
+        fn the_embedded_manifest_equals_the_file_in_the_repo() {
+            let path =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/sqlserver/sqler.toml");
+            assert_eq!(SQLSERVER_MANIFEST, fs::read_to_string(path).unwrap());
+        }
+
+        #[test]
+        fn nothing_is_offered_without_a_config_folder() {
+            let dirs = plugin_dirs(None, &[], None);
+            let got = builtin_plugins(&dirs, &Discovery::default());
+            assert!(got.plugins.is_empty() && got.problems.is_empty());
+        }
+
+        #[test]
+        fn nothing_is_offered_when_sqlserver_was_found() {
+            let s = Scratch::new("dirs-builtin-found");
+            let dirs = plugin_dirs(Some(&s.path().join("plugins")), &[], None);
+            let first = builtin_plugins(&dirs, &Discovery::default());
+            assert_eq!(first.plugins.len(), 1);
+            let p = &first.plugins[0];
+            assert_eq!(
+                p.dir,
+                dirs.config_plugins.as_ref().unwrap().join("sqlserver")
+            );
+            assert!(p.component.is_none());
+            assert!(!s.path().join("plugins").exists());
+            let again = builtin_plugins(&dirs, &first);
+            assert!(again.plugins.is_empty() && again.problems.is_empty());
+        }
     }
 
     #[cfg(unix)]

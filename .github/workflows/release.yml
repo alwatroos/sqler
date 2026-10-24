@@ -13,8 +13,8 @@ name: Release
 # - `sign (macOS)` (ADR-0065) runs on tags only, in the environment `release`, between `build` and `global`: it
 #   signs and notarises the macOS archives when the APPLE_* secrets exist and re-uploads them; `global` hashes after it.
 #
-# The release feature set is the single `features = [...]` line in dist-workspace.toml, pending the owner's decision
-# (ADR-0064). `release-guard.sh` rejects `driver-duckdb` whatever that line holds (ADR-0070).
+# The release feature set is the single `features = [...]` line in dist-workspace.toml, set per owner decision 12
+# (ADR-0064 amendment). `release-guard.sh` rejects `driver-duckdb` whatever that line holds (ADR-0070).
 on:
   pull_request:
     paths:

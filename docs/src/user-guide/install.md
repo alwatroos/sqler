@@ -1,8 +1,8 @@
 # Install
 
-SQLer 1.0 connects to SQLite, PostgreSQL and MySQL/MariaDB.
+SQLer 1.0 connects to: SQLite, PostgreSQL, MySQL/MariaDB, SQL Server.
 
-SQL Server is an in-repo plugin with a host-provided engine behind default-off cargo features. It is not in the 1.0 release binaries; build from source with `--features driver-mssql` to use it.
+SQL Server is built in to every download as a plugin. Approve the permission `driver.host:mssql` once in the Plugins view, then add a connection (see [SQL Server](databases/sqlserver.md)).
 
 > **Not in 1.0: DuckDB.** The DuckDB driver's code stays in the repository with its `driver-duckdb` feature off by default, and no 1.0 download, installer or update contains it. It may return after 1.0 as a separate download (ADR-0070).
 
@@ -47,11 +47,12 @@ xattr -dr com.apple.quarantine <path-to-sqler>
 
 ### Linux: runtime libraries
 
-The window needs the usual desktop libraries on the machine. This list is provisional until it is checked against the release binary:
+The window needs the usual desktop libraries on the machine. The release binary (x86_64 and aarch64) is linked against these shared libraries, which the loader needs at start:
 
-- X11 and Wayland client libraries: `libxcb`, `libxkbcommon`, `libxkbcommon-x11`, `libwayland-client`
-- a Vulkan driver (`libvulkan1` and a Mesa or vendor driver)
-- `libfontconfig` and `libfreetype`
+- the C runtime: `libc`, `libm` and `libgcc_s`
+- X11 client libraries: `libxcb`, `libxcb-xkb`, `libxkbcommon` and `libxkbcommon-x11`, with their dependencies `libXau`, `libXdmcp`, `libbsd` and `libmd`
+
+Libraries that the binary loads at run time instead (a Wayland client library, a Vulkan driver such as `libvulkan1` with a Mesa or vendor driver, `libfontconfig` and `libfreetype`) do not appear in that list. Install them with the desktop; the window needs a graphics driver.
 
 ## Windows
 
@@ -73,6 +74,17 @@ Or run the `.msi` installer, or unpack the `.zip` and start `sqler.exe`.
 ### Windows: SmartScreen
 
 The build is unsigned, so SmartScreen may show "Windows protected your PC". Choose More info, then Run anyway.
+
+## What the installers put on disk
+
+- The shell and PowerShell installers put the `sqler` binary in `~/.sqler/bin`, plus the `env` scripts and the `PATH` line described above.
+- The MSI puts `sqler.exe` in `Program Files\sqler-app\bin` and offers an optional `PATH` entry.
+- No installer creates `<config>` (the per-OS path is in [Settings](settings.md)) or `<config>/plugins`. That folder is yours: create it when you add a plugin. SQLer creates only `<config>/plugins/<id>/data`, and only for a plugin that reads its data scope. The built-in SQL Server needs no folder.
+- Uninstalling (deleting `~/.sqler`, or removing the MSI in Apps) leaves `<config>` alone: your connections, `plugin-grants.toml` and the plugin preferences stay. Delete that folder yourself to remove everything.
+
+### Plugin host
+
+The plugin host runtime (wasmtime and Cranelift) is linked into the binary, so no system library is needed for it.
 
 ## Verify a download
 
@@ -98,4 +110,4 @@ You need the Rust toolchain pinned in `rust-toolchain.toml`:
 cargo build --release -p sqler-app --locked
 ```
 
-The binary is `target/release/sqler`. Linux needs the GPUI build packages listed in `.github/workflows/ci.yml`, and macOS needs the Xcode Metal toolchain. For SQL Server, add `--features driver-mssql`.
+The binary is `target/release/sqler`. Linux needs the GPUI build packages listed in `.github/workflows/ci.yml`, and macOS needs the Xcode Metal toolchain. To build what the release ships, add `--features plugins,driver-mssql`.
