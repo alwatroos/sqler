@@ -135,7 +135,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends \
             pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev \
-            libvulkan1 mesa-vulkan-drivers fonts-dejavu-core cage
+            libvulkan1 mesa-vulkan-drivers fonts-dejavu-core cage xwayland
       # macOS images may ship Xcode without the separately downloaded Metal toolchain.
       - name: Metal toolchain
         if: runner.os == 'macOS'
