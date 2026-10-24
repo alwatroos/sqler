@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Security: `crypto-bigint` 0.7.5 to 0.7.6 and `ctutils` 0.4.4 to 0.4.5 in `Cargo.lock` (RUSTSEC-2026-0387, timing variability in operations meant to be constant-time); `cargo deny check` passes again. Reached only through the SSH tunnel stack (`russh`). No `deny.toml` ignore.
 - Security: `ctutils` 0.4.3 to 0.4.4 in `Cargo.lock` (RUSTSEC-2026-0385, non-constant-time mask generation and u128 comparisons); `cargo deny check` passes again. No advisory ignore was added.
 - Four timing-sensitive tests no longer flake. The guard suite (`s2`, `s8`) runs every scenario except the time-limit one with a 25 s tool time limit instead of 1 s, so a slow runner that needs more than a second to open the session cannot cut a write short; the AI session test that cancels a running statement accepts both orders in which the session and the driver cancel are seen; the plugin host tests create their `tracing` dispatcher before any host event, so the log flood test cannot capture nothing.
 - AI audit guarantee (ADR-0037 addendum): the AI session tab, the Agent tab and the editor AI actions no longer run tool calls unaudited when the app has no audit sink. They now refuse to start and show "AI is off: SQLer found no config folder for the AI audit log, and every AI tool call must be audited." This happens only when the platform gives no config folder; the three surfaces take their sink from one helper (`AiAudit`) so they cannot drift. A sink that cannot write still fails open.
