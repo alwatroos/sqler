@@ -93,12 +93,13 @@ sed 's/ (.*//; s/ *$//' "$tmp/tree.txt" | tr -d '\r' | sort -u >"$tmp/crates.txt
 crates=$(wc -l <"$tmp/crates.txt" | tr -d ' ')
 
 # name, version and manifest directory of every package.
-cargo metadata --locked --format-version 1 >"$tmp/metadata.json" || die "cargo metadata failed"
+# The shipped feature set: the optional dependencies (plugins, mssql) are in the resolve only then.
+cargo metadata --locked --format-version 1 --manifest-path "$app_manifest" "$@" >"$tmp/metadata.json" || die "cargo metadata failed"
 jq -r '.packages[] | [.name, .version, .manifest_path] | @tsv' "$tmp/metadata.json" | tr -d '\r' >"$tmp/packages.tsv"
 
 dir_of() {
     # $1 = name, $2 = version
-    awk -F '\t' -v n="$1" -v v="$2" '$1 == n && $2 == v { print $3; exit }' "$tmp/packages.tsv" | sed 's|/Cargo.toml$||'
+    awk -F '\t' -v n="$1" -v v="$2" '$1 == n && $2 == v { print $3; exit }' "$tmp/packages.tsv" | sed 's|[/\\]Cargo.toml$||'
 }
 
 notices=0
@@ -111,8 +112,8 @@ while IFS= read -r line; do
     name=${line%% v*}
     version=${line##* v}
     dir=$(dir_of "$name" "$version")
-    [ -n "$dir" ] || continue
-    [ -d "$dir" ] || continue
+    [ -n "$dir" ] || fail "no manifest directory for $name $version in cargo metadata"
+    [ -d "$dir" ] || fail "the source of $name $version is missing ($dir); did cargo fetch cover it?"
     for f in "$dir"/*; do
         [ -f "$f" ] || continue
         base=$(basename "$f")
@@ -140,6 +141,7 @@ for name in $verbatim; do
         [ "$n" = "$name" ] || continue
         version=${line##* v}
         dir=$(dir_of "$n" "$version")
+        [ -n "$dir" ] && [ -d "$dir" ] || fail "no source directory for $n $version"
         for f in "$dir"/LICENSE* "$dir"/aws-lc/third_party/*/LICENSE* "$dir"/third_party/*/LICENSE*; do
             [ -f "$f" ] || continue
             found=1

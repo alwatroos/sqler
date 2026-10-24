@@ -278,26 +278,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             msi=$(find target/distrib -name '*.msi' | head -n 1)
             test -n "$msi"
-            out="$RUNNER_TEMP/msi"
-            rm -rf "$out"
-            mkdir -p "$out"
-            7z x -y -o"$(cygpath -m "$out")" "$msi" > /dev/null
-            # The files sit in the embedded cabinet, under their WiX File Id (or their name).
-            find "$out" -iname '*.cab' > "$RUNNER_TEMP/cabs.txt"
-            test -s "$RUNNER_TEMP/cabs.txt"
-            while IFS= read -r cab; do
-              7z x -y -o"$(cygpath -m "$out/cab")" "$(cygpath -m "$cab")" > /dev/null
-            done < "$RUNNER_TEMP/cabs.txt"
-            for pair in LicenseFile:LICENSE NoticeFile:NOTICE ThirdPartyFile:THIRD-PARTY-LICENSES.txt LucideFile:LUCIDE-ISC.txt; do
-              id=${pair%%:*}
-              name=${pair#*:}
-              if [ -z "$(find "$out" \( -name "$id" -o -name "$name" \) -type f | head -n 1)" ]; then
-                echo "::error title=Licence bundle::$id ($name) is missing from the MSI"
-                find "$out" -type f
-                exit 1
-              fi
-            done
-            echo "msi bundle ok: $msi"
+            sh .github/scripts/msi-licence-check.sh "$msi"
           fi
       # Windows builds the GUI subsystem, so the output goes to a file instead of the console.
       - name: Smoke check (--version)
@@ -548,12 +529,6 @@ jobs:
           pattern: artifacts-*
           path: target/distrib/
           merge-multiple: true
-      # R14: the MSI is built in `build` (allow-dirty msi, wix/main.wxs); this download is defensive, for include checks of global builds.
-      - name: Fetch the third-party licences
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: third-party-licenses
-          path: .
       - id: cargo-dist
         shell: bash
         run: |
