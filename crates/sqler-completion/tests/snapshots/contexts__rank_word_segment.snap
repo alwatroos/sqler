@@ -15,3 +15,7 @@ context: Expression, replace: 27..30 "uid", items: 1
 == sqlite ==
 context: Expression, replace: 27..30 "uid", items: 1
  1. "user_id" [Column] insert="user_id" detail="orders · integer"
+
+== tsql ==
+context: Expression, replace: 27..30 "uid", items: 1
+ 1. "user_id" [Column] insert="user_id" detail="orders · integer"

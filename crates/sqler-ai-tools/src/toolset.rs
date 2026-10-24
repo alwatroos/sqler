@@ -12,7 +12,7 @@ use sqler_ai_api::{ToolCall, ToolDefinition, ToolResult};
 use sqler_catalog::Catalog;
 use sqler_config::{AiConfig, RedactionList};
 use sqler_driver_api::sqler_core::DbObject;
-use sqler_sql::{Dialect, StatementClass};
+use sqler_sql::StatementClass;
 
 use crate::approve::Approver;
 use crate::assist::DataSearch;
@@ -172,10 +172,7 @@ impl CancelGuard<'_> {
         };
         let state = self.ran.take();
         let inner = &self.toolset.inner;
-        let dialect = state
-            .info
-            .as_ref()
-            .and_then(|i| Dialect::from_driver_id(i.driver.as_str()));
+        let dialect = state.info.as_ref().and_then(|i| i.dialect);
         let point = if state.phase >= Phase::Approved {
             CancelPoint::AfterApproval
         } else {
@@ -489,9 +486,10 @@ impl ToolSet {
             Ok(content) => content,
             Err(err) => error_json(&err),
         };
-        let (send_rows, dialect) = ran.info.as_ref().map_or((false, None), |i| {
-            (i.send_rows, Dialect::from_driver_id(i.driver.as_str()))
-        });
+        let (send_rows, dialect) = ran
+            .info
+            .as_ref()
+            .map_or((false, None), |i| (i.send_rows, i.dialect));
         let summary = self
             .inner
             .redaction

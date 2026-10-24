@@ -15,3 +15,7 @@ context: Relation, replace: 14..23 "`Order It", items: 1
 == sqlite ==
 context: Relation, replace: 14..23 "\"Order It", items: 1
  1. "Order Items" [Table] insert="\"Order Items\"" detail="main · table"
+
+== tsql ==
+context: Relation, replace: 14..23 "\"Order It", items: 1
+ 1. "Order Items" [Table] insert="[Order Items]" detail="dbo · table"

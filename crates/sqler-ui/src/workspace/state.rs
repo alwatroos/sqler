@@ -951,7 +951,7 @@ impl Workspace {
     #[must_use]
     pub fn insert_target(&self, tab: TabId) -> Option<InsertTarget> {
         let connection = self.tabs.get(tab)?.connection();
-        let dialect = Dialect::from_driver_id(connection.driver.as_str());
+        let dialect = self.dialect_of(&connection.driver);
         Some(match self.grid_objects.get(&tab) {
             Some(object) => InsertTarget::for_object(dialect, object),
             None => InsertTarget::placeholder(dialect),

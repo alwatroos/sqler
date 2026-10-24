@@ -9,7 +9,7 @@ use sqler_sql::Dialect;
 
 use crate::scope::Ident;
 
-/// The three dialect families the data tables cover.
+/// The dialect families the data tables cover.
 ///
 /// `Dialect` is `#[non_exhaustive]`; unknown dialects use the `PostgreSQL` rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,12 +17,15 @@ pub(crate) enum Flavor {
     Postgres,
     MySql,
     Sqlite,
+    /// Microsoft T-SQL: bracket quoting, case-insensitive names, the common lists only.
+    TSql,
 }
 
 pub(crate) fn flavor(dialect: Dialect) -> Flavor {
     match dialect {
         Dialect::MySql => Flavor::MySql,
         Dialect::Sqlite => Flavor::Sqlite,
+        Dialect::TSql => Flavor::TSql,
         _ => Flavor::Postgres,
     }
 }
@@ -240,6 +243,7 @@ pub(crate) fn is_reserved(dialect: Dialect, word: &str) -> bool {
         Flavor::Postgres => PG_RESERVED,
         Flavor::MySql => MYSQL_RESERVED,
         Flavor::Sqlite => SQLITE_RESERVED,
+        Flavor::TSql => TSQL_RESERVED,
     };
     COMMON_RESERVED
         .iter()
@@ -388,6 +392,101 @@ const SQLITE_RESERVED: &[&str] = &[
     "ROLLBACK",
     "TRANSACTION",
     "WINDOW",
+];
+
+/// Words T-SQL reserves, beyond the common ones (the reserved-keyword list of the T-SQL reference).
+const TSQL_RESERVED: &[&str] = &[
+    "ADD",
+    "ANY",
+    "BACKUP",
+    "BEGIN",
+    "BREAK",
+    "BROWSE",
+    "BULK",
+    "CASCADE",
+    "CLOSE",
+    "COLUMN",
+    "COMMIT",
+    "COMPUTE",
+    "CONTAINS",
+    "CONTINUE",
+    "CONVERT",
+    "CURRENT",
+    "CURRENT_DATE",
+    "CURRENT_TIME",
+    "CURRENT_TIMESTAMP",
+    "CURRENT_USER",
+    "CURSOR",
+    "DATABASE",
+    "DBCC",
+    "DECLARE",
+    "DENY",
+    "DISK",
+    "DISTRIBUTED",
+    "DOUBLE",
+    "DUMP",
+    "ERRLVL",
+    "ESCAPE",
+    "EXEC",
+    "EXECUTE",
+    "EXIT",
+    "EXTERNAL",
+    "FETCH",
+    "FILE",
+    "FOR",
+    "FREETEXT",
+    "FUNCTION",
+    "GOTO",
+    "GRANT",
+    "HOLDLOCK",
+    "IDENTITY",
+    "IF",
+    "INDEX",
+    "KEY",
+    "KILL",
+    "LINENO",
+    "LOAD",
+    "MERGE",
+    "OF",
+    "OFF",
+    "OFFSETS",
+    "OPEN",
+    "OPTION",
+    "OVER",
+    "PERCENT",
+    "PIVOT",
+    "PLAN",
+    "PRINT",
+    "PROC",
+    "PROCEDURE",
+    "PUBLIC",
+    "RAISERROR",
+    "READ",
+    "REVERT",
+    "REVOKE",
+    "ROLLBACK",
+    "ROWCOUNT",
+    "RULE",
+    "SAVE",
+    "SCHEMA",
+    "SESSION_USER",
+    "SHUTDOWN",
+    "SOME",
+    "STATISTICS",
+    "SYSTEM_USER",
+    "TOP",
+    "TRAN",
+    "TRANSACTION",
+    "TRIGGER",
+    "TRUNCATE",
+    "TSEQUAL",
+    "UNPIVOT",
+    "USE",
+    "USER",
+    "VARYING",
+    "VIEW",
+    "WAITFOR",
+    "WHILE",
 ];
 
 const COMMON_KEYWORDS: &[&str] = &[
@@ -579,6 +678,7 @@ pub(crate) fn keywords(dialect: Dialect) -> impl Iterator<Item = &'static str> {
         Flavor::Postgres => PG_KEYWORDS,
         Flavor::MySql => MYSQL_KEYWORDS,
         Flavor::Sqlite => SQLITE_KEYWORDS,
+        Flavor::TSql => &[],
     };
     COMMON_KEYWORDS.iter().chain(extra).copied()
 }
@@ -600,6 +700,11 @@ pub(crate) fn statement_keywords(dialect: Dialect) -> &'static [&'static str] {
             "SELECT", "WITH", "INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "ALTER", "DROP",
             "EXPLAIN", "PRAGMA", "BEGIN", "COMMIT", "ROLLBACK", "VALUES", "ATTACH", "DETACH",
             "VACUUM", "REINDEX", "ANALYZE",
+        ],
+        Flavor::TSql => &[
+            "SELECT", "WITH", "INSERT", "UPDATE", "DELETE", "MERGE", "CREATE", "ALTER", "DROP",
+            "TRUNCATE", "EXEC", "DECLARE", "SET", "USE", "BEGIN", "COMMIT", "ROLLBACK", "VALUES",
+            "GRANT", "REVOKE", "DENY",
         ],
     }
 }
@@ -1000,6 +1105,7 @@ pub(crate) fn is_system_column(dialect: Dialect, name: &str) -> bool {
         Flavor::Postgres => &["ctid", "xmin", "xmax", "cmin", "cmax", "tableoid", "oid"],
         Flavor::MySql => &["_rowid"],
         Flavor::Sqlite => &["rowid", "_rowid_", "oid"],
+        Flavor::TSql => &[],
     };
     list.iter().any(|c| c.eq_ignore_ascii_case(name))
 }
@@ -1021,11 +1127,12 @@ pub(crate) fn is_system_schema(dialect: Dialect, name: &str) -> bool {
         Flavor::Postgres => &["pg_catalog", "information_schema", "pg_toast"],
         Flavor::MySql => &["information_schema", "mysql", "performance_schema", "sys"],
         Flavor::Sqlite => &["main", "temp"],
+        Flavor::TSql => &["sys", "INFORMATION_SCHEMA"],
     };
     list.iter().any(|s| s.eq_ignore_ascii_case(name))
 }
 
-/// Whether the unqualified `name` is a system relation (`pg_class`, `sqlite_master`, `dual`).
+/// Whether the unqualified `name` is a system relation (`pg_class`, `sqlite_master`, `dual`, `#temp`).
 pub(crate) fn is_system_relation(dialect: Dialect, name: &str) -> bool {
     let starts = |prefix: &str| {
         name.get(..prefix.len())
@@ -1035,6 +1142,8 @@ pub(crate) fn is_system_relation(dialect: Dialect, name: &str) -> bool {
         Flavor::Postgres => starts("pg_"),
         Flavor::MySql => name.eq_ignore_ascii_case("dual"),
         Flavor::Sqlite => starts("sqlite_"),
+        // The legacy compatibility views (`sysobjects`, ...) and the session's temporary tables (`#t`, `##t`).
+        Flavor::TSql => starts("sys") || starts("#"),
     }
 }
 
@@ -1044,6 +1153,7 @@ pub(crate) fn functions(dialect: Dialect) -> impl Iterator<Item = &'static Func>
         Flavor::Postgres => PG_FUNCS,
         Flavor::MySql => MYSQL_FUNCS,
         Flavor::Sqlite => SQLITE_FUNCS,
+        Flavor::TSql => &[],
     };
     // A dialect-specific entry replaces a common one with the same name.
     COMMON_FUNCS
@@ -1191,7 +1301,9 @@ mod tests {
     #[test]
     fn tables_are_populated() {
         for d in Dialect::ALL {
-            assert!(functions(d).count() >= 60, "{d:?} functions");
+            // T-SQL has the common list only (ADR-0073).
+            let min_functions = if d == Dialect::TSql { 30 } else { 60 };
+            assert!(functions(d).count() >= min_functions, "{d:?} functions");
             assert!(keywords(d).count() >= 100, "{d:?} keywords");
             assert!(statement_keywords(d).contains(&"SELECT"));
         }

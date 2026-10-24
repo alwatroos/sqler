@@ -16,6 +16,8 @@ use sqler_driver_api::{BoxFuture, Session};
 use sqler_plugin_host::{DataError, DataService, PluginConnection};
 use sqler_ui::connections::{ConnectRequest, Connector};
 
+use super::drivers;
+
 /// The saved connections of the user, read from `connections.toml` when asked (a connection added while the app runs
 /// is seen by the next call).
 pub(super) struct AppData {
@@ -63,12 +65,12 @@ impl DataService for AppData {
             .iter()
             .map(|p| {
                 let spec = p.spec();
-                PluginConnection::new(
+                drivers::declare_dialect(PluginConnection::new(
                     p.id().as_str(),
                     spec.name.clone(),
                     spec.driver.clone(),
                     spec.environment,
-                )
+                ))
             })
             .collect()
     }

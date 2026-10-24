@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! Snapshots of the top completion items for every context, in all three dialects.
+//! Snapshots of the top completion items for every context, in every dialect.
 
 use std::fmt::Write as _;
 
@@ -18,6 +18,7 @@ fn home(d: Dialect) -> &'static str {
     match d {
         Dialect::MySql => "shop",
         Dialect::Sqlite => "main",
+        Dialect::TSql => "dbo",
         _ => "public",
     }
 }
@@ -128,7 +129,7 @@ fn render_one(sql: &str, d: Dialect, s: &MemorySchema, top: usize) -> String {
     out
 }
 
-/// Renders the same SQL in all three dialects.
+/// Renders the same SQL in every dialect.
 fn render(sql: &str, top: usize) -> String {
     let mut out = format!("sql: {}\n", sql.replace("{q}", "\""));
     for d in Dialect::ALL {

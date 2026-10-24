@@ -18,3 +18,8 @@ context: Relation, replace: 14..16 "oi", items: 2
 context: Relation, replace: 14..16 "oi", items: 2
  1. "order_items" [Table] insert="order_items" detail="main · table"
  2. "Order Items" [Table] insert="\"Order Items\"" detail="main · table"
+
+== tsql ==
+context: Relation, replace: 14..16 "oi", items: 2
+ 1. "order_items" [Table] insert="order_items" detail="dbo · table"
+ 2. "Order Items" [Table] insert="[Order Items]" detail="dbo · table"

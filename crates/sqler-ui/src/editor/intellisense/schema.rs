@@ -110,6 +110,7 @@ impl CatalogSchema {
             .or_else(|| match dialect {
                 Dialect::Postgres => Some("public".to_owned()),
                 Dialect::Sqlite => Some("main".to_owned()),
+                Dialect::TSql => Some("dbo".to_owned()),
                 _ => None,
             })
             .into_iter()
@@ -360,6 +361,8 @@ mod tests {
         assert_eq!(s.search_path(), ["public"]);
         let lite = CatalogSchema::new(catalog.snapshot(), Dialect::Sqlite);
         assert_eq!(lite.search_path(), ["main"]);
+        let tsql = CatalogSchema::new(catalog.snapshot(), Dialect::TSql);
+        assert_eq!(tsql.search_path(), ["dbo"]);
         let my = CatalogSchema::new(catalog.snapshot(), Dialect::MySql);
         assert_eq!(my.search_path().len(), 0);
     }

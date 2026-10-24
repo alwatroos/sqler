@@ -12,3 +12,6 @@ context: None, replace: 12..12 "", items: 0
 
 == sqlite ==
 context: None, replace: 12..12 "", items: 0
+
+== tsql ==
+context: None, replace: 12..12 "", items: 0

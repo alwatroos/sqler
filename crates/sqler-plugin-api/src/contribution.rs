@@ -121,7 +121,8 @@ pub struct DriverContribution {
     pub name: String,
     /// Host or guest.
     pub kind: DriverKind,
-    /// SQL dialect name.
+    /// SQL dialect name. The names the host knows are `postgres`, `mysql`, `sqlite` and `tsql`, matched exactly. An
+    /// unknown or absent name means no dialect: the host then treats every statement as unclassified.
     pub dialect: Option<String>,
 }
 

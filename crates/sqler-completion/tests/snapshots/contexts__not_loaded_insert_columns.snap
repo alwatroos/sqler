@@ -15,3 +15,7 @@ requests: [Columns { schema: Some("shop"), relation: "pending" }]
 == sqlite ==
 context: InsertColumns, replace: 21..21 "", items: 0
 requests: [Columns { schema: Some("main"), relation: "pending" }]
+
+== tsql ==
+context: InsertColumns, replace: 21..21 "", items: 0
+requests: [Columns { schema: Some("dbo"), relation: "pending" }]

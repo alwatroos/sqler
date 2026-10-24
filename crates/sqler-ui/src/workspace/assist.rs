@@ -11,7 +11,6 @@
 
 use sqler_ai_tools::ConnectionInfo;
 use sqler_config::ProviderConfig;
-use sqler_sql::Dialect;
 
 use super::state::{Effect, Workspace};
 use crate::ai::editor::{
@@ -175,6 +174,7 @@ impl Workspace {
             spec.driver.clone(),
             spec.environment,
         )
+        .with_dialect(self.dialect_of(&spec.driver))
         .with_send_rows(profile.ai_sends_rows());
         let audit = match self.ai_audit() {
             Ok(audit) => audit.clone(),
@@ -280,7 +280,7 @@ impl Workspace {
                 let dialect = self
                     .tabs
                     .get(tab)
-                    .and_then(|t| Dialect::from_driver_id(t.connection().driver.as_str()));
+                    .and_then(|t| self.dialect_of(&t.connection().driver));
                 let snapshot = BufferSnapshot {
                     text: buffer.text,
                     selection: buffer.selection,
@@ -364,7 +364,7 @@ impl Workspace {
         let dialect = self
             .tabs
             .get(tab)
-            .and_then(|t| Dialect::from_driver_id(t.connection().driver.as_str()));
+            .and_then(|t| self.dialect_of(&t.connection().driver));
         match fix_edit(dialect, &buffer.text, &original, &sql) {
             Ok(edit) => {
                 self.assist.entry(tab).state = AssistState::FixApplied;

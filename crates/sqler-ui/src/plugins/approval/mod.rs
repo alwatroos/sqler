@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use sqler_driver_api::sqler_core::DriverId;
 use sqler_plugin_api::PluginId;
+use sqler_sql::Dialect;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
@@ -47,6 +48,8 @@ pub struct PluginWriteRequest {
     pub connection: String,
     /// The driver of the connection (picks the SQL dialect of the gate).
     pub driver: DriverId,
+    /// The SQL dialect of the gate (declared by the plugin manifest, or built in).
+    pub dialect: Option<Dialect>,
     /// Whether the connection is labelled production.
     pub prod: bool,
     /// The exact text that will be sent to the driver.
@@ -73,12 +76,20 @@ impl PluginWriteRequest {
             plugin,
             plugin_name: plugin_name.into(),
             connection: connection.into(),
+            dialect: Dialect::from_driver_id(driver.as_str()),
             driver,
             prod,
             sql: sql.into(),
             param_count: 0,
             stage,
         }
+    }
+
+    /// Sets the SQL dialect of the gate.
+    #[must_use]
+    pub fn with_dialect(mut self, dialect: Option<Dialect>) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     /// Sets how many parameters are bound with the statement.
@@ -328,9 +339,9 @@ impl WriteQueue {
             if self.gated == Some(front.id) {
                 return;
             }
-            let (id, driver) = (front.id, front.request.driver.clone());
+            let (id, dialect) = (front.id, front.request.dialect);
             self.gate.dismiss();
-            match open_prod_gate(&mut self.gate, &driver, &front.request.sql) {
+            match open_prod_gate(&mut self.gate, dialect, &front.request.sql) {
                 Ok(()) => {
                     self.gated = Some(id);
                     return;
