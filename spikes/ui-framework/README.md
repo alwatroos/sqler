@@ -135,8 +135,8 @@ Runner images (`actions/runner-images` README): `ubuntu-latest` = Ubuntu 24.04 x
 `macos-latest` = macOS 26 arm64, `windows-latest` = Windows Server 2025.
 
 Local toolchain for the manual run: Homebrew `cargo 1.99.0` / `rustc 1.99.0` (no rustup, so
-`rust-toolchain.toml` 1.99.1 is not applied locally; CI installs 1.99.1), Xcode 27.0, macOS 27.0.1,
-Apple M4 Pro (`Mac16,8`), 48 GB.
+`rust-toolchain.toml` 1.99.1 is not applied locally; CI installs 1.99.1), Xcode 27.0, macOS arm64
+(reference machine class).
 
 ## Results
 
@@ -147,7 +147,7 @@ macOS run weighs most.
 
 | Target | How obtained | Run | Build | Grid | Editor | Cold start ms (hyperfine mean) | first_frame_ms | rss_mb | Binary MB | Renderer | Notes |
 | ------ | ------------ | --- | ----- | ---- | ------ | ------------------------------ | -------------- | ------ | --------- | -------- | ----- |
-| macOS | manual (Apple M4 Pro, macOS 27.0.1, Xcode 27.0) | commit 4d3d5d1 (same tree as measured, then uncommitted) | pass | pass (smoke) | pass (smoke) | 157.8 (3 runs: 157.9, 158.4, 157.2) | 191.7 (3 runs: 178.6, 202.4, 194.2) | 151.4 (3 runs: 151.7, 151.7, 150.9) | 26.4 | metal | `scripts/measure.sh`, release `--locked`, unstripped. Peak RSS (`/usr/bin/time -l`, `--smoke`) 151.2 to 152.2 MB. 26 rows/frame max, 12 highlight kinds (`results/results.txt`). The 2-minute interactive check (trackpad scroll, type and edit SQL, resize the split) is NOT done: an agent cannot do it. Pending the developer. |
+| macOS | manual (macOS arm64 reference machine class, Xcode 27.0) | commit 4d3d5d1 (same tree as measured, then uncommitted) | pass | pass (smoke) | pass (smoke) | 157.8 (3 runs: 157.9, 158.4, 157.2) | 191.7 (3 runs: 178.6, 202.4, 194.2) | 151.4 (3 runs: 151.7, 151.7, 150.9) | 26.4 | metal | `scripts/measure.sh`, release `--locked`, unstripped. Peak RSS (`/usr/bin/time -l`, `--smoke`) 151.2 to 152.2 MB. 26 rows/frame max, 12 highlight kinds (`results/results.txt`). The 2-minute interactive check (trackpad scroll, type and edit SQL, resize the split) is NOT done: an agent cannot do it. Pending the developer. |
 | Linux X11 | CI (ubuntu-latest, xvfb) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) @ 3c59a65 | pass | pass | pass | 200.7 | 515.0 (run 1: 1853.5) | 264.3 | 57.7 | llvmpipe (LLVM 20.1.2) / llvmpipe (software) | 4 vCPU VM, software Vulkan. Peak RSS 252.3 MB. 26 rows/frame max, 12 highlight kinds. Run 1 ([link](https://github.com/alwatroos/sqler/actions/runs/39416330360)) also passed: cold 204.4, rss 264.5. |
 | Linux Wayland | CI (ubuntu-latest, headless cage) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) @ 3c59a65 | pass | pass | pass | 181.9 | 2285.1 | 267.5 | 57.7 | llvmpipe (LLVM 20.1.2) / llvmpipe (software) | Report says `display=wayland`. Peak RSS 259.6 MB. 26 rows/frame max, 12 highlight kinds. Run 1 with headless weston failed on environment only: `Wayland compositor does not provide wl_seat` (weston headless has no input device, so no seat); fixed by using cage. |
 | macOS | CI (macos-latest, arm64 VM) | [https://github.com/alwatroos/sqler/actions/runs/39418467982](https://github.com/alwatroos/sqler/actions/runs/39418467982) @ 3c59a65 | pass | pass | pass | 203.8 (run 1: 494.7) | 933.9 (run 1: 2981.6) | 124.2 | 26.4 | metal | VM Metal, no Metal toolchain step needed. Peak RSS 124.3 MB. 21 rows/frame max, 12 highlight kinds. |

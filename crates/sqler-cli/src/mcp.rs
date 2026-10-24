@@ -104,7 +104,8 @@ async fn connect_all(targets: &[(String, String)]) -> Result<CliSource> {
             let _ = worker.run().await;
         });
         entries.push(Entry {
-            info: ConnectionInfo::new(&name, &name, id, None),
+            info: ConnectionInfo::new(&name, &name, id, None)
+                .with_dialect(crate::dialect_of_driver(driver)),
             config,
             catalog,
         });

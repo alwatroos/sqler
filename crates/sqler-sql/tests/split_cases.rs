@@ -491,12 +491,19 @@ fn placeholders_postgres_specifics() {
 #[test]
 fn placeholder_ranges_are_global_and_ascending() {
     let text = "select :a; select\n  :b, :c;\n-- :d\nselect :e";
-    for d in Dialect::ALL {
+    for d in [Postgres, MySql, Sqlite] {
         let p = placeholders(d, text);
         let names: Vec<_> = p.iter().map(|p| &text[p.range.clone()]).collect();
         assert_eq!(names, [":a", ":b", ":c", ":e"]);
         assert!(p.windows(2).all(|w| w[0].range.end <= w[1].range.start));
     }
+    // T-SQL has `@P<k>` only; `:a` is not a placeholder there.
+    assert_eq!(placeholders(Dialect::TSql, text).len(), 0);
+    let text = "select @P1; select\n  @P2, @p3;\n-- @P4\nselect @P5, @x";
+    let p = placeholders(Dialect::TSql, text);
+    let names: Vec<_> = p.iter().map(|p| &text[p.range.clone()]).collect();
+    assert_eq!(names, ["@P1", "@P2", "@p3", "@P5"]);
+    assert!(p.windows(2).all(|w| w[0].range.end <= w[1].range.start));
 }
 
 #[test]

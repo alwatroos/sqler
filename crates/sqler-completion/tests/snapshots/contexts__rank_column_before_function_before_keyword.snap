@@ -18,3 +18,8 @@ context: Expression, replace: 28..30 "na", items: 2
 context: Expression, replace: 28..30 "na", items: 2
  1. "name" [Column] insert="name" detail="u · Text"
  2. "natural" [Keyword] insert="natural" detail="-"
+
+== tsql ==
+context: Expression, replace: 28..30 "na", items: 2
+ 1. "name" [Column] insert="name" detail="u · Text"
+ 2. "natural" [Keyword] insert="natural" detail="-"

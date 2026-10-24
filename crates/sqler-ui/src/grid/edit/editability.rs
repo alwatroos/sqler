@@ -635,6 +635,20 @@ mod tests {
     }
 
     #[test]
+    fn a_t_sql_connection_is_not_refused_for_its_dialect() {
+        let t = table();
+        let c = cols(&["id", "name", "code"]);
+        for sql in [
+            "SELECT * FROM [t]",
+            "SELECT TOP (10) * FROM t",
+            "SELECT * FROM [public].[t]",
+        ] {
+            let e = run(Some(Dialect::TSql), sql, Some(&t), &[], &c, false);
+            assert!(matches!(e, Editability::Editable(_)), "{sql}: {e:?}");
+        }
+    }
+
+    #[test]
     fn query_shapes() {
         let t = table();
         let c = cols(&["id", "name", "code"]);

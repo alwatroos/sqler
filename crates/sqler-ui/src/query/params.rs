@@ -7,7 +7,7 @@
 //! positional marker and returns the values in [`Query::params`], which every driver binds.
 
 use sqler_driver_api::sqler_core::{Query, Value};
-use sqler_sql::{Dialect, StatementClass};
+use sqler_sql::{Dialect, StatementClass, param_marker};
 use thiserror::Error;
 
 use super::plan::Plan;
@@ -319,11 +319,11 @@ pub fn bind(
         let keys = st.keys();
         let mut sql = st.sql.clone();
         let mut values: Vec<(ParamKey, Value)> = Vec::new();
-        if dialect.is_some() {
+        if let Some(d) = dialect {
             let mut distinct: Vec<&ParamKey> = Vec::new();
             let mut markers = Vec::with_capacity(keys.len());
             for key in &keys {
-                let marker = if dialect == Some(Dialect::MySql) {
+                let marker = if d == Dialect::MySql {
                     values.push((key.clone(), value_of(key)?));
                     "?".to_owned()
                 } else {
@@ -334,11 +334,7 @@ pub fn bind(
                     if pos + 1 == distinct.len() && values.len() < distinct.len() {
                         values.push((key.clone(), value_of(key)?));
                     }
-                    if dialect == Some(Dialect::Postgres) {
-                        format!("${}", pos + 1)
-                    } else {
-                        format!("?{}", pos + 1)
-                    }
+                    param_marker(d, pos + 1)
                 };
                 markers.push(marker);
             }
@@ -514,6 +510,18 @@ mod tests {
         let b = bind(Some(Dialect::Sqlite), &p, &[input(named(":a"), evil)]).unwrap();
         assert_eq!(b[0].query.sql, "select ?1");
         assert_eq!(b[0].query.params, [Value::Text(evil.to_owned())]);
+    }
+
+    #[test]
+    fn t_sql_binds_at_p_markers() {
+        let p = planned(Dialect::TSql, "select @P3, @P7, @P3, @x");
+        let inputs = [
+            input(ParamKey::Positional(3), "1"),
+            input(ParamKey::Positional(7), "x"),
+        ];
+        let b = bind(Some(Dialect::TSql), &p, &inputs).unwrap();
+        assert_eq!(b[0].query.sql, "select @P1, @P2, @P1, @x");
+        assert_eq!(b[0].query.params.len(), 2);
     }
 
     #[test]

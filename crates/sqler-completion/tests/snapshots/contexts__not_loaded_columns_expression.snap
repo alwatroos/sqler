@@ -33,3 +33,13 @@ requests: [Columns { schema: Some("main"), relation: "pending" }]
  4. "user_id" [Column] insert="user_id" detail="o · integer"
  5. "o" [Alias] insert="o" detail="orders"
  6. "p" [Alias] insert="p" detail="pending"
+
+== tsql ==
+context: Expression, replace: 7..7 "", items: 140
+requests: [Columns { schema: Some("dbo"), relation: "pending" }]
+ 1. "id" [Column] insert="id" detail="o · integer"
+ 2. "total" [Column] insert="total" detail="o · numeric"
+ 3. "status" [Column] insert="status" detail="o · text"
+ 4. "user_id" [Column] insert="user_id" detail="o · integer"
+ 5. "o" [Alias] insert="o" detail="orders"
+ 6. "p" [Alias] insert="p" detail="pending"

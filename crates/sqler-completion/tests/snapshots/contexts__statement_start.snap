@@ -48,3 +48,18 @@ context: StatementStart, replace: 0..0 "", items: 25
 10. "EXPLAIN" [Keyword] insert="EXPLAIN" detail="-"
 11. "PRAGMA" [Keyword] insert="PRAGMA" detail="-"
 12. "BEGIN" [Keyword] insert="BEGIN" detail="-"
+
+== tsql ==
+context: StatementStart, replace: 0..0 "", items: 26
+ 1. "SELECT" [Keyword] insert="SELECT" detail="-"
+ 2. "WITH" [Keyword] insert="WITH" detail="-"
+ 3. "INSERT" [Keyword] insert="INSERT" detail="-"
+ 4. "UPDATE" [Keyword] insert="UPDATE" detail="-"
+ 5. "DELETE" [Keyword] insert="DELETE" detail="-"
+ 6. "MERGE" [Keyword] insert="MERGE" detail="-"
+ 7. "CREATE" [Keyword] insert="CREATE" detail="-"
+ 8. "ALTER" [Keyword] insert="ALTER" detail="-"
+ 9. "DROP" [Keyword] insert="DROP" detail="-"
+10. "TRUNCATE" [Keyword] insert="TRUNCATE" detail="-"
+11. "EXEC" [Keyword] insert="EXEC" detail="-"
+12. "DECLARE" [Keyword] insert="DECLARE" detail="-"

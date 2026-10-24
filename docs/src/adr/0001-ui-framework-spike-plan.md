@@ -108,7 +108,7 @@ Commit measured: 3c59a65 (CI rows, run 39418467982) and 4d3d5d1 (manual macOS ro
 | Linux X11 | CI, ubuntu-latest, xvfb, llvmpipe (software Vulkan) | run 39418467982 | pass (26 rows/frame max, last row rendered) | pass (12 highlight kinds) |
 | Linux Wayland | CI, ubuntu-latest, headless cage, llvmpipe | run 39418467982 | pass (26 rows/frame max, last row rendered) | pass (12 highlight kinds) |
 | macOS | CI, macos-latest arm64 VM, Metal | run 39418467982 | pass (21 rows/frame max, last row rendered) | pass (12 highlight kinds) |
-| macOS | manual, Apple M4 Pro, macOS 27.0.1, Metal | commit 4d3d5d1 | pass (26 rows/frame max, last row rendered) | pass (12 highlight kinds) |
+| macOS | manual, macOS arm64 (reference machine class), Metal | commit 4d3d5d1 | pass (26 rows/frame max, last row rendered) | pass (12 highlight kinds) |
 | Windows | CI, windows-latest, WARP (software D3D) | run 39418467982 | pass (24 rows/frame max, last row rendered) | pass (12 highlight kinds) |
 
 Build passed on every target. Two earlier failures were environment only and were fixed: headless

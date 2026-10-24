@@ -175,6 +175,8 @@ pub(super) struct EditFlow {
     resolved: HashMap<(TabId, usize), Option<String>>,
     /// Query tabs whose session may be inside a user transaction.
     in_tx: HashSet<TabId>,
+    /// T-SQL: the `@@TRANCOUNT` the statements of the tab left, as far as the text shows.
+    tran_depth: HashMap<TabId, u32>,
     /// Query tabs whose session has `autocommit = 0`: ending a transaction starts the next one.
     autocommit_off: HashSet<TabId>,
     /// Applies in flight.
@@ -213,6 +215,7 @@ impl EditFlow {
         self.data_tabs.remove(&tab);
         self.resolved.retain(|(t, _), _| *t != tab);
         self.in_tx.remove(&tab);
+        self.tran_depth.remove(&tab);
         self.autocommit_off.remove(&tab);
         self.applies.remove(&tab);
         self.commit_unknown.retain(|key| key.tab != tab);
@@ -245,6 +248,32 @@ impl EditFlow {
             TxEffect::End if ended => {
                 !self.autocommit_off.contains(&tab) && self.in_tx.remove(&tab)
             }
+            // T-SQL counts nested `BEGIN TRAN`s like `@@TRANCOUNT`: a `COMMIT` ends the
+            // transaction only at the outermost level, a bare `ROLLBACK` always.
+            // A change of nothing (`BEGIN TRAN; COMMIT`) leaves the state as it is: when unsure,
+            // the transaction stays open.
+            TxEffect::Tran {
+                reset: false,
+                delta: 0,
+                floor: 0,
+            } => false,
+            TxEffect::Tran {
+                reset,
+                delta,
+                floor,
+            } if ((delta > 0 || floor > 0) && sent) || (delta <= 0 && ended) => {
+                let depth = self.tran_depth.get(&tab).copied().unwrap_or(0);
+                let base = if reset { 0 } else { depth };
+                // The count is clamped at zero at every statement: `floor` is what that leaves.
+                let next = base.saturating_add_signed(delta).max(floor);
+                if next > 0 {
+                    self.tran_depth.insert(tab, next);
+                    self.in_tx.insert(tab) || next != depth
+                } else {
+                    self.tran_depth.remove(&tab);
+                    !self.autocommit_off.contains(&tab) && self.in_tx.remove(&tab)
+                }
+            }
             TxEffect::AutocommitOff if sent => {
                 let first = self.autocommit_off.insert(tab);
                 self.in_tx.insert(tab) || first
@@ -252,8 +281,11 @@ impl EditFlow {
             // The server commits an open transaction when autocommit is switched on.
             TxEffect::AutocommitOn if finished => {
                 let off = self.autocommit_off.remove(&tab);
+                self.tran_depth.remove(&tab);
                 self.in_tx.remove(&tab) || off
             }
+            // T-SQL: the mode is off, an open transaction stays open (no commit happens).
+            TxEffect::ImplicitOff if finished => self.autocommit_off.remove(&tab),
             _ => false,
         }
     }
@@ -271,6 +303,7 @@ impl EditFlow {
     /// The session of the tab is gone or lost: it is in no transaction any more.
     pub(super) fn session_gone(&mut self, tab: TabId) {
         let off = self.autocommit_off.remove(&tab);
+        self.tran_depth.remove(&tab);
         if self.in_tx.remove(&tab) || off {
             self.generation += 1;
         }
@@ -497,7 +530,7 @@ impl Workspace {
     /// grid has no source (the tab is gone, or it is neither a table-data tab nor a result).
     pub fn edit_context(&mut self, key: GridKey) -> Option<(EditContext, Effect)> {
         let driver = self.tabs.get(key.tab)?.connection().driver.clone();
-        let dialect = Dialect::from_driver_id(driver.as_str());
+        let dialect = self.dialect_of(&driver);
         let production = self.production(key.tab);
         let apply_block = self.apply_block(key);
         let catalog = self.editor_catalog(key.tab);
@@ -927,7 +960,7 @@ impl Workspace {
         let Some(dialect) = self
             .tabs
             .get(tab)
-            .and_then(|t| Dialect::from_driver_id(t.connection().driver.as_str()))
+            .and_then(|t| self.dialect_of(&t.connection().driver))
         else {
             return;
         };

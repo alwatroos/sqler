@@ -7,6 +7,7 @@ use sqler_ai_api::BoxFuture;
 use sqler_catalog::Catalog;
 use sqler_driver_api::Session;
 use sqler_driver_api::sqler_core::{DriverId, Environment};
+use sqler_sql::Dialect;
 
 use crate::error::ToolError;
 
@@ -26,6 +27,10 @@ pub struct ConnectionInfo {
     pub read_only: bool,
     /// Whether row values may reach the model. `false` withholds every `rows` array (ADR-0037).
     pub send_rows: bool,
+    /// The SQL dialect the guard, the samples and the prompts use. [`ConnectionInfo::new`] sets
+    /// [`Dialect::from_driver_id`] of the driver; a host with a plugin driver sets the dialect its
+    /// manifest declares. `None` means no dialect is known: nothing is proven read-only.
+    pub dialect: Option<Dialect>,
 }
 
 impl ConnectionInfo {
@@ -37,6 +42,7 @@ impl ConnectionInfo {
         driver: DriverId,
         environment: Option<Environment>,
     ) -> Self {
+        let dialect = Dialect::from_driver_id(driver.as_str());
         Self {
             id: id.into(),
             name: name.into(),
@@ -44,7 +50,15 @@ impl ConnectionInfo {
             environment,
             read_only: false,
             send_rows: environment != Some(Environment::Prod),
+            dialect,
         }
+    }
+
+    /// Sets the SQL dialect (`None` for a driver with no known dialect).
+    #[must_use]
+    pub fn with_dialect(mut self, dialect: Option<Dialect>) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     /// Sets the read-only flag.
@@ -110,5 +124,20 @@ mod tests {
         assert!(!info(Some(Environment::Prod)).send_rows);
         assert!(info(Some(Environment::Prod)).with_send_rows(true).send_rows);
         assert!(!info(None).with_send_rows(false).send_rows);
+    }
+
+    #[test]
+    fn dialect_defaults_to_the_built_in_driver() {
+        let of = |id: &str| ConnectionInfo::new("a", "A", DriverId::new(id).unwrap(), None);
+        assert_eq!(of("postgres").dialect, Some(Dialect::Postgres));
+        assert_eq!(of("mysql").dialect, Some(Dialect::MySql));
+        assert_eq!(of("sqlite").dialect, Some(Dialect::Sqlite));
+        // A plugin driver has no dialect until the host sets one; `tsql` is no driver id.
+        assert_eq!(of("sqlserver").dialect, None);
+        assert_eq!(of("tsql").dialect, None);
+        assert_eq!(of("duckdb").dialect, None);
+        let set = of("sqlserver").with_dialect(Some(Dialect::TSql));
+        assert_eq!(set.dialect, Some(Dialect::TSql));
+        assert_eq!(set.with_dialect(None).dialect, None);
     }
 }

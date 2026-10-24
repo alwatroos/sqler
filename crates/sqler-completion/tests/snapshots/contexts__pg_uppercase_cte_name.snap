@@ -24,3 +24,10 @@ context: Relation, replace: 56..58 "re", items: 4
  2. "orders" [Table] insert="orders" detail="main · table"
  3. "Order Items" [Table] insert="\"Order Items\"" detail="main · table"
  4. "order_items" [Table] insert="order_items" detail="main · table"
+
+== tsql ==
+context: Relation, replace: 56..58 "re", items: 4
+ 1. "Recent" [Cte] insert="Recent" detail="cte"
+ 2. "orders" [Table] insert="orders" detail="dbo · table"
+ 3. "Order Items" [Table] insert="[Order Items]" detail="dbo · table"
+ 4. "order_items" [Table] insert="order_items" detail="dbo · table"

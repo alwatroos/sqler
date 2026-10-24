@@ -1,0 +1,14 @@
+---
+source: crates/sqler-sql/tests/format_snapshots.rs
+expression: out
+---
+-- leading
+SELECT /* inline */ a, -- trailing
+b
+FROM t /* multi
+   line */
+WHERE x = 1 -- end
+;
+
+-- only a comment
+/* another */

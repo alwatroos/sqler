@@ -31,6 +31,7 @@ use sqler_plugin_host::{
 
 use super::backend::AppPlugins;
 use super::data::AppData;
+use super::drivers;
 
 /// The longest guest message passed to the model, in characters.
 const MAX_MESSAGE_CHARS: usize = 512;
@@ -141,8 +142,11 @@ impl DataService for SurfaceData {
             .connections()
             .into_iter()
             .map(|c| {
-                PluginConnection::new(c.id, c.name, c.driver, c.environment)
-                    .with_read_only(c.read_only)
+                drivers::declare_dialect(
+                    PluginConnection::new(c.id, c.name, c.driver, c.environment)
+                        .with_dialect(c.dialect)
+                        .with_read_only(c.read_only),
+                )
             })
             .collect()
     }

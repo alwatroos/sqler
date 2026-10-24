@@ -49,6 +49,16 @@ const FRAGMENTS: &[&str] = &[
     "if",
     "loop",
     "create procedure p() ",
+    "\nGO\n",
+    "N'",
+    "[[",
+    "]]",
+    "@@",
+    "exec ",
+    "waitfor ",
+    "GO",
+    "begin tran ",
+    "create or alter proc p as ",
 ];
 
 fn fragments() -> impl Strategy<Value = String> {
@@ -196,6 +206,23 @@ fn hostile_inputs_finish_and_tile() {
             "end if",
             "create procedure p() begin ".to_owned() + &"end if;".repeat(100_000),
         ),
+        ("go words", "GO ".repeat(mib / 3)),
+        ("go lines", "GO\n".repeat(mib / 3)),
+        ("go after blanks", " ".repeat(mib) + "GO"),
+        ("go before blanks", "GO".to_owned() + &" ".repeat(mib)),
+        ("go comments", "GO -- x\n".repeat(100_000)),
+        ("tsql begin", "begin ".repeat(mib / 6)),
+        ("tsql begin semicolons", "begin;".repeat(mib / 6)),
+        ("tsql end", "end ".repeat(mib / 4)),
+        ("tsql case", "select case when ".repeat(mib / 17) + ";"),
+        (
+            "tsql routine",
+            "create or alter proc p as ".to_owned() + &"select 1;".repeat(100_000),
+        ),
+        ("at signs", "@".repeat(mib)),
+        ("hashes", "#".repeat(mib)),
+        ("closing brackets", "[a]]".repeat(mib / 4)),
+        ("money", "$".repeat(mib)),
     ];
     for (name, text) in &cases {
         for d in Dialect::ALL {

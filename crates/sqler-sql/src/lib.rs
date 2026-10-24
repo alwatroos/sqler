@@ -11,7 +11,10 @@
 //! text, column defaults and native types come from the server's catalog and are written as
 //! they are.
 //!
-//! Dialects: [`Dialect::Postgres`], [`Dialect::MySql`] (also `MariaDB`) and [`Dialect::Sqlite`].
+//! Dialects: [`Dialect::Postgres`], [`Dialect::MySql`] (also `MariaDB`), [`Dialect::Sqlite`] and
+//! [`Dialect::TSql`] (Microsoft SQL Server). The first three are built-in driver ids
+//! ([`Dialect::from_driver_id`]); a plugin driver names its dialect in its manifest and the host
+//! maps the name with [`Dialect::from_name`]. T-SQL has no create or drop scripts.
 //!
 //! The crate also has pure SQL text services built on one hand-written lexer that never fails:
 //! [`split()`] a script into statements with exact byte ranges, find the [`statement_at`] a

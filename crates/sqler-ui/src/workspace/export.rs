@@ -82,7 +82,7 @@ impl Workspace {
     }
 
     fn export_dialect(&self, tab: TabId) -> Option<Dialect> {
-        Dialect::from_driver_id(self.tabs.get(tab)?.connection().driver.as_str())
+        self.dialect_of(&self.tabs.get(tab)?.connection().driver)
     }
 
     /// Marks the results of a tab as replaced (a new run, a reopened grid). An open export dialog
@@ -473,6 +473,7 @@ mod tests {
 
     use super::*;
     use crate::export::{ExportFailure, ExportSummary};
+    use crate::grid::InsertTarget;
     use crate::query::{BufferSnapshot, RunMode};
     use crate::sidebar::SidebarModel;
     use crate::workspace::WorkspaceAction;
@@ -745,6 +746,71 @@ mod tests {
             w.exports.origins[&(tab, None)].class,
             StatementClass::Unknown
         );
+    }
+
+    /// A workspace with one `sqlserver` connection whose plugin manifest declares `tsql`.
+    fn t_sql_ws() -> Workspace {
+        use crate::plugins::manager::fixture::{driver_manifest, row};
+        let driver = DriverId::new("sqlserver").unwrap();
+        let w = Workspace::new(SidebarModel::from_connections(vec![
+            ConnectionConfig::new("mssql", driver, "localhost").with_environment(Environment::Prod),
+        ]));
+        crate::workspace::testing::with_plugin_rows(
+            w,
+            vec![row(driver_manifest("sqlserver", "sqlserver", Some("tsql")))],
+        )
+    }
+
+    #[test]
+    fn a_sqlserver_tab_exports_with_the_declared_dialect() {
+        let mut w = t_sql_ws();
+        let tab = open(&mut w, 0);
+        assert_eq!(w.export_dialect(tab), Some(Dialect::TSql));
+        w.remember_open_data(tab, "SELECT TOP (1000) *\nFROM [dbo].[t];\n");
+        assert_eq!(w.exports.origins[&(tab, None)].class, StatementClass::Read);
+        w.remember_open_data(tab, "delete from [dbo].[t]");
+        assert_eq!(w.exports.origins[&(tab, None)].class, StatementClass::Write);
+        w.remember_open_data(tab, "exec p");
+        assert_eq!(
+            w.exports.origins[&(tab, None)].class,
+            StatementClass::Unknown
+        );
+    }
+
+    #[test]
+    fn a_prod_sqlserver_tab_asks_for_every_statement_that_is_not_read() {
+        for (sql, asks) in [
+            ("select 1", false),
+            ("select top (5) * from [dbo].[t]", false),
+            ("update t set a = 1", true),
+            ("exec p", true),
+            ("select 1\nGO\ndelete from t", true),
+            ("declare @x int = 1", true),
+        ] {
+            let mut w = t_sql_ws();
+            let tab = open(&mut w, 0);
+            let effect = w.run_query(tab, RunMode::All, BufferSnapshot::at_cursor(sql, 0));
+            if asks {
+                assert!(matches!(effect, Effect::None), "{sql}");
+                assert!(
+                    matches!(
+                        w.query_tab(tab).unwrap().phase(),
+                        crate::query::Phase::Confirming(_)
+                    ),
+                    "{sql}"
+                );
+            } else {
+                assert!(matches!(effect, Effect::RunQuery { .. }), "{sql}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_sqlserver_copy_as_insert_uses_brackets() {
+        let mut w = t_sql_ws();
+        let tab = open(&mut w, 0);
+        let target = w.insert_target(tab).unwrap();
+        assert_eq!(target, InsertTarget::placeholder(Some(Dialect::TSql)));
     }
 
     #[test]

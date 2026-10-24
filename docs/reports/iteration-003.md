@@ -24,7 +24,7 @@ M2 (connections and drivers), items in merge order:
 - ADR-0016 Connect pipeline (accepted) — `Connector` trait in `sqler-ui`, pipeline (secrets, tunnel, target rewrite, driver registry) in `sqler-app`.
 - ADR-0017 Object browser sessions and DROP confirmation (accepted) — a browser session per connection, short-lived action sessions, a verbatim statement and a second step on `prod`.
 ### Metrics
-Measured on 2026-10-20, macOS 27.0.1 arm64 (Apple M4 Pro), commit `ba24c9a`, `target/release/sqler` (default features, `--locked`). Tracked in [benchmarks](../src/benchmarks.md).
+Measured on 2026-10-20, macOS arm64 (reference machine class), commit `ba24c9a`, `target/release/sqler` (default features, `--locked`). Tracked in [benchmarks](../src/benchmarks.md).
 - Cold start: 155.1 ms mean (σ 11.0, min 138.3, max 167.2), `hyperfine` 20 runs after 3 warm-ups of `sqler --exit-after-first-frame`. Target < 500 ms: met on macOS. M1 was 140.6 ms.
 - Idle RSS: 100.0 to 100.2 MiB (three runs, `ps` at 6 s and 10 s) with three saved connections (`SQLite` `:memory:`, `PostgreSQL`, `MySQL`; both servers running in Docker). The sessions were not opened: the app has no headless way to open one and an agent cannot double-click, so the "three connections open" figure is still pending the maintainer. Target < 150 MB. M1 was 98.1 MiB.
 - Binary size: 38.3 MiB (40,168,784 bytes, 40.2 MB decimal). Target < 60 MB: met. M1 was 29.5 MiB. The Linux and Windows `sqler` binaries are not measured; the M1 Linux spike build was 57.7 MB.
@@ -64,7 +64,7 @@ M3 (editor and intellisense), once the owner has answered the decisions above an
 ### AGENTS.md changes
 - Section 9: roadmap status now reads "M2 code complete; Definition of Done pending maintainer verification and product-owner decisions; M3 next", with the delivered list, the measured numbers and the explicit lists of pending maintainer checks (carried from the PR bodies of #16, #19, #24 and #25, plus the M1 items) and pending owner decisions.
 ### Raw measurements
-Commands run at `ba24c9a` on macOS 27.0.1 arm64 (Apple M4 Pro), from the repository root; `HOME` pointed at a scratch directory whose `Library/Application Support/SQLer/connections.toml` held a `SQLite` `:memory:`, a `PostgreSQL` (`127.0.0.1:54329`) and a `MySQL` (`127.0.0.1:33069`) entry.
+Commands run at `ba24c9a` on macOS arm64 (reference machine class), from the repository root; `HOME` pointed at a scratch directory whose `Library/Application Support/SQLer/connections.toml` held a `SQLite` `:memory:`, a `PostgreSQL` (`127.0.0.1:54329`) and a `MySQL` (`127.0.0.1:33069`) entry.
 - Build: `cargo build --release -p sqler-app --locked`.
 - Binary size: `stat -f %z target/release/sqler` printed `40168784` (40168784 / 1048576 = 38.3 MiB).
 - Cold start: `hyperfine -w 3 -r 20 'target/release/sqler --exit-after-first-frame'` reported mean 155.1 ms, σ 11.0 ms, min 138.3 ms, max 167.2 ms (peak memory per run 68.4 MiB).

@@ -90,7 +90,8 @@ pub fn format(
     text: &str,
     options: &FormatOptions,
 ) -> Result<String, FormatError> {
-    let mut parts: Vec<String> = Vec::new();
+    // Each part with whether it is glued to the previous one by a space instead of a blank line.
+    let mut parts: Vec<(String, bool)> = Vec::new();
     for segment in split(dialect, text) {
         let part = match segment.kind {
             SegmentKind::Statement => statement(dialect, text, &segment, options)?,
@@ -98,15 +99,32 @@ pub fn format(
             _ => slice(text, segment.body.clone()).to_owned(),
         };
         if !part.is_empty() {
-            parts.push(part);
+            let glue = dialect == Dialect::TSql
+                && segment.kind == SegmentKind::Statement
+                && starts_with_go(dialect, slice(text, segment.body.clone()));
+            parts.push((part, glue));
         }
     }
     if parts.is_empty() {
         return Ok(String::new());
     }
-    let mut out = parts.join("\n\n");
+    let mut out = String::new();
+    for (i, (part, glue)) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push_str(if *glue { " " } else { "\n\n" });
+        }
+        out.push_str(part);
+    }
     out.push('\n');
     Ok(out)
+}
+
+/// Whether the first token of a T-SQL `body` is the word `GO`. Such a `GO` shared its line with the
+/// text before it, so it is no separator; a blank line in front of it would make it one.
+fn starts_with_go(dialect: Dialect, body: &str) -> bool {
+    tokenize(dialect, body)
+        .first()
+        .is_some_and(|t| t.is_keyword(body, "GO"))
 }
 
 fn slice(text: &str, range: std::ops::Range<usize>) -> &str {
@@ -134,7 +152,14 @@ fn last_token(tokens: &[Token]) -> Option<&Token> {
 /// Appends the terminator of `segment`. A line comment before it forces a new line; a custom
 /// delimiter keeps the input gap so that no token can merge with it. After an operator that ends
 /// in `-` the whitespace is copied: it can be what stops a `MySQL` `--` from being a comment.
-fn push_terminator(out: &mut String, text: &str, segment: &Segment, tokens: &[Token], src: &str) {
+fn push_terminator(
+    out: &mut String,
+    dialect: Dialect,
+    text: &str,
+    segment: &Segment,
+    tokens: &[Token],
+    src: &str,
+) {
     let last = last_token(tokens);
     let dash = last.is_some_and(|t| t.kind == TokenKind::Op && t.text(src).ends_with('-'));
     let gap_end = segment
@@ -149,7 +174,10 @@ fn push_terminator(out: &mut String, text: &str, segment: &Segment, tokens: &[To
         return;
     };
     let term_text = slice(text, term.clone());
-    if last.is_some_and(|t| t.kind == TokenKind::LineComment) {
+    if dialect == Dialect::TSql && term_text != ";" {
+        // A `GO` separator must stay alone on its line, or it would stop being one.
+        out.push('\n');
+    } else if last.is_some_and(|t| t.kind == TokenKind::LineComment) {
         out.push('\n');
     } else if dash {
         out.push_str(gap);
@@ -209,7 +237,10 @@ fn statement(
     let body = slice(text, segment.body.clone());
     let tokens = body_tokens(dialect, text, segment);
     unterminated(&tokens, segment.body.start)?;
+    // A T-SQL `GO` word that is not a separator (`GO 2`, `select 1 GO`) is copied as it is:
+    // a layout that moved it to the start of a line would turn it into one.
     let verbatim = is_compound(dialect, body, &tokens)
+        || (dialect == Dialect::TSql && tokens.iter().any(|t| t.is_keyword(body, "GO")))
         || (dialect == Dialect::MySql
             && tokens
                 .iter()
@@ -220,7 +251,7 @@ fn statement(
     } else {
         layout(body, &tokens, options)
     };
-    push_terminator(&mut out, text, segment, &tokens, body);
+    push_terminator(&mut out, dialect, text, segment, &tokens, body);
     Ok(out)
 }
 
@@ -629,6 +660,77 @@ mod tests {
                 "{dialect:?}"
             );
         }
+    }
+
+    #[test]
+    fn tsql_go_stays_alone_on_its_line() {
+        let o = FormatOptions::default();
+        let ts = Dialect::TSql;
+        assert_eq!(
+            format(ts, "select 1\nGO\nselect 2", &o),
+            Ok("SELECT 1\nGO\n\nSELECT 2\n".to_owned())
+        );
+        assert_eq!(
+            format(ts, "select 1 -- c\n  go  -- d\nselect 2", &o),
+            Ok("SELECT 1 -- c\ngo\n\n-- d\nSELECT 2\n".to_owned())
+        );
+        assert_eq!(
+            format(ts, "go\nselect 1\ngo", &o),
+            Ok("go\n\nSELECT 1\ngo\n".to_owned())
+        );
+        // The output splits at the same places as the input.
+        for text in [
+            "select 1\nGO\nselect 2",
+            "begin try select 1 end try begin catch select 2 end catch\nGO\ndelete from t",
+            "create proc p as select 1; delete from t\nGO\nselect 2",
+        ] {
+            let out = format(ts, text, &o).unwrap();
+            let count = |s: &str| {
+                split(ts, s)
+                    .iter()
+                    .filter(|g| g.kind == SegmentKind::Statement)
+                    .count()
+            };
+            assert_eq!(count(&out), count(text), "{text:?} -> {out:?}");
+        }
+    }
+
+    #[test]
+    fn tsql_go_that_shared_a_line_is_not_moved_to_a_line_of_its_own() {
+        let o = FormatOptions::default();
+        for text in ["select 1; GO", ";GO\nGO\n", "select 1; GO -- c"] {
+            let once = format(Dialect::TSql, text, &o).unwrap();
+            let count = |s: &str| split(Dialect::TSql, s).len();
+            assert_eq!(count(&once), count(text), "{text:?} -> {once:?}");
+            assert_eq!(format(Dialect::TSql, &once, &o).unwrap(), once);
+        }
+        assert_eq!(
+            format(Dialect::TSql, "select 1; GO", &FormatOptions::default()),
+            Ok("SELECT 1; GO\n".to_owned())
+        );
+    }
+
+    #[test]
+    fn tsql_go_words_that_are_not_separators_are_copied() {
+        let o = FormatOptions::default();
+        for text in [
+            "select   1\nGO 2\nselect   2",
+            "select a   from t GO",
+            "select  1  GO  x",
+        ] {
+            let out = format(Dialect::TSql, text, &o).unwrap();
+            assert_eq!(out, format!("{text}\n"), "{text:?}");
+        }
+        // A routine is copied as it is, with `GO` on its own line after it.
+        let out = format(
+            Dialect::TSql,
+            "create  proc p as select   1; select 2\nGO",
+            &o,
+        );
+        assert_eq!(
+            out,
+            Ok("create  proc p as select   1; select 2\nGO\n".to_owned())
+        );
     }
 
     #[test]

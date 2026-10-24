@@ -75,7 +75,8 @@ pub(crate) fn lex(text: &str, dialect: Dialect) -> Vec<Token> {
             }
             b'#' if flavor == Flavor::MySql => (TokKind::Comment, line_end(b, i), true),
             b'/' if b.get(i + 1) == Some(&b'*') => {
-                let (end, open) = block_comment(b, i, flavor == Flavor::Postgres);
+                let (end, open) =
+                    block_comment(b, i, matches!(flavor, Flavor::Postgres | Flavor::TSql));
                 (TokKind::Comment, end, open)
             }
             b'\'' => {
@@ -90,41 +91,25 @@ pub(crate) fn lex(text: &str, dialect: Dialect) -> Vec<Token> {
                 let (end, open) = scan_quoted(b, i, b'"', false);
                 (TokKind::Quoted, end, open)
             }
-            b'`' if flavor != Flavor::Postgres => {
+            b'`' if matches!(flavor, Flavor::MySql | Flavor::Sqlite) => {
                 let (end, open) = scan_quoted(b, i, b'`', false);
                 (TokKind::Quoted, end, open)
             }
+            b'[' if flavor == Flavor::TSql => bracket_ident(b, i),
             b'[' if flavor == Flavor::Sqlite => match b[i + 1..].iter().position(|&x| x == b']') {
                 Some(p) => (TokKind::Quoted, i + 1 + p + 1, false),
                 None => (TokKind::Quoted, n, true),
             },
             b'$' if flavor == Flavor::Postgres => dollar(text, i),
+            b'$' | b'@' | b'#' if flavor == Flavor::TSql => tsql_sigil(text, i),
             b'0'..=b'9' => (TokKind::Number, number_end(b, i), false),
-            _ => {
-                let Some(ch) = text.get(i..).and_then(|s| s.chars().next()) else {
-                    i += 1;
-                    continue;
-                };
-                if ch.is_whitespace() {
-                    i += ch.len_utf8();
+            _ => match word_or_punct(text, i, flavor) {
+                Ok(token) => token,
+                Err(next) => {
+                    i = next;
                     continue;
                 }
-                if ch.is_alphabetic() || ch == '_' {
-                    let end = word_end(text, i);
-                    let is_e = flavor == Flavor::Postgres
-                        && end == i + 1
-                        && (c == b'E' || c == b'e')
-                        && b.get(end) == Some(&b'\'');
-                    if is_e {
-                        let (end, open) = scan_quoted(b, end, b'\'', true);
-                        (TokKind::Str, end, open)
-                    } else {
-                        (TokKind::Word, end, false)
-                    }
-                } else {
-                    (TokKind::Punct, i + ch.len_utf8(), false)
-                }
-            }
+            },
         };
         out.push(Token {
             kind,
@@ -135,6 +120,42 @@ pub(crate) fn lex(text: &str, dialect: Dialect) -> Vec<Token> {
         i = end;
     }
     out
+}
+
+/// A word, a prefixed string (`E'..'`, `N'..'`) or one punctuation character at `i`; `Err(next)`
+/// when nothing is lexed there (whitespace, or a position that is not a char boundary) and the
+/// scan continues at `next`.
+fn word_or_punct(text: &str, i: usize, flavor: Flavor) -> Result<(TokKind, usize, bool), usize> {
+    let b = text.as_bytes();
+    let Some(ch) = text.get(i..).and_then(|s| s.chars().next()) else {
+        return Err(i + 1);
+    };
+    if ch.is_whitespace() {
+        return Err(i + ch.len_utf8());
+    }
+    if !(ch.is_alphabetic() || ch == '_') {
+        return Ok((TokKind::Punct, i + ch.len_utf8(), false));
+    }
+    let end = if flavor == Flavor::TSql {
+        tsql_word_end(text, i)
+    } else {
+        word_end(text, i)
+    };
+    let c = b[i];
+    let is_e = flavor == Flavor::Postgres
+        && end == i + 1
+        && (c == b'E' || c == b'e')
+        && b.get(end) == Some(&b'\'');
+    let is_n = flavor == Flavor::TSql
+        && end == i + 1
+        && (c == b'N' || c == b'n')
+        && b.get(end) == Some(&b'\'');
+    if is_e || is_n {
+        let (end, open) = scan_quoted(b, end, b'\'', is_e);
+        Ok((TokKind::Str, end, open))
+    } else {
+        Ok((TokKind::Word, end, false))
+    }
 }
 
 fn line_end(b: &[u8], from: usize) -> usize {
@@ -199,6 +220,62 @@ fn word_end(text: &str, from: usize) -> usize {
         }
     }
     end
+}
+
+/// A T-SQL word continues with alphanumerics, `_`, `$`, `#` and `@`.
+fn tsql_word_end(text: &str, from: usize) -> usize {
+    let mut end = from;
+    if let Some(rest) = text.get(from..) {
+        for (off, ch) in rest.char_indices() {
+            if ch.is_alphanumeric() || matches!(ch, '_' | '$' | '#' | '@') {
+                end = from + off + ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+    }
+    end
+}
+
+/// A T-SQL `[..]` identifier: `]]` is an escaped `]`.
+fn bracket_ident(b: &[u8], from: usize) -> (TokKind, usize, bool) {
+    let mut j = from + 1;
+    while j < b.len() {
+        if b[j] == b']' {
+            if b.get(j + 1) == Some(&b']') {
+                j += 2;
+            } else {
+                return (TokKind::Quoted, j + 1, false);
+            }
+        } else {
+            j += 1;
+        }
+    }
+    (TokKind::Quoted, b.len(), true)
+}
+
+/// A T-SQL token that starts with `$`, `@` or `#`: money (`$5`) is a number, `$action` and a temp table (`#t`,
+/// `##t`) are words, a variable (`@x`, `@@rowcount`) is an operand, anything else is punctuation.
+fn tsql_sigil(text: &str, from: usize) -> (TokKind, usize, bool) {
+    let b = text.as_bytes();
+    let next = b.get(from + 1).copied();
+    match (b[from], next) {
+        (b'$', Some(d)) if d.is_ascii_digit() => (TokKind::Number, number_end(b, from + 1), false),
+        (b'$', Some(d)) if d.is_ascii_alphabetic() || d == b'_' => {
+            (TokKind::Word, tsql_word_end(text, from + 1), false)
+        }
+        (b'#', Some(d)) if d == b'#' || d == b'_' || d.is_ascii_alphanumeric() => {
+            (TokKind::Word, tsql_word_end(text, from + 1), false)
+        }
+        (b'@', _) => {
+            let mut j = from + 1;
+            while b.get(j) == Some(&b'@') {
+                j += 1;
+            }
+            (TokKind::Number, tsql_word_end(text, j).max(j), false)
+        }
+        _ => (TokKind::Punct, from + 1, false),
+    }
 }
 
 fn number_end(b: &[u8], from: usize) -> usize {
@@ -317,6 +394,32 @@ mod tests {
         }
         let t = lex("[abc", Dialect::Sqlite);
         assert!(t[0].unterminated);
+    }
+
+    #[test]
+    fn tsql_quoting_comments_and_variables() {
+        let d = Dialect::TSql;
+        let t = kinds("[a]]b] \"x\"\"y\" N'it''s' `", d);
+        assert_eq!(t[0], (TokKind::Quoted, "[a]]b]", false));
+        assert_eq!(t[1], (TokKind::Quoted, "\"x\"\"y\"", false));
+        assert_eq!(t[2], (TokKind::Str, "N'it''s'", false));
+        // A backtick is not a quote in T-SQL.
+        assert_eq!(t[3].0, TokKind::Punct);
+        // No backslash escapes in strings; `#` is not a comment; block comments nest.
+        let t = kinds(r"'a\' #t ##g /* /* */ x */ y", d);
+        assert_eq!(t[0], (TokKind::Str, r"'a\'", false));
+        assert_eq!(t[1], (TokKind::Word, "#t", false));
+        assert_eq!(t[2], (TokKind::Word, "##g", false));
+        assert_eq!(t[3], (TokKind::Comment, "/* /* */ x */", false));
+        assert_eq!(t[4], (TokKind::Word, "y", false));
+        // Variables and money are operands, `$action` is a word.
+        let t = kinds("@x @@rowcount $5 $action", d);
+        assert_eq!(t[0], (TokKind::Number, "@x", false));
+        assert_eq!(t[1], (TokKind::Number, "@@rowcount", false));
+        assert_eq!(t[2], (TokKind::Number, "$5", false));
+        assert_eq!(t[3], (TokKind::Word, "$action", false));
+        let t = lex("[abc", d);
+        assert!(t[0].unterminated && t[0].kind == TokKind::Quoted);
     }
 
     #[test]

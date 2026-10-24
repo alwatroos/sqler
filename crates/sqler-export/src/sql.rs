@@ -43,11 +43,22 @@ impl Format for SqlFormat {
             dialect: o.dialect,
             schema: o.schema.clone(),
             table: o.table.clone(),
-            per_statement: o.rows_per_statement.get(),
+            per_statement: per_statement(o.dialect, o.rows_per_statement.get()),
             head: String::new(),
             in_statement: 0,
             line: String::new(),
         }))
+    }
+}
+
+/// T-SQL allows at most 1000 row value expressions in one `INSERT .. VALUES`.
+const TSQL_MAX_ROWS_PER_STATEMENT: usize = 1000;
+
+/// Rows per `INSERT`: the option, capped for T-SQL.
+fn per_statement(dialect: Dialect, rows: usize) -> usize {
+    match dialect {
+        Dialect::TSql => rows.min(TSQL_MAX_ROWS_PER_STATEMENT),
+        _ => rows,
     }
 }
 
@@ -172,6 +183,33 @@ mod tests {
         let out = run(&options(Dialect::Postgres, 3), 3);
         assert_eq!(out.matches(';').count(), 1);
         assert!(out.ends_with("2');\n"));
+    }
+
+    #[test]
+    fn tsql_quotes_brackets_and_caps_rows_per_statement() {
+        let mut o = options(Dialect::TSql, 5000);
+        o.sql.schema = Some("s]1".into());
+        let out = run(&o, 2001);
+        assert!(
+            out.starts_with("INSERT INTO [s]]1].[t\"x] ([id], [na`me]) VALUES\n(0, N'it''s 0'),\n"),
+            "{out}"
+        );
+        // 2001 rows at 1000 per statement: three statements, whatever the option says.
+        assert_eq!(out.matches("INSERT INTO").count(), 3);
+        assert_eq!(out.matches(";\n").count(), 3);
+        // A smaller option is kept; the other dialects are not capped.
+        assert_eq!(
+            run(&options(Dialect::TSql, 2), 3)
+                .matches("INSERT INTO")
+                .count(),
+            2
+        );
+        assert_eq!(
+            run(&options(Dialect::Postgres, 5000), 2001)
+                .matches("INSERT INTO")
+                .count(),
+            1
+        );
     }
 
     #[test]

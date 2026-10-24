@@ -21,3 +21,9 @@ context: Relation, replace: 23..26 "ord", items: 3
  1. "orders" [Table] insert="orders" detail="main · table"
  2. "Order Items" [Table] insert="\"Order Items\"" detail="main · table"
  3. "order_items" [Table] insert="order_items" detail="main · table"
+
+== tsql ==
+context: Relation, replace: 23..26 "ord", items: 3
+ 1. "orders" [Table] insert="orders" detail="dbo · table"
+ 2. "Order Items" [Table] insert="[Order Items]" detail="dbo · table"
+ 3. "order_items" [Table] insert="order_items" detail="dbo · table"

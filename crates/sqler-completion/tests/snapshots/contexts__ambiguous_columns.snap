@@ -22,3 +22,9 @@ context: Expression, replace: 7..9 "id", items: 3
  1. "id" [Column] insert="u.id" detail="u · integer"
  2. "id" [Column] insert="o.id" detail="o · integer"
  3. "user_id" [Column] insert="user_id" detail="o · integer"
+
+== tsql ==
+context: Expression, replace: 7..9 "id", items: 3
+ 1. "id" [Column] insert="u.id" detail="u · integer"
+ 2. "id" [Column] insert="o.id" detail="o · integer"
+ 3. "user_id" [Column] insert="user_id" detail="o · integer"

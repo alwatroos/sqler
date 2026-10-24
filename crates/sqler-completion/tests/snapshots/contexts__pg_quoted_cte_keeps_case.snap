@@ -30,3 +30,12 @@ context: Expression, replace: 53..53 "", items: 197
  4. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
  5. "avg" [Function] insert="avg($1)" snippet detail="avg(expr) -> number"
  6. "cos" [Function] insert="cos($1)" snippet detail="cos(x) -> number"
+
+== tsql ==
+context: Expression, replace: 53..53 "", items: 136
+ 1. "Total" [Column] insert="Total" detail="Recent"
+ 2. "Recent" [Cte] insert="Recent" detail="cte"
+ 3. "ln" [Function] insert="ln($1)" snippet detail="ln(x) -> number"
+ 4. "abs" [Function] insert="abs($1)" snippet detail="abs(x) -> number"
+ 5. "avg" [Function] insert="avg($1)" snippet detail="avg(expr) -> number"
+ 6. "cos" [Function] insert="cos($1)" snippet detail="cos(x) -> number"

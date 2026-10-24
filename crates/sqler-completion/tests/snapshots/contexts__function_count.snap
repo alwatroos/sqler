@@ -15,3 +15,7 @@ context: Expression, replace: 7..10 "cou", items: 1
 == sqlite ==
 context: Expression, replace: 7..10 "cou", items: 1
  1. "count" [Function] insert="count($1)" snippet detail="count(expr) -> integer"
+
+== tsql ==
+context: Expression, replace: 7..10 "cou", items: 1
+ 1. "count" [Function] insert="count($1)" snippet detail="count(expr) -> integer"

@@ -57,6 +57,14 @@ impl Segment {
 /// [`SegmentKind::Delimiter`] segment and changes the delimiter (`DELIMITER ;` restores it).
 /// The delimiter word is at most 16 bytes; a longer word is treated as ordinary text.
 ///
+/// On T-SQL a `GO` word alone on its line (only spaces and tabs before it, and after it only
+/// spaces and tabs and maybe a `--` comment) ends the batch whatever the block state, and is the
+/// segment's terminator; `GO 2` and `select 1 GO` are not separators. `CREATE [OR ALTER]` or
+/// `ALTER` of a `PROC`, `PROCEDURE`, `FUNCTION` or `TRIGGER` is compound: only `GO` or the end of
+/// the text ends it. Elsewhere `BEGIN` (unless `TRAN`, `TRANSACTION`, `DISTRIBUTED`, `DIALOG`,
+/// `CONVERSATION` or `;` follows) and `CASE` open a block and `END` closes one (unless
+/// `CONVERSATION` follows); `;` splits only outside a block.
+///
 /// Pure and linear in the size of `text`; it never panics.
 #[must_use]
 pub fn split(dialect: Dialect, text: &str) -> Vec<Segment> {
@@ -97,6 +105,13 @@ pub fn split(dialect: Dialect, text: &str) -> Vec<Segment> {
             continue;
         }
 
+        if dialect == Dialect::TSql && tok.is_keyword(text, "GO") && is_go_separator(text, &tok) {
+            // `GO` ends the batch whatever the block or routine state, and resets it.
+            out.push(st.finish(text, tok.end, Some(tok.start..tok.end)));
+            st = State::new(tok.end);
+            continue;
+        }
+
         st.track(dialect, text, &tok);
         let ends = match tok.kind {
             TokenKind::Delimiter => true,
@@ -117,6 +132,26 @@ pub fn split(dialect: Dialect, text: &str) -> Vec<Segment> {
         out.push(st.finish(text, text.len(), None));
     }
     out
+}
+
+/// Whether the T-SQL `GO` word `tok` is a batch separator: on its own line, with only spaces and
+/// tabs before it and only spaces and tabs (and maybe a `--` comment) after it. Each side stops at
+/// the first byte that decides, so the check is cheap even on a line of many `GO` words.
+fn is_go_separator(src: &str, tok: &Token) -> bool {
+    let b = src.as_bytes();
+    let mut i = tok.start;
+    while i > 0 {
+        match b[i - 1] {
+            b' ' | b'\t' => i -= 1,
+            b'\r' | b'\n' => break,
+            _ => return false,
+        }
+    }
+    let mut j = tok.end;
+    while j < b.len() && matches!(b[j], b' ' | b'\t') {
+        j += 1;
+    }
+    j >= b.len() || matches!(b[j], b'\r' | b'\n') || b[j..].starts_with(b"--")
 }
 
 /// Parses the rest of a `DELIMITER` line: horizontal whitespace, then a word of at most
@@ -168,6 +203,8 @@ struct Compound {
     count: usize,
     create: bool,
     begin_first: bool,
+    /// T-SQL: `CREATE OR` was seen, `ALTER` must follow.
+    or_seen: bool,
 }
 
 /// The outcome of a decision: whether the statement is compound and whether a block was
@@ -185,6 +222,9 @@ impl Compound {
             opened_block: false,
         });
         self.count += 1;
+        if dialect == Dialect::TSql {
+            return self.push_tsql(src, tok);
+        }
         if self.count == 1 {
             if tok.is_keyword(src, "CREATE") {
                 self.create = true;
@@ -229,6 +269,41 @@ impl Compound {
     }
 }
 
+impl Compound {
+    /// T-SQL: `CREATE [OR ALTER]` or `ALTER`, then `PROC`, `PROCEDURE`, `FUNCTION` or `TRIGGER`,
+    /// as the first two to four significant tokens and nothing else in between.
+    fn push_tsql(&mut self, src: &str, tok: &Token) -> Option<Decision> {
+        let no = Some(Decision {
+            compound: false,
+            opened_block: false,
+        });
+        let routine = ["PROC", "PROCEDURE", "FUNCTION", "TRIGGER"]
+            .iter()
+            .any(|kw| tok.is_keyword(src, kw));
+        match self.count {
+            1 if tok.is_keyword(src, "CREATE") => {
+                self.create = true;
+                None
+            }
+            1 if tok.is_keyword(src, "ALTER") => None,
+            2 if routine => Some(Decision {
+                compound: true,
+                opened_block: false,
+            }),
+            2 if self.create && tok.is_keyword(src, "OR") => {
+                self.or_seen = true;
+                None
+            }
+            3 if self.or_seen && tok.is_keyword(src, "ALTER") => None,
+            4 if self.or_seen && routine => Some(Decision {
+                compound: true,
+                opened_block: false,
+            }),
+            _ => no,
+        }
+    }
+}
+
 /// Whether `tokens` (a statement's tokens, trivia allowed) start a trigger, procedure,
 /// function or event definition, or on `MySQL` a `BEGIN NOT ATOMIC` block: the statement
 /// body may then contain `;` and refers to routine arguments.
@@ -253,6 +328,8 @@ struct State {
     block_depth: usize,
     paren_depth: usize,
     pending_end: bool,
+    /// T-SQL: a `BEGIN` was seen and the next token decides whether it opens a block.
+    pending_begin: bool,
 }
 
 impl State {
@@ -267,6 +344,7 @@ impl State {
             block_depth: 0,
             paren_depth: 0,
             pending_end: false,
+            pending_begin: false,
         }
     }
 
@@ -277,6 +355,10 @@ impl State {
     }
 
     fn can_split(&self, dialect: Dialect) -> bool {
+        // A T-SQL routine body is only ended by `GO` or the end of the text.
+        if dialect == Dialect::TSql && self.compound == Some(true) {
+            return false;
+        }
         self.block_depth == 0 && (dialect != Dialect::Postgres || self.paren_depth == 0)
     }
 
@@ -290,7 +372,12 @@ impl State {
                 self.block_depth = 1;
             }
         }
-        if self.compound == Some(true) {
+        if dialect == Dialect::TSql {
+            // Every T-SQL statement tracks `BEGIN`/`CASE`/`END` blocks; a routine never splits.
+            if self.compound != Some(true) {
+                self.track_tsql_block(src, tok);
+            }
+        } else if self.compound == Some(true) {
             self.track_block(src, tok);
         }
         if tok.kind == TokenKind::Punct {
@@ -319,6 +406,44 @@ impl State {
             }
         }
         if tok.is_keyword(src, "BEGIN") || tok.is_keyword(src, "CASE") {
+            self.block_depth += 1;
+        } else if tok.is_keyword(src, "END") {
+            self.pending_end = true;
+        }
+    }
+
+    /// T-SQL blocks. `BEGIN` opens a block unless the next significant token is `TRAN`,
+    /// `TRANSACTION`, `DISTRIBUTED`, `DIALOG`, `CONVERSATION` or `;` (or the text ends).
+    /// `CASE` opens one. `END` closes one unless `CONVERSATION` follows. An unclosed block
+    /// swallows the rest of the text, which only ever means fewer splits.
+    fn track_tsql_block(&mut self, src: &str, tok: &Token) {
+        if self.pending_begin {
+            self.pending_begin = false;
+            let semicolon = tok.kind == TokenKind::Punct && src.as_bytes()[tok.start] == b';';
+            let not_a_block = semicolon
+                || [
+                    "TRAN",
+                    "TRANSACTION",
+                    "DISTRIBUTED",
+                    "DIALOG",
+                    "CONVERSATION",
+                ]
+                .iter()
+                .any(|kw| tok.is_keyword(src, kw));
+            if !not_a_block {
+                self.block_depth += 1;
+            }
+        }
+        if self.pending_end {
+            self.pending_end = false;
+            if tok.is_keyword(src, "CONVERSATION") {
+                return;
+            }
+            self.block_depth = self.block_depth.saturating_sub(1);
+        }
+        if tok.is_keyword(src, "BEGIN") {
+            self.pending_begin = true;
+        } else if tok.is_keyword(src, "CASE") {
             self.block_depth += 1;
         } else if tok.is_keyword(src, "END") {
             self.pending_end = true;

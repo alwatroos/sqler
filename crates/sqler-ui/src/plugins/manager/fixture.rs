@@ -487,3 +487,19 @@ pub(crate) fn panel_tree() -> sqler_plugin_api::WidgetTree {
     ])
     .expect("fixture tree is valid")
 }
+
+/// A declarative host-driver manifest: plugin `plugin`, one driver `driver` that declares `dialect`.
+#[must_use]
+#[cfg(test)]
+#[allow(clippy::expect_used)] // fixed fixture text
+pub(crate) fn driver_manifest(plugin: &str, driver: &str, dialect: Option<&str>) -> Manifest {
+    let mut text = format!(
+        "[plugin]\nid = \"{plugin}\"\nname = \"Driver\"\nversion = \"0.1.0\"\napi = \"0.1\"\n\
+         capabilities = [\"driver.host:mssql\"]\n\
+         [[drivers]]\nid = \"{driver}\"\nname = \"Driver\"\nkind = \"host\"\nengine = \"mssql\"\n"
+    );
+    if let Some(dialect) = dialect {
+        let _ = writeln!(text, "dialect = \"{dialect}\"");
+    }
+    Manifest::parse(&text).expect("driver manifest parses")
+}

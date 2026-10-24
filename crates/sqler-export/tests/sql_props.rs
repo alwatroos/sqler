@@ -117,7 +117,9 @@ fn expected_literal(dialect: Dialect, value: &Value) -> Vec<Expect> {
             vec![Expect::Minus, Expect::Number]
         }
         (_, Value::Int(i)) if *i < 0 => vec![Expect::Minus, Expect::Number],
-        (_, Value::Int(_) | Value::Decimal(_)) => vec![Expect::Number],
+        (_, Value::Int(_) | Value::Decimal(_)) | (Dialect::TSql, Value::Bytes(_)) => {
+            vec![Expect::Number]
+        }
         (_, Value::Float(x)) => expected_float(dialect, *x),
         (Dialect::Postgres, Value::Date(_)) => vec![Word("DATE"), Str],
         (Dialect::Postgres, Value::Time(_)) => vec![Word("TIME"), Str],
@@ -137,6 +139,21 @@ fn expected_literal(dialect: Dialect, value: &Value) -> Vec<Expect> {
             Word("TEXT"),
             Punct(')'),
         ],
+        (Dialect::TSql, Value::Text(t))
+            if t.contains('\0') || t.contains("\\\r") || t.contains("\\\n") =>
+        {
+            vec![
+                Word("CAST"),
+                Punct('('),
+                Expect::Number,
+                Word("AS"),
+                Word("NVARCHAR"),
+                Punct('('),
+                Word("MAX"),
+                Punct(')'),
+                Punct(')'),
+            ]
+        }
         (_, _) => vec![Str],
     }
 }
@@ -149,7 +166,7 @@ fn expected_float(dialect: Dialect, x: f64) -> Vec<Expect> {
         {
             vec![Str, Op("::"), Word("float8")]
         }
-        Dialect::MySql if x.is_nan() || x.is_infinite() => vec![Word("NULL")],
+        Dialect::MySql | Dialect::TSql if x.is_nan() || x.is_infinite() => vec![Word("NULL")],
         Dialect::Sqlite if x.is_nan() => vec![Word("NULL")],
         _ if x.is_sign_negative() => vec![Minus, Number],
         _ => vec![Number],
@@ -208,6 +225,42 @@ fn unescape_e(s: &str) -> Option<String> {
     Some(out)
 }
 
+/// T-SQL literals that are not a plain `N'..'` string: `0x<hex>` bytes, and text as
+/// `CAST(0x<UTF-16LE hex> AS NVARCHAR(MAX))`. `None` for every other value.
+fn decode_tsql_binary(
+    value: &Value,
+    strs: &[String],
+    texts: &[String],
+) -> Option<Result<(), String>> {
+    match value {
+        Value::Bytes(b) => {
+            let joined = texts.concat();
+            let hex = joined.strip_prefix("0x")?;
+            Some(if unhex(hex).as_deref() == Some(b.as_slice()) {
+                Ok(())
+            } else {
+                Err(format!("hex {hex:?} is not {b:?}"))
+            })
+        }
+        Value::Text(t) if strs.is_empty() => {
+            let hex = texts.get(2)?.strip_prefix("0x")?;
+            let bytes = unhex(hex)?;
+            let units: Vec<u16> = bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
+                .collect();
+            Some(match String::from_utf16(&units) {
+                Ok(decoded) if decoded == *t => Ok(()),
+                Ok(decoded) => Err(format!("decoded {decoded:?}, wanted {t:?}")),
+                Err(e) => Err(e.to_string()),
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Decodes the string tokens of one literal back to the value.
 fn decode_check(
     dialect: Dialect,
@@ -215,11 +268,16 @@ fn decode_check(
     strs: &[String],
     texts: &[String],
 ) -> Result<(), String> {
+    if dialect == Dialect::TSql
+        && let Some(result) = decode_tsql_binary(value, strs, texts)
+    {
+        return result;
+    }
     match value {
         Value::Float(x) => {
             let joined = texts.concat();
             let want_null = (x.is_nan() && dialect != Dialect::Postgres)
-                || (x.is_infinite() && dialect == Dialect::MySql);
+                || (x.is_infinite() && matches!(dialect, Dialect::MySql | Dialect::TSql));
             if want_null {
                 return if joined == "NULL" {
                     Ok(())
@@ -260,7 +318,13 @@ fn decode_check(
             if !prefix.is_empty() {
                 return Err(format!("temporal prefix {prefix:?}"));
             }
-            if body == value.to_string() {
+            let mut want = value.to_string();
+            if dialect == Dialect::TSql
+                && matches!(value, Value::Timestamp(_) | Value::TimestampTz(_))
+            {
+                want = want.replacen(' ', "T", 1);
+            }
+            if body == want {
                 Ok(())
             } else {
                 Err(format!("{body:?} is not {value}"))
@@ -273,7 +337,7 @@ fn decode_check(
                 (Dialect::MySql | Dialect::Sqlite, "X") => {
                     String::from_utf8(unhex(&body).ok_or("bad hex")?).map_err(|e| e.to_string())?
                 }
-                (_, "") => body,
+                (Dialect::TSql, "N") | (_, "") => body,
                 other => return Err(format!("unexpected prefix {other:?}")),
             };
             if decoded == *t {
@@ -449,6 +513,9 @@ fn known_hostile_values() {
         "-- x",
         "\u{e9}'\u{540d}\\",
         "E'",
+        "\\\n",
+        "a\\\r\nb",
+        "]]",
         "",
     ];
     for dialect in Dialect::ALL {

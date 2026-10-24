@@ -7,19 +7,22 @@ use proptest::prelude::*;
 use sqler_core::{DbObject, ObjectKind, ObjectPath};
 use sqler_sql::{DdlError, Dialect, qualified_name, quote_identifier};
 
-fn quote_char(dialect: Dialect) -> char {
+/// The opening and closing quote of a dialect; only the closing one is doubled.
+fn quote_chars(dialect: Dialect) -> (char, char) {
     match dialect {
-        Dialect::MySql => '`',
-        _ => '"',
+        Dialect::MySql => ('`', '`'),
+        Dialect::TSql => ('[', ']'),
+        // `Dialect` is non-exhaustive: `PostgreSQL` and `SQLite`.
+        _ => ('"', '"'),
     }
 }
 
 /// Decodes one quoted token from the start of `s`; returns the name and the rest.
 /// `None` if the token is malformed or ends early.
 fn decode_token(dialect: Dialect, s: &str) -> Option<(String, &str)> {
-    let q = quote_char(dialect);
+    let (open, q) = quote_chars(dialect);
     let mut chars = s.char_indices();
-    if chars.next()?.1 != q {
+    if chars.next()?.1 != open {
         return None;
     }
     let mut out = String::new();
@@ -46,7 +49,7 @@ fn decode_whole(dialect: Dialect, s: &str) -> Option<String> {
 }
 
 fn strategy() -> impl Strategy<Value = String> {
-    prop_oneof![any::<String>(), "[\"`'; .\\-a-zA-Z0-9 ]{0,24}"]
+    prop_oneof![any::<String>(), "[\"`'; .\\-a-zA-Z0-9 \\[\\]]{0,24}"]
 }
 
 proptest! {
