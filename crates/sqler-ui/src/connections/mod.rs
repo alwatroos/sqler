@@ -12,6 +12,7 @@ mod action;
 mod connector;
 mod dialog;
 mod form;
+pub mod import;
 #[cfg(feature = "gui")]
 pub(crate) mod view;
 
@@ -22,4 +23,9 @@ pub use dialog::{Dialog, GroupPurpose};
 pub use form::{
     COLOR_PRESETS, ConnectionForm, FieldError, FormField, FormMode, SecretField, SecretSlot,
     SshAuthKind, TestStatus, ValidForm,
+};
+pub use import::{
+    EMPTY_TEXT, EntryBadge, EntryRow, ImportAction, ImportEffect, ImportStep, ImportSummary,
+    ImportWizard, NOT_FOUND_TEXT, SCANNING_TEXT, SECRETS_HINT, SecretRow, SecretText, SourceOption,
+    error_text,
 };
