@@ -86,7 +86,7 @@ cargo about generate --manifest-path "$app_manifest" "$@" -c about.toml --fail -
 # The shipped crates: the union over all release targets (name and version, one per line).
 : >"$tmp/tree.txt"
 for t in $targets; do
-    cargo tree -p sqler-app --locked -e normal --target "$t" "$@" --prefix none --format '{p}' >>"$tmp/tree.txt" ||
+    cargo tree --color never -p sqler-app --locked -e normal --target "$t" "$@" --prefix none --format '{p}' >>"$tmp/tree.txt" ||
         die "cargo tree failed for $t"
 done
 sed 's/ (.*//; s/ *$//' "$tmp/tree.txt" | tr -d '\r' | sort -u >"$tmp/crates.txt"
