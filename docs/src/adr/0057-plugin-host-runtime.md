@@ -270,7 +270,7 @@ The generated bindings (`wasmtime::component::bindgen!`, world `full`, async imp
 
 ### Measurements
 
-macOS 27.0.1 arm64, release build of `examples/probe` with `cl,net`, one run, `probe` and `smoke` fixtures (release
+macOS arm64 (reference machine class), release build of `examples/probe` with `cl,net`, one run, `probe` and `smoke` fixtures (release
 guests; the debug probe guest is 5.0 MB):
 
 | plugin | engine create | compile | instantiate p50 / p95 | `init` p50 |
