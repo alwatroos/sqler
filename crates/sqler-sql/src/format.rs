@@ -92,7 +92,16 @@ pub fn format(
 ) -> Result<String, FormatError> {
     // Each part with whether it is glued to the previous one by a space instead of a blank line.
     let mut parts: Vec<(String, bool)> = Vec::new();
+    // Whether the previous segment ended with a T-SQL `GO` separator: the next segment then starts
+    // a line of its own, so a `GO` word in front of it did not share a line and is not glued.
+    let mut after_go = false;
     for segment in split(dialect, text) {
+        let prev_go = after_go;
+        after_go = dialect == Dialect::TSql
+            && segment
+                .terminator
+                .as_ref()
+                .is_some_and(|t| slice(text, t.clone()) != ";");
         let part = match segment.kind {
             SegmentKind::Statement => statement(dialect, text, &segment, options)?,
             SegmentKind::Trivia => trivia(dialect, text, &segment)?,
@@ -100,6 +109,7 @@ pub fn format(
         };
         if !part.is_empty() {
             let glue = dialect == Dialect::TSql
+                && !prev_go
                 && segment.kind == SegmentKind::Statement
                 && starts_with_go(dialect, slice(text, segment.body.clone()));
             parts.push((part, glue));
@@ -708,6 +718,22 @@ mod tests {
             format(Dialect::TSql, "select 1; GO", &FormatOptions::default()),
             Ok("SELECT 1; GO\n".to_owned())
         );
+    }
+
+    #[test]
+    fn tsql_go_word_after_a_go_separator_is_not_glued_to_it() {
+        let o = FormatOptions::default();
+        for text in [
+            ";\nGO\nGO\"\"",
+            "GO\nGO\"\"",
+            "select 1\nGO\nGO 2",
+            "select 1\nGO\nGO x\nGO\nGO\"\"",
+        ] {
+            let once = format(Dialect::TSql, text, &o).unwrap();
+            let count = |s: &str| split(Dialect::TSql, s).len();
+            assert_eq!(count(&once), count(text), "{text:?} -> {once:?}");
+            assert_eq!(format(Dialect::TSql, &once, &o).unwrap(), once, "{text:?}");
+        }
     }
 
     #[test]
