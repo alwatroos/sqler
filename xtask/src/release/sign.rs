@@ -17,7 +17,6 @@ use zeroize::Zeroizing;
 
 const MAX_KEY_FILE_BYTES: u64 = 1024;
 const KEY_FORMAT_ERROR: &str = "signing key file is not one line of base64 of a 32-byte seed";
-const KEY_MODE_ERROR: &str = "signing key file must not be readable by others";
 
 /// Read a base64 Ed25519 seed from `path`. Errors never name the path or the content.
 pub fn read_seed(path: &Path) -> Result<Zeroizing<[u8; 32]>, String> {
@@ -26,6 +25,7 @@ pub fn read_seed(path: &Path) -> Result<Zeroizing<[u8; 32]>, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
+        const KEY_MODE_ERROR: &str = "signing key file must not be readable by others";
         if meta.permissions().mode() & 0o077 != 0 {
             return Err(KEY_MODE_ERROR.to_owned());
         }
