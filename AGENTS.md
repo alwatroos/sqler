@@ -116,6 +116,8 @@ cargo run -p xtask -- plugins build [--release] [<name>...]
 cargo run -p xtask -- plugins check
 cargo run -p xtask -- plugins list
 cargo run -p xtask -- plugins clean
+cargo run -p xtask -- release manifest --plan <dist-manifest.json> --artifacts <dir> --published <YYYY-MM-DDTHH:MM:SSZ> --out <file> [--tag <vX.Y.Z>] [--key-file <file> [--test-key]] [--partial]   # build and sign the update manifest (ADR-0066 note, R5); CI only, the key comes from a 0600 file, never argv or env
+cargo run -p xtask -- release verify <envelope-file> [--public-key-file <file>]   # check an update manifest against the compiled-in keys
 cargo build --release -p sqler-app --features plugins --locked
 cargo test -p sqler-app --features plugins
 cargo test -p sqler-app update::

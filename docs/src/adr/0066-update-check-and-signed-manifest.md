@@ -146,6 +146,27 @@ configured and `check()` no longer returns `NotConfigured` (the empty-list behav
   were deleted.
 - Rotation: follow the rotation rule above; the page `releasing/update-feed.md` lists the current key.
 
+## Note 2026-10-24: manifest in the release pipeline (R5)
+
+- Commands: `xtask release manifest` builds the `sqler_update::Manifest` from the cargo-dist plan manifest and the
+  final archives (after macOS signing, so the sizes and hashes are those of the published files), signs
+  `signing_message(payload)` with `ring`, wraps it in the `Envelope` and checks it with `verify_envelope` before it
+  writes anything. `xtask release verify` checks a file against the compiled-in keys (or `--public-key-file`).
+- Jobs: `update manifest` (environment `release`, `v*` tag runs only) signs with the secret
+  `SQLER_UPDATE_SIGNING_KEY` and passes `sqler-update.json` to `host`, which attaches it in the same
+  `gh release create` as the archives. So `latest/download/sqler-update.json` never points at a release that lacks
+  it. A later `gh release upload` was rejected: it opens a window with no feed and gives the key holder write access.
+  `update manifest (dry run)` runs the same path on pull requests with a throwaway TEST ONLY key (no environment, no
+  secret) and uploads an Actions artifact only. With no secret set, a tag run publishes without a manifest, and the
+  client reports a failed check until a signed release exists.
+- Platforms: the five targets of `dist-workspace.toml`; the Windows entry is the `.zip`, not the `.msi`. The
+  `current_target()` arm for `aarch64-pc-windows-msvc` (not built) became `x86_64-apple-darwin` (built, was missing).
+- URLs: each entry points at the tag (`releases/download/<tag>/<name>`) and `notes_url` at the tag page, so they do
+  not drift when a newer release appears. Only the feed itself uses `latest`.
+- Key checks: a production signing key must be one of the compiled-in keys, so a rotation commits and releases the new
+  public key before the secret is swapped. A TEST ONLY key must not be a compiled-in one. The key is read from a file
+  with no access for others, never from argv or env, and is never printed.
+
 ## Note 2026-10-23: settings and notice (R4)
 
 The client is now linked into `sqler-app` and shown in the UI.
