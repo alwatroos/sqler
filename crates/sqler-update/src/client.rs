@@ -41,15 +41,15 @@ pub struct UpdateOffer {
 }
 
 /// The Rust target triple of this build when it is one of the five release
-/// targets, else `None`.
+/// targets of `dist-workspace.toml`, else `None`.
 #[must_use]
 pub fn current_target() -> Option<&'static str> {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         Some("aarch64-apple-darwin")
     } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
         Some("x86_64-pc-windows-msvc")
-    } else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
-        Some("aarch64-pc-windows-msvc")
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        Some("x86_64-apple-darwin")
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         Some("x86_64-unknown-linux-gnu")
     } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
