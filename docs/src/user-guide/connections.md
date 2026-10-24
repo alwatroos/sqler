@@ -161,10 +161,17 @@ a URL target.
 
 ### Supported databases
 
-Version 1.0 connects to `SQLite`, `PostgreSQL` and `MySQL`/`MariaDB`.
+SQLer 1.0 connects to: SQLite, PostgreSQL, MySQL/MariaDB, SQL Server.
 
-**Not in 1.0:** `DuckDB`. Its code is in the repository but switched off; no release, installer or update contains it
-([ADR-0070](../adr/0070-duckdb-engine-and-licence.md), amendment 2). It may return after 1.0 as a separate download.
+SQL Server is a built-in plugin; see [SQL Server](databases/sqlserver.md) for the set-up.
+
+### Not in 1.0
+
+`DuckDB` is not part of version 1.0. Its code is in the repository, but the feature `driver-duckdb` is off by
+default, so no release, installer or update contains it ([ADR-0070](../adr/0070-duckdb-engine-and-licence.md),
+amendment 2). It may return after 1.0 as a separate download. The import wizard skips such entries with
+"DuckDB is not in SQLer 1.0". For the technical record of what the plugin interface lacked for it, see
+[the driver API gaps](../plugin-development/drivers.md#duckdb).
 
 ### Passwords
 
@@ -180,10 +187,10 @@ Open the wizard with **Import...** at the bottom of the New connection form, or 
 Connections** (`connection:import`) from the command palette. It reads the connections of pgAdmin,
 Beekeeper Studio and Azure Data Studio. Nothing is written until you confirm.
 
-1. **Source.** One row per file found in the usual place of each tool; a tool with no file shows
+1. **Source** (the "Import connections" dialog). One row per file found in the usual place of each tool; a tool with no file shows
    "Not found in the usual places. Choose the file." While SQLer searches, the dialog says "Looking
-   for files...". Pick a row and press **Next**, or choose a file yourself (**Choose File**).
-2. **Preview.** Each entry has a badge: *add* (new), *rename* (the name is taken, so it is added as
+   for files...". Pick a row and press **Next**, or choose a file yourself (**Choose file...**).
+2. **Preview** ("Choose what to import"). Each entry has a badge: *add* (new), *rename* (the name is taken, so it is added as
    `name (2)` and the detail says "renamed from ..."), *duplicate* (already in your list) or *skipped*
    with a reason. Only *add* and *rename* entries can be selected; all start selected. Settings SQLer
    cannot carry over are listed by name. You need at least one selected entry to continue.
@@ -193,12 +200,12 @@ Beekeeper Studio and Azure Data Studio. Nothing is written until you confirm.
    Passwords go to the keychain, after the connections file is saved. SQL Server entries get the same
    prompt, and the password is stored in the keychain and put into the `sqlserver://` target when you
    connect.
-4. **Summary.** The connections added, how many entries were not imported, how many passwords were
+4. **Summary** ("Import finished"). The connections added, how many entries were not imported, how many passwords were
    stored or skipped, and any failure.
 
 Cancel (Escape) at any step leaves everything as it was. Imported connections never overwrite an
-existing one. Entries for a database that is not available are skipped with a reason: DuckDB shows
-"DuckDB is not in SQLer 1.0", and SQL Server shows "not available in this build" until its plugin
+existing one. Entries for a database that is not available are skipped with a reason (see
+[Not in 1.0](#not-in-10)). SQL Server shows "not available in this build" until its plugin
 is loaded (reopen the wizard if you read the file very early after start).
 
 Keys: **Up**/**Down** move, **Space** toggles an entry, **Enter** goes on (on the password step it

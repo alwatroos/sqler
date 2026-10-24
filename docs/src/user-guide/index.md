@@ -1,27 +1,47 @@
 # User guide
 
-The user guide is planned. SQLer has no released application yet (M0 bootstrap).
+SQLer 1.0 connects to: SQLite, PostgreSQL, MySQL/MariaDB, SQL Server. This guide covers every part of the desktop app and the command-line tool.
 
-Available now:
+## Get started
 
-- [Command-line interface](cli.md): run a statement on `SQLite` from a terminal
-- [Workspace](workspace.md): the desktop window with the connection sidebar and tabs
-- [Keybindings](keybindings.md): the command palette, default shortcuts and how to rebind them
-- [Settings](settings.md): settings, keybindings and saved connections files
-- [Results grid](results-grid.md): the virtual results table, opened today with a synthetic 1M-row result
-- [Databases](databases/index.md): object kinds, value display and TLS modes per database
-- [Connections](connections.md): the connection manager, groups, TLS and SSH settings, the `connections.toml` format
+- [Install](install.md): download, verify and start SQLer
+- [Workspace](workspace.md): the window with the activity bar, side panel, editor groups, bottom panel and status bar
+- [Command palette](command-palette.md): run any command by name
+- [Keybindings](keybindings.md): default shortcuts and how to rebind them
+- [Settings](settings.md): the config directory, `settings.toml`, the Settings tab and update checks
+- [Themes](themes.md): light, dark and system appearance, the UI font size and the environment colours
+
+## Connect
+
+- [Connections](connections.md): the connection manager, groups, TLS and SSH settings, import from other tools, the `connections.toml` format
 - [Secrets](secrets.md): passwords and passphrases in the OS keychain
 - [SSH tunnels](ssh-tunnels.md): connecting through a bastion host
-- [Object browser](object-browser.md): the lazy schema tree, context menus, DDL and the guarded DROP
-- [DDL and scripts](ddl.md): generated CREATE, SELECT, INSERT and DROP statements
+- [Databases](databases/index.md): object kinds, value display and TLS modes per database
+  - [SQLite](databases/sqlite.md)
+  - [PostgreSQL](databases/postgresql.md)
+  - [MySQL and MariaDB](databases/mysql.md)
+  - [SQL Server](databases/sqlserver.md)
 - [Migrating from other tools](migrating/index.md): bring your connections from Beekeeper Studio, Azure Data Studio or pgAdmin, with a feature map for each
 
-Planned topics:
+## Browse and write SQL
 
-- Install: planned (M7)
-- Editor: planned (M3)
-- Results grid with real query results, sorting, filtering and export: planned (M4)
-- AI: planned (M5)
-- Plugins: planned (M6)
-- Keybinding editor: planned; today you edit `keybindings.toml`, see [Keybindings](keybindings.md)
+- [Object browser](object-browser.md): the lazy schema tree, context menus, DDL and the guarded DROP
+- [DDL and scripts](ddl.md): generated CREATE, SELECT, INSERT and DROP statements
+- [SQL editor](sql-editor.md): highlighting, multi-cursor, formatting and intellisense
+- [Running queries](running-queries.md): run a statement, a selection or a script, cancel, parameters, Explain and the production confirmation
+- [Query history and saved queries](query-history.md)
+
+## Work with results
+
+- [Results grid](results-grid.md): columns, selection, cell detail, sort, filter and pages
+- [Export and copy](export.md): copy the selection, export to CSV, JSON, SQL, Markdown, Excel or Parquet
+- [Inline editing](inline-editing.md): stage cell edits, preview the SQL and apply in one transaction
+
+## AI and extensions
+
+- [AI configuration](ai.md): providers, the AI view, editor actions, AI sessions, agent tabs and the audit log
+- [Plugins](plugins.md): the plugin host, the Plugins view and permissions
+
+## Command line
+
+- [Command-line interface](cli.md): run a statement, export, and start the MCP server from a terminal

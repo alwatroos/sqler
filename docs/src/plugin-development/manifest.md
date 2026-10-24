@@ -43,21 +43,23 @@ label = "Sample size"
 default = 100
 ```
 
-A declarative plugin (no `[entry]`) that wraps a host-engine driver:
+A declarative plugin (no `[entry]`) that wraps a host-engine driver, as committed in `plugins/sqlserver/sqler.toml`:
 
 ```toml
 [plugin]
-id = "duckdb-shell"
-name = "DuckDB"
+id = "sqlserver"
+name = "SQL Server"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["driver.host:duckdb"]
+description = "Microsoft SQL Server through the native mssql engine (SQL login, TLS)."
+capabilities = ["driver.host:mssql"]
 
 [[drivers]]
-id = "duckdb"
-name = "DuckDB"
+id = "sqlserver"
+name = "SQL Server"
 kind = "host"
-engine = "duckdb"
+engine = "mssql"
+dialect = "tsql"
 ```
 
 ## Tables and keys

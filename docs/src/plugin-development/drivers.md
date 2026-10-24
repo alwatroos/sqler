@@ -6,7 +6,8 @@ next to the built-in ones and is used through the same run flow, so every statem
 goes through the statement classifier and the production confirmation. A plugin driver has no
 way to write around them.
 
-Plugin drivers need a build with the `plugins` feature (off by default in the shipped binary).
+Plugin drivers need a build with the `plugins` feature. Release builds have it; a local `cargo build` needs
+`--features plugins`.
 
 ## Two kinds
 
@@ -124,9 +125,7 @@ plugins switched off, and never asks.
 
 ## DuckDB
 
-> **Not in 1.0.** `DuckDB` is out of version 1.0 (ADR-0070, amendment 2). The code below stays in the repository,
-> disabled: the feature `driver-duckdb` is off by default, is never part of a release artifact, installer or update
-> manifest, and is built in CI only by the separate, manually dispatched `duckdb` job. It may return after 1.0 as a separate download.
+This section is the technical record behind the note [Not in 1.0](../user-guide/connections.md#not-in-10).
 
 `DuckDB` is the first host driver in the repository (ADR-0070). It has no guest: the plugin `plugins/duckdb` is a manifest only (`kind = "host"`, `engine = "duckdb"`, capability
 `driver.host:duckdb`, no `[entry]`), and the engine is the crate `sqler-driver-duckdb`, a native driver on the
@@ -243,22 +242,18 @@ setting; a `sslmode` key in the target is not lifted, and the engine refuses it 
 engine wrapper denies error text that contains the password. A real check through an SSH tunnel
 and against a real SQL Server instance is pending (maintainer).
 
-**API gaps** (the dialect gap is fixed by ADR-0073, the keychain and tunnel gap, see above, and the rows-affected gap by S4, [ADR-0071](../adr/0071-sql-server-plugin.md) amendment 2; the others are open).
+**API gaps.**
 
-- The manifest `dialect = "tsql"` is read ([ADR-0073](../adr/0073-tsql-dialect-and-manifest-dialect.md)). Known
-  names are `postgres`, `mysql`, `sqlite` and `tsql` (exact, case-sensitive); an unknown or absent name means no dialect
-  and no manifest error. With `tsql`, statements are split (`;` and a `GO` alone on its line), classified, quoted with
-  `[..]` and bound as `@P<k>`; a `select` runs on `prod` without asking and everything else asks.
-- A host-driver plugin cannot supply catalog SQL; the engine implements introspection itself from
-  `sys.*` and browses only the current database.
-- `net` scopes do not apply to host engines; the engine opens its own socket.
-- Closed (S4, ADR-0071 amendment 2): `rows_affected` is reported for `insert`, `update`, `delete`,
-  `merge` and `with` statements, which run through `sp_executesql` so the `DONE` count is visible.
-  It stays `None` for other statements, under `SET NOCOUNT ON`, with a trigger that counts its own
-  statements, and for a batch or procedure with several counts.
-- Cancel ends the session (see above), unlike the other drivers. Kept, with the reason, in amendment 2.
-- `money` arrives as a float (lossy); the first result set of a batch is returned and later ones
-  are dropped. Kept, with the reasons, in amendment 2.
+| Gap | Status |
+| --- | ------ |
+| Dialect | Closed (S3, [ADR-0073](../adr/0073-tsql-dialect-and-manifest-dialect.md)). The manifest `dialect = "tsql"` is read. Known names are `postgres`, `mysql`, `sqlite` and `tsql` (exact, case-sensitive); an unknown or absent name means no dialect and no manifest error. With `tsql`, statements are split (`;` and a `GO` alone on its line), classified, quoted with `[..]` and bound as `@P<k>`; a `select` runs on `prod` without asking and everything else asks. |
+| Keychain password and SSH tunnel | Closed (S5). See "Keychain and tunnel" above. |
+| Rows affected | Closed (S4, [ADR-0071](../adr/0071-sql-server-plugin.md) amendment 2). `rows_affected` is reported for `insert`, `update`, `delete`, `merge` and `with` statements, which run through `sp_executesql` so the `DONE` count is visible. It stays `None` for other statements, under `SET NOCOUNT ON`, with a trigger that counts its own statements, and for a batch or procedure with several counts. |
+| Catalog SQL | Stays a limit. A host-driver plugin cannot supply catalog SQL; the engine implements introspection itself from `sys.*` and browses only the current database. |
+| `net` scopes | Stays a limit. They do not apply to host engines; the engine opens its own socket. |
+| Cancel | Stays a limit. Cancel ends the session (see above), unlike the other drivers. Kept, with the reason, in amendment 2. |
+| `money` | Stays a limit. It arrives as a float (lossy). Kept, with the reason, in amendment 2. |
+| First result set | Stays a limit. The first result set of a batch is returned and later ones are dropped. Kept, with the reason, in amendment 2. |
 
 **Pending (maintainer).** A run against a real SQL Server instance (not only the CI container,
 SQL Server 2022 Developer edition): connect with SQL login, TLS modes against the server's own

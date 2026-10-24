@@ -8,8 +8,11 @@ The tunnel is implemented in the `sqler-tunnel` crate (see
 [ADR-0013](../adr/0013-ssh-tunnel-crate.md)). It is pure Rust and needs no `OpenSSH` installation,
 also on Windows.
 
-> Status: the crate is done and tested, but the connect dialog does not use it yet. Wiring it into
-> the connect flow, and saving SSH settings with a connection, come in a later release.
+You set a tunnel up in the connection form (host, port, user and the method: password, key file or
+agent) or in the `[connection.ssh]` table of `connections.toml`; see
+[the connection form](connections.md#the-connection-form) and [Connections](connections.md#connectionssh).
+The password and the key passphrase go to the keychain ([Secrets](secrets.md)). A connection with a
+tunnel needs a URL target.
 
 ## Local address
 
@@ -74,7 +77,6 @@ through a tunnel is refused; use `verify-ca` or connect without the tunnel.
 
 ## Limits
 
-- Not available from the connect dialog yet.
 - On Windows, `verify-full` TLS through the tunnel is still refused (see [TLS through a tunnel](#tls-through-a-tunnel)).
 - If the SSH session drops while the tunnel is open, new forwards fail; the tunnel does not yet
   report the dead session.

@@ -5,8 +5,8 @@ changed and never waits for a plugin: it opens as it always did, and the plugin 
 when they arrive. The design note is in
 [ADR-0026](../adr/0026-editor-intellisense.md#note-p11).
 
-Completion providers need a build with the `plugins` feature (off by default in the shipped
-binary). A completion provider needs no capability.
+Completion providers need a build with the `plugins` feature. Release builds have it; a local
+`cargo build` needs `--features plugins`. A completion provider needs no capability.
 
 ## Manifest
 

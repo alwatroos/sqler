@@ -4,9 +4,7 @@
 
 ![The workbench with a query and its results](../screenshots/after/editor-results-dark.png)
 
-```sh
-cargo run -p sqler-app
-```
+Start it from your application menu or the installed `sqler` binary (see [Install](install.md)). From a source checkout, `cargo run -p sqler-app` does the same.
 
 Options: `-h`/`--help`, `-V`/`--version`, `--exit-after-first-frame` (exits with code 0 once the first frame is shown; used to measure cold start), and `--open-sessions` (opens every saved connection after startup, then idles, for the idle memory measurement; connections that need a keychain or host-key prompt are skipped with a line on stderr (the connection name and a fixed reason; error text is never printed, so no database target, credential or key path appears; only the SSH host key reasons add the jump host and port); cannot be combined with `--exit-after-first-frame`).
 
@@ -16,10 +14,10 @@ The window has five regions. `F6` moves the focus to the next one and `Shift+F6`
 
 | Region | What it holds |
 | ------ | ------------- |
-| Activity bar | Icons for Connections, Saved Queries and History at the top, AI and Settings at the bottom (AI shows the [AI view](ai.md#the-ai-view); Settings opens the Settings tab, where the theme is chosen). |
-| Side panel | The Connections tree, the Saved Queries list or the AI view, depending on the activity item. |
+| Activity bar | Icons for Connections, Saved Queries and History at the top, Plugins, AI and Settings at the bottom (Plugins shows the [Plugins view](plugins.md#the-plugins-view); AI shows the [AI view](ai.md#the-ai-view); Settings opens the Settings tab, where the theme is chosen, see [Themes](themes.md)). |
+| Side panel | The Connections tree, the Saved Queries list, the Plugins view or the AI view, depending on the activity item. |
 | Editor groups | One to four groups side by side, each with a tab bar and the body of its active tab. |
-| Bottom panel | Results, Messages, History, Audit and Assistant, as tabs. |
+| Bottom panel | Results, Messages, History, Audit and Assistant, as tabs, plus a tab for the panels plugins contribute while one is registered. |
 | Status bar | The environment, connection and database of the active tab, the [AI state](ai.md#the-status-bar), the run state, row count and timing, and the toggles for the two panels (filled while the panel is open). |
 
 - **Activity bar.** Clicking the active item hides the side panel, as in VS Code. The History item shows or hides the bottom panel on History. Each item has a tooltip with its shortcut.

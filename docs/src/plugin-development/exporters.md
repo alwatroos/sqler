@@ -5,7 +5,8 @@ A plugin can add a file format to **Export Results...** and to `sqler-cli export
 bytes and SQLer writes them, so the partial-file rule (a cancelled or failed export leaves no file) and the progress
 line work as for a built-in format.
 
-Plugin formats need a build with the `plugins` feature (off by default in the shipped binary).
+Plugin formats need a build with the `plugins` feature. Release builds have it; a local `cargo build` needs
+`--features plugins`.
 
 ## Declare it
 

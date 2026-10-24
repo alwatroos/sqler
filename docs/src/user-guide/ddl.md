@@ -31,7 +31,7 @@ The fully qualified, fully quoted name. A schema-level object (table, view, func
 - Database, schema, extension, role: `CREATE DATABASE|SCHEMA|EXTENSION|ROLE "name";` when the server has no text. On `MySQL` a schema is `CREATE DATABASE`.
 - Any other kind without definition text is an error.
 
-`MySQL` routine definitions contain inner `;` and need statement splitting before they can be run (M3).
+`MySQL` routine definitions contain inner `;`. The editor splits a script the way the server reads it (see [Running queries](running-queries.md)), so a `BEGIN ... END` body stays in one statement.
 
 ## SELECT *
 

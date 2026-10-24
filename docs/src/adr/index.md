@@ -48,6 +48,7 @@ consequences. SQLer uses the MADR format.
 | [0036](0036-ai-tool-schemas-guards-and-host-traits.md) | AI tool schemas, guards and host traits: one `ToolSet`, approval per statement, prod twice, no approver refuses, row and time caps | accepted |
 | [0037](0037-ai-redaction-untrusted-data-and-audit-log.md) | AI redaction, untrusted-data envelope and audit log: redact by result shape, wrap every result, JSON Lines audit with rotation | accepted |
 | [0038](0038-ai-assist-engine-prompts-and-grounding.md) | AI assist engine: versioned prompt templates, schema grounding through `search_schema` under a byte budget, `search_data` as a read-only `DataSearch` | accepted |
+| [0039](0039-ai-exploration-session-engine.md) | AI exploration session engine | accepted |
 | [0040](0040-mcp-server.md) | MCP server: in-crate JSON-RPC layer (rmcp measured, not adopted), stdio and loopback HTTP with a bearer token | accepted |
 | [0041](0041-acp-client.md) | ACP client: agent profiles, one supervisor task per agent, scrubbed environment, MCP descriptor and no client capabilities | accepted |
 | [0042](0042-workbench-layout.md) | Workbench layout and editor groups: headless layout, groups, preview tabs, bottom panel, status bar | accepted |
@@ -81,4 +82,4 @@ consequences. SQLer uses the MADR format.
 | [0072](0072-plugin-export-formats.md) | Plugin export formats: `FormatSource` overlay on the export registry, `plugin-<id>:<fmt>` ids and cleaned labels, blocking wait on the host runtime, interned strings, fixed failure texts, CLI for `plugin-` ids | accepted |
 | [0073](0073-tsql-dialect-and-manifest-dialect.md) | T-SQL dialect and the manifest `dialect` key: `Dialect::TSql` with a fail-safe classifier (strict scan for `KILL`, `EXEC`, lock hints and more), `GO` splitting, dialect carried as data to the gate, export, AI tools and editing; fixes gap G1 | accepted |
 
-ADR number 0039 is reserved for M5.
+Unused numbers: 0048, 0049 (never assigned).
