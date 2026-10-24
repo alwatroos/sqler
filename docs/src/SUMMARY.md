@@ -121,6 +121,7 @@
   - [MCP server](ai/mcp.md)
   - [ACP agents](ai/acp.md)
 - [Update feed](releasing/update-feed.md)
+- [Signing](releasing/signing.md)
 - [Benchmarks](benchmarks.md)
 - [Dependencies](dependencies.md)
 - [Contributing](contributing.md)
