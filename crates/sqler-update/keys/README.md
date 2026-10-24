@@ -1,7 +1,7 @@
 # Trusted update keys
 
 This directory holds the public Ed25519 keys the client trusts. It holds the production key
-`efe45a1253fd9347.pub` (ADR-0066 note, R17). With no key listed in `src/keys.rs`, `sqler-update` reports
+`9735ae5e612eaa24.pub` (ADR-0066 note, R17). With no key listed in `src/keys.rs`, `sqler-update` reports
 `NotConfigured`.
 
 - One file per key, named `<key_id>.pub`, where `<key_id>` is the 16 lowercase hex characters of the first 8 bytes
