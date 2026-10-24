@@ -20,7 +20,7 @@ Targets: macOS (Apple silicon and Intel), Windows (x86_64) and Linux (x86_64 and
 | `sqler-app-installer.sh` | Shell installer for macOS and Linux |
 | `sqler-app-installer.ps1` | PowerShell installer for Windows |
 | `<file>.sha256`, `sha256.sum` | SHA-256 checksums, one per file and one combined |
-| `sqler-app.cdx.xml` | Software bill of materials (CycloneDX) |
+| `sqler-app_<triple>.cdx.xml` | Software bill of materials (CycloneDX), one per target; the Windows `.zip` and `.msi` share one |
 | `source.tar.gz`, `dist-manifest.json` | Source archive and the machine-readable list of the release files |
 
 `<target>` is one of `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`.

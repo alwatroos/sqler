@@ -109,6 +109,22 @@
                     </Component>
                     -->
 
+                    <!-- R14: the licence bundle of the archives, next to the `bin` folder. -->
+                    <Component Id='License' Guid='*'>
+                        <File Id='LicenseFile' Name='LICENSE' DiskId='1' Source='$(var.CargoTargetDir)\..\LICENSE' KeyPath='yes'/>
+                    </Component>
+                    <Component Id='Notice' Guid='*'>
+                        <File Id='NoticeFile' Name='NOTICE' DiskId='1' Source='$(var.CargoTargetDir)\..\NOTICE' KeyPath='yes'/>
+                    </Component>
+                    <Component Id='ThirdParty' Guid='*'>
+                        <File Id='ThirdPartyFile' Name='THIRD-PARTY-LICENSES.txt' DiskId='1' Source='$(var.CargoTargetDir)\..\THIRD-PARTY-LICENSES.txt' KeyPath='yes'/>
+                    </Component>
+                    <Directory Id='LicensesDir' Name='licenses'>
+                        <Component Id='Lucide' Guid='*'>
+                            <File Id='LucideFile' Name='LUCIDE-ISC.txt' DiskId='1' Source='$(var.CargoTargetDir)\..\licenses\LUCIDE-ISC.txt' KeyPath='yes'/>
+                        </Component>
+                    </Directory>
+
                     <Directory Id='Bin' Name='bin'>
                         <Component Id='Path' Guid='55BC8E55-35A1-499A-9287-D304C7A5D5F9' KeyPath='yes'>
                             <Environment
@@ -148,6 +164,10 @@
               sidecar file to the installer.
             -->
             <!--<ComponentRef Id='License'/>-->
+            <ComponentRef Id='License'/>
+            <ComponentRef Id='Notice'/>
+            <ComponentRef Id='ThirdParty'/>
+            <ComponentRef Id='Lucide'/>
 
             <ComponentRef Id='binary0'/>
 

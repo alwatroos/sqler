@@ -15,11 +15,15 @@ checksum = "sha256"
 precise-builds = true
 pr-run-mode = "upload"
 # release.yml is hand-maintained (path-gated PR trigger, DuckDB guard steps, GPUI setup); do not regenerate it blindly.
-allow-dirty = ["ci"]
+# crates/sqler-app/wix/main.wxs is hand-edited (licence sidecar files in the MSI, R14), hence "msi".
+allow-dirty = ["ci", "msi"]
 install-path = "~/.sqler/bin"
 install-updater = false
-cargo-cyclonedx = true
+# release.yml runs cargo-cyclonedx itself (one SBOM per target, sqler-app_<triple>.cdx.xml); dist would register a release-wide file that is never produced.
+cargo-cyclonedx = false
 github-attestations = false
 # THE release feature set, one line: release set per owner decision 12 (ADR-0064 amendment).
 # `.github/scripts/release-guard.sh features` rejects `driver-duckdb` whatever else the line holds.
 features = ["plugins", "driver-mssql"]
+# Licence files in every archive (R14): the generated THIRD-PARTY-LICENSES.txt (release.yml, plan job) and the static ones.
+include = ["NOTICE", "THIRD-PARTY-LICENSES.txt", "licenses"]
