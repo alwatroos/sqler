@@ -5,8 +5,8 @@ SQLer reads a JSON file of connections that Beekeeper Studio exports. You export
 ## Where Beekeeper Studio keeps its connections
 
 Beekeeper keeps its connections in its own application store (`app.db`). SQLer never reads that file:
-it is a live database and holds your passwords. Use the export instead (`File > Export Connections`
-in Beekeeper) and save it as JSON. SQLer finds it without help when it is named
+it is a live database and holds your passwords. Use Beekeeper's export of your connections instead
+and save it as JSON. SQLer finds it without help when it is named
 `beekeeper-connections.json` or `connections.json` and sits in `~/Downloads` or `~/Documents`. Any
 other place works too: choose the file yourself with **Choose file...**.
 

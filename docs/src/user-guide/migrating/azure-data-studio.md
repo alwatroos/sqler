@@ -45,7 +45,8 @@ Imported:
 - The name, the server and the user. For SQL Server the server can be `host`, `host,port`,
   `tcp:host,port` or an IPv6 address; the port is 1433 when it is not given. A PostgreSQL entry uses
   its `port` option (5432 when empty).
-- The database. A database of `<default>` or an empty one means no database.
+- The database. For SQL Server, a database of `<default>` or an empty one means no database; for
+  PostgreSQL it becomes `postgres`.
 - SQL Server TLS from `encrypt` and `trustServerCertificate`. `encrypt` on with
   `trustServerCertificate` on becomes `require`, `encrypt` on without it becomes `verify-full`, and
   `strict` becomes `verify-full`. `encrypt` off becomes `prefer` (with a note, because the traffic is
@@ -64,8 +65,9 @@ Not imported:
 - Named SQL Server instances (`host\instance`) are skipped: "named SQL Server instances are not
   supported; use the host and port".
 - Other providers are skipped: "only SQL Server and PostgreSQL connections are imported".
-- An entry without a user or without an authentication type is skipped, for example "the
-  authentication type is missing".
+- An entry without a user is skipped: "the SQL login user is missing", or "the authentication type
+  is missing" when the authentication type is missing too. An entry with a user and no
+  authentication type is treated as SQL login.
 - Every other setting of the entry except secret fields is listed by name as unsupported in the Preview step.
 - Entries that SQLer already has show as "already saved as connection ...".
 
