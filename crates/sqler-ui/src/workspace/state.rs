@@ -30,7 +30,7 @@ use crate::ai::{AiSessions, AiState, AiStatus, AssistJob, EditorAssist, HostMsg,
 use crate::browser::{DropFlow, ObjectTab, TreeNodeId};
 use crate::connections::{
     ConnectFailure, ConnectRequest, ConnectionAction, ConnectionForm, Dialog, FieldError, FormMode,
-    GroupPurpose, HostKeyPrompt, SecretField, TestStatus, from_profile_secret,
+    GroupPurpose, HostKeyPrompt, ImportEffect, SecretField, TestStatus, from_profile_secret,
 };
 use crate::editor::{EditorDocs, EditorKey, TextEdit};
 use crate::export::ExportJob;
@@ -300,6 +300,10 @@ pub enum Effect {
     /// Call a plugin for one of its contributions (a command, a panel, a status item) on tokio and report the
     /// result with [`Workspace::plugin_ui_finished`].
     PluginUi(PluginUiEffect),
+    /// Blocking work of the import wizard (find files, the open-file prompt, read and parse a
+    /// file) on `SessionBridge::blocking`; the answers are [`Workspace::import_discovered`],
+    /// [`Workspace::import_file_chosen`] and [`Workspace::import_file_read`].
+    Import(ImportEffect),
     /// Call the update service (ADR-0066): arm it, switch it on or off, check, dismiss, or open the release notes.
     Update(crate::update::UpdateEffect),
 }
@@ -473,6 +477,8 @@ impl std::fmt::Debug for Effect {
             Self::Plugins(effect) => f.debug_tuple("Plugins").field(effect).finish(),
             // Ids only: never the editor text or a typed value.
             Self::PluginUi(effect) => f.debug_tuple("PluginUi").field(effect).finish(),
+            // The request and the source id only: never a path.
+            Self::Import(effect) => f.debug_tuple("Import").field(effect).finish(),
             // A version or a flag only; the notes URL is an https link from the signed manifest.
             Self::Update(effect) => f.debug_tuple("Update").field(effect).finish(),
         }
@@ -498,13 +504,15 @@ pub struct Workspace {
     pub(super) requests: HashMap<RequestId, Purpose>,
     next_request: u64,
     /// The drivers offered by the connection form.
-    drivers: Vec<DriverId>,
+    pub(super) drivers: Vec<DriverId>,
     /// The dialog on screen.
     pub(super) dialog: Option<Dialog>,
     /// The form hidden behind a host-key prompt.
     parked: Option<Dialog>,
     /// Counts the dialogs opened, so a view can tell a new dialog from the same one.
-    dialog_generation: u64,
+    pub(super) dialog_generation: u64,
+    /// Counts the requests of the import wizard, so a late answer is told from the current one.
+    pub(super) import_requests: u64,
     /// A message for the user that no dialog shows (a failed move, a delete of a full group).
     pub(super) notice: Option<String>,
     pub(super) settings: SettingsModel,
@@ -607,6 +615,7 @@ impl Workspace {
             dialog: None,
             parked: None,
             dialog_generation: 0,
+            import_requests: 0,
             notice: None,
             settings: SettingsModel::default(),
             settings_tab: SettingsTab::Closed,
@@ -1661,6 +1670,7 @@ impl Workspace {
             }
             A::TrustHostKey => self.trust_host_key(),
             A::RejectHostKey => self.reject_host_key(),
+            A::Import(action) => self.dispatch_import(action),
         }
     }
 
@@ -1687,7 +1697,7 @@ impl Workspace {
     }
 
     /// Shows a dialog in place of the current one.
-    fn open_dialog(&mut self, dialog: Dialog) -> Effect {
+    pub(super) fn open_dialog(&mut self, dialog: Dialog) -> Effect {
         // A DROP confirmation that has not started is dropped; two dialogs never overlap.
         if self.drop_flow.as_ref().is_some_and(DropFlow::can_cancel) {
             self.drop_flow = None;

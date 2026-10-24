@@ -16,8 +16,8 @@ name: Release
 #   SQLER_UPDATE_SIGNING_KEY (when set) and `host` attaches it to the release. `update manifest (dry run)` runs the
 #   same path on PRs and dispatch with a TEST ONLY key it generates itself, no secret, and publishes nothing.
 #
-# The release feature set is the single `features = [...]` line in dist-workspace.toml, pending the owner's decision
-# (ADR-0064). `release-guard.sh` rejects `driver-duckdb` whatever that line holds (ADR-0070).
+# The release feature set is the single `features = [...]` line in dist-workspace.toml, set per owner decision 12
+# (ADR-0064 amendment). `release-guard.sh` rejects `driver-duckdb` whatever that line holds (ADR-0070).
 on:
   pull_request:
     paths:

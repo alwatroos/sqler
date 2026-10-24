@@ -28,7 +28,7 @@ use sqler_ui::plugins::status::is_unsafe_char;
 use sqler_ui::plugins::{PluginProblem, PluginRow, PluginSnapshot, PluginsBackend, RowState};
 
 use super::completion::{self, CompletionGate};
-use super::dirs::{ensure_data_dir, plugin_dirs};
+use super::dirs::{builtin_plugins, ensure_data_dir, plugin_dirs};
 use super::settings::Prefs;
 use super::ui;
 
@@ -86,6 +86,8 @@ pub(super) struct AppPlugins {
     services: Services,
     /// The plugins with a completion call in flight.
     completion: CompletionGate,
+    /// Whether discovery also offers the built-in plugins.
+    builtins: bool,
 }
 
 /// Longest plugin display name shown beside its completion rows, in bytes.
@@ -146,6 +148,7 @@ impl AppPlugins {
             cache: Arc::new(Mutex::new(Cache::default())),
             services: Services::new(),
             completion: CompletionGate::default(),
+            builtins: false,
         }
     }
 
@@ -153,6 +156,13 @@ impl AppPlugins {
     #[must_use]
     pub(super) fn with_services(mut self, services: Services) -> Self {
         self.services = services;
+        self
+    }
+
+    /// Also offers `dirs::builtin_plugins`; only `plugins::startup` turns it on (tests stay on disk-only discovery).
+    #[must_use]
+    pub(super) fn with_builtins(mut self) -> Self {
+        self.builtins = true;
         self
     }
 
@@ -366,7 +376,13 @@ impl PluginsBackend for AppPlugins {
             &self.inputs.dev,
             self.inputs.home.clone(),
         );
-        let found = discover(&dirs);
+        let mut found = discover(&dirs);
+        if self.builtins {
+            // Dev, then config, then built-in; a plugin of the same id found on disk wins.
+            let extra = builtin_plugins(&dirs, &found);
+            found.plugins.extend(extra.plugins);
+            found.problems.extend(extra.problems);
+        }
         let data_errors = Self::check_data_dirs(&found.plugins);
         let discovered = found.plugins.clone();
         let mut problems: Vec<PluginProblem> = host.load(found).iter().map(Self::problem).collect();
@@ -666,6 +682,60 @@ default = 5
         assert_eq!(snap.rows.len(), 1);
         assert_eq!(snap.problems.len(), 1);
         assert_eq!(snap.problems[0].dir, "broken");
+    }
+
+    #[cfg(feature = "driver-mssql")]
+    mod builtin {
+        use super::super::super::dirs::SQLSERVER_MANIFEST;
+        use super::*;
+
+        #[test]
+        fn the_sqlserver_plugin_is_listed_unapproved_and_nothing_is_written() {
+            let s = Scratch::new("be-builtin");
+            let (b, _grants, _dir) = backend(&s);
+            let snap = b.with_builtins().refresh();
+            assert_eq!(snap.rows.len(), 1);
+            assert!(snap.problems.is_empty(), "{:?}", snap.problems);
+            let row = &snap.rows[0];
+            assert_eq!(row.manifest.id().as_str(), "sqlserver");
+            assert!(!row.dev);
+            assert!(row.effective.is_empty());
+            assert!(!s.path().join("plugins").exists());
+        }
+
+        #[test]
+        fn a_folder_on_disk_replaces_the_builtin() {
+            let s = Scratch::new("be-builtin-disk");
+            let dir = s.path().join("plugins").join("sqlserver");
+            std::fs::create_dir_all(&dir).unwrap();
+            let text = SQLSERVER_MANIFEST
+                .replace("name = \"SQL Server\"", "name = \"SQL Server (local)\"");
+            std::fs::write(dir.join("sqler.toml"), text).unwrap();
+            let (b, _grants, _dir) = backend(&s);
+            let snap = b.with_builtins().refresh();
+            assert_eq!(snap.rows.len(), 1);
+            assert!(snap.problems.is_empty(), "{:?}", snap.problems);
+            assert_eq!(snap.rows[0].manifest.name(), "SQL Server (local)");
+        }
+
+        #[test]
+        fn without_with_builtins_nothing_is_added() {
+            let s = Scratch::new("be-builtin-off");
+            let (b, _grants, _dir) = backend(&s);
+            let snap = b.refresh();
+            assert!(snap.rows.is_empty() && snap.problems.is_empty());
+        }
+
+        #[test]
+        fn approving_the_builtin_grants_its_capability() {
+            let s = Scratch::new("be-builtin-approve");
+            let (b, grants, _dir) = backend(&s);
+            let manifest = Manifest::parse(SQLSERVER_MANIFEST).unwrap();
+            let prompt = grants.prompt(&manifest, None).unwrap();
+            grants.decide(&prompt, GrantCommand::Approve).unwrap();
+            let snap = b.with_builtins().refresh();
+            assert_eq!(snap.rows[0].effective.len(), 1);
+        }
     }
 
     #[test]

@@ -125,9 +125,9 @@ never looks up `password`, `sshPassword`, `sshKeyfilePassword` or any URL field,
 | Beekeeper `connectionType` | Result |
 | -------------------------- | ------ |
 | `postgresql` | driver `postgres`, target `postgres://host:port/db?user=...` (port 5432, database `postgres`) |
-| `mysql`, `mariadb` | driver `mysql`, target `mysql://user@host:port/db` (port 3306) |
+| `mysql`, `mariadb` | driver `mysql`, target `mysql://host:port/db?user=user` (port 3306) |
 | `sqlite` | driver `sqlite`, target is the absolute file path of `defaultDatabase` (or `databaseFile`) |
-| `sqlserver` | driver `sqlserver`, target `sqlserver://user@host:port/db` (port 1433), consistent with ADR-0071 |
+| `sqlserver` | driver `sqlserver`, target `sqlserver://host:port/db?user=user` (port 1433), consistent with ADR-0071 |
 | `duckdb` | skipped: "DuckDB is not in SQLer 1.0" (ADR-0070) |
 | `cockroachdb`, `redshift`, `oracle`, `mongodb`, ... and unknown types | skipped as unsupported, with the engine name for the known ones |
 
@@ -137,9 +137,8 @@ key is dropped; SQL Server client certificates are dropped with a note). `sshEna
 `sshMode` `userpass` (password), `keyfile` (`sshKeyfile`) or `agent`; a bastion host, a socket path and an unusable
 key path are not mapped and skip the entry. `labelColor` names map to a fixed palette, `#rrggbb` is kept.
 Folders become the group path (parents followed with a cycle and depth guard). Secrets to enter: the database password
-(not for SQLite) and the SSH password or key passphrase. SQL Server has no keychain password in 1.0 (ADR-0071), so
-that entry carries a note instead; R9 will push the `DbPassword` for `sqlserver` entries after ADR-0071 Amendment 1
-(S5) lands. A SQL Server entry is a normal import; the planner marks it "not available in this
+(not for SQLite) and the SSH password or key passphrase; this includes SQL Server entries, whose password goes to the
+keychain since ADR-0071 Amendment 1. A SQL Server entry is a normal import; the planner marks it "not available in this
 build" only when the caller's driver list lacks `sqlserver`. The crate needs no SQLite access and no new dependency.
 
 ### Out of scope
@@ -185,3 +184,31 @@ a valid empty report. Default locations: `<user data>/User/settings.json` with `
 
 Caps are those of the core: 4 MiB file, 5,000 connections and 5,000 groups, 4,096 characters per field. Whether
 `sqlserver` is available is decided by the caller's driver list (`DriverUnavailable`), as for every driver.
+
+## Amendment 2 (2026-10-23): the import wizard (R9)
+
+The wizard is a modal dialog in `sqler-ui` (`connections/import`, `workspace/import.rs`), opened by the command
+`connection:import` or by **Import...** in the New connection form. It has four steps: Source, Preview, Secrets and
+Summary.
+
+- **Direct dependency.** `sqler-ui` (L6) depends on `sqler-import` (L2) directly, as it does on `sqler-export`. A trait in
+  `sqler-ui` with an adapter in `sqler-app` was considered and rejected: more code, no layering gain. `sqler-app` is
+  unchanged. The plan is computed by `sqler_import::plan` against the sidebar store with the driver list of the
+  workspace (`ws.drivers()`).
+- **Blocking work.** Default-location discovery, the open-file prompt and the bounded read and parse run through
+  `SessionBridge::blocking` as an `Effect` round trip with request ids; a reply whose id is not the pending one of the
+  open wizard is ignored.
+- **Apply and ordering.** `sqler_import::apply` runs on the live store with a private recording `SecretStore`. It records
+  each `set` as a `SecretOp::Set`, answers `get` with none and `delete` with false, and touches no keychain. The recorded
+  operations travel in the existing `Effect::SaveConnections`, so `connections.toml` is written first and the keychain
+  afterwards (`commit_connections`). Cancel at any step changes nothing. A refused keychain write shows the usual
+  "Keychain: ..." notice and the connection reports a missing secret until you edit it.
+- **Secrets.** Typed passwords are held in a redacting type (`Debug` prints `<redacted>`), are never put in a notice, and
+  are cleared on apply. An empty field means skip.
+- **SQL Server password (ADR-0071 amendment 1).** The wizard adds nothing of its own: every importer (pgAdmin, Azure
+  Data Studio and, since the fix of the Beekeeper importer in this change, Beekeeper) already emits a `DbPassword`
+  secret request for its `sqlserver` entries, and the stale note "SQL Server does not use a keychain password yet" is
+  gone. The same fix writes the Beekeeper MySQL and SQL Server user as `?user=` (the connection store rejects user
+  info in a target). The password goes to the keychain and is injected into `sqlserver://` targets at connect
+  time. Without `sqlserver` in the driver list the entry is skipped with "not available in this build"; the plugin
+  manager registers the driver after start, so reopen the wizard if a file was read too early.

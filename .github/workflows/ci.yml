@@ -79,6 +79,8 @@ jobs:
               - 'crates/**'
               - 'xtask/**'
               - 'vendor/**'
+              # Compiled into sqler-app as the built-in SQL Server plugin manifest.
+              - 'plugins/sqlserver/sqler.toml'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
@@ -233,6 +235,12 @@ jobs:
       - name: Test sqler-app with plugin support
         if: needs.changes.outputs.rust == 'true' && (matrix.os != 'windows-latest' || needs.changes.outputs.full == 'true')
         run: cargo nextest run -p sqler-app --features plugins --no-tests=fail
+      # The release feature set (dist-workspace.toml, ADR-0064) links aws-lc-rs (wasmtime) and ring (sqlx) together.
+      # Running every sqler-app test with both makes a TLS test panic if `install_ring_provider` is ever lost
+      # (ADR-0071). Linux only, like the other engine runs; it also covers the built-in SQL Server plugin.
+      - name: Test sqler-app with the release feature set
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
+        run: cargo nextest run -p sqler-app --features plugins,driver-mssql --no-tests=fail
       - name: Test sqler-cli with plugin support
         if: needs.changes.outputs.rust == 'true' && (matrix.os != 'windows-latest' || needs.changes.outputs.full == 'true')
         run: cargo nextest run -p sqler-cli --features plugins --no-tests=fail

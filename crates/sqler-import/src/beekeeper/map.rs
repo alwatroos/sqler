@@ -370,14 +370,14 @@ fn build(
             } else {
                 "sqlserver"
             };
-            let at = if user.is_empty() {
-                String::new()
-            } else {
-                format!("{}@", encode(&user))
-            };
-            let mut t = format!("{scheme}://{at}{host}:{port}");
+            // The store refuses user info in a target; the user goes in `?user=` like the form
+            // writes it (the connect pipeline moves it into the user info).
+            let mut t = format!("{scheme}://{host}:{port}");
             if let Some(db) = db {
                 let _ = write!(t, "/{}", encode(&db));
+            }
+            if !user.is_empty() {
+                let _ = write!(t, "?user={}", encode(&user));
             }
             t
         }
@@ -389,14 +389,7 @@ fn build(
 
     let mut secrets = Vec::new();
     if !user.is_empty() {
-        if engine == Engine::SqlServer {
-            ctx.notes.push(
-                "SQL Server does not use a keychain password yet; the password has to be added to the connection after the import"
-                    .to_owned(),
-            );
-        } else {
-            secrets.push(ProfileSecretKind::DbPassword);
-        }
+        secrets.push(ProfileSecretKind::DbPassword);
     }
     if ctx.flag("sshEnabled") == Some(true) {
         let (ssh, kind) = ssh(ctx)?;

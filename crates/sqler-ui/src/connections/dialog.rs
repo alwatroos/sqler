@@ -7,6 +7,7 @@ use sqler_config::{ConnectionId, GroupId};
 
 use super::connector::HostKeyPrompt;
 use super::form::ConnectionForm;
+use super::import::ImportWizard;
 use crate::workspace::Purpose;
 
 /// What a group-name dialog does with the name.
@@ -48,6 +49,8 @@ pub enum Dialog {
         /// The connection to move.
         id: ConnectionId,
     },
+    /// The import wizard (ADR-0067).
+    Import(ImportWizard),
     /// "Trust this SSH host key?"
     TrustHostKey {
         /// The key the server presented.

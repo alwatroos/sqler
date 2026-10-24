@@ -58,14 +58,15 @@ in, and a workspace-wide `dist = true` would also ship `sqler-cli`, `xtask` and 
 the bundled DuckDB C++ engine. `[profile.dist]` inherits `release` and nothing else; it adds no LTO because thin LTO
 grew the binary (see the comment on `[profile.release]` in `Cargo.toml`).
 
-### The release feature set (PENDING THE OWNER'S DECISION)
+### The release feature set
 
-The features of the release build are **one line**, `features = [...]` in `dist-workspace.toml`. It is **pending the
-owner's decision; default features assumed** (`features = []`): whether the `plugins` feature, and with it SQL Server,
-ships in 1.0 is not decided (with the plugin host the Linux binary is 79.9 MB against the 83,886,080-byte budget). To
-change the set, edit that line only. The guard also reads `features` and `all-features` under `[package.metadata.dist]`
+The features of the release build are **one line**, `features = [...]` in `dist-workspace.toml`. Its value is
+`features = ["plugins", "driver-mssql"]` (owner decision 12: the plugin host and SQL Server ship in 1.0). cargo-dist
+adds these features on top of the `default` features of `sqler-app`, so `default` stays as it is. To change the set,
+edit that line only. The same line drives the SBOM (`cargo cyclonedx --features`, through the `sed` in `release.yml`).
+The guard also reads `features` and `all-features` under `[package.metadata.dist]`
 in `crates/sqler-app/Cargo.toml` (cargo-dist accepts them there) and rejects `driver-duckdb` or `all-features = true`
-in either place. The same line drives the SBOM (`cargo cyclonedx --features`). The DuckDB guard
+in either place. The DuckDB guard
 below does not depend on the value of the line. `driver-duckdb` never belongs in it.
 
 ### Triggers and the publish guard
@@ -129,6 +130,37 @@ release (`sqler-app.cdx.xml`, `cargo-cyclonedx`), not one per artifact; per-arti
 - Changing the feature line changes the size of every binary; check it against the budget in the dry run.
 - The first dry run of a target can fail for runner reasons (`macos-15-intel` availability, WiX v3 on `windows-2022`,
   GPUI on `ubuntu-22.04-arm`); a target that is not cheap to fix is dropped from `targets` and recorded here.
+
+## Amendment 1 (2026-10-23, S2): plugin host and SQL Server in every artifact
+
+- Built-in route: the app compiles `plugins/sqlserver/sqler.toml` in (only with `driver-mssql`) and adds it to plugin
+  discovery when no `sqlserver` plugin is found on disk (`plugins/dirs.rs`). Nothing is written to `<config>`, and every
+  installer works unchanged.
+- Lost alternative: shipping the manifest in the archives. It would reach archive users only, because the installers
+  install binaries only, and it would still need a manual copy.
+- Consent: the built-in plugin goes through the normal grant flow, so the user approves `driver.host:mssql` once in the
+  Plugins view (ADR-0060). A manifest on disk (`<config>/plugins` or `--plugin-dir`) replaces the built-in one.
+- Runtime needs: wasmtime, Cranelift and aws-lc are linked statically, so no system library is added. `ring` is
+  installed as the TLS provider at the start of `main` (ADR-0071). The installers install only the binary; none of them
+  creates `<config>`, and uninstalling leaves `<config>` (connections, grants, preferences) alone.
+- For R2 (signing): a hardened-runtime signature probably needs a JIT entitlement before a wasm component can compile
+  (assumed, not tested; the manifest-only SQL Server plugin does not compile wasm).
+
+Release feature set, S2 dry run (filled in from the `full-ci` run of the S2 pull request):
+
+| OS (target) | Binary bytes | Archive bytes | Budget | Headroom |
+| ----------- | ------------ | ------------- | ------ | -------- |
+| macOS arm64 | 51,921,008 | 13,725,756 | 83,886,080 | 31,965,072 |
+| macOS x86_64 | 58,434,600 | 15,920,380 | 83,886,080 | 25,451,480 |
+| Linux x86_64 | 81,176,680 | 20,724,964 | 83,886,080 | 2,709,400 |
+| Linux aarch64 | 68,182,120 | 17,832,468 | 83,886,080 | 15,703,960 |
+| Windows x86_64 | 71,068,672 | 25,901,525 | 83,886,080 | 12,817,408 |
+
+All five rows come from the same `full-ci` run, on the merge of `main` into the S2 branch. Every binary is under the
+budget; Linux x86_64 is the tightest, with 2,709,400 bytes (3.2 percent) of headroom. The `ldd`-style linkage of the
+Linux binaries (`dist build --print=linkage`) lists only `libc`, `libm`, `libgcc_s`, `libxcb`, `libxcb-xkb`,
+`libxkbcommon`, `libxkbcommon-x11` and their dependencies `libXau`, `libXdmcp`, `libbsd` and `libmd`; the macOS binaries
+link system libraries and frameworks only; the Windows binary links no non-system library.
 
 ## Measurements
 

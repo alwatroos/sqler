@@ -8594,6 +8594,7 @@ dependencies = [
  "sqler-driver-postgres",
  "sqler-driver-sqlite",
  "sqler-export",
+ "sqler-import",
  "sqler-mcp",
  "sqler-plugin-api",
  "sqler-sql",
