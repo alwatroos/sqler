@@ -74,6 +74,8 @@ pub(crate) fn tx_effect(dialect: Dialect, sql: &str) -> TxEffect {
     // `SET autocommit = 0` is sticky: only `autocommit = 1` clears it, not `COMMIT` or `BEGIN`.
     let mut off = false;
     let mut any = false;
+    // What the script opened (`BEGIN`, `BEGIN TRAN`, `SAVE`), kept across mode switches.
+    let mut held: Option<TxEffect> = None;
     // T-SQL nesting, folded over the statements of the script.
     let (mut reset, mut delta, mut floor) = (false, 0i32, 0u32);
     for segment in split(dialect, sql) {
@@ -90,11 +92,10 @@ pub(crate) fn tx_effect(dialect: Dialect, sql: &str) -> TxEffect {
                     TxEffect::AutocommitOn | TxEffect::ImplicitOff => off = false,
                     _ => {}
                 }
-                result = if effect == TxEffect::ImplicitOff
-                    && matches!(result, TxEffect::Begin | TxEffect::Tran { .. })
-                {
-                    // Switching the mode never ends a transaction: keep what the script opened.
-                    result
+                result = if effect == TxEffect::ImplicitOff {
+                    // Switching the mode never ends a transaction: keep what the script opened,
+                    // whatever `SET IMPLICIT_TRANSACTIONS` statements came in between.
+                    held.unwrap_or(effect)
                 } else if let TxEffect::Tran {
                     reset: r, delta: d, ..
                 } = effect
@@ -128,6 +129,11 @@ pub(crate) fn tx_effect(dialect: Dialect, sql: &str) -> TxEffect {
                 } else {
                     effect
                 };
+                match effect {
+                    TxEffect::Begin | TxEffect::Tran { .. } => held = Some(result),
+                    TxEffect::End | TxEffect::AutocommitOn => held = None,
+                    _ => {}
+                }
             }
         }
     }
@@ -249,11 +255,22 @@ fn tsql_effect(t: &[Tok]) -> TxEffect {
             delta: begins,
             floor: 0,
         },
-        "SET" if is(t, 1, "IMPLICIT_TRANSACTIONS") => match t.get(2) {
-            Some(Tok::Word(v)) if v == "ON" => TxEffect::AutocommitOff,
-            Some(Tok::Word(v)) if v == "OFF" => TxEffect::ImplicitOff,
-            _ => TxEffect::None,
-        },
+        // Also the list form `SET NOCOUNT, IMPLICIT_TRANSACTIONS ON`: the last word is the value
+        // for every option in the list.
+        "SET"
+            if t.iter()
+                .any(|k| matches!(k, Tok::Word(w) if w == "IMPLICIT_TRANSACTIONS")) =>
+        {
+            let last = t
+                .iter()
+                .rev()
+                .find(|k| !matches!(k, Tok::Other(s) if s == ";"));
+            match last {
+                Some(Tok::Word(v)) if v == "ON" => TxEffect::AutocommitOff,
+                Some(Tok::Word(v)) if v == "OFF" => TxEffect::ImplicitOff,
+                _ => TxEffect::None,
+            }
+        }
         _ if begins > 0 => TxEffect::Tran {
             reset: false,
             delta: begins,
@@ -330,6 +347,43 @@ mod tests {
     const LITE: Dialect = Dialect::Sqlite;
 
     use TxEffect::{AutocommitOff, AutocommitOn, Begin, End, ImplicitOff, None as Nothing, Tran};
+
+    #[test]
+    fn t_sql_mode_switches_keep_an_open_transaction() {
+        let nest = |delta| Tran {
+            reset: false,
+            delta,
+            floor: 0,
+        };
+        let all = Tran {
+            reset: true,
+            delta: 0,
+            floor: 0,
+        };
+        let table: &[(&str, TxEffect)] = &[
+            (
+                "begin tran; set implicit_transactions on; set implicit_transactions off",
+                nest(1),
+            ),
+            (
+                "begin tran; set implicit_transactions on; set implicit_transactions off; commit",
+                nest(0),
+            ),
+            (
+                "set implicit_transactions on; begin tran; set implicit_transactions off; rollback",
+                all,
+            ),
+            ("SET NOCOUNT, IMPLICIT_TRANSACTIONS ON", AutocommitOff),
+            ("set implicit_transactions, nocount off", ImplicitOff),
+            (
+                "begin tran; set nocount, implicit_transactions on; set nocount, implicit_transactions off",
+                nest(1),
+            ),
+        ];
+        for (sql, expected) in table {
+            assert_eq!(tx_effect(Dialect::TSql, sql), *expected, "{sql}");
+        }
+    }
 
     #[test]
     fn table_of_t_sql_statements() {
