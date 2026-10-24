@@ -1,0 +1,140 @@
+name: Tag release
+
+# Owner-triggered release tag (R18, ADR-0064 amendment 3). The OWNER runs this from Actions -> Tag release on `main`;
+# nobody else dispatches it. It validates (fail closed, `.github/scripts/tag-release-validate.sh`), creates the
+# lightweight tag `vX.Y.Z` through the API, then dispatches `release.yml` on that tag. A tag made with GITHUB_TOKEN does
+# not start the `push: tags` trigger of release.yml (GitHub blocks recursive triggers), but a dispatch does, and
+# release.yml publishes a dispatch on a `refs/tags/v*` ref like a tag push.
+#
+# Gate: a successful Release dry run (workflow_dispatch on main) and a successful CI push run, both on the exact
+# commit being tagged. Run the Release workflow on main first.
+#
+# Every input reaches a script through `env:` only; no expression is interpolated into a `run:` script.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without v, for example 1.0.0"
+        type: string
+        required: true
+      sha:
+        description: "Commit to tag (7-40 lowercase hex, on main). Empty means the head of main."
+        type: string
+        required: false
+        default: ""
+      confirm:
+        description: "Type exactly: release vX.Y.Z"
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: tag release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Cheap checks (script, so they are testable offline) before any API call.
+      - name: Pre-check
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          CONFIRM: ${{ inputs.confirm }}
+          REF: ${{ github.ref }}
+        run: sh .github/scripts/tag-release-precheck.sh
+
+      - name: Validate
+        id: validate
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ inputs.sha }}
+          CONFIRM: ${{ inputs.confirm }}
+          REF: ${{ github.ref }}
+          MAIN_HEAD: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: sh .github/scripts/tag-release-validate.sh
+
+      - name: Create tag
+        id: tag
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.validate.outputs.tag }}
+          SHA: ${{ steps.validate.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA"
+          echo "created=true" >>"$GITHUB_OUTPUT"
+
+      - name: Dispatch Release
+        id: dispatch
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.validate.outputs.tag }}
+          SHA: ${{ steps.validate.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run release.yml --repo "$REPO" --ref "$TAG"
+          echo "dispatched=true" >>"$GITHUB_OUTPUT"
+          # Find the new run; bounded, 12 x 5 s. Not finding it is not a failure: the tag exists and the run started.
+          i=0
+          while [ "$i" -lt 12 ]; do
+            i=$((i + 1))
+            sleep 5
+            found=$(gh run list --repo "$REPO" --workflow release.yml --event workflow_dispatch --branch "$TAG" --limit 1 --json url,headSha --jq '.[] | [.url,.headSha] | @tsv' || true)
+            # Accept only a run on the tagged commit (an older run of a deleted and recreated tag has another head sha).
+            if [ -n "$found" ] && [ "${found#*	}" = "$SHA" ]; then
+              printf 'run_url=%s\n' "${found%%	*}" >>"$GITHUB_OUTPUT"
+              break
+            fi
+          done
+
+      - name: Summary
+        if: always()
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.validate.outputs.tag }}
+          SHA: ${{ steps.validate.outputs.sha }}
+          VALIDATE: ${{ steps.validate.outcome }}
+          CREATED: ${{ steps.tag.outputs.created }}
+          DISPATCHED: ${{ steps.dispatch.outputs.dispatched }}
+          RUN_URL: ${{ steps.dispatch.outputs.run_url }}
+        run: |
+          {
+            echo "## Tag release"
+            if [ "$VALIDATE" != "success" ]; then
+              echo "Validation did not pass (outcome: $VALIDATE). No tag was created. See the Validate step."
+            else
+              echo "- Tag: \`$TAG\`"
+              echo "- Commit: \`$SHA\`"
+              if [ "$CREATED" != "true" ]; then
+                echo "- The tag was NOT created."
+              elif [ "$DISPATCHED" != "true" ]; then
+                echo "- The tag was created but the Release dispatch failed. The owner runs: \`gh workflow run release.yml --ref $TAG\`, or deletes the tag and retries."
+              elif [ -n "$RUN_URL" ]; then
+                echo "- Release run: $RUN_URL"
+              else
+                echo "- Release run: https://github.com/$REPO/actions/workflows/release.yml (the new run was not found in 60 s)"
+                echo "::warning::The Release run was not found; check the Release workflow page"
+              fi
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+          if [ "$CREATED" = "true" ] && [ "$DISPATCHED" != "true" ]; then
+            exit 1
+          fi
