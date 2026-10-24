@@ -18,7 +18,9 @@ workspace = true
 
 [dependencies]
 sqler-plugin-api.workspace = true
+serde_json.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
-toml.workspace = true
+sqler-config.workspace = true
 wit-parser.workspace = true
