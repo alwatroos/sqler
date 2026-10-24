@@ -159,14 +159,7 @@ impl WorkspaceView {
                         wizard.can_back(),
                         cx,
                     ),
-                    action_button(
-                        "import-apply",
-                        "Import",
-                        import(ImportAction::Apply),
-                        true,
-                        true,
-                        cx,
-                    ),
+                    Self::apply_button(wizard, cx),
                 ],
             ),
             ImportStep::Summary => (
@@ -190,6 +183,32 @@ impl WorkspaceView {
             .child(dialog_title(Some(AppIcon::FolderOpen), heading, cx))
             .child(body)
             .child(dialog_footer(cx).children(buttons))
+    }
+
+    /// The Import button of the Secrets step. It shares its footer position with "Next" on
+    /// Preview, so the second click of a double-click on "Next" must not reach it: a multi-click
+    /// is ignored, and the button stays disabled until the step was drawn once (one more frame
+    /// is requested the first time, which enables it).
+    fn apply_button(wizard: &ImportWizard, cx: &mut Context<WorkspaceView>) -> AnyElement {
+        let first_frame = wizard.mark_secrets_drawn();
+        if first_frame {
+            cx.notify();
+        }
+        Button::new("import-apply")
+            .label("Import")
+            .small()
+            .primary()
+            .disabled(first_frame)
+            .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                let allowed = match view.ws.import_wizard() {
+                    Some(wizard) => wizard.apply_click_allowed(event.click_count()),
+                    None => false,
+                };
+                if allowed {
+                    view.dispatch_connection(import(ImportAction::Apply), cx);
+                }
+            }))
+            .into_any_element()
     }
 
     fn source_buttons(wizard: &ImportWizard, cx: &mut Context<WorkspaceView>) -> Vec<AnyElement> {

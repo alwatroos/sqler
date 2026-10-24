@@ -14,6 +14,7 @@ mod apply;
 pub(crate) mod fixtures;
 pub mod load;
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -286,6 +287,10 @@ pub struct ImportWizard {
     selected: BTreeSet<usize>,
     secrets: BTreeMap<(usize, ProfileSecretKind), Secret>,
     summary: Option<ImportSummary>,
+    /// Whether the Secrets step was drawn once since it opened (a render-generation latch, set
+    /// by the view): the Import button stays disabled before that, so the second click of a
+    /// double-click on "Next" cannot land on it.
+    secrets_drawn: Cell<bool>,
 }
 
 impl std::fmt::Debug for ImportWizard {
@@ -332,7 +337,27 @@ impl ImportWizard {
             selected: BTreeSet::new(),
             secrets: BTreeMap::new(),
             summary: None,
+            secrets_drawn: Cell::new(false),
         }
+    }
+
+    /// Whether the Secrets step has been drawn once; the Import button is enabled only then.
+    #[must_use]
+    pub fn secrets_drawn(&self) -> bool {
+        self.secrets_drawn.get()
+    }
+
+    /// Records that the Secrets step was drawn. Returns true the first time, so the caller
+    /// can ask for one more frame that enables the button.
+    pub fn mark_secrets_drawn(&self) -> bool {
+        !self.secrets_drawn.replace(true)
+    }
+
+    /// Whether a click on the Import button runs: not as the second click of a multi-click, and
+    /// not before the Secrets step was drawn once.
+    #[must_use]
+    pub fn apply_click_allowed(&self, click_count: usize) -> bool {
+        click_count <= 1 && self.secrets_drawn.get()
     }
 
     // ---- getters ----
@@ -758,6 +783,7 @@ impl ImportWizard {
     pub(crate) fn goto_secrets(&mut self) {
         if self.step == ImportStep::Preview && self.selected_count() > 0 {
             self.step = ImportStep::Secrets;
+            self.secrets_drawn.set(false);
             self.cursor = 0;
         }
     }
@@ -943,6 +969,47 @@ mod tests {
         assert!(ImportWizard::swallows_held_key("backspace", false));
         assert!(!ImportWizard::swallows_held_key("backspace", true));
         assert!(!ImportWizard::swallows_held_key("a", true));
+    }
+
+    #[test]
+    fn the_second_click_of_a_double_click_on_next_cannot_apply() {
+        let w = at(ImportStep::Secrets);
+        // Before the Secrets step was drawn once, no click applies.
+        assert!(!w.secrets_drawn());
+        assert!(!w.apply_click_allowed(1));
+        assert!(!w.apply_click_allowed(2));
+        // The first draw is reported once; the button is enabled from the next frame.
+        assert!(w.mark_secrets_drawn());
+        assert!(!w.mark_secrets_drawn());
+        // A multi-click never applies, a single click does.
+        assert!(!w.apply_click_allowed(2));
+        assert!(!w.apply_click_allowed(3));
+        assert!(w.apply_click_allowed(1));
+    }
+
+    #[test]
+    fn opening_the_secrets_step_resets_the_drawn_latch() {
+        let mut w = at(ImportStep::Preview);
+        w.selected.insert(0);
+        w.secrets_drawn.set(true);
+        w.goto_secrets();
+        if w.step() == ImportStep::Secrets {
+            assert!(!w.secrets_drawn());
+        }
+    }
+
+    #[test]
+    fn the_wizard_branch_of_on_key_swallows_held_keys() {
+        // A guard on the wiring: the view must ask `swallows_held_key` for a held key while
+        // the wizard is open, so removing the call fails here.
+        let source = include_str!("../../workspace/view.rs");
+        let start = source.find("fn on_key(").expect("on_key exists");
+        let body = &source[start..];
+        let end = body.find("cx.stop_propagation();").expect("held keys stop");
+        let head = &body[..end];
+        assert!(head.contains("event.is_held"));
+        assert!(head.contains("import_wizard().is_some()"));
+        assert!(head.contains("ImportWizard::swallows_held_key("));
     }
 
     #[test]
