@@ -1,0 +1,71 @@
+{
+  "dist_version": "0.32.0",
+  "announcement_tag": "v1.2.3",
+  "announcement_is_prerelease": false,
+  "releases": [
+    {
+      "app_name": "sqler-app",
+      "app_version": "1.2.3",
+      "artifacts": [
+        "source.tar.gz",
+        "source.tar.gz.sha256",
+        "sqler-app-installer.sh",
+        "sqler-app-installer.ps1",
+        "sqler-app-x86_64-pc-windows-msvc.msi",
+        "sqler-app-aarch64-apple-darwin.tar.xz",
+        "sqler-app-x86_64-apple-darwin.tar.xz",
+        "sqler-app-x86_64-pc-windows-msvc.zip",
+        "sqler-app-x86_64-unknown-linux-gnu.tar.xz",
+        "sqler-app-aarch64-unknown-linux-gnu.tar.xz",
+        "sha256.sum"
+      ]
+    },
+    {
+      "app_name": "other-app",
+      "app_version": "9.9.9",
+      "artifacts": ["other-app-x86_64-unknown-linux-gnu.tar.xz"]
+    }
+  ],
+  "artifacts": {
+    "source.tar.gz": { "name": "source.tar.gz", "kind": "source-tarball" },
+    "source.tar.gz.sha256": { "name": "source.tar.gz.sha256", "kind": "checksum" },
+    "sha256.sum": { "name": "sha256.sum", "kind": "unified-checksum" },
+    "sqler-app-installer.sh": { "name": "sqler-app-installer.sh", "kind": "installer" },
+    "sqler-app-installer.ps1": { "name": "sqler-app-installer.ps1", "kind": "installer" },
+    "sqler-app-x86_64-pc-windows-msvc.msi": {
+      "name": "sqler-app-x86_64-pc-windows-msvc.msi",
+      "kind": "installer",
+      "target_triples": ["x86_64-pc-windows-msvc"]
+    },
+    "sqler-app-aarch64-apple-darwin.tar.xz": {
+      "name": "sqler-app-aarch64-apple-darwin.tar.xz",
+      "kind": "executable-zip",
+      "target_triples": ["aarch64-apple-darwin"]
+    },
+    "sqler-app-x86_64-apple-darwin.tar.xz": {
+      "name": "sqler-app-x86_64-apple-darwin.tar.xz",
+      "kind": "executable-zip",
+      "target_triples": ["x86_64-apple-darwin"]
+    },
+    "sqler-app-x86_64-pc-windows-msvc.zip": {
+      "name": "sqler-app-x86_64-pc-windows-msvc.zip",
+      "kind": "executable-zip",
+      "target_triples": ["x86_64-pc-windows-msvc"]
+    },
+    "sqler-app-x86_64-unknown-linux-gnu.tar.xz": {
+      "name": "sqler-app-x86_64-unknown-linux-gnu.tar.xz",
+      "kind": "executable-zip",
+      "target_triples": ["x86_64-unknown-linux-gnu"]
+    },
+    "sqler-app-aarch64-unknown-linux-gnu.tar.xz": {
+      "name": "sqler-app-aarch64-unknown-linux-gnu.tar.xz",
+      "kind": "executable-zip",
+      "target_triples": ["aarch64-unknown-linux-gnu"]
+    },
+    "other-app-x86_64-unknown-linux-gnu.tar.xz": {
+      "name": "other-app-x86_64-unknown-linux-gnu.tar.xz",
+      "kind": "executable-zip",
+      "target_triples": ["x86_64-unknown-linux-gnu"]
+    }
+  }
+}
