@@ -8,52 +8,59 @@ The numbers below are for the build users download: the release feature set (`pl
 
 | Metric | OS | Value | Budget | Headroom | Date | Commit | Source |
 | ------ | -- | ----- | ------ | -------- | ---- | ------ | ------ |
-| Binary size | Linux x86_64 | 81,176,680 bytes | 83,886,080 bytes (80 MB) | 2,709,400 bytes | 2026-10-24 | 7b484b4 | CI runner (S2 `full-ci` Release dry run, see the note) |
-| Binary size | Linux aarch64 | 68,182,120 bytes | 83,886,080 bytes (80 MB) | 15,703,960 bytes | 2026-10-24 | 7b484b4 | CI runner (S2 `full-ci` Release dry run, see the note) |
-| Binary size | macOS arm64 | 51,921,008 bytes | 83,886,080 bytes (80 MB) | 31,965,072 bytes | 2026-10-24 | 7b484b4 | CI runner (S2 `full-ci` Release dry run, see the note) |
-| Binary size | macOS x86_64 | 58,434,600 bytes | 83,886,080 bytes (80 MB) | 25,451,480 bytes | 2026-10-24 | 7b484b4 | CI runner (S2 `full-ci` Release dry run, see the note) |
-| Binary size | Windows x86_64 | 71,068,672 bytes | 83,886,080 bytes (80 MB) | 12,817,408 bytes | 2026-10-24 | 7b484b4 | CI runner (S2 `full-ci` Release dry run, see the note) |
+| Binary size | Linux x86_64 | 81,620,968 bytes | 83,886,080 bytes (80 MB) | 2,265,112 bytes | 2026-10-24 | d67ccb7 | CI runner (Release dry run 40106827001) |
+| Binary size | Linux aarch64 | 68,542,568 bytes | 83,886,080 bytes (80 MB) | 15,343,512 bytes | 2026-10-24 | d67ccb7 | CI runner (Release dry run 40106827001) |
+| Binary size | macOS arm64 | 52,305,536 bytes | 83,886,080 bytes (80 MB) | 31,580,544 bytes | 2026-10-24 | d67ccb7 | CI runner (Release dry run 40106827001) |
+| Binary size | macOS x86_64 | 58,848,712 bytes | 83,886,080 bytes (80 MB) | 25,037,368 bytes | 2026-10-24 | d67ccb7 | CI runner (Release dry run 40106827001) |
+| Binary size | Windows x86_64 | 71,644,672 bytes | 83,886,080 bytes (80 MB) | 12,241,408 bytes | 2026-10-24 | d67ccb7 | CI runner (Release dry run 40106827001) |
 | Binary size | macOS arm64 | 51,937,408 bytes | 83,886,080 bytes (80 MB) | 31,948,672 bytes | 2026-10-24 | 7b484b4 | desktop (reference machine class) |
-| Archive size | Linux x86_64 | 20,724,964 bytes | n/a (no budget) | n/a | 2026-10-24 | 7b484b4 | CI runner (S2 `full-ci` Release dry run, see the note) |
-| Archive size | Linux aarch64 | 17,832,468 bytes | n/a (no budget) | n/a | 2026-10-24 | 7b484b4 | CI runner (S2 `full-ci` Release dry run, see the note) |
-| Archive size | macOS arm64 | 13,725,756 bytes | n/a (no budget) | n/a | 2026-10-24 | 7b484b4 | CI runner (S2 `full-ci` Release dry run, see the note) |
-| Archive size | macOS x86_64 | 15,920,380 bytes | n/a (no budget) | n/a | 2026-10-24 | 7b484b4 | CI runner (S2 `full-ci` Release dry run, see the note) |
-| Archive size | Windows x86_64 | 25,901,525 bytes | n/a (no budget) | n/a | 2026-10-24 | 7b484b4 | CI runner (S2 `full-ci` Release dry run, see the note) |
+| Binary size | macOS arm64 | 52,321,584 bytes | 83,886,080 bytes (80 MB) | 31,564,496 bytes | 2026-10-24 | d67ccb7 | desktop (reference machine class) |
+| Archive size | Linux x86_64 | 20,883,708 bytes | n/a (no budget) | n/a | 2026-10-24 | d67ccb7 | CI runner (Release dry run 40106827001) |
+| Archive size | Linux aarch64 | 17,966,976 bytes | n/a (no budget) | n/a | 2026-10-24 | d67ccb7 | CI runner (Release dry run 40106827001) |
+| Archive size | macOS arm64 | 13,863,940 bytes | n/a (no budget) | n/a | 2026-10-24 | d67ccb7 | CI runner (Release dry run 40106827001) |
+| Archive size | macOS x86_64 | 16,069,536 bytes | n/a (no budget) | n/a | 2026-10-24 | d67ccb7 | CI runner (Release dry run 40106827001) |
+| Archive size | Windows x86_64 | 26,181,509 bytes | n/a (no budget) | n/a | 2026-10-24 | d67ccb7 | CI runner (Release dry run 40106827001) |
 | Cold start, none | macOS arm64 | 121.4 ms (sigma 4.1, min 116.2, max 128.3) | 500 ms | 378.6 ms | 2026-10-24 | 7b484b4 | desktop (reference machine class) |
 | Cold start, plugin | macOS arm64 | 125.8 ms (sigma 5.1, min 118.9, max 137.2) | 500 ms | 374.2 ms | 2026-10-24 | 7b484b4 | desktop (reference machine class) |
 | Idle RSS, none | macOS arm64 | 76.9 MiB (min 76.8, max 77.1; 3 of 3 open) | 150 MiB | 73.1 MiB | 2026-10-24 | 7b484b4 | desktop (reference machine class) |
 | Idle RSS, plugin | macOS arm64 | 77.0 MiB (min 76.9, max 77.2; 3 of 3 open) | 150 MiB | 73.0 MiB | 2026-10-24 | 7b484b4 | desktop (reference machine class) |
-| Cold start, none | Linux x86_64 | pending: first benchmarks.yml run after merge | 500 ms | n/a | pending | pending | CI runner (benchmarks.yml) |
-| Cold start, plugin | Linux x86_64 | pending: first benchmarks.yml run after merge | 500 ms | n/a | pending | pending | CI runner (benchmarks.yml) |
-| Idle RSS, none | Linux x86_64 | pending: first benchmarks.yml run after merge | 150 MiB | n/a | pending | pending | CI runner (benchmarks.yml) |
-| Idle RSS, plugin | Linux x86_64 | pending: first benchmarks.yml run after merge | 150 MiB | n/a | pending | pending | CI runner (benchmarks.yml) |
-| Cold start, none | macOS arm64 | pending: first benchmarks.yml run after merge | 500 ms | n/a | pending | pending | CI runner (benchmarks.yml) |
-| Cold start, plugin | macOS arm64 | pending: first benchmarks.yml run after merge | 500 ms | n/a | pending | pending | CI runner (benchmarks.yml) |
-| Idle RSS, none | macOS arm64 | pending: first benchmarks.yml run after merge | 150 MiB | n/a | pending | pending | CI runner (benchmarks.yml) |
-| Idle RSS, plugin | macOS arm64 | pending: first benchmarks.yml run after merge | 150 MiB | n/a | pending | pending | CI runner (benchmarks.yml) |
-| Cold start, none | Windows x86_64 | pending: first benchmarks.yml run after merge | 500 ms | n/a | pending | pending | CI runner (benchmarks.yml) |
-| Cold start, plugin | Windows x86_64 | pending: first benchmarks.yml run after merge | 500 ms | n/a | pending | pending | CI runner (benchmarks.yml) |
-| Idle RSS (working set), none | Windows x86_64 | pending: first benchmarks.yml run after merge | 150 MiB | n/a | pending | pending | CI runner (benchmarks.yml) |
-| Idle RSS (working set), plugin | Windows x86_64 | pending: first benchmarks.yml run after merge | 150 MiB | n/a | pending | pending | CI runner (benchmarks.yml) |
+| Cold start, none | macOS arm64 | 129.8 ms (sigma 4.5, min 121.0, max 137.2) | 500 ms | 370.2 ms | 2026-10-24 | d67ccb7 | desktop (reference machine class) |
+| Cold start, plugin | macOS arm64 | 129.2 ms (sigma 3.2, min 123.3, max 134.9) | 500 ms | 370.8 ms | 2026-10-24 | d67ccb7 | desktop (reference machine class) |
+| Idle RSS, none | macOS arm64 | 77.2 MiB (min 77.0, max 77.2; 3 of 3 open) | 150 MiB | 72.8 MiB | 2026-10-24 | d67ccb7 | desktop (reference machine class) |
+| Idle RSS, plugin | macOS arm64 | 77.2 MiB (min 77.1, max 77.2; 3 of 3 open) | 150 MiB | 72.8 MiB | 2026-10-24 | d67ccb7 | desktop (reference machine class) |
+| Cold start, none | Linux x86_64 | 252.3 ms | 500 ms | 247.7 ms | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
+| Cold start, plugin | Linux x86_64 | 256.8 ms | 500 ms | 243.2 ms | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
+| Idle RSS, none | Linux x86_64 | 178.7 MiB (informational: headless software-rendered display; 3 of 3 open) | 150 MiB | n/a (informational) | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
+| Idle RSS, plugin | Linux x86_64 | 176.4 MiB (informational: headless software-rendered display; 3 of 3 open) | 150 MiB | n/a (informational) | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
+| Cold start, none | macOS arm64 | 187.9 ms | 500 ms | 312.1 ms | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
+| Cold start, plugin | macOS arm64 | 198.2 ms | 500 ms | 301.8 ms | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
+| Idle RSS, none | macOS arm64 | 54.5 MiB (3 of 3 open) | 150 MiB | 95.5 MiB | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
+| Idle RSS, plugin | macOS arm64 | 53.0 MiB (3 of 3 open) | 150 MiB | 97.0 MiB | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
+| Cold start, none | Windows x86_64 | 164.8 ms | 500 ms | 335.2 ms | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
+| Cold start, plugin | Windows x86_64 | 174.7 ms | 500 ms | 325.3 ms | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
+| Idle RSS (working set), none | Windows x86_64 | 56.1 MiB | 150 MiB | 93.9 MiB | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
+| Idle RSS (working set), plugin | Windows x86_64 | 54.6 MiB | 150 MiB | 95.4 MiB | 2026-10-24 | d67ccb7 | CI runner (benchmarks.yml run 40110120418) |
 
-Note on the size rows: the five CI-runner figures are the per-OS sizes recorded for the S2 `full-ci` Release dry run (binary and archive bytes, in the 2026-10-24 CHANGELOG entry for S2); the run id was not kept, so the table names the run by its entry and the commit that merged it. The Linux x86_64 binary is the tightest, with 2,709,400 bytes (about 2.6 MiB) of headroom. The first `benchmarks.yml` run after merge replaces the pending rows and re-measures the sizes from the artifacts it downloads.
+Note on the size rows: the CI-runner figures are the per-OS sizes from the "Size report" lines of the Release dry run 40106827001 on `d67ccb7`; the earlier S2 figures (commit `7b484b4`) stay in ADR-0064 Amendment 1. The Linux x86_64 binary is the tightest, with 2,265,112 bytes (about 2.2 MiB, 2.7 percent) of headroom. The cold start and idle RSS CI-runner rows come from `benchmarks.yml` run 40110120418, which measured the release artifacts of that dry run. The Linux idle RSS rows (178.7 and 176.4 MiB) are above 150 MiB but are informational: the headless runner uses a software-rendered display, so they are not comparable with a desktop and are not a pass claim for Linux desktops.
 
 The plugin host is discovered after the first frame, so the cold-start difference between "none" and "plugin" is small (4.4 ms here, inside the noise: sigma is 4 to 5 ms), and idle RSS differs by 0.1 MiB. The host's cost shows up when a plugin is started, not at idle.
 
-Benches (desktop, `cargo bench` defaults, all exit 0, same run as above):
+Benches (desktop (reference machine class), `cargo run -p xtask --locked -- bench`, 2026-10-24, commit `d67ccb7`, all five exit 0):
 
 | Bench | Metric | Value |
 | ----- | ------ | ----- |
 | `grid_viewport` | viewport fetch p50 / p95 | 83 / 125 ns |
-| `grid_viewport` | ingest of 1,000,000 rows | 181 ms |
+| `grid_viewport` | ingest of 1,000,000 rows | 174 ms |
 | `grid_viewport` | heap estimate | 113,900,996 bytes |
-| `grid_sort` | sort p95 | 69.3 ms |
-| `grid_sort` | filter p95 | 112.3 ms |
-| `grid_sort` | sorted viewport p95 | 1,875 ns |
-| `editor_buffer` | bracket build p95 | 1.26 ms |
-| `editor_buffer` | format p95 | 10.9 ms |
-| `editor_intellisense` | worst p95 | 278,666 ns |
-| `completion` | worst p95 | 2,503,750 ns |
+| `grid_sort` | sort p95 | 70.2 ms |
+| `grid_sort` | filter p95 | 110.3 ms |
+| `grid_sort` | sorted viewport p95 | 2,000 ns |
+| `editor_buffer` | bracket build p95 | 1.23 ms |
+| `editor_buffer` | format p95 | 9.68 ms |
+| `editor_intellisense` | worst p95 | 256,042 ns |
+| `completion` | worst p95 | 2,424,917 ns |
+
+On the shared CI runners of `benchmarks.yml` run 40110120418, the `editor_buffer` format p95 was 29.3 ms on macOS and 21.6 ms on Windows (13.3 ms on Linux), above its 16 ms threshold, while the desktop run above is 9.68 ms. The workflow records these as reported, not gated; the pull-request bench gate (`bench.yml`) is the gate. This is shared-runner noise as far as we can tell, and it stays an open item to watch.
 
 Not in 1.0: the DuckDB engine is not part of version 1.0 and is not measured here.
 
