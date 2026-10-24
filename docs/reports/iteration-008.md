@@ -91,7 +91,7 @@ Checked 2026-10-24 against merged `main` at `d67ccb7`:
 - `cargo deny fetch && cargo deny check` exit 0 (advisories, bans, licenses, sources ok), `git diff e657ebe d67ccb7 -- deny.toml` empty, no new ignore: met
 - `rsa` absent (`cargo tree -i rsa` finds no package); `sqler-ui` dependents are `sqler-app` and `sqler-ui` only: met
 - Docs build (`mdbook build docs`, no warnings) and `check-adr-index.sh` exit 0, rerun on the final tree: met
-- No user-facing DuckDB outside "Not in 1.0" notes (README, user guide) and no "build from source" for SQL Server; the CHANGELOG 1.0 section has 0 mentions of DuckDB in any case and is 2,688 bytes (limit 20,000): met
+- No user-facing DuckDB outside "Not in 1.0" notes (README, user guide) and no "build from source" for SQL Server; the CHANGELOG 1.0 section has 0 mentions of DuckDB in any case and is 2,664 bytes (without the heading line) (limit 20,000): met
 - Benches in thresholds: local `xtask bench` exit 0; `benchmarks.yml` run 40110120418 result=pass on three runners, with all benches exit 0 except the `editor_buffer` format p95 on macOS and Windows (29.3 and 21.6 ms against 16 ms; reported, not gated, see Metrics); `bench.yml` last run on `main` is 40099664929 at `5debdf7` (success), and `d67ccb7` changed only the benchmark workflow and the `xtask bench` reporting: met, with the CI micro-benchmark noise as an open item
 - `SQLER_UPDATE_SIGNING_KEY` present in environment `release` (name only; deployment branch policy is the `v*` tag rule, no `APPLE_*` secrets, no repository secrets or variables): met
 - Final rows in `docs/src/benchmarks.md` (no pending row left) and the dated `## [1.0.0] - 2026-10-24` heading: met
@@ -118,7 +118,7 @@ None. The Linux x86_64 headroom of 2,265,112 bytes is recorded under Risks. The 
 - **Release tooling nits**: the MSI licence check fallbacks can pass on a bare string match (R14 review); `benchmarks.yml` on its first run picks the newest successful Release dry run (R12 review); a `workflow_dispatch` of `release.yml` works only from `main`; the `release.yml` size step only warns.
 - **Flaky tests**: `sqler-cli` `mcp` `http_with_env_token` (macOS), `screenshots (macos)` 600 s hang, `agent_flow`.
 - **Unsigned builds**: macOS and Windows ship unsigned by owner decision; the system warns on first start and `install.md` has the steps. Whether the notarisation steps work with real secrets is untested.
-- **AGENTS.md section 8 ADR table** lacks rows for ADR-0065, ADR-0069 and ADR-0073. Follow-up, not fixed here (outside the paths of this item).
+- **AGENTS.md section 8 ADR table**: the rows for ADR-0065, ADR-0069 and ADR-0073 are added in this PR; nothing is left open here.
 - **PR title numbering** is inconsistent (`[n/17]` against `[n/22]`).
 - **Privacy matter**: see Incidents. Counts only; the owner decides on the history.
 - The M6 risks that are not closed (redaction nits, the SQLite driver cannot interrupt a statement, the M5 follow-ups of iteration-006) stay carried in AGENTS.md section 9.
@@ -147,7 +147,7 @@ Checked 2026-10-24: the worktrees besides the main checkout are only the `sqler-
 4. Work through the Pending (maintainer) list as machines and instances become available.
 
 ### AGENTS.md changes
-Section 9 gets a `### Release 1.0 readiness` subsection (M7 done, verdict, delivered, owner decisions, consolidated Pending (maintainer), next step), and the M6 "Current" line is demoted to "M6 close (iteration-007)". Section 10 adds the M7 gotchas (Xwayland for the Linux benchmark job, Linux headless RSS informational, `benchmarks.yml` first-run choice, the size step only warns, `workflow_dispatch` from `main` only, the CHANGELOG 1.0 section as release notes, shared-runner micro-benchmark flakes, the flaky tests, PR numbering) and corrects the two stale lines on the manifest `dialect` and the release feature set. The section 8 ADR table still lacks ADR-0065, ADR-0069 and ADR-0073 (reported, not fixed here).
+Section 9 gets a `### Release 1.0 readiness` subsection (M7 done, verdict, delivered, owner decisions, consolidated Pending (maintainer), next step), and the M6 "Current" line is demoted to "M6 close (iteration-007)". Section 10 adds the M7 gotchas (Xwayland for the Linux benchmark job, Linux headless RSS informational, `benchmarks.yml` first-run choice, the size step only warns, `workflow_dispatch` from `main` only, the CHANGELOG 1.0 section as release notes, shared-runner micro-benchmark flakes, the flaky tests, PR numbering) and corrects the two stale lines on the manifest `dialect` and the release feature set. The section 8 ADR table gets the rows for ADR-0065, ADR-0069 and ADR-0073 in this PR.
 
 ### Raw measurements
 ```
