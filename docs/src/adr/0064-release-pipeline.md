@@ -41,7 +41,7 @@ diff it against `release.yml`.
 
 Global artifacts: `sqler-app-installer.sh` (macOS and Linux), `sqler-app-installer.ps1` (Windows),
 `sha256.sum` (one file over all artifacts), one `<artifact>.sha256` per artifact, `source.tar.gz` and
-`sqler-app.cdx.xml`. Downloads live under `https://github.com/alwatroos/sqler/releases/latest/download/`.
+`sqler-app_<triple>.cdx.xml` (one per target; Amendment 2). Downloads live under `https://github.com/alwatroos/sqler/releases/latest/download/`.
 Artifact names keep the package name `sqler-app`; the binary inside is `sqler`.
 
 The installers put the binary in `~/.sqler/bin` (`install-path`), not in the cargo bin directory: a self-contained
@@ -107,7 +107,7 @@ in the script.
 Each build job extracts its archive and runs `sqler --version`; the output must match `^sqler [0-9]` (on Windows it is
 redirected to a file because of the GUI subsystem). The step summary gets the binary and archive bytes next to the
 83,886,080-byte budget, with a warning when over; it reports and never gates. cargo-dist produces **one** SBOM per
-release (`sqler-app.cdx.xml`, `cargo-cyclonedx`), not one per artifact; per-artifact SBOMs are a follow-up.
+release (`sqler-app.cdx.xml`, `cargo-cyclonedx`), not one per artifact; per-artifact SBOMs are a follow-up (done in Amendment 2: one SBOM per target).
 
 ### Dropped, and why
 
@@ -198,3 +198,22 @@ The Apple secrets follow this rule in the job `sign (macOS)` ([ADR-0065](0065-ma
 Delete `.github/workflows/release.yml`, `.github/scripts/release-guard.sh`, `dist-workspace.toml`,
 `crates/sqler-app/wix/` and the dist metadata in `crates/sqler-app/Cargo.toml`, and remove `[profile.dist]` from
 `Cargo.toml`. Nothing else depends on them.
+
+## Amendment 2 (2026-10-24, R14): licence bundle and SBOM per target
+
+- Licence bundle: `.github/scripts/third-party-licenses.sh` generates `THIRD-PARTY-LICENSES.txt` with cargo-about
+  (`about.toml`, `about.hbs`) for the `features` and `targets` lines of `dist-workspace.toml`, appends the upstream
+  `NOTICE` files and the verbatim licence files of the crates with bundled C code, and fails on `driver-duckdb` or on
+  any DuckDB text. The `plan` job runs it once, before `dist plan`, and uploads the file; `build` and `global` download
+  it, so every target ships the same bytes. `include = ["NOTICE", "THIRD-PARTY-LICENSES.txt", "licenses"]` puts it, with
+  `LICENSE`, into every archive. Lost alternative: committing the file with a freshness check (every `Cargo.lock` bump
+  would need a regenerated file).
+- MSI: `crates/sqler-app/wix/main.wxs` is hand-edited to install `LICENSE`, `NOTICE`, `THIRD-PARTY-LICENSES.txt` and
+  `licenses/LUCIDE-ISC.txt` next to `bin`. `allow-dirty` is now `["ci", "msi"]`, so cargo-dist does not refuse the
+  edited file. After a cargo-dist upgrade, diff the wxs against a scratch `dist generate` as for `release.yml`.
+- The shell and PowerShell installers install the binary only; they download the archive, which carries the bundle.
+- SBOM: one CycloneDX file per target, `sqler-app_<triple>.cdx.xml` (`cargo cyclonedx --target <triple>
+  --target-in-filename`), built in `global` from the `targets` and `features` lines. The Windows `.zip` and `.msi` share
+  the `x86_64-pc-windows-msvc` file. This replaces the single release-wide SBOM described above.
+- Licences: no new allow-list entry, no `deny.toml` exception and no advisory ignore. The audit is in
+  [Licences and SBOM](../licenses.md).

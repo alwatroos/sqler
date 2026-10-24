@@ -122,6 +122,7 @@
   - [ACP agents](ai/acp.md)
 - [Update feed](releasing/update-feed.md)
 - [Signing](releasing/signing.md)
+- [Licences and SBOM](licenses.md)
 - [Benchmarks](benchmarks.md)
 - [Dependencies](dependencies.md)
 - [Contributing](contributing.md)
