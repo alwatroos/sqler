@@ -27,7 +27,7 @@ use crate::ai::agent::{AgentMsg, PermissionAsk};
 use crate::ai::{AiAction, AiProviderFactory, AiStartup};
 use crate::browser::{BrowserAction, LoadState, TreeNodeId};
 use crate::command::CommandId;
-use crate::connections::{ConnectionAction, Connector};
+use crate::connections::{ConnectionAction, Connector, ImportAction};
 use crate::palette::OPEN_PALETTE;
 use crate::settings::SettingsModel;
 use crate::tabs::{TabId, TabKind};
@@ -216,6 +216,26 @@ pub const SCENES: &[Scene] = &[
         pending: None,
     },
     Scene {
+        name: "import-source",
+        pending: None,
+    },
+    Scene {
+        name: "import-preview",
+        pending: None,
+    },
+    Scene {
+        name: "import-secrets",
+        pending: None,
+    },
+    Scene {
+        name: "import-summary",
+        pending: None,
+    },
+    Scene {
+        name: "import-error",
+        pending: None,
+    },
+    Scene {
         name: "settings-updates",
         pending: None,
     },
@@ -357,6 +377,13 @@ enum Step {
     SelectPlugin(&'static str),
     /// Queues a write approval of a plugin on a production connection at this stage.
     PluginWrite(crate::plugins::WriteStage),
+    /// Opens the import wizard with a canned answer for the search of the default locations.
+    /// No real search runs.
+    ImportOpen,
+    /// Feeds the fixture file of a source to the wizard, as if it had been read and parsed.
+    ImportRead(&'static str),
+    /// Shows a canned read error on the Source step.
+    ImportError,
 }
 
 /// The canned conversation of an agent scene.
@@ -576,6 +603,31 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Command("workbench:toggle-side-panel"),
         ],
         "connection-dialog" => vec![Step::Command("connection:new")],
+        "import-source" => vec![Step::ImportOpen, Step::Pause(2)],
+        "import-preview" => vec![
+            Step::ImportOpen,
+            Step::ImportRead("beekeeper"),
+            Step::Pause(2),
+        ],
+        "import-secrets" => vec![
+            Step::ImportOpen,
+            Step::ImportRead("beekeeper"),
+            Step::Connection(ConnectionAction::Import(ImportAction::Next)),
+            Step::Pause(3),
+        ],
+        "import-summary" => vec![
+            Step::ImportOpen,
+            Step::ImportRead("beekeeper"),
+            Step::Connection(ConnectionAction::Import(ImportAction::Next)),
+            Step::Connection(ConnectionAction::Import(ImportAction::Apply)),
+            Step::Pause(2),
+        ],
+        "import-error" => vec![
+            Step::ImportOpen,
+            Step::Connection(ConnectionAction::Import(ImportAction::SetCursor(1))),
+            Step::ImportError,
+            Step::Pause(2),
+        ],
         "agent-tab" => vec![
             Step::Select("dev"),
             Step::AgentFixture(AgentScene::Conversation),
@@ -1137,9 +1189,56 @@ impl WorkspaceView {
                 self.plugin_select(&id, cx);
             }
             Step::PluginWrite(stage) => self.queue_plugin_write(*stage)?,
+            Step::ImportOpen => self.open_import_scene(),
+            Step::ImportRead(source) => self.read_import_scene(source)?,
+            Step::ImportError => {
+                self.ws
+                    .import_fixture_error(sqler_import::ImportError::UnrecognisedFormat(
+                        "no connections list",
+                    ));
+            }
             Step::Pause(_) | Step::Wait(_) => {}
         }
         cx.notify();
+        Ok(())
+    }
+
+    /// Opens the import wizard with files "found" in a fixture home. The paths are shown with
+    /// `~`, so no local path reaches a picture; nothing is searched or read.
+    fn open_import_scene(&mut self) {
+        let home = std::path::PathBuf::from("/fixture-home");
+        let found = vec![
+            ("pgadmin", Vec::new()),
+            (
+                "beekeeper",
+                vec![home.join(".config/beekeeper-studio/exports/connections.json")],
+            ),
+            (
+                "azure-data-studio",
+                vec![home.join(".config/azuredatastudio/User/settings.json")],
+            ),
+        ];
+        // The drivers a full build offers, so the entries of the fixture files can be added.
+        let drivers = ["sqlite", "postgres", "mysql", "sqlserver"]
+            .into_iter()
+            .filter_map(|id| DriverId::new(id).ok())
+            .collect();
+        self.ws.set_drivers(drivers);
+        self.ws.open_import_fixture(Some(home), found);
+    }
+
+    /// Feeds the fixture file of `source` to the wizard.
+    fn read_import_scene(&mut self, source: &'static str) -> Result<(), String> {
+        let text = match source {
+            "beekeeper" => crate::connections::import::fixtures::BEEKEEPER,
+            "azure-data-studio" => crate::connections::import::fixtures::AZURE_DATA_STUDIO,
+            other => return Err(format!("no import fixture for {other}")),
+        };
+        let path = std::path::PathBuf::from("/fixture-home").join(match source {
+            "beekeeper" => ".config/beekeeper-studio/exports/connections.json",
+            _ => ".config/azuredatastudio/User/settings.json",
+        });
+        self.ws.import_fixture_report(source, path, text.as_bytes());
         Ok(())
     }
 

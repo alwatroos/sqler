@@ -12,6 +12,9 @@ name: Release
 # - Tag `vX.Y.Z`: the full run, then `host` creates the GitHub Release. Nothing else ever publishes.
 # - `sign (macOS)` (ADR-0065) runs on tags only, in the environment `release`, between `build` and `global`: it
 #   signs and notarises the macOS archives when the APPLE_* secrets exist and re-uploads them; `global` hashes after it.
+# - `update manifest` (ADR-0066, R5) runs on tags only, in the environment `release`: it signs sqler-update.json with
+#   SQLER_UPDATE_SIGNING_KEY (when set) and `host` attaches it to the release. `update manifest (dry run)` runs the
+#   same path on PRs and dispatch with a TEST ONLY key it generates itself, no secret, and publishes nothing.
 #
 # The release feature set is the single `features = [...]` line in dist-workspace.toml, set per owner decision 12
 # (ADR-0064 amendment). `release-guard.sh` rejects `driver-duckdb` whatever that line holds (ADR-0070).
@@ -25,6 +28,8 @@ on:
       - "packaging/macos/**"
       - "crates/sqler-app/Cargo.toml"
       - "crates/sqler-app/wix/**"
+      - "xtask/src/release/**"
+      - "crates/sqler-update/keys/**"
   workflow_dispatch:
   push:
     tags:
@@ -524,6 +529,173 @@ jobs:
             ${{ env.BUILD_MANIFEST_NAME }}
           retention-days: 7
 
+  # Update manifest dry run (R5, ADR-0066): pull requests and dispatch. No environment, no secret: it signs with a
+  # TEST ONLY key generated inside the job, which is not compiled into the client. The result is an Actions artifact
+  # named TEST-ONLY and is never a release asset.
+  manifest-dry-run:
+    name: update manifest (dry run)
+    needs:
+      - plan
+      - guard
+      - build
+      - sign-macos
+    if: ${{ always() && needs.plan.outputs.publishing != 'true' && needs.plan.result == 'success' && needs.guard.result == 'success' && needs.build.result == 'success' && (needs.sign-macos.result == 'success' || needs.sign-macos.result == 'skipped') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+      - name: Build xtask
+        shell: bash
+        run: cargo build -p xtask --locked
+      - name: Fetch the dist plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: artifacts-plan-dist-manifest
+          path: ${{ runner.temp }}/plan
+      - name: Fetch the build artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: artifacts-build-local-*
+          path: ${{ runner.temp }}/dist
+          merge-multiple: true
+      - name: Guard (no DuckDB in the artifacts)
+        shell: bash
+        run: sh .github/scripts/release-guard.sh artifacts "$RUNNER_TEMP/dist"
+      - name: Build and test-sign the manifest
+        shell: bash
+        env:
+          FULL: ${{ needs.plan.outputs.full }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/test-signing-key"
+          trap 'rm -f "$key"' EXIT
+          head -c 32 /dev/urandom | base64 -w0 > "$key"
+          partial=""
+          if [ "$FULL" != "true" ]; then partial="--partial"; fi
+          out="$RUNNER_TEMP/update-manifest-test"
+          mkdir -p "$out"
+          published=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # shellcheck disable=SC2086 # partial is empty or one flag
+          target/debug/xtask release manifest --plan "$RUNNER_TEMP/plan/plan-dist-manifest.json" \
+            --artifacts "$RUNNER_TEMP/dist" --published "$published" \
+            --key-file "$key" --test-key $partial \
+            --out "$out/sqler-update.TEST-ONLY.json"
+          echo "::notice title=Update manifest (dry run)::signed with a TEST ONLY key generated in this job; not a release asset"
+      - name: Guard (no DuckDB in the manifest output)
+        shell: bash
+        run: sh .github/scripts/release-guard.sh artifacts "$RUNNER_TEMP/update-manifest-test"
+      - name: Upload the TEST ONLY manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: update-manifest-TEST-ONLY
+          path: ${{ runner.temp }}/update-manifest-test/sqler-update.TEST-ONLY.json
+          retention-days: 7
+
+  # Signs the update manifest (R5, ADR-0066) on a `v*` tag push only, in the environment `release` (deployment rule:
+  # tags `v*`). The only job that reads SQLER_UPDATE_SIGNING_KEY. xtask is built BEFORE any step can see the secret
+  # and the signing step runs the prebuilt binary, so no build script runs while the key exists. `host` attaches the
+  # result to the release when it creates it. Without the secret the release simply carries no manifest.
+  manifest:
+    name: update manifest
+    needs:
+      - plan
+      - guard
+      - build
+      - sign-macos
+    if: ${{ always() && needs.plan.outputs.publishing == 'true' && needs.plan.result == 'success' && needs.guard.result == 'success' && needs.build.result == 'success' && needs.sign-macos.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+    outputs:
+      signed: ${{ steps.done.outputs.signed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+      - name: Build xtask
+        shell: bash
+        run: cargo build -p xtask --locked
+      - name: Fetch the dist plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: artifacts-plan-dist-manifest
+          path: ${{ runner.temp }}/plan
+      - name: Fetch the build artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: artifacts-build-local-*
+          path: ${{ runner.temp }}/dist
+          merge-multiple: true
+      - name: Guard (no DuckDB in the artifacts)
+        shell: bash
+        run: sh .github/scripts/release-guard.sh artifacts "$RUNNER_TEMP/dist"
+      # Only whether the secret exists is exposed to this step, never its value.
+      - id: secret
+        name: Check the update signing key
+        shell: bash
+        env:
+          HAVE_KEY: ${{ secrets.SQLER_UPDATE_SIGNING_KEY != '' }}
+        run: |
+          if [ "$HAVE_KEY" = "true" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Update manifest::no SQLER_UPDATE_SIGNING_KEY; the release carries no update manifest"
+          fi
+      - id: sign
+        name: Build and sign the manifest
+        if: steps.secret.outputs.present == 'true'
+        shell: bash
+        env:
+          SQLER_UPDATE_SIGNING_KEY: ${{ secrets.SQLER_UPDATE_SIGNING_KEY }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/update-signing-key"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$SQLER_UPDATE_SIGNING_KEY" > "$key"
+          unset SQLER_UPDATE_SIGNING_KEY
+          out="$RUNNER_TEMP/update-manifest"
+          mkdir -p "$out"
+          published=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          target/debug/xtask release manifest --plan "$RUNNER_TEMP/plan/plan-dist-manifest.json" \
+            --artifacts "$RUNNER_TEMP/dist" --published "$published" --tag "$TAG" \
+            --key-file "$key" --out "$out/sqler-update.json"
+      # An independent check against the compiled-in key, from the file that will be uploaded.
+      - name: Verify the signed manifest
+        if: steps.secret.outputs.present == 'true'
+        shell: bash
+        run: target/debug/xtask release verify "$RUNNER_TEMP/update-manifest/sqler-update.json"
+      - name: Guard (no DuckDB in the manifest output)
+        if: steps.secret.outputs.present == 'true'
+        shell: bash
+        run: sh .github/scripts/release-guard.sh artifacts "$RUNNER_TEMP/update-manifest"
+      - name: Upload the signed manifest
+        if: steps.secret.outputs.present == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: update-manifest
+          path: ${{ runner.temp }}/update-manifest/sqler-update.json
+          retention-days: 7
+      - id: done
+        name: Report
+        shell: bash
+        env:
+          PRESENT: ${{ steps.secret.outputs.present }}
+        run: echo "signed=$PRESENT" >> "$GITHUB_OUTPUT"
+
   # Publishes the GitHub Release. Runs on a `v*` tag only (publishing), after every build and the global artifacts.
   host:
     name: host
@@ -533,7 +705,8 @@ jobs:
       - build
       - sign-macos
       - global
-    if: ${{ always() && needs.plan.outputs.publishing == 'true' && needs.plan.result == 'success' && needs.guard.result == 'success' && needs.build.result == 'success' && needs.sign-macos.result == 'success' && needs.global.result == 'success' }}
+      - manifest
+    if: ${{ always() && needs.plan.outputs.publishing == 'true' && needs.plan.result == 'success' && needs.guard.result == 'success' && needs.build.result == 'success' && needs.sign-macos.result == 'success' && needs.global.result == 'success' && needs.manifest.result == 'success' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     permissions:
@@ -563,19 +736,6 @@ jobs:
           pattern: artifacts-*
           path: target/distrib/
           merge-multiple: true
-      # R5 adds the update manifest signing here (an `environment:` with the key, and the signing step).
-      # R2 and R5: every signing secret (Apple certificate, update key) must live in a GitHub environment whose
-      # deployment rules limit it to `v*` tag runs, never in repository-wide secrets (ADR-0064).
-      - name: Update manifest signing (R5)
-        shell: bash
-        env:
-          SQLER_UPDATE_SIGNING_KEY: ${{ secrets.SQLER_UPDATE_SIGNING_KEY }}
-        run: |
-          if [ -z "$SQLER_UPDATE_SIGNING_KEY" ]; then
-            echo "::notice title=Update manifest::no signing key; the release carries no signed update manifest (R5)"
-          else
-            echo "Signing key present; manifest signing arrives with R5"
-          fi
       - name: Guard (no DuckDB in the artifacts)
         shell: bash
         run: sh .github/scripts/release-guard.sh artifacts target/distrib
@@ -605,6 +765,14 @@ jobs:
         run: |
           # Remove the granular manifests.
           rm -f artifacts/*-dist-manifest.json
+      # The signed update manifest (R5) is part of the release from the moment it is created, so the feed URL never
+      # points at a release that lacks it. Its artifact name does not match `artifacts-*`, so `dist host` never saw it.
+      - name: Fetch the signed update manifest
+        if: needs.manifest.outputs.signed == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-manifest
+          path: artifacts
       - name: Guard (no DuckDB in the release files)
         shell: bash
         run: sh .github/scripts/release-guard.sh artifacts artifacts
@@ -621,6 +789,12 @@ jobs:
           echo "$ANNOUNCEMENT_BODY" > "$RUNNER_TEMP/notes.txt"
           # shellcheck disable=SC2086 # PRERELEASE_FLAG is empty or one flag
           gh release create "$RELEASE_TAG" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+      - name: Check the update manifest is a release asset
+        if: needs.manifest.outputs.signed == 'true'
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        shell: bash
+        run: gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -qx sqler-update.json
 
   announce:
     name: announce

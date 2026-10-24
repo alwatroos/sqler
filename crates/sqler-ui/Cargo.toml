@@ -28,6 +28,7 @@ sqler-config.workspace = true
 sqler-driver-api.workspace = true
 sqler-plugin-api.workspace = true
 sqler-export.workspace = true
+sqler-import.workspace = true
 sqler-mcp.workspace = true
 sqler-sql.workspace = true
 thiserror.workspace = true

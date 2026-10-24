@@ -82,6 +82,7 @@ use plugin_writes::WriteUi;
 use plugins::PluginsUi;
 
 mod export;
+mod import;
 mod plugin_ui;
 mod plugin_writes;
 mod plugins;
@@ -621,6 +622,13 @@ impl WorkspaceView {
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.is_held
             && (self.ws.drop_dialog().is_some()
+                || (self.ws.import_wizard().is_some()
+                    && crate::connections::import::ImportWizard::swallows_held_key(
+                        &event.keystroke.key,
+                        self.inputs
+                            .as_ref()
+                            .is_some_and(|inputs| inputs.any_focused(window, cx)),
+                    ))
                 || self.edit_overlay_open()
                 || self.plugin_dialog_open()
                 || self.plugin_write_open())
@@ -648,6 +656,24 @@ impl WorkspaceView {
             cx.stop_propagation();
             self.dispatch_connection(ConnectionAction::Cancel, cx);
             return;
+        }
+        if !was_open && self.ws.import_wizard().is_some() {
+            // The wizard's keys: arrows, Space, Enter, Backspace. A focused password field keeps
+            // them for typing.
+            let input = key_input(&event.keystroke);
+            let typing = self
+                .inputs
+                .as_ref()
+                .is_some_and(|inputs| inputs.any_focused(window, cx));
+            let other = input.ctrl || input.alt || input.cmd;
+            if let Some(id) = self
+                .import_key(&input.key, input.shift, other, typing)
+                .and_then(|id| CommandId::new(id).ok())
+            {
+                cx.stop_propagation();
+                self.run_command(&id, window, cx);
+                return;
+            }
         }
         if !was_open && self.plugin_write_key(&chord, cx) {
             cx.stop_propagation();
@@ -1227,7 +1253,12 @@ impl WorkspaceView {
     fn sync_dialog_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wants = matches!(
             self.ws.dialog(),
-            Some(Dialog::Form(_) | Dialog::GroupName { .. } | Dialog::TrustHostKey { .. })
+            Some(
+                Dialog::Form(_)
+                    | Dialog::GroupName { .. }
+                    | Dialog::TrustHostKey { .. }
+                    | Dialog::Import(_)
+            )
         );
         if !wants {
             self.inputs = None;
@@ -1324,6 +1355,7 @@ impl WorkspaceView {
             | Effect::SaveSavedQueries { .. } => self.apply_history(effect, cx),
             Effect::ReadAudit(read) => self.read_audit(read, cx),
             Effect::PickExportPath { .. } | Effect::RunExport(_) => self.apply_export(effect, cx),
+            Effect::Import(work) => self.apply_import(work, cx),
             Effect::SaveAiConfig { .. } | Effect::TestAiProvider { .. } => {
                 self.apply_ai(effect, cx);
             }
