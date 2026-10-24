@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0] - YYYY-MM-DD
+## [1.0.0] - 2026-10-24
 
 First stable release of SQLer, a fast desktop SQL client written in Rust. This section lists the highlights; the detailed development log is kept below under 0.1.0.
 
@@ -23,7 +23,7 @@ First stable release of SQLer, a fast desktop SQL client written in Rust. This s
 - **Plugins:** a sandboxed WebAssembly plugin host with capability grants that you approve one plugin at a time, plugin commands, panels, export formats and drivers, and a template for writing your own.
 - **Workbench:** object browser with DDL, command palette, rebindable keybindings, light and dark themes.
 - **Updates:** an opt-in update check that verifies a signed manifest and never downloads or installs anything by itself.
-- **Downloads:** archives and installers for macOS, Windows and Linux with checksums and third-party licences. The macOS and Windows builds may be unsigned, so the system can warn on first start; the install guide has the steps: <https://alwatroos.github.io/sqler/user-guide/install.html>.
+- **Downloads:** archives and installers for macOS, Windows and Linux with checksums and third-party licences. The macOS and Windows builds ship unsigned by owner decision, so the system warns on first start; the install guide has the steps: <https://alwatroos.github.io/sqler/user-guide/install.html>.
 - **Not in 1.0:** one more database engine, an embedded analytics engine, is developed in the repository but is switched off and is in no download, installer or update; see <https://alwatroos.github.io/sqler/user-guide/connections.html#not-in-10>.
 
 ## [0.1.0] - development builds, never published
