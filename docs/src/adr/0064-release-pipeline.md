@@ -81,7 +81,8 @@ below does not depend on the value of the line. `driver-duckdb` never belongs in
   dist's own conditions, and alone hold `contents: write`. Everything else has `contents: read`.
 - Until the package version is `1.0.0`, a tag run fails dist's tag and version coherence check. That is expected;
   nothing is tagged before the release item.
-- Job names are stable: `plan`, `guard (features)`, `build (<target>)`, `global artifacts`, `host`, `announce`.
+- Job names are stable: `plan`, `guard (features)`, `build (<target>)`, `sign (macOS)`, `global artifacts`, `host`,
+  `announce`.
 
 ### The DuckDB guard
 
@@ -115,7 +116,8 @@ release (`sqler-app.cdx.xml`, `cargo-cyclonedx`), not one per artifact; per-arti
 - `driver-duckdb` in any release artifact: owner decision 11 and ADR-0070.
 - Signing and notarisation: owner decisions 1 and 2, delivered by R2. `release.yml` has a placeholder step
   `macOS notarisation (R2)` that prints a notice while no signing secret exists (the macOS and Windows downloads are
-  unsigned, which the install page explains).
+  unsigned, which the install page explains). R2 replaced it with the gated job `sign (macOS)`
+  ([ADR-0065](0065-macos-signing-and-notarisation.md)).
 - The updater and the signed update manifest: R3 and R5. `host` has an `Update manifest signing (R5)` placeholder.
 - A macOS `.app` bundle: the 1.0 macOS download is the archive with the bare `sqler` binary.
 - `github-attestations`: off; revisit with signing.
@@ -183,6 +185,7 @@ macOS x86_64 build ran on the native Intel runner and took about 30 minutes, the
 
 When signing lands (R2 for Apple, R5 for the update manifest), the secrets must live in a GitHub environment whose
 deployment rules limit it to `v*` tag runs. Repository-wide secrets would be readable by any workflow run on a branch.
+The Apple secrets follow this rule in the job `sign (macOS)` ([ADR-0065](0065-macos-signing-and-notarisation.md)).
 
 ## Rollback
 
