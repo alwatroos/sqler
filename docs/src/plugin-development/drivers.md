@@ -243,7 +243,7 @@ setting; a `sslmode` key in the target is not lifted, and the engine refuses it 
 engine wrapper denies error text that contains the password. A real check through an SSH tunnel
 and against a real SQL Server instance is pending (maintainer).
 
-**API gaps** (the dialect gap is fixed by ADR-0073 and the keychain and tunnel gap, see above; the others are open).
+**API gaps** (the dialect gap is fixed by ADR-0073, the keychain and tunnel gap, see above, and the rows-affected gap by S4, [ADR-0071](../adr/0071-sql-server-plugin.md) amendment 2; the others are open).
 
 - The manifest `dialect = "tsql"` is read ([ADR-0073](../adr/0073-tsql-dialect-and-manifest-dialect.md)). Known
   names are `postgres`, `mysql`, `sqlite` and `tsql` (exact, case-sensitive); an unknown or absent name means no dialect
@@ -252,10 +252,13 @@ and against a real SQL Server instance is pending (maintainer).
 - A host-driver plugin cannot supply catalog SQL; the engine implements introspection itself from
   `sys.*` and browses only the current database.
 - `net` scopes do not apply to host engines; the engine opens its own socket.
-- `rows_affected` is `None`: the statement stream does not expose the `DONE` counts.
-- Cancel ends the session (see above), unlike the other drivers.
+- Closed (S4, ADR-0071 amendment 2): `rows_affected` is reported for `insert`, `update`, `delete`,
+  `merge` and `with` statements, which run through `sp_executesql` so the `DONE` count is visible.
+  It stays `None` for other statements, under `SET NOCOUNT ON`, with a trigger that counts its own
+  statements, and for a batch or procedure with several counts.
+- Cancel ends the session (see above), unlike the other drivers. Kept, with the reason, in amendment 2.
 - `money` arrives as a float (lossy); the first result set of a batch is returned and later ones
-  are dropped.
+  are dropped. Kept, with the reasons, in amendment 2.
 
 **Pending (maintainer).** A run against a real SQL Server instance (not only the CI container,
 SQL Server 2022 Developer edition): connect with SQL login, TLS modes against the server's own
