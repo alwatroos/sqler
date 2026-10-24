@@ -154,7 +154,7 @@ What the plugin API could not express for this driver, as found while building i
 
 | ID | Gap |
 | - | - |
-| G1 | The manifest `dialect` key has no consumer. `Dialect` covers only the built-in driver ids, so a `duckdb` connection gets no statement splitting, no placeholders and the `Unknown` statement class: every run on a `prod` connection asks for confirmation, even a `SELECT`. Fresh-run export, the SQL INSERT export and the AI query tools refuse the driver. Run one statement or a selection; a multi-statement text fails with the `DuckDB` error. |
+| G1 | The manifest `dialect` key is read since [ADR-0073](../adr/0073-tsql-dialect-and-manifest-dialect.md) (fixed for `tsql`, `postgres`, `mysql` and `sqlite`), but `DuckDB` has no dialect name to declare. A `duckdb` connection gets no statement splitting, no placeholders and the `Unknown` statement class: every run on a `prod` connection asks for confirmation, even a `SELECT`. Fresh-run export, the SQL INSERT export and the AI query tools refuse the driver. Run one statement or a selection; a multi-statement text fails with the `DuckDB` error. |
 | G2 | A host-engine plugin is purely declarative. Catalog SQL, type mapping and the sandbox live in the engine crate, so the plugin API validates registration and grants only. |
 | G3 | There is no session read-only statement for `DuckDB` (`read_only_statement`). |
 | G4 | `sqler-core` has no nested, interval or UUID `Value`. Lists, structs, maps, unions, intervals, enums and UUIDs arrive as text with `DataType::Other`. |
@@ -243,11 +243,12 @@ setting; a `sslmode` key in the target is not lifted, and the engine refuses it 
 engine wrapper denies error text that contains the password. A real check through an SSH tunnel
 and against a real SQL Server instance is pending (maintainer).
 
-**API gaps** (the keychain and tunnel gap is fixed, see above; the others are not).
+**API gaps** (the dialect gap is fixed by ADR-0073 and the keychain and tunnel gap, see above; the others are open).
 
-- No T-SQL dialect exists, so `Dialect::from_driver_id("sqlserver")` is `None`: every statement
-  counts as not read-only, a production connection asks for confirmation of every statement
-  (including `select 1`), and the manifest `dialect` is not used.
+- The manifest `dialect = "tsql"` is read ([ADR-0073](../adr/0073-tsql-dialect-and-manifest-dialect.md)). Known
+  names are `postgres`, `mysql`, `sqlite` and `tsql` (exact, case-sensitive); an unknown or absent name means no dialect
+  and no manifest error. With `tsql`, statements are split (`;` and a `GO` alone on its line), classified, quoted with
+  `[..]` and bound as `@P<k>`; a `select` runs on `prod` without asking and everything else asks.
 - A host-driver plugin cannot supply catalog SQL; the engine implements introspection itself from
   `sys.*` and browses only the current database.
 - `net` scopes do not apply to host engines; the engine opens its own socket.

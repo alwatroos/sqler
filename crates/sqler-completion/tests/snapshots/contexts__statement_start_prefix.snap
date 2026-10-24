@@ -18,3 +18,8 @@ context: StatementStart, replace: 0..3 "sel", items: 2
 context: StatementStart, replace: 0..3 "sel", items: 2
  1. "sel" [Snippet] insert="select ${1:*}\nfrom ${2:table}\nwhere ${3:condition}$0" snippet detail="SELECT ... FROM ... WHERE"
  2. "select" [Keyword] insert="select" detail="-"
+
+== tsql ==
+context: StatementStart, replace: 0..3 "sel", items: 2
+ 1. "sel" [Snippet] insert="select ${1:*}\nfrom ${2:table}\nwhere ${3:condition}$0" snippet detail="SELECT ... FROM ... WHERE"
+ 2. "select" [Keyword] insert="select" detail="-"

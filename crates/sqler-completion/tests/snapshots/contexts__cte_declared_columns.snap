@@ -18,3 +18,8 @@ context: Qualified, replace: 40..40 "", items: 2
 context: Qualified, replace: 40..40 "", items: 2
  1. "a" [Column] insert="a" detail="t"
  2. "b" [Column] insert="b" detail="t"
+
+== tsql ==
+context: Qualified, replace: 40..40 "", items: 2
+ 1. "a" [Column] insert="a" detail="t"
+ 2. "b" [Column] insert="b" detail="t"

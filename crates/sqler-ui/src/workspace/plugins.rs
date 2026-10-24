@@ -9,7 +9,10 @@
 
 use std::time::Instant;
 
+use sqler_driver_api::sqler_core::DriverId;
 use sqler_plugin_api::{CommandContext, ContributionId, PluginId, WidgetEvent};
+
+use sqler_sql::Dialect;
 
 use super::state::{Effect, Workspace};
 use crate::command::CommandId;
@@ -33,6 +36,25 @@ impl Workspace {
     #[must_use]
     pub fn plugins(&self) -> &PluginsState {
         &self.plugins
+    }
+
+    /// The SQL dialect of a driver: the built-in ids first, else the dialect the plugin manifests declare for it
+    /// (matched by name). Manifests that disagree about one driver id give no dialect, as does none that declares
+    /// one: every statement is then unclassified and asks for approval.
+    #[must_use]
+    pub fn dialect_of(&self, driver: &DriverId) -> Option<Dialect> {
+        if let Some(built_in) = Dialect::from_driver_id(driver.as_str()) {
+            return Some(built_in);
+        }
+        let mut declared = self
+            .plugins
+            .rows()
+            .iter()
+            .flat_map(|row| row.manifest.contributes().drivers.iter())
+            .filter(|d| d.id.as_str() == driver.as_str())
+            .map(|d| d.dialect.as_deref().and_then(Dialect::from_name));
+        let first = declared.next()?;
+        declared.all(|d| d == first).then_some(first).flatten()
     }
 
     /// The manager's effects as one effect; its message for the user goes to the workspace notice.
@@ -497,5 +519,62 @@ mod tests {
             now,
         );
         assert_eq!(ws.take_plugin_ui_notices(), ["Live One: hello"]);
+    }
+
+    // ---- the dialect a driver declares ----
+
+    use crate::plugins::manager::fixture::driver_manifest;
+    use crate::workspace::testing::with_plugin_rows;
+
+    fn driver(id: &str) -> DriverId {
+        DriverId::new(id).unwrap()
+    }
+
+    fn with_drivers(manifests: Vec<(&str, &str, Option<&str>)>) -> Workspace {
+        let rows = manifests
+            .into_iter()
+            .map(|(plugin, driver, dialect)| row(driver_manifest(plugin, driver, dialect)))
+            .collect();
+        with_plugin_rows(Workspace::new(sidebar()), rows)
+    }
+
+    #[test]
+    fn a_built_in_driver_keeps_its_dialect_without_any_plugin() {
+        let ws = Workspace::new(sidebar());
+        assert_eq!(ws.dialect_of(&driver("postgres")), Some(Dialect::Postgres));
+        assert_eq!(ws.dialect_of(&driver("sqlserver")), None);
+    }
+
+    #[test]
+    fn a_declared_dialect_is_read_from_the_manifest() {
+        let ws = with_drivers(vec![
+            ("sqlserver", "sqlserver", Some("tsql")),
+            ("quack", "duckdb", None),
+            ("odd", "odd", Some("TSQL")),
+        ]);
+        assert_eq!(ws.dialect_of(&driver("sqlserver")), Some(Dialect::TSql));
+        assert_eq!(ws.dialect_of(&driver("duckdb")), None);
+        assert_eq!(ws.dialect_of(&driver("odd")), None);
+        assert_eq!(ws.dialect_of(&driver("unknown")), None);
+        assert_eq!(ws.dialect_of(&driver("sqlite")), Some(Dialect::Sqlite));
+    }
+
+    #[test]
+    fn manifests_that_disagree_give_no_dialect() {
+        let ws = with_drivers(vec![
+            ("one", "shared", Some("tsql")),
+            ("two", "shared", Some("postgres")),
+        ]);
+        assert_eq!(ws.dialect_of(&driver("shared")), None);
+        let agree = with_drivers(vec![
+            ("one", "shared", Some("tsql")),
+            ("two", "shared", Some("tsql")),
+        ]);
+        assert_eq!(agree.dialect_of(&driver("shared")), Some(Dialect::TSql));
+        let one_silent = with_drivers(vec![
+            ("one", "shared", Some("tsql")),
+            ("two", "shared", None),
+        ]);
+        assert_eq!(one_silent.dialect_of(&driver("shared")), None);
     }
 }

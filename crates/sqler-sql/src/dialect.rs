@@ -19,32 +19,49 @@ pub enum Dialect {
     MySql,
     /// `SQLite`.
     Sqlite,
+    /// Microsoft SQL Server T-SQL.
+    TSql,
 }
 
 impl Dialect {
     /// Every dialect.
-    pub const ALL: [Dialect; 3] = [Self::Postgres, Self::MySql, Self::Sqlite];
+    pub const ALL: [Dialect; 4] = [Self::Postgres, Self::MySql, Self::Sqlite, Self::TSql];
 
-    /// The driver id of this dialect: `postgres`, `mysql` or `sqlite`.
+    /// The dialects that are also built-in driver ids.
+    const BUILT_IN: [Dialect; 3] = [Self::Postgres, Self::MySql, Self::Sqlite];
+
+    /// The name of this dialect: `postgres`, `mysql`, `sqlite` or `tsql`. For the first three it
+    /// is also the driver id; `tsql` is only a dialect name (a plugin manifest declares it).
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Postgres => "postgres",
             Self::MySql => "mysql",
             Self::Sqlite => "sqlite",
+            Self::TSql => "tsql",
         }
     }
 
-    /// Parses a driver id produced by [`Dialect::as_str`] (exact match).
+    /// Parses a built-in driver id (`postgres`, `mysql`, `sqlite`; exact match). Never returns
+    /// [`Dialect::TSql`]: `tsql` is not a driver id, and a plugin driver reaches its dialect
+    /// through [`Dialect::from_name`].
     #[must_use]
     pub fn from_driver_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|d| d.as_str() == id)
+        Self::BUILT_IN.into_iter().find(|d| d.as_str() == id)
     }
 
-    fn quote_char(self) -> char {
+    /// Parses a dialect name as a plugin manifest declares it (exact, case-sensitive match on
+    /// [`Dialect::as_str`]). An unknown name is `None`.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|d| d.as_str() == name)
+    }
+
+    fn quote_chars(self) -> (char, char) {
         match self {
-            Self::Postgres | Self::Sqlite => '"',
-            Self::MySql => '`',
+            Self::Postgres | Self::Sqlite => ('"', '"'),
+            Self::MySql => ('`', '`'),
+            Self::TSql => ('[', ']'),
         }
     }
 }
@@ -63,16 +80,17 @@ pub fn quote_identifier(dialect: Dialect, name: &str) -> Result<String, DdlError
             name: name.to_owned(),
         });
     }
-    let quote = dialect.quote_char();
+    let (open, close) = dialect.quote_chars();
     let mut out = String::with_capacity(name.len() + 2);
-    out.push(quote);
+    out.push(open);
     for c in name.chars() {
-        if c == quote {
-            out.push(quote);
+        // Only the closing char is doubled: `[a]]b]` on T-SQL.
+        if c == close {
+            out.push(close);
         }
         out.push(c);
     }
-    out.push(quote);
+    out.push(close);
     Ok(out)
 }
 
@@ -82,7 +100,8 @@ pub fn quote_identifier(dialect: Dialect, name: &str) -> Result<String, DdlError
 /// in a form that no `sql_mode` or `standard_conforming_strings` setting can misread (`E'..'` on
 /// `PostgreSQL`, a hex string with a character-set introducer on `MySQL`, a hex `CAST` on
 /// `SQLite`). Floats that SQL has no literal for are `NaN` and the infinities: `PostgreSQL` gets
-/// casts, `SQLite` gets `9e999` (which it reads as infinity), `MySQL` gets `NULL`.
+/// casts, `SQLite` gets `9e999` (which it reads as infinity), `MySQL` and T-SQL get `NULL`. T-SQL text is
+/// `N'..'`; text with a NUL or a backslash before a line break is a `CAST` of its UTF-16LE bytes.
 ///
 /// # Examples
 ///
@@ -97,8 +116,8 @@ pub fn push_literal(out: &mut String, dialect: Dialect, value: &Value) {
     match value {
         Value::Null => out.push_str("NULL"),
         Value::Bool(b) => out.push_str(match (dialect, b) {
-            (Dialect::Sqlite, true) => "1",
-            (Dialect::Sqlite, false) => "0",
+            (Dialect::Sqlite | Dialect::TSql, true) => "1",
+            (Dialect::Sqlite | Dialect::TSql, false) => "0",
             (Dialect::Postgres | Dialect::MySql, true) => "TRUE",
             (Dialect::Postgres | Dialect::MySql, false) => "FALSE",
         }),
@@ -112,6 +131,7 @@ pub fn push_literal(out: &mut String, dialect: Dialect, value: &Value) {
             let (open, close) = match dialect {
                 Dialect::Postgres => ("decode('", "', 'hex')"),
                 Dialect::MySql | Dialect::Sqlite => ("X'", "'"),
+                Dialect::TSql => ("0x", ""),
             };
             out.push_str(open);
             push_hex(out, bytes);
@@ -156,7 +176,7 @@ fn push_float(out: &mut String, dialect: Dialect, x: f64) {
             // stores +0.0; MariaDB 11.8 stores +0.0 for every literal form.
             out.push_str(match dialect {
                 Dialect::Postgres => "'-0'::float8",
-                Dialect::MySql | Dialect::Sqlite => "-0.0e0",
+                Dialect::MySql | Dialect::Sqlite | Dialect::TSql => "-0.0e0",
             });
         } else {
             let _ = write!(out, "{x:?}");
@@ -169,7 +189,7 @@ fn push_float(out: &mut String, dialect: Dialect, x: f64) {
         (Dialect::Postgres, false, true) => "'-Infinity'::float8",
         (Dialect::Sqlite, false, false) => "9e999",
         (Dialect::Sqlite, false, true) => "-9e999",
-        (Dialect::Sqlite, true, _) | (Dialect::MySql, _, _) => "NULL",
+        (Dialect::Sqlite, true, _) | (Dialect::MySql | Dialect::TSql, _, _) => "NULL",
     });
 }
 
@@ -180,6 +200,14 @@ fn push_temporal(out: &mut String, dialect: Dialect, keyword: &str, value: &Valu
             out.push(' ');
         }
         Dialect::MySql | Dialect::Sqlite => {}
+        Dialect::TSql => {
+            // `YYYY-MM-DDThh:mm:ss` is the form that `datetime2` and `datetimeoffset` read the
+            // same under every `SET DATEFORMAT` and language.
+            if matches!(value, Value::Timestamp(_) | Value::TimestampTz(_)) {
+                push_plain(out, &value.to_string().replacen(' ', "T", 1));
+                return;
+            }
+        }
     }
     push_plain(out, &value.to_string());
 }
@@ -222,10 +250,29 @@ fn push_string(out: &mut String, dialect: Dialect, text: &str) {
             push_hex(out, text.as_bytes());
             out.push_str("' AS TEXT)");
         }
+        Dialect::TSql if tsql_needs_cast(text) => {
+            // The UTF-16LE code units as a binary literal, read back as the same text.
+            out.push_str("CAST(0x");
+            for unit in text.encode_utf16() {
+                let [lo, hi] = unit.to_le_bytes();
+                let _ = write!(out, "{lo:02x}{hi:02x}");
+            }
+            out.push_str(" AS NVARCHAR(MAX))");
+        }
+        Dialect::TSql => {
+            out.push('N');
+            push_plain(out, text);
+        }
         // Plain `'..'` is exact here: no backslash or NUL (PostgreSQL, MySQL), no NUL (SQLite).
         // Every dialect is named so that a new one must decide its escaping.
         Dialect::Postgres | Dialect::MySql | Dialect::Sqlite => push_plain(out, text),
     }
+}
+
+/// T-SQL text that a plain `N'..'` cannot carry: a NUL, or a backslash right before a line
+/// break (the line continuation that removes both).
+fn tsql_needs_cast(text: &str) -> bool {
+    text.contains('\0') || text.contains("\\\r") || text.contains("\\\n")
 }
 
 /// The qualifier of a schema-level object: the schema, or on `MySQL` the schema or database.
@@ -284,7 +331,23 @@ mod tests {
     #[test]
     fn dialect_ids() {
         for d in Dialect::ALL {
-            assert_eq!(Dialect::from_driver_id(d.as_str()), Some(d));
+            assert_eq!(Dialect::from_name(d.as_str()), Some(d));
+            // `tsql` is a dialect name, never a built-in driver id.
+            let id = Dialect::from_driver_id(d.as_str());
+            assert_eq!(id, (d != Dialect::TSql).then_some(d), "{d:?}");
+        }
+        assert_eq!(Dialect::from_driver_id("tsql"), None);
+        assert_eq!(Dialect::from_driver_id("sqlserver"), None);
+        for bad in [
+            "TSql",
+            "TSQL",
+            "Postgres",
+            "mssql",
+            "sqlserver",
+            " tsql",
+            "",
+        ] {
+            assert_eq!(Dialect::from_name(bad), None, "{bad:?}");
         }
         assert_eq!(Dialect::from_driver_id("Postgres"), None);
         assert_eq!(Dialect::from_driver_id("mssql"), None);
@@ -308,6 +371,14 @@ mod tests {
         assert_eq!(q(d, "Mixed Case"), "`Mixed Case`");
         assert_eq!(q(d, "with space"), "`with space`");
         assert_eq!(q(d, "é 名"), "`é 名`");
+        let d = Dialect::TSql;
+        assert_eq!(q(d, "a]b"), "[a]]b]");
+        assert_eq!(q(d, "a[b"), "[a[b]");
+        assert_eq!(q(d, "a\"b`c"), "[a\"b`c]");
+        assert_eq!(q(d, "select"), "[select]");
+        assert_eq!(q(d, "Mixed Case"), "[Mixed Case]");
+        assert_eq!(q(d, "]"), "[]]]");
+        assert_eq!(q(d, "é 名"), "[é 名]");
     }
 
     #[test]
@@ -351,6 +422,12 @@ mod tests {
             qualified_name(Dialect::MySql, &t(&ObjectPath::root())).unwrap(),
             "`t`"
         );
+        // T-SQL: the schema is the qualifier, the database is not.
+        assert_eq!(
+            qualified_name(Dialect::TSql, &t(&with_schema)).unwrap(),
+            "[s].[t]"
+        );
+        assert_eq!(qualified_name(Dialect::TSql, &t(&db_only)).unwrap(), "[t]");
     }
 
     #[test]
@@ -406,6 +483,7 @@ mod tests {
         const PG: Dialect = Dialect::Postgres;
         const MY: Dialect = Dialect::MySql;
         const LITE: Dialect = Dialect::Sqlite;
+        const TS: Dialect = Dialect::TSql;
 
         fn lit(d: Dialect, v: &Value) -> String {
             sql_literal(d, v)
@@ -435,6 +513,8 @@ mod tests {
             assert_eq!(lit(MY, &Value::Bool(false)), "FALSE");
             assert_eq!(lit(LITE, &Value::Bool(true)), "1");
             assert_eq!(lit(LITE, &Value::Bool(false)), "0");
+            assert_eq!(lit(TS, &Value::Bool(true)), "1");
+            assert_eq!(lit(TS, &Value::Bool(false)), "0");
         }
 
         #[test]
@@ -442,6 +522,7 @@ mod tests {
             assert_eq!(lit(Dialect::Postgres, &Value::Float(-0.0)), "'-0'::float8");
             assert_eq!(lit(Dialect::MySql, &Value::Float(-0.0)), "-0.0e0");
             assert_eq!(lit(Dialect::Sqlite, &Value::Float(-0.0)), "-0.0e0");
+            assert_eq!(lit(Dialect::TSql, &Value::Float(-0.0)), "-0.0e0");
             for d in Dialect::ALL {
                 assert_eq!(lit(d, &Value::Float(0.0)), "0.0", "{d:?}");
             }
@@ -455,6 +536,7 @@ mod tests {
             assert_eq!(lit(PG, &Value::Float(ninf)), "'-Infinity'::float8");
             for v in [nan, inf, ninf] {
                 assert_eq!(lit(MY, &Value::Float(v)), "NULL");
+                assert_eq!(lit(TS, &Value::Float(v)), "NULL");
             }
             assert_eq!(lit(LITE, &Value::Float(nan)), "NULL");
             assert_eq!(lit(LITE, &Value::Float(inf)), "9e999");
@@ -470,9 +552,33 @@ mod tests {
                     "'{\"a\":\"it''s\"}'"
                 };
                 for d in Dialect::ALL {
+                    let want = if d == Dialect::TSql {
+                        format!("N{want}")
+                    } else {
+                        want.to_owned()
+                    };
                     assert_eq!(lit(d, &v), want);
                 }
             }
+            let ts = Dialect::TSql;
+            assert_eq!(lit(ts, &text("")), "N''");
+            assert_eq!(lit(ts, &text("a\\b")), "N'a\\b'");
+            assert_eq!(lit(ts, &text("é名")), "N'é名'");
+            // A NUL, or a backslash right before a line break, becomes the UTF-16LE bytes.
+            assert_eq!(
+                lit(ts, &text("a\0b")),
+                "CAST(0x610000006200 AS NVARCHAR(MAX))"
+            );
+            assert_eq!(
+                lit(ts, &text("a\\\nb")),
+                "CAST(0x61005c000a006200 AS NVARCHAR(MAX))"
+            );
+            assert_eq!(lit(ts, &text("\\\r")), "CAST(0x5c000d00 AS NVARCHAR(MAX))");
+            // Outside the BMP: a surrogate pair.
+            assert_eq!(
+                lit(ts, &text("\0\u{1F600}")),
+                "CAST(0x00003dd800de AS NVARCHAR(MAX))"
+            );
             assert_eq!(lit(PG, &text("")), "''");
             assert_eq!(lit(PG, &text("a\\b'\0")), "E'a\\\\b''\\x00'");
             assert_eq!(lit(MY, &text("a\\")), "_utf8mb4 X'615c'");
@@ -491,6 +597,8 @@ mod tests {
             assert_eq!(lit(LITE, &b), "X'00abff'");
             assert_eq!(lit(PG, &Value::Bytes(vec![])), "decode('', 'hex')");
             assert_eq!(lit(MY, &Value::Bytes(vec![])), "X''");
+            assert_eq!(lit(TS, &b), "0x00abff");
+            assert_eq!(lit(TS, &Value::Bytes(vec![])), "0x");
         }
 
         #[test]
@@ -509,6 +617,10 @@ mod tests {
                 assert_eq!(lit(d, &stamp), "'2024-01-02 03:04:05'");
                 assert_eq!(lit(d, &tz), "'2024-01-02 03:04:05+01:00'");
             }
+            assert_eq!(lit(TS, &date), "'2024-01-02'");
+            assert_eq!(lit(TS, &time), "'03:04:05'");
+            assert_eq!(lit(TS, &stamp), "'2024-01-02T03:04:05'");
+            assert_eq!(lit(TS, &tz), "'2024-01-02T03:04:05+01:00'");
             let far = Value::Date(Date::new(12345, 1, 2).unwrap());
             assert_eq!(lit(PG, &far), "DATE '+12345-01-02'");
         }
@@ -542,14 +654,24 @@ mod tests {
                 "/*",
                 "\"",
                 "é\\名'",
+                "\\\n",
+                "a\\\r\nb'; drop table t; --",
+                "\\ \n",
             ];
             for d in Dialect::ALL {
                 for t in nasty {
                     let out = string_literal(d, t);
                     let toks = sig(d, &out);
-                    let hex_form =
-                        (d == MY && t.contains(['\\', '\0'])) || (d == LITE && t.contains('\0'));
-                    if d == MY && hex_form {
+                    let hex_form = (d == MY && t.contains(['\\', '\0']))
+                        || (d == LITE && t.contains('\0'))
+                        || (d == TS && tsql_needs_cast(t));
+                    if d == TS && hex_form {
+                        let texts: Vec<_> = toks.iter().map(|t| t.1.as_str()).collect();
+                        assert_eq!(toks.len(), 9, "{out}");
+                        assert_eq!(texts[..2], ["CAST", "("]);
+                        assert_eq!(toks[2].0, TokenKind::Number);
+                        assert_eq!(texts[3..], ["AS", "NVARCHAR", "(", "MAX", ")", ")"]);
+                    } else if d == MY && hex_form {
                         assert_eq!(toks.len(), 2, "{out}");
                         assert_eq!(toks[0], (TokenKind::Word, "_utf8mb4".to_owned()));
                         assert!(is_str(&toks[1]), "{out}");
@@ -578,6 +700,8 @@ mod tests {
                 assert_eq!(toks.len(), 1);
                 assert!(is_str(&toks[0]));
             }
+            let toks = sig(TS, &lit(TS, &b));
+            assert_eq!(toks, vec![(TokenKind::Number, "0x0102ff".to_owned())]);
         }
     }
 }

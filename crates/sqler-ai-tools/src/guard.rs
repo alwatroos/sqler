@@ -111,7 +111,7 @@ pub(crate) fn plan(
     sql: &str,
     force: Option<ApprovalReason>,
 ) -> Result<Vec<Planned>, ToolError> {
-    let dialect = Dialect::from_driver_id(info.driver.as_str());
+    let dialect = info.dialect;
     let statements: Vec<(String, StatementClass)> = if let Some(dialect) = dialect {
         classify_each(dialect, sql)
             .into_iter()

@@ -76,7 +76,6 @@ fn lead_words_every_dialect() {
         ("detach x", Write),
         ("optimize table t", Write),
         ("repair table t", Write),
-        ("handler t open", Other),
         ("call p()", Unknown),
         ("do 1", Unknown),
         ("exec p", Unknown),
@@ -92,6 +91,11 @@ fn lead_words_every_dialect() {
     for d in Dialect::ALL {
         check(d, leads);
     }
+    // `OPEN` starts a cursor or key statement on T-SQL, which the classifier does not model.
+    for d in [Dialect::Postgres, Dialect::MySql, Dialect::Sqlite] {
+        check(d, &[("handler t open", Other)]);
+    }
+    check(Dialect::TSql, &[("handler t open", Unknown)]);
 }
 
 #[test]
@@ -586,7 +590,6 @@ fn explain_is_its_inner_statement() {
                 ("explain analyze execute p", Unknown),
                 ("explain analyze call p()", Unknown),
                 ("explain analyze do 1", Unknown),
-                ("explain analyze declare c cursor for select 1", Unknown),
                 ("explain query plan refresh materialized view mv", Write),
                 ("explain format=json delete from t", Write),
                 ("explain analyze select 1", Read),
@@ -598,6 +601,17 @@ fn explain_is_its_inner_statement() {
             ],
         );
     }
+    // `DECLARE` starts a statement only on T-SQL (`EXPLAIN` is not T-SQL syntax there).
+    for d in [Dialect::Postgres, Dialect::MySql, Dialect::Sqlite] {
+        check(
+            d,
+            &[("explain analyze declare c cursor for select 1", Unknown)],
+        );
+    }
+    check(
+        Dialect::TSql,
+        &[("explain analyze declare c cursor for select 1", Other)],
+    );
     check(
         Dialect::MySql,
         &[("explain t", Read), ("explain for connection 3", Read)],
@@ -894,6 +908,102 @@ fn set_lists_with_global_assignments_are_writes() {
             ("set session a = 1, b = 2", Other),
             ("set a = 1, b = 2", Other),
             ("set @x = 1", Other),
+        ],
+    );
+}
+
+/// T-SQL lead words, the rules for `EXEC`, `WAITFOR`, `BEGIN` and `END`, and the dialect gate.
+#[test]
+fn tsql_leads() {
+    check(
+        Dialect::TSql,
+        &[
+            ("bulk insert t from 'f'", Write),
+            ("dbcc checkdb", Write),
+            ("backup database d to disk = 'x'", Write),
+            ("restore database d from disk = 'x'", Write),
+            ("reconfigure", Write),
+            ("shutdown", Write),
+            ("receive top (1) * from q", Write),
+            ("send on conversation @h ('x')", Write),
+            ("updatetext t.c @p 0 0 'x'", Write),
+            ("writetext t.c @p 'x'", Write),
+            ("move conversation @h to @g", Write),
+            ("end conversation @h", Write),
+            ("deny select on t to u", Ddl),
+            ("enable trigger tr on t", Ddl),
+            ("disable trigger tr on t", Ddl),
+            ("declare @x int = 1", Other),
+            ("declare @x int = (select 1)", Other),
+            ("declare @x int = (select f(1))", Unknown),
+            ("print 'x'", Other),
+            ("print dbo.f(1)", Unknown),
+            ("save tran s", Other),
+            ("waitfor delay '00:00:01'", Other),
+            ("waitfor time '23:00'", Other),
+            ("waitfor", Write),
+            ("waitfor ( receive * from q ), timeout 100", Write),
+            ("begin", Other),
+            ("begin tran", Other),
+            ("begin transaction t1", Other),
+            ("begin distributed transaction", Other),
+            ("begin tran delete from t", Write),
+            (
+                "begin try select 1 end try begin catch select 2 end catch",
+                Unknown,
+            ),
+            ("begin dialog @h from service a to service 'b'", Unknown),
+            ("begin select 1 end", Unknown),
+            ("exec p", Unknown),
+            ("execute p", Unknown),
+            ("grant execute on p to u", Unknown),
+            ("insert into t exec p", Unknown),
+            ("select 1 where exec", Unknown),
+            ("revert", Unknown),
+            ("setuser 'u'", Unknown),
+            ("open c", Unknown),
+            ("if 1 = 1 select 1", Unknown),
+            ("while 1 = 1 select 1", Unknown),
+            ("throw", Unknown),
+            ("return", Unknown),
+            ("goto l", Unknown),
+        ],
+    );
+    check(
+        Dialect::TSql,
+        &[
+            ("explain declare @x int", Other),
+            ("explain waitfor delay '1'", Unknown),
+            ("explain dbcc checkdb", Write),
+            ("explain deny select on t to u", Ddl),
+        ],
+    );
+}
+
+/// The T-SQL additions never apply to another dialect.
+#[test]
+fn tsql_words_are_ordinary_elsewhere() {
+    for d in [Dialect::Postgres, Dialect::MySql, Dialect::Sqlite] {
+        check(
+            d,
+            &[
+                ("select * from t with (updlock)", Read),
+                ("select serializable from t", Read),
+                ("select * from t where kill = 1", Read),
+                ("select len(a) from t", Unknown),
+                ("select getdate()", Unknown),
+                ("select top (5) * from t", Unknown),
+                ("select * from t option (x)", Unknown),
+            ],
+        );
+    }
+    check(
+        Dialect::TSql,
+        &[
+            ("select len(a) from t", Read),
+            ("select getdate()", Read),
+            ("select serializable from t", Write),
+            ("select * from t where kill = 1", Write),
         ],
     );
 }

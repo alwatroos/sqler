@@ -81,7 +81,10 @@ mod tests {
     #[test]
     fn never_adds_analyze() {
         for d in Dialect::ALL {
-            let text = explain_text(d, "select 1").unwrap();
+            let Some(text) = explain_text(d, "select 1") else {
+                assert_eq!(d, Dialect::TSql);
+                continue;
+            };
             assert!(!text.to_uppercase().contains("ANALYZE"), "{text}");
         }
         assert!(

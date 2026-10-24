@@ -55,7 +55,7 @@ impl Workspace {
     fn query_context(&self, tab: TabId) -> Option<(Option<Dialect>, bool)> {
         let connection = self.tabs.get(tab)?.connection();
         Some((
-            Dialect::from_driver_id(connection.driver.as_str()),
+            self.dialect_of(&connection.driver),
             connection.environment == Some(Environment::Prod),
         ))
     }

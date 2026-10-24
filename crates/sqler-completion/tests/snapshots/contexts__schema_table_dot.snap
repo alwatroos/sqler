@@ -18,3 +18,8 @@ context: Qualified, replace: 17..17 "", items: 2
 context: Qualified, replace: 17..17 "", items: 2
  1. "id" [Column] insert="id" detail="log · integer"
  2. "message" [Column] insert="message" detail="log · text"
+
+== tsql ==
+context: Qualified, replace: 17..17 "", items: 2
+ 1. "id" [Column] insert="id" detail="log · integer"
+ 2. "message" [Column] insert="message" detail="log · text"

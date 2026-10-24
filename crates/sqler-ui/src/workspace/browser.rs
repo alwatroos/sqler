@@ -1064,7 +1064,7 @@ impl Workspace {
             .sidebar
             .index_of(conn)
             .and_then(|i| self.sidebar.entries().get(i))
-            .and_then(|e| Dialect::from_driver_id(e.config().driver.as_str()));
+            .and_then(|e| self.dialect_of(&e.config().driver));
         self.next_generation += 1;
         self.browsers.insert(
             conn.clone(),

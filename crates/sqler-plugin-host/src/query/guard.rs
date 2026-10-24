@@ -90,7 +90,7 @@ pub(crate) fn explain_runs_query(dialect: Dialect, text: &str) -> bool {
 /// # Errors
 /// `invalid-argument` for no statement or more than one.
 pub(crate) fn plan(conn: &PluginConnection, sql: &str) -> Result<Planned, PluginError> {
-    let dialect = Dialect::from_driver_id(conn.driver.as_str());
+    let dialect = conn.dialect;
     let mut statements: Vec<(String, StatementClass)> = if let Some(dialect) = dialect {
         classify_each(dialect, sql)
             .into_iter()
@@ -241,6 +241,37 @@ mod tests {
             assert_eq!(p.class, StatementClass::Unknown);
             assert!(p.needs_approval());
         }
+    }
+
+    fn tsql(sql: &str) -> Result<Planned, PluginError> {
+        plan(
+            &conn("sqlserver").with_dialect(Some(sqler_sql::Dialect::TSql)),
+            sql,
+        )
+    }
+
+    #[test]
+    fn a_declared_tsql_dialect_classifies_statements() {
+        let p = tsql("select top (5) * from [dbo].[t]").unwrap();
+        assert!(!p.needs_approval());
+        assert_eq!(p.sql, "select top (5) * from [dbo].[t]");
+        let p = tsql("update t set a = 1").unwrap();
+        assert_eq!(p.reason, Some(WriteReason::Write));
+        for text in [
+            "exec p",
+            "execute('drop table t')",
+            "exec sp_executesql N'delete from t'",
+        ] {
+            let p = tsql(text).unwrap();
+            assert_eq!(p.class, StatementClass::Unknown, "{text}");
+            assert!(p.needs_approval(), "{text}");
+        }
+        // `GO` is a separator: a read followed by a write is two statements, not one read.
+        let e = tsql("select 1\nGO\ndelete from t").unwrap_err();
+        assert_eq!(code(&e), ErrorCode::InvalidArgument);
+        // Without the declared dialect the same read needs approval.
+        let p = plan(&conn("sqlserver"), "select 1").unwrap();
+        assert_eq!(p.class, StatementClass::Unknown);
     }
 
     #[test]

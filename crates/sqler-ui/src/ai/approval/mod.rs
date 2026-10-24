@@ -16,7 +16,6 @@ use std::collections::VecDeque;
 
 use sqler_ai_tools::{ApprovalRequest, ApprovalStage, Approver, Decision};
 use sqler_driver_api::BoxFuture;
-use sqler_driver_api::sqler_core::DriverId;
 use sqler_sql::Dialect;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -221,10 +220,9 @@ impl ApprovalQueue {
 /// empty plan); the gate is left idle then.
 pub fn open_prod_gate(
     gate: &mut QueryTab,
-    driver: &DriverId,
+    dialect: Option<Dialect>,
     sql: &str,
 ) -> Result<(), &'static str> {
-    let dialect = Dialect::from_driver_id(driver.as_str());
     let shown = plan(dialect, &BufferSnapshot::at_cursor(sql, 0), RunMode::All)
         .ok()
         .and_then(|plan| gate.request(dialect, plan, true).ok());
@@ -309,8 +307,8 @@ mod tests {
         }
     }
 
-    fn driver() -> DriverId {
-        DriverId::new("sqlite").unwrap()
+    fn driver() -> sqler_driver_api::sqler_core::DriverId {
+        sqler_driver_api::sqler_core::DriverId::new("sqlite").unwrap()
     }
 
     fn fixture(env: Option<Environment>) -> (Arc<AtomicUsize>, ToolSet) {
@@ -557,7 +555,7 @@ mod tests {
     fn the_prod_gate_shows_the_exact_sql() {
         let mut gate = QueryTab::new();
         let sql = "update t set a = 1 where id = 2";
-        open_prod_gate(&mut gate, &driver(), sql).unwrap();
+        open_prod_gate(&mut gate, Dialect::from_driver_id("sqlite"), sql).unwrap();
         let Phase::Confirming(list) = gate.phase() else {
             panic!("not confirming: {:?}", gate.phase());
         };
@@ -570,7 +568,7 @@ mod tests {
         for sql in ["select 1", "update t set a = :x", "", "   "] {
             let mut gate = QueryTab::new();
             assert_eq!(
-                open_prod_gate(&mut gate, &driver(), sql),
+                open_prod_gate(&mut gate, Dialect::from_driver_id("sqlite"), sql),
                 Err(GATE_UNAVAILABLE),
                 "{sql}"
             );

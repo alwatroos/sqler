@@ -15,3 +15,7 @@ context: Qualified, replace: 9..11 "em", items: 1
 == sqlite ==
 context: Qualified, replace: 9..11 "em", items: 1
  1. "email" [Column] insert="email" detail="u · text"
+
+== tsql ==
+context: Qualified, replace: 9..11 "em", items: 1
+ 1. "email" [Column] insert="email" detail="u · text"

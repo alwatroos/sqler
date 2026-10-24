@@ -24,6 +24,10 @@ const SQLITE_SQL: &str = "SELECT t.schema FROM pragma_table_list AS t \
     JOIN pragma_database_list AS d ON d.name = t.schema WHERE t.name = ?1 COLLATE NOCASE \
     ORDER BY CASE t.schema WHEN 'temp' THEN 0 WHEN 'main' THEN 1 ELSE 2 END, d.seq LIMIT 1";
 
+/// T-SQL: the schema of the object `OBJECT_ID` finds for the bracket-quoted name (the default schema of the login
+/// when unqualified). A temporary table or a missing object gives `NULL`, and `NULL` makes the result read-only.
+const TSQL_SQL: &str = "SELECT OBJECT_SCHEMA_NAME(OBJECT_ID(@P1))";
+
 /// `MySQL` and `MariaDB`: the current database (a temporary table shadows by name, not by schema).
 ///
 /// The driver prepares every statement and the connection caches the prepared form by its text,
@@ -80,6 +84,7 @@ impl SchemaProbe {
                 }
                 source.name.text.clone()
             }
+            Dialect::TSql => quote_identifier(dialect, &source.name.text).ok()?,
             Dialect::MySql => String::new(),
             _ => source.name.text.clone(),
         };
@@ -94,6 +99,7 @@ impl SchemaProbe {
             Dialect::Postgres => {
                 Query::new(PG_SQL).with_params(vec![Value::Text(self.name.clone())])
             }
+            Dialect::TSql => Query::new(TSQL_SQL).with_params(vec![Value::Text(self.name.clone())]),
             Dialect::MySql => {
                 let n = MYSQL_PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 Query::new(format!("{MYSQL_SQL} /* sqler-probe {n} */"))
@@ -182,6 +188,18 @@ mod tests {
     }
 
     #[test]
+    fn t_sql_binds_the_bracket_quoted_name() {
+        let q = probe(Dialect::TSql, "SELECT * FROM Foo").unwrap().query();
+        assert_eq!(q.sql, "SELECT OBJECT_SCHEMA_NAME(OBJECT_ID(@P1))");
+        assert_eq!(q.params, vec![Value::Text("[Foo]".to_owned())]);
+        let q = probe(Dialect::TSql, "SELECT * FROM [a]]b]")
+            .unwrap()
+            .query();
+        assert_eq!(q.params, vec![Value::Text("[a]]b]".to_owned())]);
+        assert!(probe(Dialect::TSql, "SELECT * FROM dbo.t").is_none());
+    }
+
+    #[test]
     fn mysql_binds_nothing() {
         let q = probe(Dialect::MySql, "SELECT * FROM `t`").unwrap().query();
         assert!(q.sql.starts_with(MYSQL_SQL), "{}", q.sql);
@@ -206,14 +224,17 @@ mod tests {
             "\"?1 $1 ?\"",
             "\"/* c */\"",
         ];
-        for d in [Dialect::Postgres, Dialect::MySql, Dialect::Sqlite] {
+        for d in Dialect::ALL {
             for n in names {
                 let Some(p) = probe(d, &format!("SELECT * FROM {n}")) else {
                     continue;
                 };
                 let q = p.query();
                 assert!(
-                    q.sql == PG_SQL || q.sql == SQLITE_SQL || q.sql.starts_with(MYSQL_SQL),
+                    q.sql == PG_SQL
+                        || q.sql == TSQL_SQL
+                        || q.sql == SQLITE_SQL
+                        || q.sql.starts_with(MYSQL_SQL),
                     "{d:?} {n}"
                 );
                 assert!(!q.sql.contains(';'), "{d:?} {n}");
@@ -299,6 +320,8 @@ mod tests {
             let p = probe(Dialect::Postgres, "SELECT * FROM t").unwrap();
             assert_eq!(p.run(&mut *s).await, None);
             let p = probe(Dialect::MySql, "SELECT * FROM t").unwrap();
+            assert_eq!(p.run(&mut *s).await, None);
+            let p = probe(Dialect::TSql, "SELECT * FROM t").unwrap();
             assert_eq!(p.run(&mut *s).await, None);
         });
     }

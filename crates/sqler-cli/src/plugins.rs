@@ -12,12 +12,14 @@ use std::str::FromStr as _;
 use std::sync::{Arc, OnceLock};
 
 use sqler_config::{ConfigDir, GrantDecision, GrantsLoad, PluginGrants, PrefsLoad};
+use sqler_driver_api::sqler_core::DriverId;
 use sqler_plugin_api::{Capability, CapabilitySet, GrantKey, GrantSource, Limits, PluginId};
 use sqler_plugin_host::net::NetEgressFactory;
 use sqler_plugin_host::{
     HostEngines, HostOptions, MemorySettings, PluginDirs, PluginDrivers, PluginExporters,
     PluginHost, Services, discover,
 };
+use sqler_sql::Dialect;
 
 /// The grants as they were on disk when the command started. Read-only: an unknown key, a denial, a damaged or newer
 /// file all approve nothing.
@@ -61,6 +63,11 @@ pub(crate) fn driver_source_in(dir: &ConfigDir) -> Option<Arc<PluginDrivers>> {
     let source = PluginDrivers::new(engines());
     source.attach(&host);
     Some(source)
+}
+
+/// The dialect a plugin manifest declares for `driver`, or `None` without a source or a declaration.
+pub(crate) fn dialect_for(source: Option<&PluginDrivers>, driver: &DriverId) -> Option<Dialect> {
+    source?.dialect(driver)
 }
 
 /// The runtime of the export formats: one worker, started on first use and kept for the life of the process.
@@ -225,6 +232,18 @@ mod tests {
         dir.save_plugin_grants(&grants).unwrap();
         let source = driver_source_in(&dir).unwrap();
         (s, source)
+    }
+
+    #[tokio::test]
+    async fn the_sqlserver_manifest_declares_the_tsql_dialect() {
+        let (_s, source) = sqlserver_source("mssql-dialect");
+        let id = DriverId::new("sqlserver").unwrap();
+        // Without the engine the driver is unavailable and has no dialect; with it, T-SQL.
+        let expected = cfg!(feature = "driver-mssql").then_some(Dialect::TSql);
+        assert_eq!(dialect_for(Some(&source), &id), expected);
+        assert_eq!(dialect_for(None, &id), None);
+        let other = DriverId::new("nothing-db").unwrap();
+        assert_eq!(dialect_for(Some(&source), &other), None);
     }
 
     #[cfg(feature = "driver-mssql")]
