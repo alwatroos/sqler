@@ -96,3 +96,48 @@ reversible: an upstream issue asking `tiberius` to drop the default features, or
 - **No tunnel container test.** No existing setup reaches a database through `sshd`, and the SSH and SQL Server test
   containers share no network. Fake tunnels cover the pipeline. A real check through an SSH tunnel and against a real
   SQL Server instance is pending (maintainer).
+
+## Amendment 2 (2026-10-24): rows affected and the limits that stay
+
+- Status: accepted. This fixes the API gap "`rows_affected` is `None`", so inline grid editing now applies on SQL Server.
+  The amendment number may be renumbered at merge if another amendment took 2; the content does not change.
+- **What `tiberius` 0.13 gives.** `QueryStream` (from `simple_query` and `query`) yields only metadata and rows and skips
+  every `DONE` token. `execute` returns the counts but drops the rows. `Command::exec` (a named-procedure RPC) streams
+  metadata, rows **and** one `RowsAffected` item per `DONE` or `DONEINPROC`. `TokenDone::rows()` returns 0 when the
+  count flag is unset, and the status bits are not public, so the driver cannot tell "0 rows" from "no count" by itself.
+- **Mechanism.** A text whose leading keyword (after whitespace, `;`, `--` and nested `/* */` comments) is
+  `INSERT`, `UPDATE` (not `UPDATE STATISTICS`), `DELETE`, `MERGE` or `WITH`, and that is confidently one statement,
+  runs as `sp_executesql` through `Command` (`@stmt`, `@params`, `@P1..@Pn`). Its rows still stream, so an `OUTPUT`
+  clause works, and its count is the single `RowsAffected` item. "Confidently one statement" is a token check that
+  ignores strings, comments and quoted names: no `;` followed by more text, no word from a list of state or flow
+  statements (`USE`, `DECLARE`, `CREATE`, `ALTER`, `DROP`, `EXEC`, `BEGIN`, `IF`, `WHILE`, `COMMIT`, ...), no `SET` beyond
+  those of `UPDATE ... SET`, and no `INTO` other than `INSERT INTO` / `MERGE INTO` (so `SELECT ... INTO #tmp` is out).
+  `UPDATE ... SET`, `INSERT ... SELECT` and `WITH ... INSERT/UPDATE/DELETE/MERGE` pass. A text that fails the check
+  keeps the old plain-batch route and reports `None`, so the grid apply rolls back. Every other statement keeps its
+  path (a plain batch, or a parameterised query) and reports `None`. Rejected:
+  `execute` for DML, because it drops `OUTPUT` rows; and appending `SELECT @@ROWCOUNT`, because it rewrites the user's
+  SQL and adds a result set.
+- **When the count is `None`.** Zero count items (a session `SET NOCOUNT ON` suppresses them), more than one (a trigger
+  that counts its own statements, a batch or a procedure with several statements), and every statement that is not
+  routed as DML. The driver never guesses. The apply path treats `None` as an unverifiable row count and rolls back, so
+  the safe default of the grid editor is unchanged. A trigger is fixed by `SET NOCOUNT ON` as its first statement.
+- **Plain DML moves to RPC.** A text routed as DML without parameters now also runs through `sp_executesql`. The scope
+  of `SCOPE_IDENTITY()` was already per batch, so nothing is lost; existing temporary tables and an open
+  `BEGIN TRANSACTION` carry over (the transaction descriptor is attached to RPC requests). Caveat: anything that
+  statement text itself creates (`SET`, `USE`, a `#temp` table from `SELECT ... INTO`) ends with the call. That is why
+  the routing check above sends every text that could hold such a statement (a `SET`/`USE`/`DECLARE`/`CREATE`/...
+  after the DML, with or without `;`) to the plain batch, at the price that an unusual text is not counted. The check
+  is conservative, not a parser. A `WITH ... SELECT` reports the number of rows it returns, which is harmless.
+- **Kept: cancel closes the connection.** `tiberius` 0.13 does have `Client::cancel_query` (a TDS attention), so the
+  earlier "no attention path" wording is corrected. It stays closed because an attention leaves an open transaction
+  open, which would change the documented "a cancel rolls back" behaviour and needs its own design and tests. `KILL`
+  from a second connection needs `ALTER ANY CONNECTION`, which a normal login lacks.
+- **Kept: `money` and `smallmoney` as float.** `tiberius` decodes them to `f64` and does not expose the exact value.
+  Workaround: `CAST(x AS decimal(19,4))`. A grid edit whose `WHERE` compares a `money` column can match 0 rows and then
+  rolls back (nothing is written).
+- **Kept: one result set per statement.** Later sets are dropped. `QueryEvent` has no message channel to say so per
+  result, and changing the driver API is out of scope, so it is documented only. With the T-SQL splitting of
+  [ADR-0073](0073-tsql-dialect-and-manifest-dialect.md) this only cuts a procedure or batch that returns several sets.
+- **Tests.** Unit tests cover the routing, the count rule and the parameter declaration. Container tests
+  (`db_mssql_dml.rs`) cover counts per statement and the `NOCOUNT` and trigger cases; `db_edit_mssql.rs` in `sqler-ui`
+  applies staged edits end to end. A run against a real SQL Server instance is pending (maintainer).

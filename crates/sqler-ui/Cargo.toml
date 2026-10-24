@@ -45,6 +45,7 @@ toml.workspace = true
 [dev-dependencies]
 sqler-ai-api = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
+sqler-driver-mssql.workspace = true
 sqler-driver-mysql.workspace = true
 sqler-driver-postgres.workspace = true
 sqler-driver-sqlite.workspace = true

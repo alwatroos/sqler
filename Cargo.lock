@@ -8590,6 +8590,7 @@ dependencies = [
  "sqler-completion",
  "sqler-config",
  "sqler-driver-api",
+ "sqler-driver-mssql",
  "sqler-driver-mysql",
  "sqler-driver-postgres",
  "sqler-driver-sqlite",

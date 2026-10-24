@@ -71,12 +71,26 @@ against that name instead of the host you dial. Client certificates and keys are
 - **Export and AI tools.** Fresh-run export, the SQL `INSERT` export and the AI query tools work
   (`INSERT` statements hold at most 1000 rows each, text is written as `N'..'`). The AI sampling tool
   uses `select top (n)`; `explain` is not available on SQL Server, in the editor or for the AI.
-- **Rows affected.** The number of rows changed by `insert`, `update` and `delete` is not shown. For the same reason, inline editing in the results grid cannot be applied on SQL Server until the driver reports a changed-row count: the apply is rolled back and nothing is written.
-- **Result sets.** Only the first result set of a batch is shown.
-- **Types.** `money` arrives as a float; `uniqueidentifier` and `xml` as text; `decimal` keeps its
-  scale.
+- **Rows affected.** The number of rows changed by `insert`, `update`, `delete` and `merge` (and a
+  statement that starts with `with`) is shown, and inline editing in the results grid is applied on
+  SQL Server. The count is unknown, and shown as such, for other statements, after `SET NOCOUNT ON`,
+  when a trigger counts its own statements (add `SET NOCOUNT ON` as its first statement), and for a
+  batch or procedure with several counts. When the count of an inline edit is unknown the apply is
+  rolled back and nothing is written; this is the safe default.
+- **Result sets.** Only the first result set of a statement is shown; later ones are dropped, and the
+  result does not say so. The driver reports one result per statement. A script split at `;` or `GO`
+  loses nothing; only a procedure or batch that returns several sets is cut.
+- **Types.** `money` and `smallmoney` arrive as a float, because the driver library decodes them that
+  way and the exact value is not available. Use `CAST(x AS decimal(19,4))` for an exact value. An
+  inline edit whose row match compares a `money` column can match no row and is then rolled back.
+  `uniqueidentifier` and `xml` arrive as text; `decimal` keeps its scale.
 - **Parameters.** A statement with parameters runs through `sp_executesql`, so a `USE` or `SET` in
-  it does not last; a statement without parameters keeps the session state.
+  it does not last. A text that is clearly one DML statement (`insert`, `update` but not
+  `update statistics`, `delete`, `merge`, `with`) without parameters also runs through `sp_executesql`,
+  to read its row count. If such a text also holds a later `set`, `use`, `declare`, `create`, `exec`,
+  `select ... into #tmp` or similar, or a `;` followed by more text, it runs as a plain batch instead,
+  keeps its session state and shows an unknown row count. Any other statement without parameters keeps
+  the session state. A `with ... select` shows the number of rows it returns.
 
 ## Object browser
 
