@@ -14,7 +14,9 @@ name: Benchmarks
 # This workflow never builds `sqler-app` and never uses `driver-duckdb`: it measures the binaries that the Release
 # workflow built and guarded (ADR-0070), and `cargo xtask bench` refuses a feature line holding `driver-duckdb`.
 # Release artifacts last 7 days; when none exist, dispatch a Release dry run first.
-# A breach of a budget turns the run red, after the results were uploaded.
+# A breach of a budget (size, cold start, idle RSS) turns the run red, after the results were uploaded. The five
+# micro-benchmarks are reported only (bench.yml gates them), and on Linux the idle RSS is reported only: it is
+# measured on a software-rendered headless display (cage, pixman) and is not comparable with the desktop budget.
 on:
   workflow_dispatch:
     inputs:
@@ -193,7 +195,9 @@ jobs:
           rm -rf "$out"
           mkdir -p "$out"
           cage_pid=""
+          display=native
           if [ "$RUNNER_OS" = "Linux" ]; then
+            display=headless-software
             # weston --backend=headless advertises no wl_seat and GPUI panics on that; cage always creates a seat.
             export XDG_RUNTIME_DIR="$(mktemp -d)"
             chmod 700 "$XDG_RUNTIME_DIR"
@@ -216,7 +220,7 @@ jobs:
           fi
           cargo run -q -p xtask --locked -- bench \
             --bin "$BIN" --archive "$ARCHIVE" --commit "$SHA" \
-            --source ci-runner --machine "GitHub-hosted $RUNNER_NAME_LABEL" \
+            --source ci-runner --machine "GitHub-hosted $RUNNER_NAME_LABEL" --display "$display" \
             --out "$out" | tee "$out/results.txt"
           code=${PIPESTATUS[0]}
           if [ -n "$cage_pid" ]; then kill "$cage_pid" 2>/dev/null; fi
@@ -233,6 +237,9 @@ jobs:
               echo '```'
               cat "$RUNNER_TEMP/bench/results.txt"
               echo '```'
+              if grep -q '^display=headless-software$' "$RUNNER_TEMP/bench/results.txt"; then
+                echo "Idle RSS is informational here: it was measured on a software-rendered headless display (cage, pixman), which inflates RSS and is not comparable with the 150 MiB desktop budget."
+              fi
             } >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Upload the results
