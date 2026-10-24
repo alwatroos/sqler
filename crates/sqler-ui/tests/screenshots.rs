@@ -14,8 +14,10 @@
 //! - `SQLER_SCREENSHOT_SCENES`: comma-separated scene names; an unknown name fails.
 //! - `SQLER_SCREENSHOT_OPTIONAL=1`: skip with exit 0 when no headless renderer exists (a
 //!   developer without Vulkan; CI never sets it).
+//! - `SQLER_SCREENSHOT_WIDTH`: output width in pixels, an integer from 320 to 1280, default 1280;
+//!   the height keeps the 16:10 ratio (960 gives 960x600).
 //!
-//! Output is `<scene>-<theme>.png`, 1280x800. The pictures are for judging the look, not goldens
+//! Output is `<scene>-<theme>.png`, 1280x800 unless `SQLER_SCREENSHOT_WIDTH` is set. The pictures are for judging the look, not goldens
 //! (ADR-0047): timings in the results differ between runs.
 //!
 //! The test has `harness = false`: the macOS text system must be built on the main thread.
@@ -192,6 +194,27 @@ fn chosen_scenes() -> Result<Vec<&'static Scene>, String> {
         .collect()
 }
 
+/// The output size from `SQLER_SCREENSHOT_WIDTH` (default: the window size). The height keeps
+/// the window's aspect ratio.
+fn output_size() -> Result<(u32, u32), String> {
+    let (window_w, window_h) = scene::WINDOW_SIZE;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // 1280 x 800
+    let (full_w, full_h) = (window_w as u32, window_h as u32);
+    let Ok(text) = std::env::var("SQLER_SCREENSHOT_WIDTH") else {
+        return Ok((full_w, full_h));
+    };
+    match text.trim().parse::<u32>() {
+        Ok(width) if (320..=full_w).contains(&width) => {
+            let height =
+                (u64::from(width) * u64::from(full_h) + u64::from(full_w) / 2) / u64::from(full_w);
+            Ok((width, u32::try_from(height).unwrap_or(full_h)))
+        }
+        _ => Err(format!(
+            "SQLER_SCREENSHOT_WIDTH must be an integer from 320 to {full_w}"
+        )),
+    }
+}
+
 /// Renders everything. `Ok(true)` when every picture was written.
 fn run() -> Result<bool, String> {
     self_check()?;
@@ -201,6 +224,7 @@ fn run() -> Result<bool, String> {
         std::process::exit(1);
     });
     let scenes = chosen_scenes()?;
+    let out_size = output_size()?;
 
     // On macOS a missing Metal device ends the process inside GPUI; this only catches Linux.
     match gpui_platform::current_headless_renderer() {
@@ -250,7 +274,15 @@ fn run() -> Result<bool, String> {
             );
             context.allow_parking();
             context.update(sqler_ui::workspace::init);
-            match capture(&mut context, scene, theme, &connector, &runtime, &dir) {
+            match capture(
+                &mut context,
+                scene,
+                theme,
+                &connector,
+                &runtime,
+                &dir,
+                out_size,
+            ) {
                 Ok(line) => println!("ok: {label} {line}"),
                 Err(reason) => {
                     ok = false;
@@ -271,6 +303,7 @@ fn capture(
     connector: &Arc<dyn Connector>,
     runtime: &tokio::runtime::Runtime,
     dir: &std::path::Path,
+    (out_w, out_h): (u32, u32),
 ) -> Result<String, String> {
     let (width, height) = scene::WINDOW_SIZE;
     let player: Rc<RefCell<Option<ScenePlayer>>> = Rc::new(RefCell::new(None));
@@ -339,8 +372,6 @@ fn capture(
     );
     check_size(&raw, want)?;
     let colours = check_colours(&raw)?;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // 1280 x 800
-    let (out_w, out_h) = (width as u32, height as u32);
     let small = image::imageops::resize(&raw, out_w, out_h, FilterType::Triangle);
     check_size(&small, (out_w, out_h))?;
     let path = dir.join(format!("{}-{}.png", scene.name, theme.name()));
