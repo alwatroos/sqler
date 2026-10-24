@@ -12,8 +12,8 @@
 - ADR-0003 AI tool contract (accepted) — one tool set in `sqler-ai-tools` shared by the in-app chat, the MCP server and ACP-hosted agents.
 - ADR-0004 Driver API: boxed futures, event stream, session cancellation (accepted) — object-safe `Driver` and `Session` traits returning boxed futures and a `QueryStream` of events, with explicit cancel handles.
 ### Metrics
-All values below come from commands run on 2026-10-20 on macOS 27.0.1 arm64 against `target/release/sqler-cli` (default features, default release profile). Tracked in [benchmarks](../src/benchmarks.md).
-- Cold start: 2.4 ms mean (max 2.6 ms) for `sqler-cli run :memory: "select 1"`; `--version` floor 2.4 ms mean (max 2.7 ms). 20 runs after 3 warm-ups, timed with Python `time.perf_counter` around `subprocess.run` (`hyperfine` not installed). macOS 27.0.1 arm64, commit `6fc6229`. Target < 500 ms. Warm file cache, CLI only.
+All values below come from commands run on 2026-10-20 on macOS arm64 (reference machine class) against `target/release/sqler-cli` (default features, default release profile). Tracked in [benchmarks](../src/benchmarks.md).
+- Cold start: 2.4 ms mean (max 2.6 ms) for `sqler-cli run :memory: "select 1"`; `--version` floor 2.4 ms mean (max 2.7 ms). 20 runs after 3 warm-ups, timed with Python `time.perf_counter` around `subprocess.run` (`hyperfine` not installed). macOS arm64 (reference machine class), commit `6fc6229`. Target < 500 ms. Warm file cache, CLI only.
 - Idle RSS with three connections: n/a until M1 (UI); CLI peak RSS 3.6 MB (3817472 bytes, `/usr/bin/time -l`) for reference.
 - Binary size: 3.0 MB (3172736 bytes) for the `sqler-cli` release binary. Target < 60 MB. This is the CLI, not the desktop app.
 - Completion p95: n/a until M3.
