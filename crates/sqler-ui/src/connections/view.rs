@@ -19,7 +19,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::spinner::Spinner;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
-use sqler_config::{ConnectionAi, GroupId, TlsMode};
+use sqler_config::{ConnectionAi, GroupId, ProfileSecretKind, TlsMode};
 use sqler_driver_api::sqler_core::{DriverId, Environment};
 
 use super::action::ConnectionAction;
@@ -28,6 +28,7 @@ use super::form::{
     COLOR_PRESETS, ConnectionForm, FormField, FormMode, SecretField, SecretSlot, SshAuthKind,
     TestStatus,
 };
+use super::import::{ImportAction, ImportStep, SecretText};
 use crate::tabs::Rgb;
 use crate::theme::SPACE;
 use crate::theme::icons::AppIcon;
@@ -59,6 +60,8 @@ pub(crate) struct DialogInputs {
     generation: u64,
     fields: HashMap<FormField, Entity<InputState>>,
     group_name: Option<Entity<InputState>>,
+    /// The password fields of the import wizard's Secrets step.
+    secrets: Vec<((usize, ProfileSecretKind), Entity<InputState>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -90,7 +93,27 @@ impl DialogInputs {
         self.fields.get(&field)
     }
 
+    /// The password input of an import wizard field.
+    pub(crate) fn secret_input(
+        &self,
+        index: usize,
+        kind: ProfileSecretKind,
+    ) -> Option<&Entity<InputState>> {
+        self.secrets
+            .iter()
+            .find(|(key, _)| *key == (index, kind))
+            .map(|(_, input)| input)
+    }
+
+    /// Whether one of the wizard's password inputs has the keyboard focus.
+    pub(crate) fn any_focused(&self, window: &Window, cx: &App) -> bool {
+        self.secrets
+            .iter()
+            .any(|(_, input)| input.focus_handle(cx).is_focused(window))
+    }
+
     /// Makes the inputs for the dialog on screen; `None` for dialogs without text inputs.
+    #[allow(clippy::too_many_lines)] // one arm per dialog with inputs
     pub(crate) fn build(
         ws: &Workspace,
         window: &mut Window,
@@ -127,6 +150,7 @@ impl DialogInputs {
                     generation,
                     fields,
                     group_name: None,
+                    secrets: Vec::new(),
                     _subscriptions: subscriptions,
                 })
             }
@@ -153,7 +177,52 @@ impl DialogInputs {
                     generation,
                     fields: HashMap::new(),
                     group_name: Some(input),
+                    secrets: Vec::new(),
                     _subscriptions: vec![subscription],
+                })
+            }
+            Dialog::Import(wizard) if wizard.step() == ImportStep::Secrets => {
+                let mut secrets = Vec::new();
+                let mut subscriptions = Vec::new();
+                for row in wizard.secret_rows() {
+                    let (index, kind) = (row.index, row.kind);
+                    let input = cx.new(|cx| {
+                        InputState::new(window, cx)
+                            .masked(true)
+                            .placeholder(row.label.to_lowercase())
+                    });
+                    subscriptions.push(cx.subscribe(
+                        &input,
+                        move |view, input, event: &InputEvent, cx| match event {
+                            InputEvent::Change => {
+                                let text = SecretText::new(input.read(cx).value().to_string());
+                                view.dispatch_connection(
+                                    ConnectionAction::Import(ImportAction::SetSecret {
+                                        index,
+                                        kind,
+                                        text,
+                                    }),
+                                    cx,
+                                );
+                            }
+                            InputEvent::PressEnter { .. } => view.dispatch_connection(
+                                ConnectionAction::Import(ImportAction::Apply),
+                                cx,
+                            ),
+                            _ => {}
+                        },
+                    ));
+                    secrets.push(((index, kind), input));
+                }
+                if let Some((_, first)) = secrets.first() {
+                    window.focus(&first.focus_handle(cx), cx);
+                }
+                Some(Self {
+                    generation,
+                    fields: HashMap::new(),
+                    group_name: None,
+                    secrets,
+                    _subscriptions: subscriptions,
                 })
             }
             _ => None,
@@ -329,6 +398,9 @@ pub(crate) fn dialog_overlay(
             move_panel(ws, id, current.as_ref(), colors, cx).into_any_element()
         }
         Dialog::TrustHostKey { key, .. } => host_key_panel(key, colors, cx).into_any_element(),
+        Dialog::Import(wizard) => {
+            WorkspaceView::import_panel(wizard, inputs, cx).into_any_element()
+        }
     };
     Some(
         scrim("dialog-scrim", cx)
@@ -745,26 +817,46 @@ fn form_panel(
         .child(dialog_title(Some(AppIcon::Server), heading, cx))
         .child(body)
         .child(footer(
-            vec![
-                button(
-                    "form-cancel",
-                    "Cancel",
-                    ConnectionAction::Cancel,
-                    Look::Plain,
-                    cx,
-                )
-                .into_any_element(),
-                button(
-                    "form-save",
-                    "Save",
-                    ConnectionAction::Save,
-                    Look::Primary,
-                    cx,
-                )
-                .into_any_element(),
-            ],
+            form_buttons(matches!(form.mode(), FormMode::New), cx),
             cx,
         ))
+}
+
+/// The buttons of the form footer; a new connection can also be imported from another tool.
+fn form_buttons(importable: bool, cx: &mut Context<WorkspaceView>) -> Vec<AnyElement> {
+    let mut buttons = Vec::new();
+    if importable {
+        buttons.push(
+            Button::new("form-import")
+                .label("Import...")
+                .icon(AppIcon::FolderOpen)
+                .small()
+                .outline()
+                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                    view.dispatch_connection(ConnectionAction::Import(ImportAction::Open), cx);
+                }))
+                .into_any_element(),
+        );
+    }
+    buttons.extend([
+        button(
+            "form-cancel",
+            "Cancel",
+            ConnectionAction::Cancel,
+            Look::Plain,
+            cx,
+        )
+        .into_any_element(),
+        button(
+            "form-save",
+            "Save",
+            ConnectionAction::Save,
+            Look::Primary,
+            cx,
+        )
+        .into_any_element(),
+    ]);
+    buttons
 }
 
 /// A masked password input with what will happen to the stored secret.
