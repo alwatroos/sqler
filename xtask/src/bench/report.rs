@@ -32,6 +32,7 @@ pub struct Report {
     header: Vec<(String, String)>,
     features: Vec<String>,
     metrics: Vec<(String, String)>,
+    rss_informational: bool,
 }
 
 /// The identifying fields printed before any measurement.
@@ -63,6 +64,9 @@ fn one_line(text: &str) -> String {
 }
 
 /// Whether `value` breaches the budget of `key`; `None` when the key has no budget.
+///
+/// `bench_*_exit` has no budget here: the five micro-benchmarks are reported only (a single noisy sample on a
+/// shared runner must not turn the job red; `bench.yml` gates them with interleaved rounds).
 fn breached(key: &str, value: &str) -> Option<bool> {
     let over = |budget: u64| {
         let v = value.parse::<f64>().ok()?;
@@ -75,8 +79,6 @@ fn breached(key: &str, value: &str) -> Option<bool> {
         over(COLD_START_BUDGET_MS).or(Some(false))
     } else if key.starts_with("idle_rss_") && key.ends_with("_median_mib") {
         over(IDLE_RSS_BUDGET_MIB).or(Some(false))
-    } else if key.starts_with("bench_") && key.ends_with("_exit") {
-        Some(value != "0")
     } else {
         None
     }
@@ -99,7 +101,13 @@ impl Report {
             ],
             features: h.features,
             metrics: Vec::new(),
+            rss_informational: false,
         }
+    }
+
+    /// Report idle RSS without gating it (software-rendered headless display: not comparable with the budget).
+    pub fn set_rss_informational(&mut self) {
+        self.rss_informational = true;
     }
 
     /// Set a value; a repeated key keeps its first position.
@@ -138,7 +146,10 @@ impl Report {
     pub fn breaches(&self) -> Vec<String> {
         self.metrics
             .iter()
-            .filter(|(k, v)| breached(k, v) == Some(true))
+            .filter(|(k, v)| {
+                !(self.rss_informational && k.starts_with("idle_rss_"))
+                    && breached(k, v) == Some(true)
+            })
             .map(|(k, _)| k.clone())
             .collect()
     }
@@ -309,10 +320,32 @@ mod tests {
         assert_eq!(breached("cold_start_plugin_mean_ms", "500.1"), Some(true));
         assert_eq!(breached("idle_rss_none_median_mib", "150.0"), Some(false));
         assert_eq!(breached("idle_rss_plugin_median_mib", "150.1"), Some(true));
-        assert_eq!(breached("bench_grid_sort_exit", "0"), Some(false));
-        assert_eq!(breached("bench_grid_sort_exit", "1"), Some(true));
+        assert_eq!(breached("bench_grid_sort_exit", "1"), None);
         assert_eq!(breached("cold_start_none_max_ms", "9999.0"), None);
         assert_eq!(breached("binary_budget_bytes", "1"), None);
+    }
+
+    #[test]
+    fn a_failing_micro_benchmark_is_reported_not_a_breach() {
+        let mut r = sample();
+        r.set("bench_editor_buffer_exit", "1");
+        assert_eq!(r.breaches().len(), 0);
+        assert_eq!(r.result(), "pass");
+        assert_eq!(r.exit_code(), 0);
+    }
+
+    #[test]
+    fn informational_rss_is_not_a_breach_but_other_budgets_still_are() {
+        let mut r = sample();
+        r.set_f64("idle_rss_none_median_mib", 178.7);
+        assert_eq!(r.breaches(), vec!["idle_rss_none_median_mib".to_owned()]);
+        r.set_rss_informational();
+        assert_eq!(r.breaches().len(), 0);
+        assert_eq!(r.result(), "pass");
+        r.set("binary_bytes", "83886081");
+        r.set_f64("cold_start_none_mean_ms", 500.1);
+        assert_eq!(r.breaches().len(), 2);
+        assert_eq!(r.result(), "breach");
     }
 
     #[test]

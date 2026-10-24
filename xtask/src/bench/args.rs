@@ -33,6 +33,8 @@ pub struct Options {
     pub source: String,
     /// Free text describing the machine class.
     pub machine: String,
+    /// `native` or `headless-software` (a software-rendered headless display; idle RSS is informational).
+    pub display: String,
     /// Hyperfine runs.
     pub runs: u32,
     /// Hyperfine warmup runs.
@@ -48,7 +50,7 @@ pub struct Options {
 pub struct UsageError(pub String);
 
 const USAGE_HINT: &str = "usage: cargo run -p xtask -- bench [--bin PATH] [--archive PATH] [--commit SHA] [--out DIR] \
-[--source desktop|ci-runner] [--machine TEXT] [--runs N] [--warmup N] [--rss-runs N] \
+[--source desktop|ci-runner] [--machine TEXT] [--display native|headless-software] [--runs N] [--warmup N] [--rss-runs N] \
 [--skip cold-start|rss|size|benches]...";
 
 /// The usage text of the task.
@@ -97,6 +99,7 @@ pub fn parse(args: &[String]) -> Result<Options, UsageError> {
         out: None,
         source: "desktop".to_owned(),
         machine: "unspecified".to_owned(),
+        display: "native".to_owned(),
         runs: 20,
         warmup: 3,
         rss_runs: 3,
@@ -115,6 +118,7 @@ pub fn parse(args: &[String]) -> Result<Options, UsageError> {
             "--out",
             "--source",
             "--machine",
+            "--display",
             "--runs",
             "--warmup",
             "--rss-runs",
@@ -144,6 +148,14 @@ pub fn parse(args: &[String]) -> Result<Options, UsageError> {
                 value.clone_into(&mut opts.source);
             }
             "--machine" => value.clone_into(&mut opts.machine),
+            "--display" => {
+                if value != "native" && value != "headless-software" {
+                    return Err(UsageError(format!(
+                        "`--display` is `native` or `headless-software`, got `{value}`"
+                    )));
+                }
+                value.clone_into(&mut opts.display);
+            }
             "--runs" => opts.runs = count(flag, value)?,
             "--warmup" => opts.warmup = count(flag, value)?,
             "--rss-runs" => opts.rss_runs = count(flag, value)?,
@@ -175,6 +187,7 @@ mod tests {
         assert_eq!(o.out, None);
         assert_eq!(o.source, "desktop");
         assert_eq!(o.machine, "unspecified");
+        assert_eq!(o.display, "native");
         assert_eq!((o.runs, o.warmup, o.rss_runs), (20, 3, 3));
         assert_eq!(o.skip.len(), 0);
     }
@@ -194,6 +207,8 @@ mod tests {
             "ci-runner",
             "--machine",
             "GitHub-hosted x",
+            "--display",
+            "headless-software",
             "--runs",
             "5",
             "--warmup",
@@ -211,6 +226,7 @@ mod tests {
         assert_eq!(o.commit.as_deref(), Some("abcdef1"));
         assert_eq!(o.source, "ci-runner");
         assert_eq!(o.machine, "GitHub-hosted x");
+        assert_eq!(o.display, "headless-software");
         assert_eq!((o.runs, o.warmup, o.rss_runs), (5, 1, 2));
         assert_eq!(o.skip, vec![Group::Rss, Group::Benches]);
     }
@@ -227,6 +243,7 @@ mod tests {
         assert!(p(&["--runs", "-1"]).is_err());
         assert!(p(&["--source", "laptop"]).is_err());
         assert!(p(&["--skip", "everything"]).is_err());
+        assert!(p(&["--display", "gpu"]).is_err());
         assert!(p(&["--commit", "abc123"]).is_err());
         assert!(p(&["--commit", "zzzzzzz"]).is_err());
         assert!(p(&["--commit", &"a".repeat(41)]).is_err());

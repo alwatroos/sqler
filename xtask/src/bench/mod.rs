@@ -170,6 +170,17 @@ fn execute(options: &Options, w: &mut dyn std::io::Write) -> Result<u8, String> 
             None
         }
     };
+    report.set("display", &options.display);
+    if options.display == "headless-software" {
+        report.set_rss_informational();
+        for variant in desktop::VARIANTS {
+            report.set(&format!("rss_{variant}_informational"), "true");
+        }
+        report.set(
+            "rss_informational_reason",
+            "idle RSS measured on a software-rendered headless display; not comparable with the desktop budget",
+        );
+    }
     if !skipped(Group::Size) {
         measure_size(&mut report, bin.as_deref(), options);
     }

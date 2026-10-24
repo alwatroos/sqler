@@ -14,7 +14,9 @@ name: Benchmarks
 # This workflow never builds `sqler-app` and never uses `driver-duckdb`: it measures the binaries that the Release
 # workflow built and guarded (ADR-0070), and `cargo xtask bench` refuses a feature line holding `driver-duckdb`.
 # Release artifacts last 7 days; when none exist, dispatch a Release dry run first.
-# A breach of a budget turns the run red, after the results were uploaded.
+# A breach of a budget (size, cold start, idle RSS) turns the run red, after the results were uploaded. The five
+# micro-benchmarks are reported only (bench.yml gates them), and on Linux the idle RSS is reported only: it is
+# measured on a software-rendered headless display (cage, pixman) and is not comparable with the desktop budget.
 on:
   workflow_dispatch:
     inputs:
@@ -115,7 +117,9 @@ jobs:
           git config --global core.longpaths true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ needs.resolve.outputs.sha }}
+          # On main: the tree of the measured Release run. A dispatch from another branch (to test changes to this
+          # workflow or to xtask) uses that branch's tree; the artifacts and the recorded commit are still the Release run's.
+          ref: ${{ github.ref == 'refs/heads/main' && needs.resolve.outputs.sha || github.sha }}
           persist-credentials: false
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
@@ -135,7 +139,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends \
             pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev \
-            libvulkan1 mesa-vulkan-drivers fonts-dejavu-core cage
+            libvulkan1 mesa-vulkan-drivers fonts-dejavu-core cage xwayland
       # macOS images may ship Xcode without the separately downloaded Metal toolchain.
       - name: Metal toolchain
         if: runner.os == 'macOS'
@@ -193,7 +197,9 @@ jobs:
           rm -rf "$out"
           mkdir -p "$out"
           cage_pid=""
+          display=native
           if [ "$RUNNER_OS" = "Linux" ]; then
+            display=headless-software
             # weston --backend=headless advertises no wl_seat and GPUI panics on that; cage always creates a seat.
             export XDG_RUNTIME_DIR="$(mktemp -d)"
             chmod 700 "$XDG_RUNTIME_DIR"
@@ -216,7 +222,7 @@ jobs:
           fi
           cargo run -q -p xtask --locked -- bench \
             --bin "$BIN" --archive "$ARCHIVE" --commit "$SHA" \
-            --source ci-runner --machine "GitHub-hosted $RUNNER_NAME_LABEL" \
+            --source ci-runner --machine "GitHub-hosted $RUNNER_NAME_LABEL" --display "$display" \
             --out "$out" | tee "$out/results.txt"
           code=${PIPESTATUS[0]}
           if [ -n "$cage_pid" ]; then kill "$cage_pid" 2>/dev/null; fi
@@ -233,6 +239,9 @@ jobs:
               echo '```'
               cat "$RUNNER_TEMP/bench/results.txt"
               echo '```'
+              if grep -q '^display=headless-software$' "$RUNNER_TEMP/bench/results.txt"; then
+                echo "Idle RSS is informational here: it was measured on a software-rendered headless display (cage, pixman), which inflates RSS and is not comparable with the 150 MiB desktop budget."
+              fi
             } >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Upload the results
