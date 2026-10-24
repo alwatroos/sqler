@@ -8,11 +8,16 @@ name: Release
 # - Pull request touching a release file: plan, guard and a Linux x86_64 build (uploaded as a workflow artifact, 7
 #   days). The label `full-ci` (read when the run starts; push again after labelling) adds every OS, the global
 #   artifacts and the SBOM.
-# - workflow_dispatch: always a full dry run, never publishes. It needs this file on the default branch.
-# - Tag `vX.Y.Z`: the full run, then `host` creates the GitHub Release. Nothing else ever publishes.
-# - `sign (macOS)` (ADR-0065) runs on tags only, in the environment `release`, between `build` and `global`: it
+# - workflow_dispatch on a branch: always a full dry run, never publishes. It needs this file on the default branch.
+# - Tag `vX.Y.Z` (a tag push, or a workflow_dispatch on the tag ref): the full run, then `host` creates the GitHub
+#   Release. Nothing else ever publishes.
+# tag-dispatch: a workflow_dispatch on a refs/tags/v* ref publishes like a tag push (R18).
+#   The "Tag release" workflow creates the tag with GITHUB_TOKEN, which does not trigger the tag push, so it
+#   dispatches this workflow on the tag instead. The tag is derived from GITHUB_REF in the `mode` step, checked
+#   against the workspace version and passed to dist explicitly.
+# - `sign (macOS)` (ADR-0065) runs on `v*` tag runs only, in the environment `release`, between `build` and `global`: it
 #   signs and notarises the macOS archives when the APPLE_* secrets exist and re-uploads them; `global` hashes after it.
-# - `update manifest` (ADR-0066, R5) runs on tags only, in the environment `release`: it signs sqler-update.json with
+# - `update manifest` (ADR-0066, R5) runs on `v*` tag runs only, in the environment `release`: it signs sqler-update.json with
 #   SQLER_UPDATE_SIGNING_KEY (when set) and `host` attaches it to the release. `update manifest (dry run)` runs the
 #   same path on PRs and dispatch with a TEST ONLY key it generates itself, no secret, and publishes nothing.
 #
@@ -40,9 +45,10 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+*"
 
-# Cancel superseded runs on pull requests only; a tag or dispatch run completes (own group per run), as in size.yml.
+# Cancel superseded runs on pull requests only; a branch dispatch run completes (own group per run), as in size.yml.
+# A run on a tag ref (push or dispatch) shares one group per tag, so two runs on the same tag never overlap.
 concurrency:
-  group: release-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  group: release-${{ (github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/')) && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -61,11 +67,11 @@ jobs:
       val: ${{ steps.plan.outputs.manifest }}
       tag: ${{ steps.mode.outputs.tag }}
       tag-flag: ${{ steps.mode.outputs.tag-flag }}
-      publishing: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+      publishing: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(github.ref, 'refs/tags/v') }}
       full: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      PUBLISHING: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+      PUBLISHING: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(github.ref, 'refs/tags/v') }}
       FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -108,17 +114,29 @@ jobs:
         shell: bash
         run: |
           if [ "$PUBLISHING" = "true" ]; then
-            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-            echo "tag-flag=--tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            tag=${GITHUB_REF#refs/tags/}
+            if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+              echo "::error title=Release tag::the tag is not vX.Y.Z[-pre]"
+              exit 1
+            fi
+            version=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' Cargo.toml | head -n 1)
+            if [ -z "$version" ] || [ "${tag#v}" != "$version" ]; then
+              echo "::error title=Release tag::the tag does not match the workspace version in Cargo.toml"
+              exit 1
+            fi
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "tag-flag=--tag=$tag" >> "$GITHUB_OUTPUT"
           else
             echo "tag=" >> "$GITHUB_OUTPUT"
             echo "tag-flag=" >> "$GITHUB_OUTPUT"
           fi
       - id: plan
         shell: bash
+        env:
+          TAG: ${{ steps.mode.outputs.tag }}
         run: |
           if [ "$PUBLISHING" = "true" ]; then
-            dist host --steps=create --tag="$GITHUB_REF_NAME" --output-format=json > plan-dist-manifest.json
+            dist host --steps=create --tag="$TAG" --output-format=json > plan-dist-manifest.json
           else
             dist plan --output-format=json > plan-dist-manifest.json
           fi
@@ -341,7 +359,7 @@ jobs:
           retention-days: 7
 
   # Signs and notarises the two macOS archives (ADR-0065). The only job that reads the APPLE_* secrets, and it runs
-  # on a `v*` tag push only, in the environment `release` (deployment rule: tags `v*`; it also holds the update
+  # on a `v*` tag run (push, or dispatch on the tag) only, in the environment `release` (deployment rule: tags `v*`; it also holds the update
   # signing key). Without the secrets it only prints notices and uploads nothing, so the archives stay as built.
   # With the secrets set, a failed signing or notarisation FAILS this job and nothing publishes (fail closed). Only the
   # repository variable SQLER_ALLOW_UNSIGNED_FALLBACK == 'true' restores warn-and-ship-that-target-unsigned.
@@ -646,7 +664,7 @@ jobs:
           path: ${{ runner.temp }}/update-manifest-test/sqler-update.TEST-ONLY.json
           retention-days: 7
 
-  # Signs the update manifest (R5, ADR-0066) on a `v*` tag push only, in the environment `release` (deployment rule:
+  # Signs the update manifest (R5, ADR-0066) on a `v*` tag run (push, or dispatch on the tag) only, in the environment `release` (deployment rule:
   # tags `v*`). The only job that reads SQLER_UPDATE_SIGNING_KEY. xtask is built BEFORE any step can see the secret
   # and the signing step runs the prebuilt binary, so no build script runs while the key exists. `host` attaches the
   # result to the release when it creates it. Without the secret the release simply carries no manifest.
@@ -744,7 +762,7 @@ jobs:
           PRESENT: ${{ steps.secret.outputs.present }}
         run: echo "signed=$PRESENT" >> "$GITHUB_OUTPUT"
 
-  # Publishes the GitHub Release. Runs on a `v*` tag only (publishing), after every build and the global artifacts.
+  # Publishes the GitHub Release. Runs on a `v*` tag run only (publishing), after every build and the global artifacts.
   host:
     name: host
     needs:

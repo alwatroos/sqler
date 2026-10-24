@@ -5,7 +5,7 @@ turn it on. The design is in [ADR-0065](../adr/0065-macos-signing-and-notarisati
 
 ## Current state
 
-The release is unsigned. The `sign (macOS)` job exists in `release.yml` and runs on `v*` tag pushes only. While the
+The release is unsigned. The `sign (macOS)` job exists in `release.yml` and runs on `v*` tag runs only (a tag push or the Tag release dispatch). While the
 secrets below are absent it prints two notices in the run (`Unsigned macOS build` and `Not notarised`), uploads
 nothing, and the macOS archives keep the bytes of the build job. Nothing costs money until the owner enrols with
 Apple.

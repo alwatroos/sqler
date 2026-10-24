@@ -587,6 +587,8 @@ jobs:
           tool: mdbook@0.5.4
       - name: ADR index
         run: sh .github/scripts/check-adr-index.sh
+      - name: Tag release validation
+        run: sh .github/scripts/tag-release-validate-test.sh
       - name: mdBook
         run: mdbook build docs
 

@@ -217,3 +217,36 @@ Delete `.github/workflows/release.yml`, `.github/scripts/release-guard.sh`, `dis
   the `x86_64-pc-windows-msvc` file. This replaces the single release-wide SBOM described above.
 - Licences: no new allow-list entry, no `deny.toml` exception and no advisory ignore. The audit is in
   [Licences and SBOM](../licenses.md).
+
+## Amendment 3 (2026-10-24, R18): owner-triggered Tag release
+
+- Trigger rule: `release.yml` publishes on a `v*` tag run, that is a tag push or a `workflow_dispatch` whose ref is
+  `refs/tags/v*`. `publishing` is `(event is push or workflow_dispatch) and ref starts with refs/tags/v`. A dispatch on
+  a branch, or on a tag without the `v` prefix, stays a dry run. Everywhere ADR-0064, ADR-0065 and ADR-0066 say "tag
+  push", read "tag run".
+- Why a dispatch: a tag created with `GITHUB_TOKEN` does not trigger `on: push: tags` (GitHub blocks recursive
+  triggers), but a `workflow_dispatch` started with `GITHUB_TOKEN` does start a run. The new workflow `tag-release.yml`
+  therefore creates the tag with `gh api` and then runs `gh workflow run release.yml --ref <tag>`. Lost alternative: a
+  `tag` input on `release.yml` that publishes from a branch dispatch. It would put a branch ref into the `release`
+  environment, whose policy is `v*` tags, and widen who can publish.
+- Owner only: the owner starts "Tag release" (Actions, Run workflow, branch `main`, inputs `version`, optional `sha`,
+  `confirm` = `release vX.Y.Z`). The team never runs it. Anyone with write access technically can, as with pushing a
+  tag before; this is a process rule.
+- Validator: `.github/scripts/tag-release-validate.sh` fails closed with one reason line before anything is written. It
+  checks the ref is `main`, the semver, the confirm string, the commit (an ancestor of the `main` head), the
+  `Cargo.toml` workspace version and the `CHANGELOG.md` heading at that commit, no `duckdb` in that section, the tag
+  being absent, a successful `Release` dispatch run on `main` for that exact commit and a successful `CI` run on it
+  (strict dry-run gate). Its tests run in the CI `docs` job with a fake `gh`, without network.
+- Marker: the validator requires a line starting with `# tag-dispatch: ` in `release.yml` at the commit. A commit from
+  before this amendment lacks it, and a dispatch there would only be a dry run.
+- Concurrency: the group is `release-<ref>` for pull requests and for any tag ref, otherwise the run id. A tag push and
+  a tag dispatch on the same tag are serialised, and the second `gh release create` fails on the existing release.
+- Explicit tag: `mode` derives the tag once from `GITHUB_REF`, checks it against a strict regex and the workspace
+  version, and `plan` passes it to `dist host --tag`. dist's own tag and version check still runs.
+- Environment policy: GitHub checks the deployment policy against the ref the run executes on. A dispatch on
+  `refs/tags/v1.0.0` runs on that ref, so the `v*` tag rule should match as for a push. Not verified: a branch dry run
+  skips the environment jobs. If it fails, `sign (macOS)` fails with "not allowed to deploy", `host` needs it, and
+  nothing publishes.
+- Also unverified until the owner's run: that `GITHUB_TOKEN` may create the tag ref (a tag ruleset or the
+  `workflows` permission rule could refuse it; nothing is created then). The fallback is the owner's local tag and push
+  described in `RELEASING.md`.

@@ -8,7 +8,9 @@ This is the checklist for cutting a release such as `v1.0.0`. The pipeline is `.
 
 - Releases are published on GitHub Releases only. There is no Homebrew, winget, Scoop or crates.io package (owner
   decision 4).
-- The team tags and publishes, after the release readiness items are merged. The owner announces.
+- The owner cuts the release by running the "Tag release" workflow (see "Tag-time steps (owner)"). The team never
+  runs "Tag release", never dispatches it, never pushes a tag and never creates a Release. The team only prepares
+  `main` (the readiness items, the dry run) and hands over. The owner announces.
 - Nothing outside this repository is posted by the team.
 - Use read-only `gh` calls while checking. Never print a secret value; check presence by name only.
 
@@ -25,7 +27,7 @@ afterwards.
   check).
 - [ ] The final full Release dry run on `main` is green: `gh workflow run release.yml --ref main` (no inputs). A
   dispatch is always a full dry run and never publishes. Watch it with
-  `gh run list --workflow release.yml --event workflow_dispatch --limit 1` and `gh run view <id>`.
+  `gh run list --workflow release.yml --event workflow_dispatch --branch main --limit 1` and `gh run view <id>`.
   - [ ] The `update manifest (dry run)` job is green.
   - [ ] The `benchmarks.yml` run that the dry run triggers (`workflow_run`, after a successful dispatch run on `main`)
     is green: `gh run list --workflow benchmarks.yml --limit 1`.
@@ -66,19 +68,75 @@ afterwards.
 ## Version and tag
 
 - The workflow reads the version from the tag, which must match `v[0-9]+.[0-9]+.[0-9]+*`.
+- `release.yml` publishes on a `v*` tag run: a tag push, or a `workflow_dispatch` whose ref is a `refs/tags/v*` tag
+  (this is what "Tag release" starts, because a tag created with `GITHUB_TOKEN` does not trigger the push event). A
+  dispatch on any branch stays a dry run and never publishes. In both cases the `mode` step takes the tag from
+  `GITHUB_REF`, and `plan` passes it to `dist host --tag`.
 - The `plan` job runs `dist host --steps=create --tag=<tag>`. It fails when the version of the tag differs from the
   workspace version (`version` under `[workspace.package]` in `Cargo.toml`), so nothing builds or publishes
   (ADR-0064). Bump the workspace version by PR before tagging.
 - A `-` suffix (for example `v1.0.0-rc.1`) makes a pre-release. The update feed never serves a pre-release.
 
-## Tag-time steps (team)
+## Tag-time steps (owner)
 
-1. The release readiness changes are merged, with the dated `CHANGELOG.md` heading.
-2. `git fetch origin main`.
-3. Pick the `main` commit the dry run passed on.
-4. `git tag v1.0.0 <sha>` (a lightweight tag).
-5. `git push origin v1.0.0`.
-6. Watch the run with bounded waits: `gh run list --workflow release.yml --event push --limit 1`, then
+Only the owner does these. The team never runs the "Tag release" workflow.
+
+1. The release readiness changes are merged, with the dated `CHANGELOG.md` heading, and the pre-flight is ticked.
+2. The Release dry run gate is strict. "Tag release" refuses to tag unless both of these exist for the exact commit
+   being tagged (the head of `main` when `sha` is empty):
+   - a successful `Release` run started by `workflow_dispatch` on `main` for that commit, and
+   - a successful `CI` run for that commit.
+
+   When `main` has moved since the last dry run (any merge, even docs), start a new one: Actions -> Release -> Run
+   workflow, branch `main`, no inputs, then wait for it to turn green before going on. Check it with
+   `gh run list --workflow release.yml --event workflow_dispatch --branch main --limit 1 --json status,conclusion,headSha`
+   and `gh run list --workflow ci.yml --branch main --event push --commit <sha> --limit 1 --json status,conclusion,headSha`; the `headSha` must be
+   the commit to tag.
+3. Actions -> "Tag release" -> Run workflow. Branch `main` (the workflow refuses any other ref). Inputs:
+   - `version`: `1.0.0` (no `v` prefix, no `+build`; a pre-release suffix such as `1.0.0-rc.1` is accepted).
+   - `sha`: leave empty (it then means the current head of `main`). To tag an earlier `main` commit, give 7 to 40
+     lowercase hex characters, and that commit needs its own green dry run and CI run.
+   - `confirm`: `release v1.0.0`, exactly.
+4. The workflow validates, creates the lightweight tag `v1.0.0` with `gh api`, dispatches `release.yml` on the tag and
+   writes the tag, the commit and the Release run link to the job summary. Open the link, or find the run with
+   `gh run list --workflow release.yml --event workflow_dispatch --branch v1.0.0 --limit 1`.
+
+### What to verify afterwards
+
+- The "Tag release" job is green and its summary names `v1.0.0`, the expected commit and a Release run link.
+- The Release run on the ref `v1.0.0` ran `plan`, the builds, `sign (macOS)`, `update manifest` (not the dry-run
+  manifest job), `global artifacts`, `host` and `announce`, and `host` is green. If `host` was skipped, nothing was
+  published (a dry run); see Rollback.
+- The assets, `sqler-update.json`, the checksums and the notes: run every item of "Post-release verification" below.
+
+### Failure modes
+
+- Validation fails: the job prints one line `tag-release-validate: <reason>` and stops before anything is written.
+  Typical reasons: the ref is not `main`; the version is not semver; `confirm` differs from `release vX.Y.Z`; the
+  `sha` is unknown or not on `main`; the `Cargo.toml` workspace version differs from `version`; `CHANGELOG.md` has no
+  `## [version]` heading or the section names the excluded engine; the tag already exists; the `release.yml` at the
+  commit has no `# tag-dispatch:` marker line (the commit is older than this feature); or the dry run or CI run for
+  that commit is missing or not successful. Fix the cause (new dry run, a PR to `main`, a corrected input) and run
+  "Tag release" again. Nothing was created, so there is nothing to clean up.
+- Environment policy risk: the environment `release` allows `v*` tags only. A dispatch on `refs/tags/v1.0.0` should
+  match that rule like a push does, but this was never proven before the first release. If it does not, `sign (macOS)`
+  fails with "not allowed to deploy", `host` never starts and nothing is published. The tag exists, so follow
+  Rollback.
+- `GITHUB_TOKEN` ref creation risk: a tag ruleset, or the refusal of workflow-file changes without the `workflows`
+  permission, could reject the call that creates the tag. If so the job fails at "Create tag" with nothing created; use the
+  fallback below.
+- The tag was created but the dispatch failed or no run appeared: the summary says so. The owner starts the run with
+  `gh workflow run release.yml --ref v1.0.0`.
+
+### Fallback (owner only)
+
+If "Tag release" cannot be used, the owner tags locally. The team never does this.
+
+1. `git fetch origin main`.
+2. Pick the `main` commit the dry run passed on.
+3. `git tag v1.0.0 <sha>` (a lightweight tag).
+4. `git push origin v1.0.0` (a push by a person triggers `release.yml` through the tag push).
+5. Watch the run with bounded waits: `gh run list --workflow release.yml --event push --limit 1`, then
    `gh run view <id>`.
 
 ## What the workflow does
@@ -118,8 +176,12 @@ Work in a scratch directory and delete it afterwards.
 
 ## Rollback
 
-- The tag run failed before `host`: nothing is published. Delete the remote tag (`git push origin :refs/tags/v1.0.0`)
-  and the local tag, fix on `main` by PR, repeat the dry run, tag again.
+- The tag run failed before `host`: nothing is published. The owner deletes the tag
+  (`gh api --method DELETE repos/{owner}/{repo}/git/refs/tags/v1.0.0`, or `git push origin :refs/tags/v1.0.0` and the
+  local tag after the fallback route), fixes `main` by PR, repeats the dry run on the new head, then runs "Tag
+  release" again.
+- "Tag release" created the tag but the dispatch did not start: the owner runs
+  `gh workflow run release.yml --ref v1.0.0`.
 - A bad release is already published: do not reuse the tag. Mark it a pre-release in the GitHub UI, or delete it with
   `gh release delete v1.0.0 --cleanup-tag --yes`, so `latest` stops serving it. Then fix forward with `v1.0.1`
   (the workspace version bump PR comes first).

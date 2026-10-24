@@ -110,6 +110,7 @@ sh .github/scripts/release-guard.sh features            # DuckDB guard of releas
 sh .github/scripts/release-guard.sh binary <file>       # no DuckDB engine marker in the binary
 sh .github/scripts/release-guard.sh build-dir <dir>     # no libduckdb-sys build output
 sh .github/scripts/release-guard.sh artifacts <dir>     # no DuckDB in artifact names or text artifacts
+sh .github/scripts/tag-release-validate-test.sh         # fixture cases of the owner-only "Tag release" validator (R18, ADR-0064 amendment 3): temp git repo and a fake gh, no network
 sh .github/scripts/third-party-licenses.sh <out-file>   # generates THIRD-PARTY-LICENSES.txt for the release features (needs cargo-about 0.9.2 with feature cli, jq)
 dist plan   # cargo-dist, installed in a scratch root (cargo install --locked --version <pinned in dist-workspace.toml> --root <scratch> cargo-dist); never in the repo
 target/release/sqler --open-sessions
