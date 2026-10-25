@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-25
+
+### Changed
+
+- **macOS downloads are now signed with a Developer ID certificate and notarised by Apple**, so the macOS archives open without the Gatekeeper warning that 1.0.0 showed. The release pipeline fails instead of publishing an unsigned macOS build. Windows downloads stay unsigned.
+- The release pipeline reads the Apple signing secrets under their final names.
+
+### Fixed
+
+- Formatter: formatting a script is idempotent when a `GO` batch separator is on its own line (a second format no longer changes the result).
+
 ## [1.0.0] - 2026-10-24
 
 First stable release of SQLer, a fast desktop SQL client written in Rust. This section lists the highlights; the detailed development log is kept below under 0.1.0.
