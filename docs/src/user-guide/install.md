@@ -6,7 +6,7 @@ SQL Server is built in to every download as a plugin. Approve the permission `dr
 
 > **Not in 1.0: DuckDB.** The DuckDB driver's code stays in the repository with its `driver-duckdb` feature off by default, and no 1.0 download, installer or update contains it. It may return after 1.0 as a separate download (ADR-0070).
 
-Downloads are on the [GitHub releases page](https://github.com/alwatroos/sqler/releases/latest). The release is built by the pipeline in [ADR-0064](../adr/0064-release-pipeline.md). Builds are unsigned, so macOS and Windows show a warning on first start (see below).
+Downloads are on the [GitHub releases page](https://github.com/alwatroos/sqler/releases/latest). The release is built by the pipeline in [ADR-0064](../adr/0064-release-pipeline.md). macOS builds are signed and notarised from 1.0.1; Windows builds are unsigned (see below).
 
 Targets: macOS (Apple silicon and Intel), Windows (x86_64) and Linux (x86_64 and aarch64).
 
@@ -37,9 +37,11 @@ To leave your shell profiles alone, set `SQLER_APP_NO_MODIFY_PATH=1` for the ins
 
 Archive: download `sqler-app-<target>.tar.xz`, unpack it with `tar -xJf` and run the `sqler` binary inside.
 
-### macOS: unsigned build
+### macOS: signed and notarised
 
-The app is not signed or notarised, so Gatekeeper blocks the first start. Either open System Settings > Privacy & Security and choose Open Anyway next to the SQLer message, or remove the quarantine flag:
+Releases from 1.0.1 are signed with a Developer ID certificate and notarised by Apple, so they open without the Gatekeeper prompt.
+
+Release 1.0.0 is not signed or notarised, so Gatekeeper blocks its first start. Either open System Settings > Privacy & Security and choose Open Anyway next to the SQLer message, or remove the quarantine flag:
 
 ```sh
 xattr -dr com.apple.quarantine <path-to-sqler>

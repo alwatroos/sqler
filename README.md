@@ -71,8 +71,7 @@ Not in 1.0: DuckDB (may return after 1.0 as a separate download).
 
 See the [install page](https://alwatroos.github.io/sqler/user-guide/install.html) for downloads and steps.
 
-- macOS: the app is not signed or notarised, so Gatekeeper blocks the first start. Open System Settings > Privacy &
-  Security and choose Open Anyway, or remove the quarantine flag as the install page describes.
+- macOS: signed and notarised from 1.0.1. Release 1.0.0 is unsigned; the install page describes how to open it.
 - Windows: the build is unsigned, so SmartScreen may show "Windows protected your PC". Choose More info, then Run
   anyway.
 
