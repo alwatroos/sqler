@@ -238,6 +238,12 @@ if [ "$notarise" = yes ]; then
     i=0
     ok=no
     while [ "$i" -lt "$ticket_tries" ]; do
+        # A bare Mach-O is an executable: assess it as such first, then the document form as a fallback.
+        sp=$(spctl --assess --type execute -vv "$bin" 2>&1 || true)
+        if printf '%s\n' "$sp" | grep -q 'source=Notarized Developer ID'; then
+            ok=yes
+            break
+        fi
         sp=$(spctl --assess --type open --context context:primary-signature -v "$bin" 2>&1 || true)
         if printf '%s\n' "$sp" | grep -q 'source=Notarized Developer ID'; then
             ok=yes

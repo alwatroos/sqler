@@ -66,7 +66,7 @@ The signed binary is zipped (`ditto -c -k --keepParent`) and submitted with `xcr
 20m` using the API key. The result must be `Accepted`; otherwise the script prints a reduced notary log (status,
 summary and issues only) and fails. The ticket is not stapled: `stapler` supports only `.app`, `.pkg` and `.dmg`, and
 the download is a tar archive with a bare binary. Gatekeeper fetches the ticket online on first run, and the script
-confirms that the ticket is online with `spctl --assess` (`source=Notarized Developer ID`, a bounded number of tries).
+confirms that the ticket is online with `spctl --assess --type execute` (falling back to the document form; `source=Notarized Developer ID`, a bounded number of tries).
 A future `.app` or `.dmg` would be stapled.
 
 ### Order and checksums

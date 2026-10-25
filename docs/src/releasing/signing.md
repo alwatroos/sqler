@@ -56,7 +56,7 @@ Extract the macOS archive, then run these on the `sqler` binary:
 ```text
 codesign --verify --strict --verbose=2 sqler
 codesign -dvv sqler
-spctl --assess --type open --context context:primary-signature -v sqler
+spctl --assess --type execute -vv sqler
 shasum -a 256 -c sqler-app-aarch64-apple-darwin.tar.xz.sha256
 ```
 
