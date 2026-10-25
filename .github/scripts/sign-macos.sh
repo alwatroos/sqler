@@ -1,27 +1,3 @@
-# Signs with the given identity; codesign's output is kept for a redacted diagnosis.
-cs_out="$work/codesign.out"
-sign_with() {
-    codesign --force --options runtime "$stamp" --entitlements "$entitlements" --keychain "$kc" --sign "$1" "$bin" \
-        >"$cs_out" 2>&1
-}
-# Counts only; neither identity nor team appears in the output.
-diagnose() {
-    nid=$(security find-identity -v -p codesigning 2>/dev/null | awk '$1 ~ /^[0-9]+\)$/ { n++ } END { print n + 0 }')
-    nkc=$(security list-keychains 2>/dev/null | awk 'NF { n++ } END { print n + 0 }')
-    echo "sign-macos: valid codesigning identities in the search list: $nid; keychains in the search list: $nkc" >&2
-    # Only codesign's error text, with the identity, any "Developer ID ...: ... (TEAMID)" and the team redacted.
-    sed -e "s/$identity/<redacted>/g" -e "s/${APPLE_TEAM_ID:-NOTEAM}/<team>/g" \
-        -e 's/Developer ID [A-Za-z ]*:[^(]*([A-Z0-9]\{10\})/<redacted>/g' \
-        -e 's/([A-Z0-9]\{10\})/(<team>)/g' "$cs_out" | head -n 10 | sed 's/^/sign-macos: codesign: /' >&2
-}
-if ! sign_with "$identity"; then
-    if [ -n "$cn" ] && sign_with "$cn"; then
-        say "signed using the common name (the hash was not resolved)"
-    else
-        diagnose
-        die "codesign failed"
-    fi
-fi
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: The SQLer Authors
@@ -281,8 +257,30 @@ if [ "$local_test" = 1 ]; then
 else
     stamp=--timestamp
 fi
-codesign --force --options runtime "$stamp" --entitlements "$entitlements" --keychain "$kc" --sign "$identity" "$bin" ||
-    die "codesign failed"
+# Signs with the given identity; codesign's output is kept for a redacted diagnosis.
+cs_out="$work/codesign.out"
+sign_with() {
+    codesign --force --options runtime "$stamp" --entitlements "$entitlements" --keychain "$kc" --sign "$1" "$bin" \
+        >"$cs_out" 2>&1
+}
+# Counts only; neither identity nor team appears in the output.
+diagnose() {
+    nid=$(security find-identity -v -p codesigning 2>/dev/null | awk '$1 ~ /^[0-9]+\)$/ { n++ } END { print n + 0 }')
+    nkc=$(security list-keychains 2>/dev/null | awk 'NF { n++ } END { print n + 0 }')
+    echo "sign-macos: valid codesigning identities in the search list: $nid; keychains in the search list: $nkc" >&2
+    # Only codesign's error text, with the identity, any "Developer ID ...: ... (TEAMID)" and the team redacted.
+    sed -e "s/$identity/<redacted>/g" -e "s/${APPLE_TEAM_ID:-NOTEAM}/<team>/g" \
+        -e 's/Developer ID [A-Za-z ]*:[^(]*([A-Z0-9]\{10\})/<redacted>/g' \
+        -e 's/([A-Z0-9]\{10\})/(<team>)/g' "$cs_out" | head -n 10 | sed 's/^/sign-macos: codesign: /' >&2
+}
+if ! sign_with "$identity"; then
+    if [ -n "$cn" ] && sign_with "$cn"; then
+        say "signed using the common name (the hash was not resolved)"
+    else
+        diagnose
+        die "codesign failed"
+    fi
+fi
 codesign --verify --strict --verbose=2 "$bin" || die "the signature does not verify"
 codesign -dv --verbose=2 "$bin" 2>&1 | grep -Eq 'flags=0x[0-9a-f]+\(.*runtime' || die "the signature lacks the hardened runtime flag"
 if [ "$local_test" != 1 ]; then
