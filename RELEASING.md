@@ -46,15 +46,12 @@ afterwards.
   without `sqler-update.json`, so clients never see the update. Do not tag until it is present. Never print the value.
 - [ ] The compiled-in update key id is `9735ae5e612eaa24` (`crates/sqler-update/keys/9735ae5e612eaa24.pub`). It is
   the key behind the secret; see [update-feed.md](docs/src/releasing/update-feed.md).
-- [ ] macOS is unsigned by owner decision, so no `APPLE_*` secret or `SQLER_ALLOW_UNSIGNED_FALLBACK` variable is set:
-  `gh secret list --env release` and `gh secret list` show no `APPLE_*` name, and `gh variable list` shows no
-  `SQLER_ALLOW_UNSIGNED_FALLBACK`. What the job does:
-  - With no `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD`, `sign (macOS)` only prints the notices
-    "Unsigned macOS build" and "Not notarised", uploads nothing and succeeds. The team sets nothing.
-  - `SQLER_ALLOW_UNSIGNED_FALLBACK` matters only when the secrets exist and signing fails (the job fails closed). It
-    must stay unset.
-  - A partial set (certificate and password present) makes the job attempt signing, so do not add part of the set.
-  - Details: [signing.md](docs/src/releasing/signing.md).
+- [ ] The six Apple secrets exist in the environment `release`, by name only:
+  `gh api repos/alwatroos/sqler/environments/release/secrets --jq '.secrets[].name'` lists `APPLE_CERTIFICATE_P12_BASE64`,
+  `APPLE_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` and
+  `APPLE_API_KEY_P8_BASE64`. **Blocker if any is absent.** The tag run then fails in `sign (macOS)` and nothing
+  publishes. The variable `SQLER_ALLOW_UNSIGNED_FALLBACK` is no longer read. Never print a value. Details:
+  [signing.md](docs/src/releasing/signing.md).
 - [ ] Windows is unsigned by owner decision: there is no step and no secret for it.
 - [ ] The release notes preview works. cargo-dist is installed in a scratch root at the version in
   `dist-workspace.toml`
@@ -148,7 +145,7 @@ Jobs in order:
 3. `build (<target>)`, once for each of the 5 targets: the archive `sqler-app-<triple>.tar.xz` (`.zip` on Windows)
    with a `.sha256` file each, the MSI on Windows, the guards against the excluded engine, the `--version` smoke
    check and the size line.
-4. `sign (macOS)` (environment `release`): notices only while no `APPLE_*` secret exists.
+4. `sign (macOS)` (environment `release`): signs and notarises both macOS archives; fails if a secret is missing.
 5. In parallel after that:
    - `global artifacts`: `sha256.sum`, the shell and PowerShell installers, the source archive and one
      `sqler-app_<triple>.cdx.xml` SBOM per target.
@@ -171,6 +168,10 @@ Work in a scratch directory and delete it afterwards.
   version `1.0.0` and one line for each of the 5 platforms, none naming the excluded engine.
 - [ ] `gh release view v1.0.0 --json body --jq .body | grep -ic duckdb` prints `0`.
 - [ ] A downloaded archive passes `shasum -a 256 -c <archive>.sha256`, and `sqler --version` prints `sqler 1.0.0`.
+- [ ] On the downloaded macOS archive, extracted: `codesign --verify --strict --verbose=2 sqler` passes,
+  `codesign -dv --verbose=2 sqler 2>&1 | grep -c 'flags=0x10000(runtime)'` prints `1`,
+  `spctl --assess --type open --context context:primary-signature -v sqler` reports `source=Notarized Developer ID`,
+  and `shasum -a 256 -c <archive>.sha256` passes. Do not paste the Authority or TeamIdentifier lines anywhere public.
 - [ ] On a desktop, the New connection driver list and the Plugins view show SQL Server. Headless proxy:
   `LC_ALL=C grep -a -c 'driver.host:mssql' sqler` prints more than 0.
 
