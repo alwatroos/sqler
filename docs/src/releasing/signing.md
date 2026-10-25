@@ -107,4 +107,7 @@ with all six set, a garbage `APPLE_API_KEY_P8_BASE64` exits 1 with `does not hol
 PEM key and the self-signed certificate it exits 1 with `not one valid Developer ID Application identity`, leaving the
 archive untouched.
 
+To simulate the CI keychain handling, run the same command with `GITHUB_ACTIONS=true`: the temporary keychain is then put
+first in your user keychain search list and the original list is restored on exit.
+
 Delete the scratch directory when done (`rm -r "$d"`). The script removes its temporary keychain by itself.

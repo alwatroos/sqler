@@ -52,7 +52,7 @@ The signed object is the `sqler` Mach-O binary inside each of the two macOS arch
 (`sqler-app-aarch64-apple-darwin.tar.xz` and `sqler-app-x86_64-apple-darwin.tar.xz`). The archives themselves are
 re-packed with the signed binary, not signed: tar has no signature. The script `.github/scripts/sign-macos.sh` does,
 per archive, on a copy in a temporary directory: import the certificate into a temporary keychain (created in the
-runner temp directory, removed on exit, the user's keychain search list is not changed), `codesign` with the hardened
+runner temp directory, removed on exit, in CI it is first in the user keychain search list until exit, then the list is restored), `codesign` with the hardened
 runtime, a secure timestamp and the entitlements file, `codesign --verify --strict`, check that the identity is a
 Developer ID Application of `APPLE_TEAM_ID` and that the signature's `TeamIdentifier` equals it, then notarise, then re-pack with
 the same top-level entries. Only at the end are the archive, its `.sha256` sidecar and the checksum in the

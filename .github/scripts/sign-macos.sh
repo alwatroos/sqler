@@ -37,6 +37,9 @@
 # command line is the `.p12` password of `security import -P` (macOS offers no other way). Output of codesign,
 # find-identity and spctl holds the identity and team: it only goes into `grep -q` or a variable never echoed.
 #
+# In CI (GITHUB_ACTIONS=true) the temporary keychain is first in the user keychain search list until exit, when the
+# original list is restored. Simulate it locally with GITHUB_ACTIONS=true on top of the local test below.
+#
 # Local test (macOS, from the repository root; everything in a scratch dir that you delete afterwards):
 #   d=$(mktemp -d); mkdir "$d/in"
 #   printf '[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=SQLer local test\n[ext]\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\n' > "$d/openssl.cnf"
@@ -56,6 +59,8 @@ umask 077
 
 work=''
 kc=''
+list_file=''
+list_changed=0
 
 say() {
     echo "sign-macos: $1"
@@ -71,10 +76,22 @@ usage() {
     exit 2
 }
 
+# Puts the user keychain search list back as it was before the temporary keychain was added (CI only).
+restore_list() {
+    [ "$list_changed" = 1 ] && [ -n "$list_file" ] && [ -f "$list_file" ] || return 0
+    set --
+    while IFS= read -r p; do
+        [ -n "$p" ] && set -- "$@" "$p"
+    done <"$list_file"
+    security list-keychains -d user -s "$@" >/dev/null 2>&1 || true
+    list_changed=0
+}
+
 # Removes the temporary keychain and every decoded secret, on success, failure and signals.
 cleanup() {
     rc=$?
     trap - EXIT INT TERM
+    restore_list
     if [ -n "$kc" ] && [ -e "$kc" ]; then
         security delete-keychain "$kc" >/dev/null 2>&1 || true
     fi
@@ -162,16 +179,51 @@ if [ "$notarise" = yes ]; then
         die "APPLE_API_KEY_P8_BASE64 does not hold a .p8 private key"
 fi
 
-# Temporary keychain; the user's keychain search list and default keychain are not changed.
+# Temporary keychain. In CI it is put first in the user keychain search list (restored on exit): codesign resolves the
+# identity and builds its certificate chain through the search list, `--keychain` alone is not enough. The default
+# keychain is never changed. Outside CI (a developer's Mac) the search list is left alone.
 kc="$work/sqler-sign.keychain-db"
 kcpass=$(openssl rand -hex 24) || die "cannot generate a keychain password"
 security create-keychain -p "$kcpass" "$kc" >/dev/null 2>&1 || die "cannot create the temporary keychain"
-security set-keychain-settings -lut 3600 "$kc" >/dev/null 2>&1 || die "cannot configure the temporary keychain"
+security set-keychain-settings "$kc" >/dev/null 2>&1 || die "cannot configure the temporary keychain"
 security unlock-keychain -p "$kcpass" "$kc" >/dev/null 2>&1 || die "cannot unlock the temporary keychain"
 security import "$p12" -k "$kc" -f pkcs12 -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null 2>&1 ||
     die "cannot import the certificate (wrong password or not a .p12)"
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpass" "$kc" >/dev/null 2>&1 ||
     die "cannot allow codesign to use the key"
+
+in_ci=no
+if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    in_ci=yes
+    list_file="$work/search-list"
+    security list-keychains -d user 2>/dev/null | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//' >"$list_file" ||
+        die "cannot read the keychain search list"
+    set --
+    while IFS= read -r p; do
+        [ -n "$p" ] && set -- "$@" "$p"
+    done <"$list_file"
+    list_changed=1
+    security list-keychains -d user -s "$kc" "$@" >/dev/null 2>&1 || {
+        restore_list
+        die "cannot add the temporary keychain to the search list"
+    }
+    security unlock-keychain -p "$kcpass" "$kc" >/dev/null 2>&1 || die "cannot unlock the temporary keychain"
+fi
+
+# The Developer ID intermediate must resolve. The .p12 normally carries it; when no keychain of the search list has
+# it, fetch Apple's public G2 intermediate (official URL, SHA-256 pinned) into the temporary keychain.
+if [ "$in_ci" = yes ] && [ "$local_test" != 1 ]; then
+    if ! security find-certificate -c "Developer ID Certification Authority" >/dev/null 2>&1; then
+        say "Developer ID intermediate not found in the search list; fetching Apple's G2 intermediate"
+        g2="$work/DeveloperIDG2CA.cer"
+        g2_sha256=f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a
+        curl -fsSL --proto '=https' --max-time 60 -o "$g2" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer ||
+            die "cannot download the Developer ID intermediate"
+        [ "$(shasum -a 256 "$g2" | awk '{ print $1 }')" = "$g2_sha256" ] ||
+            die "the downloaded Developer ID intermediate does not match its pinned SHA-256"
+        security import "$g2" -k "$kc" >/dev/null 2>&1 || die "cannot import the Developer ID intermediate"
+    fi
+fi
 
 # Exactly one signing identity; the local test accepts an untrusted (self-signed) one.
 if [ "$local_test" = 1 ]; then
@@ -188,6 +240,8 @@ ids=$(printf '%s\n' "$idlist" | awk '$1 ~ /^[0-9]+\)$/ && $2 ~ /^[0-9A-Fa-f]{40}
 count=$(printf '%s\n' "$ids" | awk 'NF { n++ } END { print n + 0 }')
 [ "$count" -eq 1 ] || die "expected one valid signing identity in the certificate, found $count"
 identity=$ids
+# The quoted common name of the same identity: a fallback if the hash is not resolved (never printed).
+cn=$(printf '%s\n' "$idlist" | awk -v h="$identity" '$2 == h' | sed -n 's/^[^"]*"\(.*\)".*$/\1/p' | head -n 1)
 
 # Work on a copy of the archive contents.
 ex="$work/extract"
@@ -203,8 +257,30 @@ if [ "$local_test" = 1 ]; then
 else
     stamp=--timestamp
 fi
-codesign --force --options runtime "$stamp" --entitlements "$entitlements" --keychain "$kc" --sign "$identity" "$bin" ||
-    die "codesign failed"
+# Signs with the given identity; codesign's output is kept for a redacted diagnosis.
+cs_out="$work/codesign.out"
+sign_with() {
+    codesign --force --options runtime "$stamp" --entitlements "$entitlements" --keychain "$kc" --sign "$1" "$bin" \
+        >"$cs_out" 2>&1
+}
+# Counts only; neither identity nor team appears in the output.
+diagnose() {
+    nid=$(security find-identity -v -p codesigning 2>/dev/null | awk '$1 ~ /^[0-9]+\)$/ { n++ } END { print n + 0 }')
+    nkc=$(security list-keychains 2>/dev/null | awk 'NF { n++ } END { print n + 0 }')
+    echo "sign-macos: valid codesigning identities in the search list: $nid; keychains in the search list: $nkc" >&2
+    # Only codesign's error text, with the identity, any "Developer ID ...: ... (TEAMID)" and the team redacted.
+    sed -e "s/$identity/<redacted>/g" -e "s/${APPLE_TEAM_ID:-NOTEAM}/<team>/g" \
+        -e 's/Developer ID [A-Za-z ]*:[^(]*([A-Z0-9]\{10\})/<redacted>/g' \
+        -e 's/([A-Z0-9]\{10\})/(<team>)/g' "$cs_out" | head -n 10 | sed 's/^/sign-macos: codesign: /' >&2
+}
+if ! sign_with "$identity"; then
+    if [ -n "$cn" ] && sign_with "$cn"; then
+        say "signed using the common name (the hash was not resolved)"
+    else
+        diagnose
+        die "codesign failed"
+    fi
+fi
 codesign --verify --strict --verbose=2 "$bin" || die "the signature does not verify"
 codesign -dv --verbose=2 "$bin" 2>&1 | grep -Eq 'flags=0x[0-9a-f]+\(.*runtime' || die "the signature lacks the hardened runtime flag"
 if [ "$local_test" != 1 ]; then
