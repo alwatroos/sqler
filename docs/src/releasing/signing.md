@@ -12,6 +12,11 @@ or signing or notarisation fails, the job fails and nothing publishes. There is 
 Windows stays unsigned by owner decision: there is no step, script or secret for it. The install page explains the
 SmartScreen warning. Linux downloads carry SHA-256 checksums only.
 
+The `.dmg` installers ([ADR-0075](../adr/0075-platform-installers.md)) are the exception on macOS: `build-dmg.sh` signs
+`SQLer.app` ad hoc (`codesign --sign -`, no identity) and nothing notarises it, on dry runs and on tag runs. It is built
+in `build (<target>)`, not in `sign (macOS)`. The `.tar.xz` archives stay Developer ID signed and notarised. Signing and
+notarising the `.dmg` would need its own step in `sign (macOS)` and is not done.
+
 ## What the owner provides
 
 The owner is enrolled in the Apple Developer Program (a paid yearly membership) and carries that cost. To provide or

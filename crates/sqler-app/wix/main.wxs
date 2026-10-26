@@ -147,7 +147,27 @@
                     </Directory>
                 </Directory>
             </Directory>
+            <Directory Id='ProgramMenuFolder'/>
         </Directory>
+
+        <!-- T4: the Start menu entry. The HKCU value is the component's KeyPath (a shortcut cannot be one). -->
+        <DirectoryRef Id='ProgramMenuFolder'>
+            <Component Id='StartMenuShortcut' Guid='7C2E9B1A-4D3F-4A8E-9B61-2F5C8D0E7A43'>
+                <Shortcut
+                    Id='SqlerStartMenuShortcut'
+                    Name='SQLer'
+                    Description='SQLer SQL IDE'
+                    Target='[#exe0]'
+                    WorkingDirectory='Bin'/>
+                <RegistryValue
+                    Root='HKCU'
+                    Key='Software\The SQLer Authors\SQLer'
+                    Name='StartMenuShortcut'
+                    Type='integer'
+                    Value='1'
+                    KeyPath='yes'/>
+            </Component>
+        </DirectoryRef>
 
         <Feature
             Id='Binaries'
@@ -170,6 +190,7 @@
             <ComponentRef Id='Lucide'/>
 
             <ComponentRef Id='binary0'/>
+            <ComponentRef Id='StartMenuShortcut'/>
 
             <Feature
                 Id='Environment'
