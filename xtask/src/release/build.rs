@@ -298,6 +298,28 @@ pub mod tests {
     }
 
     #[test]
+    fn installers_beside_archives_are_ignored() {
+        let d = archives("installers");
+        for t in [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+        ] {
+            let ext = if t.contains("apple") { "dmg" } else { "deb" };
+            let name = format!("sqler-app-{t}.{ext}");
+            std::fs::write(d.0.join(&name), name.as_bytes()).unwrap();
+            std::fs::write(d.0.join(format!("{name}.sha256")), b"unused").unwrap();
+        }
+        let m = build(PLAN.as_bytes(), &d.0, &opts(None, false)).unwrap();
+        assert_eq!(m.platforms.len(), 5);
+        let json = serde_json::to_string(&m).unwrap();
+        for ext in [".dmg", ".deb", ".msi"] {
+            assert!(!json.contains(ext), "{ext} leaked into the manifest");
+        }
+    }
+
+    #[test]
     fn tag_defaults_to_the_version() {
         let d = archives("deftag");
         let m = build(PLAN.as_bytes(), &d.0, &opts(None, false)).unwrap();

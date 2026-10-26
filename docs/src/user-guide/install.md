@@ -16,6 +16,8 @@ Targets: macOS (Apple silicon and Intel), Windows (x86_64) and Linux (x86_64 and
 | ---- | --- |
 | `sqler-app-<target>.tar.xz` | Archive for macOS and Linux |
 | `sqler-app-x86_64-pc-windows-msvc.zip` | Archive for Windows |
+| `sqler-app-<apple-target>.dmg` | macOS disk image with `SQLer.app` (not notarised) |
+| `sqler-app-<linux-target>.deb` | Debian and Ubuntu package |
 | `sqler-app-x86_64-pc-windows-msvc.msi` | Windows installer |
 | `sqler-app-installer.sh` | Shell installer for macOS and Linux |
 | `sqler-app-installer.ps1` | PowerShell installer for Windows |
@@ -23,7 +25,7 @@ Targets: macOS (Apple silicon and Intel), Windows (x86_64) and Linux (x86_64 and
 | `sqler-app_<triple>.cdx.xml` | Software bill of materials (CycloneDX), one per target; the Windows `.zip` and `.msi` share one |
 | `source.tar.gz`, `dist-manifest.json` | Source archive and the machine-readable list of the release files |
 
-`<target>` is one of `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`.
+`<target>` is one of `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`. `<apple-target>` is one of the two `apple-darwin` targets and `<linux-target>` one of the two Linux targets.
 
 ## macOS and Linux
 
@@ -37,15 +39,38 @@ To leave your shell profiles alone, set `SQLER_APP_NO_MODIFY_PATH=1` for the ins
 
 Archive: download `sqler-app-<target>.tar.xz`, unpack it with `tar -xJf` and run the `sqler` binary inside.
 
+### macOS: .dmg
+
+Open `sqler-app-<apple-target>.dmg` and drag `SQLer.app` onto the `Applications` link in the window. To use `sqler` in a terminal as well, link the binary once:
+
+```sh
+sudo mkdir -p /usr/local/bin
+sudo ln -s /Applications/SQLer.app/Contents/MacOS/sqler /usr/local/bin/sqler
+```
+
+The `.dmg` and its app are signed ad hoc only and are not notarised on any release (see below).
+
 ### macOS: signed and notarised
 
 Releases from 1.0.1 are signed with a Developer ID certificate and notarised by Apple, so they open without the Gatekeeper prompt.
 
-Release 1.0.0 is not signed or notarised, so Gatekeeper blocks its first start. Either open System Settings > Privacy & Security and choose Open Anyway next to the SQLer message, or remove the quarantine flag:
+This applies to the `.tar.xz` archives. The `.dmg` is **not notarised on any release**, so Gatekeeper blocks its first start, as it does for the archive of release 1.0.0. Either open System Settings > Privacy & Security and choose Open Anyway next to the SQLer message, or remove the quarantine flag:
 
 ```sh
-xattr -dr com.apple.quarantine <path-to-sqler>
+xattr -dr com.apple.quarantine /Applications/SQLer.app
 ```
+
+For an unpacked archive, run the same command on `<path-to-sqler>` instead.
+
+### Linux: .deb
+
+On Debian or Ubuntu, install the package for your CPU (`x86_64` is `amd64`, `aarch64` is `arm64`). `apt` resolves the dependencies:
+
+```sh
+sudo apt install ./sqler-app-x86_64-unknown-linux-gnu.deb
+```
+
+This puts `sqler` on your `PATH` (`/usr/bin/sqler`) and adds a SQLer entry to the application menu. The package recommends the libraries that the binary loads at run time (see below). To remove it: `sudo apt remove sqler`. Your `<config>` folder stays.
 
 ### Linux: runtime libraries
 
@@ -71,18 +96,24 @@ $env:SQLER_APP_NO_MODIFY_PATH = "1"
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/alwatroos/sqler/releases/latest/download/sqler-app-installer.ps1 | iex"
 ```
 
-Or run the `.msi` installer, or unpack the `.zip` and start `sqler.exe`.
+### Windows: MSI
+
+Run `sqler-app-x86_64-pc-windows-msvc.msi`. It installs `sqler.exe` in `Program Files\sqler-app\bin`, adds a SQLer shortcut to the Start menu and, by default, adds that folder to the machine `PATH` (open a new terminal to see it). Remove it in Apps.
+
+Or unpack the `.zip` and start `sqler.exe`.
 
 ### Windows: SmartScreen
 
-The build is unsigned, so SmartScreen may show "Windows protected your PC". Choose More info, then Run anyway.
+The MSI and the `.exe` are unsigned, so SmartScreen may show "Windows protected your PC". Choose More info, then Run anyway.
 
 ## What the installers put on disk
 
 - The shell and PowerShell installers put the `sqler` binary in `~/.sqler/bin`, plus the `env` scripts and the `PATH` line described above.
-- The MSI puts `sqler.exe` in `Program Files\sqler-app\bin` and offers an optional `PATH` entry.
+- The `.dmg` holds `SQLer.app` (the `sqler` binary and the licences inside the bundle); you copy it to `Applications`. It writes nothing else.
+- The `.deb` puts `/usr/bin/sqler`, `/usr/share/applications/sqler.desktop` and the licences in `/usr/share/doc/sqler`.
+- The MSI puts `sqler.exe` in `Program Files\sqler-app\bin`, adds a Start menu shortcut and offers an optional `PATH` entry.
 - No installer creates `<config>` (the per-OS path is in [Settings](settings.md)) or `<config>/plugins`. That folder is yours: create it when you add a plugin. SQLer creates only `<config>/plugins/<id>/data`, and only for a plugin that reads its data scope. The built-in SQL Server needs no folder.
-- Uninstalling (deleting `~/.sqler`, or removing the MSI in Apps) leaves `<config>` alone: your connections, `plugin-grants.toml` and the plugin preferences stay. Delete that folder yourself to remove everything.
+- Uninstalling (deleting `~/.sqler`, removing the `.deb` with `apt remove sqler`, deleting `SQLer.app`, or removing the MSI in Apps) leaves `<config>` alone: your connections, `plugin-grants.toml` and the plugin preferences stay. Delete that folder yourself to remove everything.
 
 ### Plugin host
 

@@ -21,6 +21,10 @@ name: Release
 # - `update manifest` (ADR-0066, R5) runs on `v*` tag runs only, in the environment `release`: it signs sqler-update.json with
 #   SQLER_UPDATE_SIGNING_KEY (when set) and `host` attaches it to the release. `update manifest (dry run)` runs the
 #   same path on PRs and dispatch with a TEST ONLY key it generates itself, no secret, and publishes nothing.
+# - Installers (ADR-0075), built inside each `build` job from the extracted archive: macOS `.dmg` (drag to Applications,
+#   ad-hoc signed, never notarised), Linux `.deb` (dpkg-deb), Windows `.msi` (cargo-dist, with a Start menu shortcut).
+#   Each is installed or mounted and run in CI (packaging/*/check-*); `global` adds the `.dmg` and `.deb` hashes to
+#   sha256.sum. The update manifest still covers the archives only.
 #
 # The release feature set is the single `features = [...]` line in dist-workspace.toml, set per owner decision 12
 # (ADR-0064 amendment). `release-guard.sh` rejects `driver-duckdb` whatever that line holds (ADR-0070).
@@ -31,7 +35,7 @@ on:
       - ".github/workflows/release.yml"
       - ".github/scripts/release-guard.sh"
       - ".github/scripts/sign-macos.sh"
-      - "packaging/macos/**"
+      - "packaging/**"
       - "crates/sqler-app/Cargo.toml"
       - "crates/sqler-app/wix/**"
       - "about.toml"
@@ -172,7 +176,8 @@ jobs:
         shell: bash
         run: sh .github/scripts/release-guard.sh features
 
-  # Builds and packages the platform-specific artifacts, one job per target.
+  # Builds and packages the platform-specific artifacts, one job per target: the archive (and the MSI on Windows) from
+  # cargo-dist, plus the .dmg on macOS and the .deb on Linux from packaging/ (ADR-0075).
   build:
     name: build (${{ join(matrix.targets, ', ') }})
     needs:
@@ -211,7 +216,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends \
             pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
-            libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
+            libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev dpkg-dev
       # macOS images may ship Xcode without the separately downloaded Metal toolchain.
       - name: Metal toolchain
         if: runner.os == 'macOS'
@@ -308,6 +313,36 @@ jobs:
           "$BIN" --version > "$RUNNER_TEMP/version.txt" 2>&1
           cat "$RUNNER_TEMP/version.txt"
           grep -Eq '^sqler [0-9]' "$RUNNER_TEMP/version.txt"
+      # ADR-0075: the .dmg and the .deb are built from the extracted archive, then installed or mounted and run.
+      # The MSI is cargo-dist's; it is installed, checked and removed here. The check scripts change the host (CI only).
+      - name: Installer (.dmg)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          BIN: ${{ steps.extract.outputs.bin }}
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' Cargo.toml | head -n 1)
+          test -n "$version"
+          sh packaging/macos/build-dmg.sh "$(dirname "$BIN")" "$version" "$TARGET" target/distrib
+          sh packaging/macos/check-dmg.sh "target/distrib/sqler-app-$TARGET.dmg"
+      - name: Installer (.deb)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          BIN: ${{ steps.extract.outputs.bin }}
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' Cargo.toml | head -n 1)
+          test -n "$version"
+          sh packaging/linux/build-deb.sh "$(dirname "$BIN")" "$version" "$TARGET" target/distrib
+          sh packaging/linux/check-deb.sh "target/distrib/sqler-app-$TARGET.deb"
+      - name: Installer check (.msi)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem target/distrib -Filter *.msi | Select-Object -First 1
+          if (-not $msi) { Write-Host '::error title=Installer::no .msi in target/distrib'; exit 1 }
+          pwsh -NoProfile -File packaging/windows/check-msi.ps1 -Msi $msi.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # Report only, never a gate (ADR-0069: budget 80 MB = 83,886,080 bytes).
       - name: Size report
         shell: bash
@@ -341,9 +376,17 @@ jobs:
         shell: bash
         run: |
           # Parse out what was built and upload it to scratch storage.
+          # ADR-0075: the installers built by packaging/ are not in dist's manifest; add each with its sidecar.
           {
             echo "paths<<EOF"
             dist print-upload-files-from-manifest --manifest dist-manifest.json
+            for ext in dmg deb; do
+              for f in "target/distrib/sqler-app-$TARGET.$ext" "target/distrib/sqler-app-$TARGET.$ext.sha256"; do
+                if [ -f "$f" ]; then
+                  echo "$f"
+                fi
+              done
+            done
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
@@ -541,6 +584,27 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
+      # ADR-0075: the .dmg and .deb files and the MSI must all be here; their sidecars verify; their hashes join sha256.sum
+      # (dist's own list covers the archives only), which `host` publishes through its artifacts/* glob.
+      - name: Installer checksums
+        shell: bash
+        run: |
+          cd target/distrib
+          files=""
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do files="$files sqler-app-$t.dmg"; done
+          for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do files="$files sqler-app-$t.deb"; done
+          for f in $files sqler-app-x86_64-pc-windows-msvc.msi; do
+            if [ ! -f "$f" ]; then
+              echo "::error title=Installer::$f is missing from the build artifacts"
+              exit 1
+            fi
+          done
+          for f in $files; do
+            sha256sum -c "$f.sha256"
+          done
+          # shellcheck disable=SC2086 # $files is a list of plain names
+          sha256sum $files >> sha256.sum
+          cat sha256.sum
       # R14: one SBOM per target (the Windows .zip and .msi share one), for the shipped package only. Each uses the
       # feature list of dist-workspace.toml, so it describes what is shipped for that target.
       - id: cargo-cyclonedx

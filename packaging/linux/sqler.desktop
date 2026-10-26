@@ -1,0 +1,10 @@
+[Desktop Entry]
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: The SQLer Authors
+Type=Application
+Name=SQLer
+GenericName=SQL IDE
+Comment=Lightweight native SQL IDE
+Exec=sqler
+Terminal=false
+Categories=Development;Database;
