@@ -114,6 +114,7 @@
   - [ADR-0071: SQL Server plugin](adr/0071-sql-server-plugin.md)
   - [ADR-0072: Plugin export formats](adr/0072-plugin-export-formats.md)
   - [ADR-0073: T-SQL dialect and the manifest dialect](adr/0073-tsql-dialect-and-manifest-dialect.md)
+  - [ADR-0074: PR checks and post-release benchmarks](adr/0074-pr-checks-and-post-release-benchmarks.md)
 - [Plugin development](plugin-development/index.md)
   - [Tutorial](plugin-development/tutorial.md)
   - [Manifest](plugin-development/manifest.md)
