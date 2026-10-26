@@ -24,18 +24,34 @@ use tokio::sync::mpsc::unbounded_channel;
 use super::ai::NO_PROVIDER;
 use super::browser::OpenDataJob;
 use super::state::{Effect, Workspace, tab_connection};
+use crate::ai::chat::chat_sql_blocks;
 use crate::ai::session::{
     AiSessionStart, AiSessionTab, AiTurnJob, ENTRY_GONE, HostMsg, SESSION_AI_OFF, SESSION_BUSY,
     SESSION_CONFIG_BROKEN, SESSION_EMPTY, SESSION_NO_CONNECTION, SESSION_NOT_BUILT,
-    SESSION_STARTING, STALE_ANSWER, SessionPhase, SessionReady, TAB_CLOSED, UiCall, UiRequest,
-    WRONG_CONNECTION,
+    SESSION_STARTING, STALE_ANSWER, SessionMode, SessionPhase, SessionReady, TAB_CLOSED, UiCall,
+    UiRequest, WRONG_CONNECTION,
 };
-use crate::ai::{AiAction, ApprovalQueue, HubModel, SessionRow, ai_status, open_prod_gate};
+use crate::ai::{
+    AiAction, AiAudit, AiStatus, ApprovalQueue, HubModel, SessionRow, ai_status, open_prod_gate,
+};
 use crate::connections::ConnectRequest;
 use crate::grid::{GridLimits, GridTab, grid_channel_with};
 use crate::query::{BufferSnapshot, Phase, QueryTab, RunMode};
 use crate::tabs::{TabId, TabKind};
+use crate::workbench::WorkbenchAction;
 use sqler_ai_tools::session::SessionEvent;
+
+/// What a new session is built from (see `Workspace::session_setup`).
+struct SessionSetup {
+    conn: ConnectionId,
+    index: usize,
+    provider: ProviderConfig,
+    model: String,
+    info: ConnectionInfo,
+    request: ConnectRequest,
+    status: Option<AiStatus>,
+    audit: AiAudit,
+}
 
 /// The title of a results tab the model opened without one.
 const DEFAULT_RESULTS_TITLE: &str = "AI query";
@@ -163,20 +179,36 @@ impl Workspace {
         let Some(conn) = self.ai_target() else {
             return self.session_notice(SESSION_NO_CONNECTION);
         };
-        let (provider, model) = match self.session_gate(&conn) {
-            Ok(ok) => ok,
-            Err(NO_PROVIDER) => return self.no_provider(),
+        let setup = match self.session_setup(&conn, SessionMode::Tab) {
+            Ok(setup) => setup,
+            Err(message) if message == NO_PROVIDER => return self.no_provider(),
             Err(message) => return self.session_notice(message),
         };
+        let connection = tab_connection(self.sidebar.entries()[setup.index].config());
+        let tab = self.tabs.open(connection, TabKind::AiSession);
+        self.tab_conns.insert(tab, conn);
+        // The gate of the production second confirmation (ADR-0024).
+        self.queries.insert(tab, QueryTab::new());
+        self.show_connection_tabs();
+        self.launch_session(tab, setup, SessionMode::Tab)
+    }
+
+    /// Everything a session on `conn` is built from, or the text that says why it cannot start.
+    /// The chat panel gets the read-only connection (ADR-0076).
+    fn session_setup(
+        &self,
+        conn: &ConnectionId,
+        mode: SessionMode,
+    ) -> Result<SessionSetup, String> {
+        let (provider, model) = self
+            .session_gate(conn)
+            .map_err(std::borrow::ToOwned::to_owned)?;
         let (Some(profile), Some(index)) =
-            (self.sidebar.profile(&conn), self.sidebar.index_of(&conn))
+            (self.sidebar.profile(conn), self.sidebar.index_of(conn))
         else {
-            return self.session_notice(SESSION_NO_CONNECTION);
+            return Err(SESSION_NO_CONNECTION.to_owned());
         };
-        let request = match ConnectRequest::from_profile(profile) {
-            Ok(request) => request,
-            Err(err) => return self.session_notice(err.to_string()),
-        };
+        let request = ConnectRequest::from_profile(profile).map_err(|err| err.to_string())?;
         let spec = profile.spec();
         let info = ConnectionInfo::new(
             profile.id().as_str(),
@@ -185,18 +217,32 @@ impl Workspace {
             spec.environment,
         )
         .with_dialect(self.dialect_of(&spec.driver))
-        .with_send_rows(profile.ai_sends_rows());
-        let status = ai_status(self.ai.config(), Some(spec));
-        let connection = tab_connection(self.sidebar.entries()[index].config());
-        let audit = match self.ai_audit() {
-            Ok(audit) => audit.clone(),
-            Err(message) => return self.session_notice(message),
-        };
-        let tab = self.tabs.open(connection, TabKind::AiSession);
-        self.tab_conns.insert(tab, conn.clone());
-        // The gate of the production second confirmation (ADR-0024).
-        self.queries.insert(tab, QueryTab::new());
-        self.show_connection_tabs();
+        .with_send_rows(profile.ai_sends_rows())
+        .with_read_only(mode == SessionMode::ChatPanel);
+        Ok(SessionSetup {
+            conn: conn.clone(),
+            index,
+            provider,
+            model,
+            info,
+            request,
+            status: ai_status(self.ai.config(), Some(spec)),
+            audit: self.ai_audit().map_err(str::to_owned)?.clone(),
+        })
+    }
+
+    /// Stores the tab state under `tab` and starts building its session.
+    fn launch_session(&mut self, tab: TabId, setup: SessionSetup, mode: SessionMode) -> Effect {
+        let SessionSetup {
+            conn,
+            provider,
+            model,
+            info,
+            request,
+            status,
+            audit,
+            ..
+        } = setup;
         let (tx, host) = unbounded_channel();
         self.ai_sessions.tabs.insert(
             tab,
@@ -211,6 +257,7 @@ impl Workspace {
             config: self.ai.config().clone(),
             audit,
             tx,
+            mode,
         };
         join(
             self.ensure_browser(&conn),
@@ -457,6 +504,11 @@ impl Workspace {
     /// tab). A tab that does not exist, a second production confirmation and a statement the
     /// gate cannot show are denied.
     pub(super) fn ai_ask(&mut self, tab: TabId, ask: crate::ai::ApprovalAsk) {
+        if tab == TabId::CHAT_PANEL {
+            // The chat is read-only and has no approver; an ask here is a bug, never an approval.
+            let _ = ask.reply.send(Decision::Deny);
+            return;
+        }
         let Some(waiting) = self.approvals(tab).map(ApprovalQueue::is_waiting) else {
             // No tab owns this ask any more.
             let _ = ask.reply.send(Decision::Deny);
@@ -492,6 +544,13 @@ impl Workspace {
 
     /// A tool only the UI can run. Both reply `Ok` once the effect is built.
     fn ai_ui_call(&mut self, tab: TabId, call: UiCall) -> Effect {
+        if tab == TabId::CHAT_PANEL {
+            // The chat has no host for the UI tools (ADR-0076).
+            let _ = call
+                .reply
+                .send(Err(ToolError::Host(WRONG_CONNECTION.to_owned())));
+            return Effect::None;
+        }
         let Some(t) = self.ai_sessions.get(tab) else {
             let _ = call.reply.send(Err(ToolError::Host(TAB_CLOSED.to_owned())));
             return Effect::None;
@@ -631,5 +690,83 @@ impl Workspace {
             .values()
             .filter_map(|t| t.source.as_ref().and_then(|s| s.shut()))
             .collect()
+    }
+}
+
+impl Workspace {
+    /// The chat panel's session, once a chat was started (ADR-0076).
+    #[must_use]
+    pub fn chat(&self) -> Option<&AiSessionTab> {
+        self.ai_sessions.get(TabId::CHAT_PANEL)
+    }
+
+    /// Whether a chat can start on the active connection, or the text that says why not.
+    ///
+    /// # Errors
+    /// The empty-state text: no connection, AI off, no provider, a broken `ai.toml`.
+    pub fn chat_gate(&self) -> Result<(), &'static str> {
+        let conn = self.ai_target().ok_or(SESSION_NO_CONNECTION)?;
+        self.session_gate(&conn).map(|_| ())
+    }
+
+    /// Runs a chat panel action. The returned effect is carried out by the view.
+    pub(super) fn dispatch_chat(&mut self, action: AiAction) -> Effect {
+        match action {
+            AiAction::ToggleChat => {
+                self.layout.apply(WorkbenchAction::ToggleChatPanel);
+                if self.layout.chat_visible() && self.chat().is_none() {
+                    return self.open_chat(false);
+                }
+                Effect::None
+            }
+            AiAction::NewChat => {
+                let closed = self.close_ai_session(TabId::CHAT_PANEL);
+                self.layout.reveal_chat();
+                join(closed, self.open_chat(true))
+            }
+            AiAction::SetChatDraft(text) => {
+                if let Some(t) = self.ai_sessions.tabs.get_mut(&TabId::CHAT_PANEL) {
+                    t.draft = text;
+                }
+                Effect::None
+            }
+            AiAction::SendChat => self.send_ai_message(TabId::CHAT_PANEL),
+            AiAction::CancelChat => self.cancel_ai_session(TabId::CHAT_PANEL),
+            AiAction::CopyChatSql { entry, block } => match self.chat_sql(entry, block) {
+                Some((_, sql)) => Effect::Copy(sql),
+                None => self.session_notice(ENTRY_GONE),
+            },
+            AiAction::OpenChatSql { entry, block } => match self.chat_sql(entry, block) {
+                Some((conn, sql)) => self.open_editor_on(&conn, Some(sql)),
+                None => self.session_notice(ENTRY_GONE),
+            },
+            _ => Effect::None,
+        }
+    }
+
+    /// Starts a chat on the active connection. `notify` says why it did not start; the panel
+    /// shows the same text as its empty state either way.
+    fn open_chat(&mut self, notify: bool) -> Effect {
+        let started = self
+            .ai_target()
+            .ok_or_else(|| SESSION_NO_CONNECTION.to_owned());
+        let setup = started.and_then(|conn| self.session_setup(&conn, SessionMode::ChatPanel));
+        match setup {
+            Ok(setup) => self.launch_session(TabId::CHAT_PANEL, setup, SessionMode::ChatPanel),
+            Err(message) if notify => self.session_notice(message),
+            Err(_) => Effect::None,
+        }
+    }
+
+    /// The SQL of statement `block` of transcript entry `entry` of the chat, and the connection
+    /// it belongs to: the statement that ran (block 0) or a fenced block of an answer.
+    fn chat_sql(&self, entry: usize, block: usize) -> Option<(ConnectionId, String)> {
+        let chat = self.chat()?;
+        let sql = match chat.entry(entry)? {
+            TranscriptEntry::Sql(sql) if block == 0 => sql.rerun().sql,
+            TranscriptEntry::Assistant { text } => chat_sql_blocks(text).into_iter().nth(block)?,
+            _ => return None,
+        };
+        Some((chat.conn.clone(), sql))
     }
 }

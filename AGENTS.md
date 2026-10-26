@@ -337,6 +337,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0073](docs/src/adr/0073-tsql-dialect-and-manifest-dialect.md) | T-SQL dialect and the manifest `dialect` key: `Dialect::TSql` with a fail-safe classifier, `GO` splitting, dialect carried as data to the gate, export, AI tools and editing | accepted |
 | [0074](docs/src/adr/0074-pr-checks-and-post-release-benchmarks.md) | PR checks and post-release benchmarks: pull requests run `ci.yml` only; `bench`, `size`, spikes and `release` run on `main` or on dispatch; `benchmarks.yml` runs after a published release | accepted |
 | [0075](docs/src/adr/0075-platform-installers.md) | Platform installers: ad-hoc-signed `.dmg`, `.deb` (amd64, arm64) and the MSI with a Start menu shortcut, built by POSIX scripts from the guarded archive with built-in tools only; amends ADR-0064 | accepted |
+| [0076](docs/src/adr/0076-ai-chat-panel.md) | AI chat panel: right-side panel on the reserved `TabId::CHAT_PANEL`, read-only by construction (no approver), forced caps, no `open_results_tab`, `search_data` via `AssistSearch`, `Surface::Chat`, additive `workbench.toml` `chat_panel` | accepted |
 
 ## 9. Roadmap status
 

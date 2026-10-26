@@ -215,7 +215,7 @@ fn memory_sink_keeps_entries_in_order() {
 
 #[test]
 fn enums_round_trip_their_wire_names() {
-    for s in ["assist", "session", "mcp", "agent", "unspecified"] {
+    for s in ["assist", "session", "mcp", "agent", "chat", "unspecified"] {
         assert_eq!(Surface::from_wire(s).unwrap().as_str(), s);
     }
     for s in ["not_needed", "approved", "denied", "refused", "not_asked"] {

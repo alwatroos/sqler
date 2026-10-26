@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **AI chat panel**: a read-only assistant on the right side of the window, next to the editor. Open it with **AI: Toggle Chat Panel** or the **Chat** item of the status bar. It samples and analyses data under the row and time caps of `ai.toml`, refuses every statement that would change data (there is no approval step), and lets you copy or open the SQL it produced in an editor tab without running it. Chat calls appear in the audit log as **Chat panel**. See [ADR-0076](docs/src/adr/0076-ai-chat-panel.md).
+
 ## [1.0.2] - 2026-10-26
 
 ### Fixed

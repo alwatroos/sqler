@@ -20,6 +20,13 @@ pub const PANEL_MAX_FRACTION: f32 = 0.7;
 /// `SetPanelHeight` clamp ceiling in logical pixels.
 pub const PANEL_MAX_ABS: f32 = 4096.;
 
+/// Smallest AI chat panel width in logical pixels.
+pub const CHAT_MIN: f32 = 280.;
+/// Largest AI chat panel width in logical pixels.
+pub const CHAT_MAX: f32 = 900.;
+/// Default AI chat panel width in logical pixels.
+pub const CHAT_DEFAULT: f32 = 380.;
+
 /// A view of the side panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SideView {
@@ -117,6 +124,8 @@ pub enum Region {
     Editor,
     /// The bottom panel.
     Panel,
+    /// The AI chat panel on the right.
+    ChatPanel,
     /// The status bar.
     StatusBar,
 }
@@ -136,6 +145,10 @@ pub enum WorkbenchAction {
     SetSideWidth(u16),
     /// Set the bottom panel height, clamped.
     SetPanelHeight(u16),
+    /// Show or hide the AI chat panel.
+    ToggleChatPanel,
+    /// Set the AI chat panel width, clamped.
+    SetChatWidth(u16),
     /// Move focus to the next region (the view tracks the region).
     FocusNextRegion,
     /// Move focus to the previous region (the view tracks the region).
@@ -143,6 +156,8 @@ pub enum WorkbenchAction {
     /// Restore the default layout.
     ResetLayout,
 }
+
+type LayoutSnapshot = (bool, f32, SideView, bool, f32, PanelView, bool, f32);
 
 /// Panel visibility, sizes and views. Plain data; the shell renders from it.
 #[derive(Debug, Clone, PartialEq)]
@@ -153,6 +168,8 @@ pub struct WorkbenchLayout {
     panel_visible: bool,
     panel_height: f32,
     panel_view: PanelView,
+    chat_visible: bool,
+    chat_width: f32,
     generation: u64,
 }
 
@@ -176,6 +193,8 @@ impl WorkbenchLayout {
             panel_visible: s.bottom_panel.visible,
             panel_height: clamp_size(s.bottom_panel.size, PANEL_MIN, PANEL_MAX_ABS, PANEL_DEFAULT),
             panel_view: PanelView::parse(&s.bottom_panel.view).unwrap_or_default(),
+            chat_visible: s.chat_panel.visible,
+            chat_width: clamp_size(s.chat_panel.size, CHAT_MIN, CHAT_MAX, CHAT_DEFAULT),
             generation: 0,
         }
     }
@@ -198,6 +217,10 @@ impl WorkbenchLayout {
             WorkbenchAction::SetPanelHeight(h) => {
                 self.panel_height = f32::from(h).clamp(PANEL_MIN, PANEL_MAX_ABS);
             }
+            WorkbenchAction::ToggleChatPanel => self.chat_visible = !self.chat_visible,
+            WorkbenchAction::SetChatWidth(w) => {
+                self.chat_width = f32::from(w).clamp(CHAT_MIN, CHAT_MAX);
+            }
             WorkbenchAction::FocusNextRegion | WorkbenchAction::FocusPreviousRegion => {}
             WorkbenchAction::ResetLayout => {
                 let generation = self.generation;
@@ -212,7 +235,7 @@ impl WorkbenchLayout {
         changed
     }
 
-    fn snapshot(&self) -> (bool, f32, SideView, bool, f32, PanelView) {
+    fn snapshot(&self) -> LayoutSnapshot {
         (
             self.side_visible,
             self.side_width,
@@ -220,7 +243,17 @@ impl WorkbenchLayout {
             self.panel_visible,
             self.panel_height,
             self.panel_view,
+            self.chat_visible,
+            self.chat_width,
         )
+    }
+
+    /// Shows the AI chat panel.
+    pub fn reveal_chat(&mut self) {
+        if !self.chat_visible {
+            self.chat_visible = true;
+            self.generation += 1;
+        }
     }
 
     /// Shows the bottom panel on `v`.
@@ -275,6 +308,18 @@ impl WorkbenchLayout {
         self.panel_view
     }
 
+    /// Whether the AI chat panel is shown.
+    #[must_use]
+    pub fn chat_visible(&self) -> bool {
+        self.chat_visible
+    }
+
+    /// The AI chat panel width in logical pixels.
+    #[must_use]
+    pub fn chat_width(&self) -> f32 {
+        self.chat_width
+    }
+
     /// The bottom panel height for a window of `window_height`: at least [`PANEL_MIN`], at most
     /// [`PANEL_MAX_FRACTION`] of the window (but never below the minimum).
     #[must_use]
@@ -293,11 +338,12 @@ impl Default for WorkbenchLayout {
 /// The region after (or before) `current`, cyclic, skipping hidden panels.
 #[must_use]
 pub fn next_region(current: Region, layout: &WorkbenchLayout, forward: bool) -> Region {
-    const ORDER: [Region; 5] = [
+    const ORDER: [Region; 6] = [
         Region::ActivityBar,
         Region::SidePanel,
         Region::Editor,
         Region::Panel,
+        Region::ChatPanel,
         Region::StatusBar,
     ];
     let len = ORDER.len();
@@ -311,7 +357,8 @@ pub fn next_region(current: Region, layout: &WorkbenchLayout, forward: bool) -> 
         };
         let r = ORDER[i];
         let hidden = (r == Region::SidePanel && !layout.side_visible)
-            || (r == Region::Panel && !layout.panel_visible);
+            || (r == Region::Panel && !layout.panel_visible)
+            || (r == Region::ChatPanel && !layout.chat_visible);
         if !hidden {
             return r;
         }
@@ -322,7 +369,9 @@ pub fn next_region(current: Region, layout: &WorkbenchLayout, forward: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqler_config::{BOTTOM_PANEL_SIZE_RANGE, PanelState, SIDE_PANEL_SIZE_RANGE};
+    use sqler_config::{
+        BOTTOM_PANEL_SIZE_RANGE, CHAT_PANEL_SIZE_RANGE, PanelState, SIDE_PANEL_SIZE_RANGE,
+    };
 
     #[test]
     fn consts_match_config() {
@@ -333,6 +382,10 @@ mod tests {
         let d = WorkbenchState::default();
         assert_eq!(SIDE_DEFAULT, d.side_panel.size);
         assert_eq!(PANEL_DEFAULT, d.bottom_panel.size);
+        assert_eq!(CHAT_MIN, *CHAT_PANEL_SIZE_RANGE.start());
+        assert_eq!(CHAT_MAX, *CHAT_PANEL_SIZE_RANGE.end());
+        assert_eq!(CHAT_DEFAULT, d.chat_panel.size);
+        assert!(!d.chat_panel.visible);
     }
 
     #[test]
@@ -376,6 +429,8 @@ mod tests {
         assert!(!l.panel_visible());
         assert_eq!(l.panel_height(), 380.);
         assert_eq!(l.panel_view(), PanelView::Results);
+        assert!(!l.chat_visible());
+        assert_eq!(l.chat_width(), 380.);
         assert_eq!(l.generation(), 0);
     }
 
@@ -401,6 +456,43 @@ mod tests {
         assert!(l.panel_visible());
         assert_eq!(l.panel_height(), 380.);
         assert_eq!(l.panel_view(), PanelView::Results);
+        assert!(!l.chat_visible());
+        assert_eq!(l.chat_width(), 380.);
+    }
+
+    #[test]
+    fn from_state_maps_chat_panel() {
+        let s = WorkbenchState {
+            chat_panel: PanelState {
+                visible: true,
+                size: 10_000.,
+                view: "chat".into(),
+            },
+            ..WorkbenchState::default()
+        };
+        let l = WorkbenchLayout::from_state(&s);
+        assert!(l.chat_visible());
+        assert_eq!(l.chat_width(), 900.);
+    }
+
+    #[test]
+    fn chat_actions_clamp_toggle_and_reveal() {
+        let mut l = WorkbenchLayout::default();
+        assert!(l.apply(WorkbenchAction::ToggleChatPanel));
+        assert!(l.chat_visible());
+        assert!(l.apply(WorkbenchAction::SetChatWidth(1)));
+        assert_eq!(l.chat_width(), 280.);
+        assert!(l.apply(WorkbenchAction::SetChatWidth(u16::MAX)));
+        assert_eq!(l.chat_width(), 900.);
+        let g = l.generation();
+        assert!(!l.apply(WorkbenchAction::SetChatWidth(u16::MAX)));
+        assert_eq!(l.generation(), g);
+        l.reveal_chat();
+        assert_eq!(l.generation(), g);
+        assert!(l.apply(WorkbenchAction::ToggleChatPanel));
+        l.reveal_chat();
+        assert!(l.chat_visible());
+        assert_eq!(l.generation(), g + 2);
     }
 
     #[test]
@@ -461,10 +553,14 @@ mod tests {
         assert!(!l.apply(WorkbenchAction::ResetLayout));
         l.apply(WorkbenchAction::SetSideWidth(400));
         l.apply(WorkbenchAction::ToggleBottomPanel);
+        l.apply(WorkbenchAction::ToggleChatPanel);
+        l.apply(WorkbenchAction::SetChatWidth(500));
         let g = l.generation();
         assert!(l.apply(WorkbenchAction::ResetLayout));
         assert_eq!(l.side_width(), 260.);
         assert!(!l.panel_visible());
+        assert!(!l.chat_visible());
+        assert_eq!(l.chat_width(), 380.);
         assert_eq!(l.generation(), g + 1);
     }
 
@@ -493,7 +589,7 @@ mod tests {
     fn walk(l: &WorkbenchLayout, forward: bool) -> Vec<Region> {
         let mut out = Vec::new();
         let mut r = Region::Editor;
-        for _ in 0..5 {
+        for _ in 0..6 {
             r = next_region(r, l, forward);
             out.push(r);
         }
@@ -502,19 +598,25 @@ mod tests {
 
     #[test]
     fn next_region_skips_hidden() {
-        use Region::{ActivityBar as A, Editor as E, Panel as P, SidePanel as S, StatusBar as B};
-        let mut l = WorkbenchLayout::default(); // side shown, panel hidden
-        assert_eq!(walk(&l, true), [B, A, S, E, B]);
-        assert_eq!(walk(&l, false), [S, A, B, E, S]);
-        l.apply(WorkbenchAction::ToggleBottomPanel); // both shown
-        assert_eq!(walk(&l, true), [P, B, A, S, E]);
-        assert_eq!(walk(&l, false), [S, A, B, P, E]);
+        use Region::{
+            ActivityBar as A, ChatPanel as C, Editor as E, Panel as P, SidePanel as S,
+            StatusBar as B,
+        };
+        let mut l = WorkbenchLayout::default(); // side shown, panel and chat hidden
+        assert_eq!(walk(&l, true), [B, A, S, E, B, A]);
+        assert_eq!(walk(&l, false), [S, A, B, E, S, A]);
+        l.apply(WorkbenchAction::ToggleBottomPanel); // side and panel shown
+        assert_eq!(walk(&l, true), [P, B, A, S, E, P]);
+        assert_eq!(walk(&l, false), [S, A, B, P, E, S]);
         l.apply(WorkbenchAction::ToggleSidePanel); // panel only
-        assert_eq!(walk(&l, true), [P, B, A, E, P]);
-        assert_eq!(walk(&l, false), [A, B, P, E, A]);
+        assert_eq!(walk(&l, true), [P, B, A, E, P, B]);
+        assert_eq!(walk(&l, false), [A, B, P, E, A, B]);
         l.apply(WorkbenchAction::ToggleBottomPanel); // both hidden
-        assert_eq!(walk(&l, true), [B, A, E, B, A]);
-        assert_eq!(walk(&l, false), [A, B, E, A, B]);
+        assert_eq!(walk(&l, true), [B, A, E, B, A, E]);
+        assert_eq!(walk(&l, false), [A, B, E, A, B, E]);
+        l.apply(WorkbenchAction::ToggleChatPanel); // chat only
+        assert_eq!(walk(&l, true), [C, B, A, E, C, B]);
+        assert_eq!(walk(&l, false), [A, B, C, E, A, B]);
     }
 
     #[test]

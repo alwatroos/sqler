@@ -8,6 +8,7 @@ use sqler_ai_tools::session::TranscriptEntry;
 use sqler_config::{ModelChoice, ProviderId, ProviderKind, UseCase};
 
 use super::audit::AuditFilterChange;
+use super::chat::chat_sql_blocks;
 use super::settings::AiField;
 use crate::command::{Command, CommandError, CommandId, CommandRegistry};
 use crate::tabs::TabId;
@@ -119,6 +120,31 @@ pub enum AiAction {
     AllowAgentRequest(TabId, u64, String),
     /// Answer the permission request with this ask id with the offered option (a reject).
     RejectAgentRequest(TabId, u64, String),
+    /// Show or hide the AI chat panel; showing it starts a chat when there is none.
+    ToggleChat,
+    /// Discard the chat and start a new one on the active connection.
+    NewChat,
+    /// Set the text in the composer of the chat panel.
+    SetChatDraft(String),
+    /// Send the composer text of the chat panel to the model.
+    SendChat,
+    /// Cancel the running turn of the chat panel.
+    CancelChat,
+    /// Copy a statement of the chat (stable entry number, block index) without running it.
+    CopyChatSql {
+        /// The stable transcript entry number.
+        entry: usize,
+        /// 0 for a statement that ran, else the index into `chat_sql_blocks` of the answer.
+        block: usize,
+    },
+    /// Open a statement of the chat (stable entry number, block index) in a new editor tab
+    /// without running it.
+    OpenChatSql {
+        /// The stable transcript entry number.
+        entry: usize,
+        /// 0 for a statement that ran, else the index into `chat_sql_blocks` of the answer.
+        block: usize,
+    },
 }
 
 impl AiAction {
@@ -135,6 +161,21 @@ impl AiAction {
                 | Self::DenyStatement(..)
                 | Self::RerunSql(..)
                 | Self::OpenSqlInEditor(..)
+        )
+    }
+
+    /// Whether the chat panel handles this action.
+    #[must_use]
+    pub fn is_chat(&self) -> bool {
+        matches!(
+            self,
+            Self::ToggleChat
+                | Self::NewChat
+                | Self::SetChatDraft(_)
+                | Self::SendChat
+                | Self::CancelChat
+                | Self::CopyChatSql { .. }
+                | Self::OpenChatSql { .. }
         )
     }
 
@@ -157,6 +198,7 @@ impl AiAction {
 
 // A typed API key travels in `SetText`; its `Debug` must not show it.
 impl std::fmt::Debug for AiAction {
+    #[allow(clippy::too_many_lines)] // one arm per action
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OpenSettings => f.write_str("OpenSettings"),
@@ -251,6 +293,25 @@ impl std::fmt::Debug for AiAction {
                 .field(id)
                 .field(option)
                 .finish(),
+            Self::ToggleChat => f.write_str("ToggleChat"),
+            Self::NewChat => f.write_str("NewChat"),
+            // The length only: the draft is the user's message.
+            Self::SetChatDraft(text) => f
+                .debug_struct("SetChatDraft")
+                .field("len", &text.len())
+                .finish(),
+            Self::SendChat => f.write_str("SendChat"),
+            Self::CancelChat => f.write_str("CancelChat"),
+            Self::CopyChatSql { entry, block } => f
+                .debug_struct("CopyChatSql")
+                .field("entry", entry)
+                .field("block", block)
+                .finish(),
+            Self::OpenChatSql { entry, block } => f
+                .debug_struct("OpenChatSql")
+                .field("entry", entry)
+                .field("block", block)
+                .finish(),
         }
     }
 }
@@ -289,6 +350,12 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("ai:restart-agent", "AI: Restart Agent"),
     ("ai:allow-agent-request", "AI: Allow Agent Request Once"),
     ("ai:reject-agent-request", "AI: Reject Agent Request"),
+    ("ai:toggle-chat", "AI: Toggle Chat Panel"),
+    ("ai:new-chat", "AI: New Chat"),
+    ("ai:send-chat", "AI: Send Chat Message"),
+    ("ai:cancel-chat", "AI: Cancel Chat Turn"),
+    ("ai:copy-chat-sql", "AI: Copy Chat SQL"),
+    ("ai:open-chat-sql", "AI: Open Chat SQL in Editor"),
 ];
 
 impl AiAction {
@@ -342,6 +409,12 @@ impl AiAction {
             Self::RestartAgent(_) => "ai:restart-agent",
             Self::AllowAgentRequest(..) => "ai:allow-agent-request",
             Self::RejectAgentRequest(..) => "ai:reject-agent-request",
+            Self::ToggleChat => "ai:toggle-chat",
+            Self::NewChat => "ai:new-chat",
+            Self::SetChatDraft(_) | Self::SendChat => "ai:send-chat",
+            Self::CancelChat => "ai:cancel-chat",
+            Self::CopyChatSql { .. } => "ai:copy-chat-sql",
+            Self::OpenChatSql { .. } => "ai:open-chat-sql",
         };
         CommandId::new(id).expect("constant command ID is valid")
     }
@@ -424,6 +497,11 @@ pub fn action_for(id: &CommandId, ws: &Workspace) -> Option<AiAction> {
         | "ai:deny-statement"
         | "ai:rerun-sql"
         | "ai:open-sql-in-editor" => session_action(id.as_str(), ws),
+        "ai:toggle-chat" => Some(AiAction::ToggleChat),
+        "ai:new-chat" => Some(AiAction::NewChat),
+        "ai:send-chat" | "ai:cancel-chat" | "ai:copy-chat-sql" | "ai:open-chat-sql" => {
+            chat_action(id.as_str(), ws)
+        }
         "ai:open-agent" => Some(AiAction::OpenAgent),
         "ai:send-agent-prompt"
         | "ai:cancel-agent"
@@ -432,6 +510,39 @@ pub fn action_for(id: &CommandId, ws: &Workspace) -> Option<AiAction> {
         | "ai:reject-agent-request" => agent_action(id.as_str(), ws),
         _ => None,
     }
+}
+
+/// The chat panel commands: they apply only while a chat exists.
+fn chat_action(id: &str, ws: &Workspace) -> Option<AiAction> {
+    let chat = ws.chat()?;
+    match id {
+        "ai:send-chat" => Some(AiAction::SendChat),
+        "ai:cancel-chat" => chat.is_running().then_some(AiAction::CancelChat),
+        "ai:copy-chat-sql" => {
+            last_chat_sql(chat).map(|(entry, block)| AiAction::CopyChatSql { entry, block })
+        }
+        "ai:open-chat-sql" => {
+            last_chat_sql(chat).map(|(entry, block)| AiAction::OpenChatSql { entry, block })
+        }
+        _ => None,
+    }
+}
+
+/// The newest statement of the chat: a statement that ran (block 0) or the last SQL block of
+/// the newest answer that has one, as (stable entry number, block).
+fn last_chat_sql(chat: &super::AiSessionTab) -> Option<(usize, usize)> {
+    chat.entries()
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(ix, entry)| match entry {
+            TranscriptEntry::Sql(_) => Some((chat.dropped() + ix, 0)),
+            TranscriptEntry::Assistant { text } => chat_sql_blocks(text)
+                .len()
+                .checked_sub(1)
+                .map(|last| (chat.dropped() + ix, last)),
+            _ => None,
+        })
 }
 
 /// The session tab commands: they apply only while the active tab is an AI session.
@@ -591,6 +702,13 @@ mod tests {
             AiAction::RestartAgent(tab()),
             AiAction::AllowAgentRequest(tab(), 0, "allow-once".into()),
             AiAction::RejectAgentRequest(tab(), 0, "reject-once".into()),
+            AiAction::ToggleChat,
+            AiAction::NewChat,
+            AiAction::SetChatDraft(String::new()),
+            AiAction::SendChat,
+            AiAction::CancelChat,
+            AiAction::CopyChatSql { entry: 0, block: 0 },
+            AiAction::OpenChatSql { entry: 0, block: 0 },
         ]
     }
 
@@ -685,6 +803,7 @@ mod tests {
             let assist = a.command_id().as_str().starts_with("ai:")
                 && !a.is_session()
                 && !a.is_agent()
+                && !a.is_chat()
                 && !matches!(
                     a.command_id().as_str(),
                     "ai:open-settings"
@@ -830,6 +949,42 @@ mod tests {
             "ai:restart-agent",
             "ai:allow-agent-request",
             "ai:reject-agent-request",
+        ] {
+            assert_eq!(act(id, &w), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn chat_actions_are_ours_and_hide_the_message() {
+        let secret = "canary chat message";
+        let draft = AiAction::SetChatDraft(secret.into());
+        assert!(draft.is_chat());
+        assert!(!draft.is_session() && !draft.is_agent() && !draft.is_assist());
+        let text = format!("{draft:?}");
+        assert!(!text.contains(secret));
+        assert!(text.contains("len"));
+        let chat: Vec<AiAction> = all().into_iter().filter(AiAction::is_chat).collect();
+        assert_eq!(chat.len(), 7);
+        assert_eq!(draft.command_id().as_str(), "ai:send-chat");
+        assert_eq!(AiAction::SendChat.command_id().as_str(), "ai:send-chat");
+        assert_eq!(
+            AiAction::CopyChatSql { entry: 1, block: 2 }
+                .command_id()
+                .as_str(),
+            "ai:copy-chat-sql"
+        );
+    }
+
+    #[test]
+    fn chat_commands_need_a_chat_except_toggle_and_new() {
+        let w = Workspace::new(SidebarModel::default());
+        assert_eq!(act("ai:toggle-chat", &w), Some(AiAction::ToggleChat));
+        assert_eq!(act("ai:new-chat", &w), Some(AiAction::NewChat));
+        for id in [
+            "ai:send-chat",
+            "ai:cancel-chat",
+            "ai:copy-chat-sql",
+            "ai:open-chat-sql",
         ] {
             assert_eq!(act(id, &w), None, "{id}");
         }

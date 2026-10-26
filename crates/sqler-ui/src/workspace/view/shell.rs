@@ -18,6 +18,7 @@ use sqler_config::Modifiers;
 
 use super::WorkspaceView;
 use super::audit::audit_panel_body;
+use crate::ai::chat::view::chat_panel;
 use crate::command::CommandId;
 use crate::export::view::export_bar;
 use crate::grid::IngestState;
@@ -30,8 +31,8 @@ use crate::workbench::view::{
     activity_bar, bottom_panel, focus_index, messages_body, side_panel, status_bar, welcome,
 };
 use crate::workbench::{
-    PANEL_MAX_FRACTION, PANEL_MIN, PanelView, Region, RowInfo, SIDE_MAX, SIDE_MIN, WorkbenchAction,
-    next_region,
+    CHAT_MAX, CHAT_MIN, PANEL_MAX_FRACTION, PANEL_MIN, PanelView, Region, RowInfo, SIDE_MAX,
+    SIDE_MIN, WorkbenchAction, next_region,
 };
 use crate::workspace::WorkspaceAction;
 
@@ -43,10 +44,11 @@ mod layout_tests;
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 
 /// The regions that have a handle of their own; the editor region is the groups.
-const HANDLE_REGIONS: [Region; 4] = [
+const HANDLE_REGIONS: [Region; 5] = [
     Region::ActivityBar,
     Region::SidePanel,
     Region::Panel,
+    Region::ChatPanel,
     Region::StatusBar,
 ];
 
@@ -66,15 +68,22 @@ impl WorkspaceView {
         ];
     }
 
-    /// A drag of the side panel divider ended: the width goes to the layout.
+    /// A drag of a divider of the side row ended: the widths of the side panel (first) and the
+    /// chat panel (last) go to the layout.
     fn side_resized(&mut self, cx: &mut Context<Self>) {
-        if !self.ws.layout().side_visible() {
-            return;
+        let sizes = self.side_split.read(cx).sizes().clone();
+        if self.ws.layout().side_visible()
+            && let Some(width) = sizes.first()
+        {
+            let width = to_u16(f32::from(*width));
+            self.dispatch_workbench(WorkbenchAction::SetSideWidth(width), cx);
         }
-        let Some(width) = self.side_split.read(cx).sizes().first().copied() else {
-            return;
-        };
-        self.dispatch_workbench(WorkbenchAction::SetSideWidth(to_u16(f32::from(width))), cx);
+        if self.ws.layout().chat_visible()
+            && let Some(width) = sizes.last()
+        {
+            let width = to_u16(f32::from(*width));
+            self.dispatch_workbench(WorkbenchAction::SetChatWidth(width), cx);
+        }
         self.split_generation = self.ws.layout().generation();
     }
 
@@ -156,6 +165,16 @@ impl WorkspaceView {
                 .size_range(px(PANEL_MIN)..gpui::Pixels::MAX)
                 .child(fill(vertical.into_any_element())),
         );
+        if layout.chat_visible() {
+            let chat = chat_panel(self, &self.chat_focus, cx);
+            horizontal = horizontal.child(
+                resizable_panel()
+                    .size(px(layout.chat_width()))
+                    .size_range(px(CHAT_MIN)..px(CHAT_MAX))
+                    .fixed()
+                    .child(fill(chat)),
+            );
+        }
 
         div()
             .size_full()
@@ -367,7 +386,9 @@ impl WorkspaceView {
                     !layout.side_visible() && self.sidebar_focus.contains_focused(window, cx);
                 let panel_lost =
                     !layout.panel_visible() && self.panel_focus.contains_focused(window, cx);
-                if side_lost || panel_lost {
+                let chat_lost =
+                    !layout.chat_visible() && self.chat_focus.contains_focused(window, cx);
+                if side_lost || panel_lost || chat_lost {
                     self.focus_region(Region::Editor, window, cx);
                 }
             }
@@ -380,6 +401,7 @@ impl WorkspaceView {
             Region::ActivityBar => Some(&self.activity_focus),
             Region::SidePanel => Some(&self.sidebar_focus),
             Region::Panel => Some(&self.panel_focus),
+            Region::ChatPanel => Some(&self.chat_focus),
             Region::StatusBar => Some(&self.status_focus),
             Region::Editor => None,
         }
@@ -433,7 +455,20 @@ impl WorkspaceView {
                     None => window.focus(&self.panel_focus, cx),
                 }
             }
+            Region::ChatPanel => self.focus_chat(window, cx),
             Region::Editor => self.focus_editor_region(window, cx),
+        }
+    }
+
+    /// Focuses the chat composer, else the panel root.
+    fn focus_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::Focusable as _;
+        match self.ai_composer(TabId::CHAT_PANEL) {
+            Some(input) => {
+                let handle = input.read(cx).focus_handle(cx);
+                window.focus(&handle, cx);
+            }
+            None => window.focus(&self.chat_focus, cx),
         }
     }
 

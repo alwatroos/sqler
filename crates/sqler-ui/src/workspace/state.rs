@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use sqler_catalog::{CacheKey, CatalogWorker, RefreshHandle};
 use sqler_config::{
-    AiConfig, ConfigDir, ConnectionId, ConnectionProfile, NewHistoryEntry, PanelState,
+    AiConfig, CHAT_VIEWS, ConfigDir, ConnectionId, ConnectionProfile, NewHistoryEntry, PanelState,
     ProviderConfig, SavedQueries, Secret, SecretRef, WINDOW_SIZE_RANGE, WORKBENCH_VERSION,
     WindowState, WorkbenchLoad, WorkbenchState,
 };
@@ -735,6 +735,11 @@ impl Workspace {
                 visible: l.panel_visible(),
                 size: l.panel_height(),
                 view: l.panel_view().as_str().to_owned(),
+            },
+            chat_panel: PanelState {
+                visible: l.chat_visible(),
+                size: l.chat_width(),
+                view: CHAT_VIEWS[0].to_owned(),
             },
             window: window.filter(|w| {
                 WINDOW_SIZE_RANGE.contains(&w.width) && WINDOW_SIZE_RANGE.contains(&w.height)

@@ -25,7 +25,7 @@ mod source;
 pub(crate) mod view;
 
 pub use host::{ChannelEvents, ChannelUiHost, HostMsg, UiCall, UiRequest};
-pub use job::{AiSessionStart, AiTurnJob, SessionReady, TurnDone, build_session};
+pub use job::{AiSessionStart, AiTurnJob, SessionMode, SessionReady, TurnDone, build_session};
 pub use source::TabSource;
 
 use super::approval::ApprovalQueue;

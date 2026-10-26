@@ -29,6 +29,9 @@ pub const BOTTOM_PANEL_SIZE_RANGE: RangeInclusive<f32> = 120.0..=4096.0;
 /// Accepted remembered window width and height in logical pixels.
 pub const WINDOW_SIZE_RANGE: RangeInclusive<f32> = 400.0..=16384.0;
 
+/// Accepted AI chat panel widths in logical pixels.
+pub const CHAT_PANEL_SIZE_RANGE: RangeInclusive<f32> = 280.0..=900.0;
+
 /// How many recently used commands are kept.
 pub const MAX_RECENT_COMMANDS: usize = 10;
 
@@ -37,6 +40,9 @@ pub const MAX_RECENT_CONNECTIONS: usize = 5;
 
 /// The known views of the side panel.
 pub const SIDE_VIEWS: [&str; 4] = ["connections", "saved-queries", "ai", "plugins"];
+
+/// The known views of the AI chat panel.
+pub const CHAT_VIEWS: [&str; 1] = ["chat"];
 
 /// The known views of the bottom panel.
 pub const BOTTOM_VIEWS: [&str; 6] = [
@@ -50,6 +56,7 @@ pub const BOTTOM_VIEWS: [&str; 6] = [
 
 const DEFAULT_SIDE_SIZE: f32 = 260.0;
 const DEFAULT_BOTTOM_SIZE: f32 = 380.0;
+const DEFAULT_CHAT_SIZE: f32 = 380.0;
 
 /// One collapsible panel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -77,6 +84,14 @@ impl PanelState {
             visible: false,
             size: DEFAULT_BOTTOM_SIZE,
             view: BOTTOM_VIEWS[0].to_owned(),
+        }
+    }
+
+    fn chat() -> Self {
+        Self {
+            visible: false,
+            size: DEFAULT_CHAT_SIZE,
+            view: CHAT_VIEWS[0].to_owned(),
         }
     }
 }
@@ -108,6 +123,8 @@ pub struct WorkbenchState {
     pub side_panel: PanelState,
     /// The bottom panel.
     pub bottom_panel: PanelState,
+    /// The AI chat panel on the right.
+    pub chat_panel: PanelState,
     /// The window size at the last exit, if it was sane.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowState>,
@@ -123,6 +140,7 @@ impl Default for WorkbenchState {
             version: WORKBENCH_VERSION,
             side_panel: PanelState::side(),
             bottom_panel: PanelState::bottom(),
+            chat_panel: PanelState::chat(),
             window: None,
             recent_commands: Vec::new(),
             recent_connections: Vec::new(),
@@ -230,6 +248,12 @@ fn parse(text: &str) -> WorkbenchLoad {
             PanelState::bottom(),
             &BOTTOM_PANEL_SIZE_RANGE,
             &BOTTOM_VIEWS,
+        ),
+        chat_panel: panel_of(
+            table.get("chat_panel"),
+            PanelState::chat(),
+            &CHAT_PANEL_SIZE_RANGE,
+            &CHAT_VIEWS,
         ),
         window: window_of(table.get("window")),
         recent_commands: strings_of(table.get("recent_commands"), MAX_RECENT_COMMANDS),
@@ -375,6 +399,11 @@ mod tests {
                 size: 333.0,
                 view: "history".into(),
             },
+            chat_panel: PanelState {
+                visible: true,
+                size: 420.0,
+                view: "chat".into(),
+            },
             window: Some(WindowState {
                 width: 1280.0,
                 height: 800.0,
@@ -384,6 +413,29 @@ mod tests {
         };
         d.save_workbench_state(&s).unwrap();
         assert_eq!(d.load_workbench_state(), WorkbenchLoad::Loaded(s));
+    }
+
+    #[test]
+    fn chat_panel_default_when_table_missing() {
+        let s = loaded("[side_panel]\nvisible = false\n");
+        assert_eq!(
+            s.chat_panel,
+            PanelState {
+                visible: false,
+                size: 380.0,
+                view: "chat".into()
+            }
+        );
+    }
+
+    #[test]
+    fn chat_panel_clamps_and_ignores_bad_values() {
+        let s = loaded("[chat_panel]\nvisible = true\nsize = 5000\nview = \"nope\"\n");
+        assert!(s.chat_panel.visible);
+        assert!((s.chat_panel.size - 900.0).abs() < f32::EPSILON);
+        assert_eq!(s.chat_panel.view, "chat");
+        let s = loaded("[chat_panel]\nsize = 10\n");
+        assert!((s.chat_panel.size - 280.0).abs() < f32::EPSILON);
     }
 
     #[test]

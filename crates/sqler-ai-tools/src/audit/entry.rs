@@ -43,6 +43,8 @@ wire_enum! {
         Mcp => "mcp",
         /// An ACP agent.
         Agent => "agent",
+        /// The read-only AI chat panel.
+        Chat => "chat",
         /// The host did not say.
         #[default]
         Unspecified => "unspecified",

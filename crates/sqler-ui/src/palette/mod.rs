@@ -28,6 +28,7 @@ pub(crate) const NEEDS_ARGUMENT: &[&str] = &[
     "tab:move",
     "workbench:set-side-width",
     "workbench:set-panel-height",
+    "workbench:set-chat-width",
 ];
 
 /// Registers the palette's own commands.

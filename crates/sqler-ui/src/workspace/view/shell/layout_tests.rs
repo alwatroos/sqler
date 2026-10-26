@@ -254,3 +254,45 @@ fn the_editor_follows_the_side_panel_and_editor_splits(cx: &mut TestAppContext) 
         assert!(near(e.size.height, base.size.height));
     }
 }
+
+#[gpui::test]
+fn the_editor_fills_the_rest_with_the_chat_side_and_bottom_panels_open(cx: &mut TestAppContext) {
+    let (rig, cx) = open(cx);
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    let tab = open_editor(&rig, cx);
+    if !rig.view.read_with(cx, |v, _| v.ws.layout().panel_visible()) {
+        command(&rig, cx, "workbench:toggle-bottom-panel");
+    }
+    let (_, base) = measure(&rig, cx, tab);
+
+    workbench(&rig, cx, WorkbenchAction::ToggleChatPanel);
+    assert!(rig.view.read_with(cx, |v, _| v.ws.layout().chat_visible()));
+    let chat = rig.view.read_with(cx, |v, _| v.ws.layout().chat_width());
+    let (c1, e1) = measure(&rig, cx, tab);
+    assert_fills(c1, e1, "chat, side and bottom panels at 1280x800");
+    assert!(
+        near_f(base.size.width, e1.size.width, -chat),
+        "{e1:?} {base:?}"
+    );
+    assert!(near(e1.size.height, base.size.height));
+
+    cx.simulate_resize(size(px(1000.), px(700.)));
+    let (c2, e2) = measure(&rig, cx, tab);
+    assert_fills(c2, e2, "chat, side and bottom panels at 1000x700");
+    assert!(e2.size.width < e1.size.width && e2.size.height < e1.size.height);
+    assert!(
+        e2.size.width >= px(200.),
+        "editor squeezed to {:?}",
+        e2.size
+    );
+
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    let (c3, e3) = measure(&rig, cx, tab);
+    assert_fills(c3, e3, "chat, side and bottom panels at 1400x900");
+    assert!(e3.size.width > e1.size.width && e3.size.height > e1.size.height);
+
+    workbench(&rig, cx, WorkbenchAction::ToggleChatPanel);
+    let (c4, e4) = measure(&rig, cx, tab);
+    assert_fills(c4, e4, "chat closed again");
+    assert!(near_f(e3.size.width, e4.size.width, chat));
+}

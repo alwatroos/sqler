@@ -18,6 +18,7 @@ use super::WorkspaceView;
 use crate::ai::AiAction;
 use crate::ai::session::{AiSessionStart, AiTurnJob, HostMsg, build_session};
 use crate::tabs::{TabId, TabKind};
+use crate::workbench::Region;
 use crate::workspace::Effect;
 
 /// What one open AI session tab keeps on the view side.
@@ -63,7 +64,12 @@ impl WorkspaceView {
     /// Sends the composer's text: the workspace takes the draft, and the input is cleared when
     /// the message was taken.
     pub(crate) fn ai_send(&mut self, tab: TabId, window: &mut Window, cx: &mut Context<Self>) {
-        self.dispatch_ai(AiAction::SendMessage(tab), cx);
+        let send = if tab == TabId::CHAT_PANEL {
+            AiAction::SendChat
+        } else {
+            AiAction::SendMessage(tab)
+        };
+        self.dispatch_ai(send, cx);
         let taken = self
             .ws
             .ai_session(tab)
@@ -78,7 +84,7 @@ impl WorkspaceView {
     /// dropped with the tab. A new approval card takes the focus on Deny; a growing transcript
     /// scrolls to its end.
     pub(super) fn sync_ai_session_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let open: Vec<TabId> = self
+        let mut open: Vec<TabId> = self
             .ws
             .tabs()
             .iter()
@@ -86,10 +92,18 @@ impl WorkspaceView {
             .map(crate::tabs::Tab::id)
             .filter(|id| self.ws.ai_session(*id).is_some())
             .collect();
+        // The chat panel has no strip tab; its composer lives as long as the chat does.
+        if self.ws.chat().is_some() {
+            open.push(TabId::CHAT_PANEL);
+        }
         self.ai_session_inputs
             .tabs
             .retain(|id, _| open.contains(id));
         let active = self.ws.tabs().active().map(crate::tabs::Tab::id);
+        // A hidden panel must not keep the focus: the keys would go nowhere.
+        if !self.ws.layout().chat_visible() && self.chat_focus.contains_focused(window, cx) {
+            self.focus_region(Region::Editor, window, cx);
+        }
         for id in open {
             if !self.ai_session_inputs.tabs.contains_key(&id) {
                 let name = self
@@ -139,7 +153,12 @@ impl WorkspaceView {
             move |view, input, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
                     let text = input.read(cx).value().to_string();
-                    view.dispatch_ai(AiAction::SetSessionDraft(tab, text), cx);
+                    let draft = if tab == TabId::CHAT_PANEL {
+                        AiAction::SetChatDraft(text)
+                    } else {
+                        AiAction::SetSessionDraft(tab, text)
+                    };
+                    view.dispatch_ai(draft, cx);
                 }
                 InputEvent::PressEnter { .. } => view.ai_send(tab, window, cx),
                 _ => {}

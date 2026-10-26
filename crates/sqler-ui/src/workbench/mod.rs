@@ -19,8 +19,9 @@ use sqler_config::{ConfigDir, WorkbenchLoad};
 pub use action::{action_for, register_commands, register_pane_commands};
 pub use chrome::{ActivityItem, status_solid};
 pub use layout::{
-    PANEL_DEFAULT, PANEL_MAX_ABS, PANEL_MAX_FRACTION, PANEL_MIN, PanelView, Region, SIDE_DEFAULT,
-    SIDE_MAX, SIDE_MIN, SideView, WorkbenchAction, WorkbenchLayout, next_region,
+    CHAT_DEFAULT, CHAT_MAX, CHAT_MIN, PANEL_DEFAULT, PANEL_MAX_ABS, PANEL_MAX_FRACTION, PANEL_MIN,
+    PanelView, Region, SIDE_DEFAULT, SIDE_MAX, SIDE_MIN, SideView, WorkbenchAction,
+    WorkbenchLayout, next_region,
 };
 pub use messages::{MessageLine, message_lines};
 pub use recent::{RecentCommands, RecentConnections};

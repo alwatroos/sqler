@@ -16,7 +16,7 @@ use crate::session::approval::SessionApprover;
 use crate::session::cancel::{Cancelled, SessionCancel, cancellable};
 use crate::session::config::SessionConfig;
 use crate::session::events::{EventHub, SessionEvent, SessionEvents, SessionState};
-use crate::session::prompt::system_prompt;
+use crate::session::prompt::prompt_for;
 use crate::session::repeat::RepeatGuard;
 use crate::session::transcript::{NotRunReason, Notice, Transcript, TranscriptEntry};
 use crate::source::ConnectionInfo;
@@ -130,7 +130,7 @@ impl ExplorationSession {
         if !provider.capabilities().tools {
             return Err(SessionError::ToolsUnsupported);
         }
-        let prompt = system_prompt(&connection);
+        let prompt = prompt_for(&connection, config.prompt);
         let state = Arc::new(Mutex::new(SessionState::Idle));
         let waited = Arc::new(Mutex::new(Duration::ZERO));
         let events = EventHub::new();

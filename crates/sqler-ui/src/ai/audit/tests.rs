@@ -229,6 +229,7 @@ fn rows_have_readable_labels_tones_and_results() {
     assert_eq!(audit_row(&v[2], NOW).when, "3 h ago");
     assert_eq!(audit_row(&v[3], NOW).tone, AuditTone::Danger);
     assert_eq!(audit_row(&v[3], NOW).surface, "ACP agent");
+    assert_eq!(audit_row(&v[4], NOW).surface, "Chat panel");
     assert_eq!(audit_row(&v[4], NOW).sql, "");
     assert_eq!(audit_row(&v[4], NOW).when, "1 d ago");
     assert_eq!(audit_row(&v[6], NOW).result, "Error: sql_error");

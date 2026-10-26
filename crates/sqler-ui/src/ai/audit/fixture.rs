@@ -127,7 +127,7 @@ pub fn entries(now_ms: u64) -> Vec<AuditEntry> {
             4,
             now_ms,
             26 * 3600,
-            Surface::Assist,
+            Surface::Chat,
             names::LIST_TABLES,
             ("c-dev", "dev"),
             A::NotNeeded,

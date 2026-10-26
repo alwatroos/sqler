@@ -190,6 +190,24 @@ Type in the composer and press **Send** (`ai:send-message`). The transcript show
 
 **Nothing is persisted.** The transcript lives in memory for the life of the tab and is never written to disk; the audit log records statements and outcomes, never cell values. The engine is described in [Exploration sessions](../ai/sessions.md); the decisions in [ADR-0053](../adr/0053-ai-session-tab-and-approvals.md).
 
+### AI chat panel
+
+The chat panel is a conversation about one connection that sits on the right side of the window, next to the editor. Open or hide it with **AI: Toggle Chat Panel** (`ai:toggle-chat`) or the **Chat** item at the right of the status bar. The first time it is shown it starts a chat on the connection of the active tab; drag its left edge to resize it (280 to 900 px). Whether it is shown and its width are remembered between sessions.
+
+**Read-only.** The chat only reads. A statement that would change data is refused before anything runs, on every connection, `prod` or not, and there is no approval card. The panel shows such a call as "refused (read-only chat)" and a note that you can open the SQL in an editor to run it yourself. The chat has no results tab and no "open in editor" tool of its own.
+
+**Caps.** Whatever `[limits]` says about `unlimited`, the chat always runs capped. The header states the caps: "Read-only · up to N rows · T s per query" (`max_rows` and `timeout_secs`). Rows beyond the cap are not shown to the model, and the transcript footer says so. Redaction applies as everywhere. The model can sample tables and search values (`search_data`) under the same caps.
+
+**Data analysis.** The chat is prompted to analyse in the database: it prefers aggregate queries (counts, sums, group-bys, distinct counts, null rates), samples a table only to see what the data looks like, says when a result is a capped sample rather than the whole table, and ends with a short summary and the SQL it used. On a driver without a SQL dialect (for example DuckDB) the chat can answer schema questions only, because no statement can be proven to be a read.
+
+**Copy and open.** Each SQL statement that ran, and each fenced `sql` block in an answer, has **Copy** (`ai:copy-chat-sql`) and **Open in editor** (`ai:open-chat-sql`). Opening puts the text in a new editor tab on the connection; running it there goes through the normal run flow, including the production confirmation. The chat never runs it.
+
+**Empty states.** When AI is off for the connection, or no provider with a model is set up, the panel says so and offers **Turn on AI** or **Open AI settings**; otherwise it offers **Start chat**. If the active connection is not the one the chat was started on, the panel offers a new chat for it.
+
+**Cancel and new chat.** **Cancel** (`ai:cancel-chat`) stops the answer or the running call and you can send the next message at once. **New chat** (`ai:new-chat`) discards the conversation and ends its database session. Hiding the panel keeps the conversation; quitting ends it.
+
+**Nothing is persisted.** The transcript lives in memory and is never written to disk. Calls are written to the [audit log](#audit-log-and-redaction) with the surface **Chat panel**. The decision is in [ADR-0076](../adr/0076-ai-chat-panel.md).
+
 ### Agent tabs
 
 An Agent tab lets an external coding agent (for example Claude Code or Codex over ACP) use one connection through SQLer's tools. Open it with **AI: Open Agent** (`ai:open-agent`) or **New agent** in the **Agents** section of the AI view. It opens on the connection of the active tab, which must have AI turned on and a readable `ai.toml`; no provider is needed. Pick a profile in the tab; the agent starts, and you type in the composer and press **Send** (`ai:send-agent-prompt`). The tab is pinned and titled `Agent: {connection}`.
@@ -291,6 +309,13 @@ keeps these settings.
 | `ai:deny-statement` | AI: Deny Statement |
 | `ai:rerun-sql` | AI: Re-run SQL |
 | `ai:open-sql-in-editor` | AI: Open SQL in Editor |
+| `ai:toggle-chat` | AI: Toggle Chat Panel |
+| `ai:new-chat` | AI: New Chat |
+| `ai:send-chat` | AI: Send Chat Message |
+| `ai:cancel-chat` | AI: Cancel Chat Turn |
+| `ai:copy-chat-sql` | AI: Copy Chat SQL |
+| `ai:open-chat-sql` | AI: Open Chat SQL in Editor |
+| `workbench:set-chat-width` | Set Chat Panel Width |
 | `ai:open-agent` | AI: Open Agent |
 | `ai:send-agent-prompt` | AI: Send to Agent |
 | `ai:cancel-agent` | AI: Cancel Agent Turn |
@@ -313,7 +338,7 @@ The Audit panel lists the tool calls recorded in `ai-audit.jsonl`, newest first.
 Each row shows:
 
 - **When**: the age of the call (`just now`, `N min ago`, `N h ago`, `N d ago`).
-- **Surface**: `In-app assistant`, `In-app session`, `MCP` or `ACP agent`.
+- **Surface**: `In-app assistant`, `In-app session`, `Chat panel`, `MCP` or `ACP agent`.
 - **Connection**: the connection name, or `—` when the call had none.
 - **Tool**: the tool that was called.
 - **SQL**: the first line of the statement, cut at 200 characters, with `+N` when the call had more statements. SQL is shown as stored: values that were masked stay masked (`update acct set ssn = ?`).

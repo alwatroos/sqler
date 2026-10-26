@@ -277,6 +277,25 @@ pub(crate) fn status_bar(
             );
     }
     let layout = view.workspace().layout();
+    let chat_open = layout.chat_visible();
+    right = right.child(
+        action_item(
+            "status-ai-chat",
+            colors,
+            None,
+            "ai:toggle-chat",
+            "Chat",
+            Some("Show or hide the AI chat panel".into()),
+            cx,
+        )
+        .when(chat_open, |el| el.bg(text.opacity(0.2)))
+        .child(
+            Icon::new(AppIcon::MessageSquare)
+                .size(px(12.))
+                .text_color(text),
+        )
+        .child("Chat"),
+    );
     for (id, icon, command, label, open) in [
         (
             "status-toggle-side",
