@@ -1,11 +1,11 @@
 # SQL editor
 
-The SQL editor is a tab bound to one connection. Its header shows the connection name, colour and environment (a `prod` connection stands out), like every other tab. The editor has its own session, so a long query in one editor does not block another tab.
+The SQL editor is a tab bound to one connection. Its header shows the connection name, colour and environment (a `prod` connection stands out), like every other tab. The editor has its own session, so a long query in one editor does not block another tab. The editor fills the tab below its toolbar (and the AI prompt bar when it is shown) and follows every resize of the window, the side panel, the bottom panel and editor splits.
 
 ## Open an editor
 
 - Run `editor:new` ("Editor: New SQL Editor", Cmd+N on macOS, Ctrl+N elsewhere). It opens an editor for the connection of the active tab, or for the connection selected in the sidebar. With neither, SQLer shows "Select a connection in the sidebar first."
-- In the [object browser](object-browser.md), choose "Open in SQL Editor" (`object:open-in-editor`) on a table or view. The editor opens with a `SELECT *` for that object. The command `object:open-tab-in-editor` does the same for the DDL tab that is active, and the DDL tab has an "Open in Editor" button next to Copy.
+- In the [object browser](object-browser.md), choose "Open in SQL Editor" (`object:open-in-editor`) on a table or view. The editor opens with a `SELECT *` for that object. The command `object:open-tab-in-editor` does the same for the DDL tab that is active. Scripts generated from the DDL tab open directly in an editor tab.
 - `dev:open-large-sql-script` ("Open Synthetic 10,000-Line SQL Script") opens an editor filled with a generated script of 10,000 lines. Use it to check that scrolling and typing stay smooth.
 
 ## Highlighting
@@ -30,7 +30,7 @@ When the cursor is next to `(`, `)`, `[`, `]`, `{` or `}`, both brackets of the 
 
 ## Running queries
 
-The editor hands its text, selection and cursor to the query run commands, and the results appear in the results area below the editor, one grid per statement.
+The editor hands its text, selection and cursor to the query run commands, and the results appear in the Results view of the bottom panel, one grid per statement.
 
 | Command | macOS | Windows and Linux | Runs |
 | --- | --- | --- | --- |
