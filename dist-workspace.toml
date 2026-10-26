@@ -13,8 +13,9 @@ targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msv
 checksum = "sha256"
 # Build `--package sqler-app` only; a workspace build would compile the DuckDB C++ engine (ADR-0070).
 precise-builds = true
-pr-run-mode = "upload"
-# release.yml is hand-maintained (path-gated PR trigger, DuckDB guard steps, GPUI setup); do not regenerate it blindly.
+# release.yml has no pull_request trigger (ADR-0074).
+pr-run-mode = "skip"
+# release.yml is hand-maintained (dry run, DuckDB guard steps, GPUI setup); do not regenerate it blindly.
 # crates/sqler-app/wix/main.wxs is hand-edited (licence sidecar files in the MSI, R14), hence "msi".
 allow-dirty = ["ci", "msi"]
 install-path = "~/.sqler/bin"

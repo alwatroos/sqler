@@ -29,8 +29,6 @@ afterwards.
   dispatch is always a full dry run and never publishes. Watch it with
   `gh run list --workflow release.yml --event workflow_dispatch --branch main --limit 1` and `gh run view <id>`.
   - [ ] The `update manifest (dry run)` job is green.
-  - [ ] The `benchmarks.yml` run that the dry run triggers (`workflow_run`, after a successful dispatch run on `main`)
-    is green: `gh run list --workflow benchmarks.yml --limit 1`.
   - [ ] Size: each `build (...)` job prints a "Size report" line. The binary must be at most 83,886,080 bytes
     (80 MB) on every OS. Record the binary bytes and the headroom for each of the 5 targets in the release PR or
     issue. If the Linux binary is over 83,886,080 bytes, stop and ask the owner (decision 12). The size step only
@@ -102,7 +100,7 @@ Only the owner does these. The team never runs the "Tag release" workflow.
 
 - The "Tag release" job is green and its summary names `v1.0.0`, the expected commit and a Release run link.
 - The Release run on the ref `v1.0.0` ran `plan`, the builds, `sign (macOS)`, `update manifest` (not the dry-run
-  manifest job), `global artifacts`, `host` and `announce`, and `host` is green. If `host` was skipped, nothing was
+  manifest job), `global artifacts` and `host`, and `host` is green. If `host` was skipped, nothing was
   published (a dry run); see Rollback.
 - The assets, `sqler-update.json`, the checksums and the notes: run every item of "Post-release verification" below.
 
@@ -153,7 +151,6 @@ Jobs in order:
      it with `xtask release verify`.
 6. `host`: `gh release create` with every file and the notes of the `1.0.0` section of `CHANGELOG.md`, then checks
    that `sqler-update.json` is a release asset.
-7. `announce`: does nothing.
 
 Confirm the exact asset names against the artifacts of the dry run. Do not guess them.
 
@@ -174,6 +171,9 @@ Work in a scratch directory and delete it afterwards.
   and `shasum -a 256 -c <archive>.sha256` passes. Do not paste the Authority or TeamIdentifier lines anywhere public.
 - [ ] On a desktop, the New connection driver list and the Plugins view show SQL Server. Headless proxy:
   `LC_ALL=C grep -a -c 'driver.host:mssql' sqler` prints more than 0.
+- [ ] `gh run list --workflow benchmarks.yml --limit 1` shows a run for the tag's commit (it starts by itself after the
+  Release run, ADR-0074). Informational: a red run is a follow-up and never a reason to roll the release back. Record
+  the figures in `docs/src/benchmarks.md`.
 
 ## Rollback
 

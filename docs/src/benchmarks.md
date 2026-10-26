@@ -60,7 +60,7 @@ Benches (desktop (reference machine class), `cargo run -p xtask --locked -- benc
 | `editor_intellisense` | worst p95 | 256,042 ns |
 | `completion` | worst p95 | 2,424,917 ns |
 
-On the shared CI runners of `benchmarks.yml` run 40110120418, the `editor_buffer` format p95 was 29.3 ms on macOS and 21.6 ms on Windows (13.3 ms on Linux), above its 16 ms threshold, while the desktop run above is 9.68 ms. The workflow records these as reported, not gated; the pull-request bench gate (`bench.yml`) is the gate. This is shared-runner noise as far as we can tell, and it stays an open item to watch.
+On the shared CI runners of `benchmarks.yml` run 40110120418, the `editor_buffer` format p95 was 29.3 ms on macOS and 21.6 ms on Windows (13.3 ms on Linux), above its 16 ms threshold, while the desktop run above is 9.68 ms. The workflow records these as reported, not gated; the `bench.yml` gate is the gate. This is shared-runner noise as far as we can tell, and it stays an open item to watch.
 
 Not in 1.0: the DuckDB engine is not part of version 1.0 and is not measured here.
 
@@ -79,7 +79,7 @@ Each of cold start and idle RSS is measured twice, in throwaway config directori
 - Variant `none`: three `sqlite` `:memory:` connections and no plugin.
 - Variant `plugin`: the same, plus the SQL Server manifest (`plugins/sqlserver/sqler.toml`) copied to `<config>/plugins/sqlserver/` and an approved grant for `driver.host:mssql`.
 
-In CI, `.github/workflows/benchmarks.yml` runs the same command on Linux, macOS and Windows runners. It starts by hand (`workflow_dispatch`, optional Release run id) or after a successful Release dry run, downloads that run's build artifacts, checks them with `release-guard.sh`, measures the extracted binary and uploads the JSON and the text report (30 days). A breach turns the run red after the upload. It never builds `sqler-app` and never uses `driver-duckdb`. On Linux it runs inside a headless `cage` compositor.
+In CI, `.github/workflows/benchmarks.yml` runs the same command on Linux, macOS and Windows runners. It starts by hand (`workflow_dispatch`, optional Release run id; empty means the run of the newest published release) or after a successful publishing Release run (a `v*` tag run whose GitHub Release exists, [ADR-0074](adr/0074-pr-checks-and-post-release-benchmarks.md)), downloads that run's build artifacts, checks them with `release-guard.sh`, measures the extracted binary and uploads the JSON and the text report (30 days). A breach turns the run red after the upload. It never builds `sqler-app` and never uses `driver-duckdb`. On Linux it runs inside a headless `cage` compositor.
 
 ## Method (1.0)
 
@@ -216,7 +216,7 @@ Run from the repository root on the commit being recorded:
 
 ### Regression rule
 
-`bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job. The whole measurement runs `--reps 3` times and the reported p50 and p95 are the minimum over the repetitions (noise on a shared runner only adds time), on the base and on the PR alike. It fails if the PR p95 is more than 25 % plus 100 ns above the base p95, or if the p95 is above 1 ms (`--budget-p95-ns 1000000`). The 100 ns slack is about two timer ticks (one `Instant` pair costs about 41 ns); a 2x slowdown of the 300 ns p95 still fails (checked with `--viewport 200` against a baseline taken with the default 50: p95 584 ns against 292 ns, limit 465 ns). Without a baseline on the base branch only the 1 ms budget applies.
+`bench.yml` runs the bench on Linux on push to `main` (budgets) and on a branch dispatch (base = merge-base with `main`), on the base commit and on the PR in the same job. The whole measurement runs `--reps 3` times and the reported p50 and p95 are the minimum over the repetitions (noise on a shared runner only adds time), on the base and on the PR alike. It fails if the PR p95 is more than 25 % plus 100 ns above the base p95, or if the p95 is above 1 ms (`--budget-p95-ns 1000000`). The 100 ns slack is about two timer ticks (one `Instant` pair costs about 41 ns); a 2x slowdown of the 300 ns p95 still fails (checked with `--viewport 200` against a baseline taken with the default 50: p95 584 ns against 292 ns, limit 465 ns). Without a baseline on the base branch only the 1 ms budget applies.
 
 `cells_p95_ns` is gated the same way when the baseline file has that key: the minimum over the repetitions may not exceed the baseline by more than 25 % plus `--cells-slack-ns` (default 500 ns, about one cold cache line of noise per visible row; Linux runners may need a larger value, set it in `bench.yml` if a first run shows it). When the baseline has no `cells_p95_ns` (the base branch is older than this change), the bench prints a skip note and compares only `p95_ns`, so the rule is inert on the PR that introduces it and applies from the next PR on. Checked by hand: a baseline with `cells_p95_ns=100` fails with exit code 1, one with `100000` passes.
 
@@ -284,7 +284,7 @@ Re-run at `248e740` (macOS arm64, reference machine class, `cargo bench -p sqler
 
 ### Regression rule
 
-`bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job (rule of PR #33). The bench takes the minimum over `--reps 3` for every key, on the base and on the PR alike (noise on a shared runner only adds time). `--compare` fails a gated key when the PR figure is above the baseline times 1.25 plus an absolute slack: 20 ms for `sort_p95_ns`, 10 ms for `filter_p95_ns`, 500 ns for `viewport_sorted_p95_ns` (about one cold cache line per visible row), and the same 25 % plus 20 ms for `sort_url_p95_ns`. A key that the baseline file lacks is not compared; the bench prints a skip note, so the rule is inert on the PR that adds it (the base has no `grid_sort` bench) and applies from the next PR on. The base step passes `--reps 3` only if the base source of the bench knows the flag. The budgets (1.5 s, 500 ms, 1 ms, 16 ms, and for the three added columns 500 ms, 500 ms, 15 s and 16 ms per longest step) fail the run with or without a baseline. `sort_int_p95_ns`, `sort_multi_p95_ns`, `filter_cond_p95_ns`, `order_heap_bytes`, `order_peak_heap_bytes` and the other keys of the added columns are reported, not gated (they only have their budgets; `sort_url_p95_ns` has its budget and the relative rule). Checked by hand: a baseline of `sort_p95_ns=1` with no slack exits 1; a baseline without the keys exits 0 with four notes; an unknown flag exits 2.
+`bench.yml` runs the bench on Linux on push to `main` (budgets) and on a branch dispatch (base = merge-base with `main`), on the base commit and on the PR in the same job (rule of PR #33). The bench takes the minimum over `--reps 3` for every key, on the base and on the PR alike (noise on a shared runner only adds time). `--compare` fails a gated key when the PR figure is above the baseline times 1.25 plus an absolute slack: 20 ms for `sort_p95_ns`, 10 ms for `filter_p95_ns`, 500 ns for `viewport_sorted_p95_ns` (about one cold cache line per visible row), and the same 25 % plus 20 ms for `sort_url_p95_ns`. A key that the baseline file lacks is not compared; the bench prints a skip note, so the rule is inert on the PR that adds it (the base has no `grid_sort` bench) and applies from the next PR on. The base step passes `--reps 3` only if the base source of the bench knows the flag. The budgets (1.5 s, 500 ms, 1 ms, 16 ms, and for the three added columns 500 ms, 500 ms, 15 s and 16 ms per longest step) fail the run with or without a baseline. `sort_int_p95_ns`, `sort_multi_p95_ns`, `filter_cond_p95_ns`, `order_heap_bytes`, `order_peak_heap_bytes` and the other keys of the added columns are reported, not gated (they only have their budgets; `sort_url_p95_ns` has its budget and the relative rule). Checked by hand: a baseline of `sort_p95_ns=1` with no slack exits 1; a baseline without the keys exits 0 with four notes; an unknown flag exits 2.
 
 ## Catalog tree
 
@@ -316,7 +316,7 @@ Run from the repository root on the commit being recorded:
 
 ### Regression rule
 
-`bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `hit_p95_ns` is more than 25 % plus 50 ns above the base, or if a budget is exceeded. Without a baseline on the base branch only the budgets apply.
+`bench.yml` runs the bench on Linux on push to `main` (budgets) and on a branch dispatch (base = merge-base with `main`), on the base commit and on the PR in the same job, and fails if `hit_p95_ns` is more than 25 % plus 50 ns above the base, or if a budget is exceeded. Without a baseline on the base branch only the budgets apply.
 
 ## Catalog index
 
@@ -354,7 +354,7 @@ Run from the repository root on the commit being recorded:
 
 ### Regression rule
 
-`bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `prefix_p95_ns` is more than 25 % plus 50 ns above the base, or if a budget is exceeded. Without a baseline on the base branch only the budgets apply.
+`bench.yml` runs the bench on Linux on push to `main` (budgets) and on a branch dispatch (base = merge-base with `main`), on the base commit and on the PR in the same job, and fails if `prefix_p95_ns` is more than 25 % plus 50 ns above the base, or if a budget is exceeded. Without a baseline on the base branch only the budgets apply.
 
 ## Object browser tree
 
@@ -381,7 +381,7 @@ Expand p95 is about 0.7 ms against the 16 ms budget (one frame at 60 Hz), and se
 
 ### Regression rule
 
-`bench.yml` runs the bench on Linux for each pull request. Base and PR rounds alternate inside one step (T15; see the noise analysis below): 8 rounds, each a single in-process repetition (`--reps 1`), in the order base, PR, PR, base, base, PR, ... so that neither side owns the cold start or the slow minute. Each round saves its report. A final judge-only call (`--pr` per PR file, `--compare` per base file) takes the minimum per key over the rounds of each side and decides. The rule on those minima:
+`bench.yml` runs the bench on Linux on push to `main` (budgets) and on a branch dispatch (base = merge-base with `main`). Base and PR rounds alternate inside one step (T15; see the noise analysis below): 8 rounds, each a single in-process repetition (`--reps 1`), in the order base, PR, PR, base, base, PR, ... so that neither side owns the cold start or the slow minute. Each round saves its report. A final judge-only call (`--pr` per PR file, `--compare` per base file) takes the minimum per key over the rounds of each side and decides. The rule on those minima:
 
 - `expand_p50_ns` fails when it is above `max(base_p50 x 1.25 + 250 us, 1 ms)` (`--threshold-pct 25`, `--slack-ns 250000`, `--floor-ns 1000000`). The floor keeps a base that happens to be very fast from producing a limit near the timer and allocator noise.
 - `expand_p95_ns` is informational: a `WARN:` line above `2 x base_p95 + 2 x slack`, never a failure. Its absolute budget (16 ms) still fails, and so does the select p95 budget (1 ms).
@@ -497,7 +497,7 @@ The worst completion p95 is about 0.5 to 1.0 ms against the 16 ms budget (one fr
 
 ### Regression rule
 
-`bench.yml` runs the bench on Linux for each pull request, on the base commit and on the PR in the same job, and fails if `complete_p95_ns`, taken as the minimum over 3 in-process repetitions, is more than 25 % plus 250 us (`--slack-ns 250000`, 1/64 of the budget) above the same figure on the base, or if `complete_p95_ns`, `hover_p95_ns`, `diagnose_p95_ns` or `worst_p95_ns` exceeds the 16 ms budget. `hover_p95_ns` and `diagnose_p95_ns` are compared the same way when the base's file has them (a base from before T7 does not; `bench.yml` therefore gates them only once the base branch has a baseline with those keys, and until then only the 16 ms budget applies to them; the gate code is checked by comparing against a saved file that has the keys). Without a baseline on the base branch only the budget applies. The p95 of this bench is in the hundreds of microseconds and sits in the tail of the relation-scan scenarios, so the fixed 50 ns slack of the ns-scale benches would flake on a shared runner; the minimum over repetitions drops a noisy repetition and the 250 us floor keeps a real 2x regression (about +450 us on the M4, more on a runner) failing. If the gate still flakes, report it here rather than widening the default silently.
+`bench.yml` runs the bench on Linux on push to `main` (budgets) and on a branch dispatch (base = merge-base with `main`), on the base commit and on the PR in the same job, and fails if `complete_p95_ns`, taken as the minimum over 3 in-process repetitions, is more than 25 % plus 250 us (`--slack-ns 250000`, 1/64 of the budget) above the same figure on the base, or if `complete_p95_ns`, `hover_p95_ns`, `diagnose_p95_ns` or `worst_p95_ns` exceeds the 16 ms budget. `hover_p95_ns` and `diagnose_p95_ns` are compared the same way when the base's file has them (a base from before T7 does not; `bench.yml` therefore gates them only once the base branch has a baseline with those keys, and until then only the 16 ms budget applies to them; the gate code is checked by comparing against a saved file that has the keys). Without a baseline on the base branch only the budget applies. The p95 of this bench is in the hundreds of microseconds and sits in the tail of the relation-scan scenarios, so the fixed 50 ns slack of the ns-scale benches would flake on a shared runner; the minimum over repetitions drops a noisy repetition and the 250 us floor keeps a real 2x regression (about +450 us on the M4, more on a runner) failing. If the gate still flakes, report it here rather than widening the default silently.
 
 ## Gate review (T15)
 
@@ -678,6 +678,21 @@ cache); the dispatch with `full` unticked runs the same subsets on the branch re
 
 The levers that did not pay or were not needed are in the ADR (sharding, `workflow_run` chaining, sccache, linker and
 incremental flags, toolchain and apt caching).
+
+### T1 (ADR-0074)
+
+[ADR-0074](adr/0074-pr-checks-and-post-release-benchmarks.md) removes every pull request trigger except `ci.yml`.
+Before the change, the runs of one `main` commit (`c26d10a`, `ci-timings.sh --commit`, 2026-10-26) took: `CI` 777 s,
+`Binary size` 1176 s, `Release` dry run 2989 s and 3305 s, `Benchmarks` 915 s. A PR waited for the longest of the
+workflows it triggered, not for `CI` alone (the baseline above: `Bench` 1134 s, `Binary size` 734 s).
+
+| What | Run | Date | Wall (s) | Note |
+| ---- | --- | ---- | -------: | ---- |
+| Pull request, `ci-timings.sh --commit <PR head>` | to record | to record | to record | `CI` must be the only `pull_request` workflow, at most 900 s |
+| `ci.yml` dispatch with `full=false` | to record | to record | to record | warm path |
+| `release.yml` dispatch on the branch | to record | to record | to record | green, no `announce` job, `benchmarks.yml` does not start |
+
+The rows are filled from the PR's own runs after the push (they cannot be measured offline).
 
 ## UI framework spike
 
