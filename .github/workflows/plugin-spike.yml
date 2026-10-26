@@ -4,6 +4,8 @@ name: Plugin runtime spike
 # and the DuckDB / SQL Server guest feasibility. Everything lives in spikes/plugin-runtime
 # (its own workspace); results are `SPIKE key=value` lines merged by scripts/collect.sh.
 # No rust-cache save: the 18 host jobs would evict the ci.yml caches.
+# Triggers: push to main touching `spikes/plugin-runtime/**` or this file, workflow_dispatch. No pull_request
+# trigger (ADR-0074).
 
 on:
   workflow_dispatch:
@@ -12,21 +14,16 @@ on:
         description: "Newest size.yml Linux binary size in bytes (headroom columns)"
         required: false
         default: ""
-  # push only on main: a PR branch is covered by the pull_request trigger, so it no longer runs twice.
   push:
     branches: [main]
     paths:
       - "spikes/plugin-runtime/**"
       - ".github/workflows/plugin-spike.yml"
-  pull_request:
-    paths:
-      - "spikes/plugin-runtime/**"
-      - ".github/workflows/plugin-spike.yml"
 
-# Cancel superseded runs on pull requests only; every main run completes (own group per run).
+# One group per run, never cancelled: every run completes.
 concurrency:
-  group: plugin-spike-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: plugin-spike-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

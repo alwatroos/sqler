@@ -81,6 +81,7 @@ consequences. SQLer uses the MADR format.
 | [0071](0071-sql-server-plugin.md) | SQL Server as an in-repo plugin with a host-provided engine: plugin vs core, cancel closes the connection, ring installed beside aws-lc-rs, API gaps | accepted |
 | [0072](0072-plugin-export-formats.md) | Plugin export formats: `FormatSource` overlay on the export registry, `plugin-<id>:<fmt>` ids and cleaned labels, blocking wait on the host runtime, interned strings, fixed failure texts, CLI for `plugin-` ids | accepted |
 | [0073](0073-tsql-dialect-and-manifest-dialect.md) | T-SQL dialect and the manifest `dialect` key: `Dialect::TSql` with a fail-safe classifier (strict scan for `KILL`, `EXEC`, lock hints and more), `GO` splitting, dialect carried as data to the gate, export, AI tools and editing; fixes gap G1 | accepted |
+| [0074](0074-pr-checks-and-post-release-benchmarks.md) | PR checks and post-release benchmarks: pull requests run `ci.yml` only; `bench`, `size`, spikes and `release` run on `main` or on dispatch; `benchmarks.yml` runs after a published release; amends ADR-0068 option 7 and the ADR-0064 PR trigger | accepted |
 | [0075](0075-platform-installers.md) | Platform installers: ad-hoc-signed `.dmg` with `SQLer.app`, `.deb` for amd64 and arm64, the MSI with a Start menu shortcut, all built by POSIX scripts from the guarded archive with built-in tools only; checksums joined into `sha256.sum`; amends ADR-0064 | accepted |
 
-Unused numbers: 0048, 0049 (never assigned), 0074 (reserved for the parallel item T1; remove from this line when its ADR merges).
+Unused numbers: 0048, 0049 (never assigned).

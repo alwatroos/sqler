@@ -15,6 +15,8 @@
 #                        (one extra API call per job; bounded by <limit>)
 #   ci-timings.sh --caches       cache usage and inventory (GET)
 #   ci-timings.sh --protection   branch protection / rulesets reading (GET)
+#   ci-timings.sh --commit <sha> every workflow run of one commit (7..40 hex characters) with its wall time, and the
+#                                wall time of the pull_request runs (the longest one is what a PR waits for)
 #
 # Queue = job startedAt - run createdAt; run = job completedAt - startedAt.
 # Needs: gh (authenticated), jq.
@@ -66,6 +68,31 @@ protection() {
       --jq '"  - \(.name) (\(.enforcement)): rules = \([.rules[].type] | join(", ")); required checks = \([.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | join(", "))"' \
       2>&1 || echo "  - ruleset $id: not readable"
   done
+}
+
+commit() {
+  sha="$1"
+  case "$sha" in
+    '' | *[!0-9a-fA-F]*) die "--commit needs a hex sha (7..40 characters)" ;;
+  esac
+  [ "${#sha}" -ge 7 ] && [ "${#sha}" -le 40 ] || die "--commit needs a hex sha (7..40 characters)"
+
+  list=$(gh run list --repo "$REPO" --commit "$sha" --limit 50 \
+    --json databaseId,workflowName,event,headBranch,conclusion,createdAt,updatedAt)
+
+  echo "## Runs of commit $sha"
+  echo
+  echo "| run | workflow | event | conclusion | wall s |"
+  echo "| --- | --- | --- | --- | --: |"
+  printf '%s' "$list" | jq -r '
+    def ts: fromdateiso8601;
+    .[] | "| \(.databaseId) | \(.workflowName) | \(.event) | \(.conclusion) | \((.updatedAt | ts) - (.createdAt | ts)) |"'
+  echo
+  printf '%s' "$list" | jq -r '
+    def ts: fromdateiso8601;
+    [ .[] | select(.event == "pull_request") ] as $p
+    | "- pull_request wall: \(if ($p | length) > 0 then ([$p[] | (.updatedAt | ts) - (.createdAt | ts)] | max) else 0 end) s "
+      + "(\($p | length) runs: \([$p[].workflowName] | unique | join(", ")))"'
 }
 
 runs() {
@@ -145,6 +172,10 @@ $jobrows"
 case "$1" in
   --caches) caches ;;
   --protection) protection ;;
+  --commit)
+    [ "$#" -eq 2 ] || die "usage: ci-timings.sh --commit <sha>"
+    commit "$2"
+    ;;
   -*) die "unknown option $1" ;;
   *)
     [ "$#" -ge 2 ] || die "usage: ci-timings.sh <workflow-file> <limit> [branch|event] [--cache-log]"

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- CI: pull requests run only the format, lint and test checks (`CI`); release builds, binary size, spikes and benchmarks run on `main`, on demand or after a published release (ADR-0074).
+
 ### Added
 
 - **Installers for every platform.** Releases now include a macOS `.dmg` (drag `SQLer.app` to Applications; ad-hoc signed and not notarised, see the install page for Open Anyway), a Linux `.deb` for x86_64 and aarch64 (`sudo apt install ./sqler-app-<target>.deb` puts `sqler` on `PATH` and adds a menu entry), and the Windows MSI now adds a Start menu shortcut. Each has a `.sha256` file and a line in `sha256.sum`.
