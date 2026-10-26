@@ -287,8 +287,6 @@ enum Wait {
         conn: &'static str,
         name: &'static str,
     },
-    /// The active tab shows a generated script.
-    Ddl,
     /// The active AI session tab is idle and ready for a message.
     AiReady,
     /// The active AI session tab shows an approval card.
@@ -315,7 +313,6 @@ impl Wait {
             Self::Editors(n) => format!("{n} editor tab(s) with a session"),
             Self::RunDone => "the run to end".to_owned(),
             Self::Table { name, .. } => format!("table {name} in the object browser"),
-            Self::Ddl => "the DDL tab".to_owned(),
             Self::AiReady => "the AI session to be ready".to_owned(),
             Self::AiApproval => "the approval card".to_owned(),
             Self::AiGate => "the production confirmation".to_owned(),
@@ -475,7 +472,7 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
                 name: "customers",
             }),
             Step::Command("object:generate-create"),
-            Step::Wait(Wait::Ddl),
+            Step::Wait(Wait::Editors(2)),
         ],
         "palette-recent" => vec![
             open_step("dev", "select * from customers;"),
@@ -1362,11 +1359,6 @@ impl WorkspaceView {
                 self.ws
                     .query_tab(tab)
                     .is_some_and(|q| matches!(q.phase(), crate::query::Phase::Confirming(_)))
-            }),
-            Wait::Ddl => self.ws.tabs().active().is_some_and(|tab| {
-                self.ws.object_tab(tab.id()).is_some_and(|object| {
-                    matches!(object.content, crate::browser::ObjectTabContent::Script(_))
-                })
             }),
         }
     }

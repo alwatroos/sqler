@@ -37,7 +37,7 @@ The script entries follow the object kind and the dialect, see [DDL and scripts]
 
 - **Open Data** opens a [results grid](results-grid.md) tab, titled `Results: <object>`, with `SELECT * ... LIMIT 1000`. It runs on its own short-lived session; closing the tab cancels it.
 - **Open in SQL Editor** opens a new [SQL editor](sql-editor.md) on the object's connection, filled with `SELECT * ...` for the object. It is offered for the same objects as Generate SELECT.
-- **Generate CREATE, SELECT, INSERT, DROP** opens a read-only `DDL: <object>` tab with the script and a Copy button. Nothing runs against the server, except Generate CREATE for a view, function, index and the like: it opens a short-lived session to read the definition.
+- **Generate CREATE, SELECT, INSERT, DROP** opens a new [SQL editor](sql-editor.md) tab on the object's connection, filled with the script and ready to edit. Nothing runs until you run it, and the normal run path and the production confirmation apply. Generate CREATE for a view, function, index and the like opens a short-lived session to read the definition. If the script cannot be generated, a notice appears and no editor opens.
 - **Properties** opens a read-only `Properties: <object>` tab with a two-column table of the fields SQLer knows (kind, path, owner, comment, columns and so on).
 - **Copy Name** puts the fully quoted, qualified name on the clipboard.
 - **Refresh** reloads the node and everything below it. The row shows progress while it runs and a cancel button (X) next to the count; `Object: Cancel Refresh` does the same. Cancelling keeps the old tree.

@@ -1,6 +1,6 @@
 # DDL and scripts
 
-For an object in the object browser SQLer generates four scripts and a "copy name". They are built for the dialect of the connection: `PostgreSQL`, `MySQL`/`MariaDB` or `SQLite`. Generating a script runs nothing against the server.
+For an object in the object browser SQLer generates four scripts and a "copy name". They are built for the dialect of the connection: `PostgreSQL`, `MySQL`/`MariaDB` or `SQLite`. Generating a script runs nothing against the server. Each script opens in a new [SQL editor](sql-editor.md) tab on the object's connection, ready to edit; you run it yourself.
 
 ## Quoting
 
