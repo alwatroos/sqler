@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- SQL editor: the editor fills the whole query tab below its toolbar again and follows window, side panel, bottom panel and split resizes (it showed only two or three lines).
+
 ### Changed
 
 - CI: pull requests run only the format, lint and test checks (`CI`); release builds, binary size, spikes and benchmarks run on `main`, on demand or after a published release (ADR-0074).
