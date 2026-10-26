@@ -141,6 +141,9 @@ impl Workspace {
         if action.is_agent() {
             return self.dispatch_agent(action);
         }
+        if action.is_chat() {
+            return self.dispatch_chat(action);
+        }
         if action.is_assist() {
             return self.dispatch_assist(action, None);
         }
@@ -240,6 +243,13 @@ impl Workspace {
             | AiAction::RestartAgent(_)
             | AiAction::AllowAgentRequest(..)
             | AiAction::RejectAgentRequest(..)) => self.dispatch_agent(agent),
+            chat @ (AiAction::ToggleChat
+            | AiAction::NewChat
+            | AiAction::SetChatDraft(_)
+            | AiAction::SendChat
+            | AiAction::CancelChat
+            | AiAction::CopyChatSql { .. }
+            | AiAction::OpenChatSql { .. }) => self.dispatch_chat(chat),
             // Routed above; kept so a new assist action cannot fall through unhandled.
             assist => self.dispatch_assist(assist, None),
         }

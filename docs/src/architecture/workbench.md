@@ -172,7 +172,7 @@ The product questions are taken with the recommended defaults and implemented un
 
 ## 5. Persistence, compatibility and budgets
 - **`workbench.toml`** (config dir, `sqler-config`):
-  - Contents: `version = 1`; `[side_panel]` visible/size/view (`connections|saved-queries`); `[bottom_panel]` visible/size/view (`results|messages|history|ai-audit|assistant`); optional `[window]` width/height; `recent_commands` (≤10 IDs); `recent_connections` (≤5 connection IDs).
+  - Contents: `version = 1`; `[side_panel]` visible/size/view (`connections|saved-queries`); `[bottom_panel]` visible/size/view (`results|messages|history|ai-audit|assistant`); optional `[chat_panel]` visible/size/view (`chat`, size 280-900, default hidden at 380; added by ADR-0076, the version stays 1, a file without it loads the default); optional `[window]` width/height; `recent_commands` (≤10 IDs); `recent_connections` (≤5 connection IDs).
   - Reading is lenient: unknown keys are ignored, and out-of-range or unknown values fall back per field to the default/clamp.
   - A missing file gives defaults.
   - `version > 1` gives defaults, and the file is **never written** (read-only, same rule as settings).
@@ -210,6 +210,7 @@ Rust names are pinned. Implementation items may add private helpers, not rename 
 // sqler-config/src/workbench.rs (U2)
 pub const WORKBENCH_VERSION: u32 = 1;
 #[serde(default)] pub struct WorkbenchState { pub version: u32, pub side_panel: PanelState, pub bottom_panel: PanelState,
+    pub chat_panel: PanelState,   // ADR-0076; defaults (false,380,"chat")
     pub window: Option<WindowState>, pub recent_commands: Vec<String>, pub recent_connections: Vec<String> }
 pub struct PanelState { pub visible: bool, pub size: f32, pub view: String }   // defaults: (true,260,"connections"), (false,380,"results")
 pub struct WindowState { pub width: f32, pub height: f32 }

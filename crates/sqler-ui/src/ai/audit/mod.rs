@@ -40,9 +40,10 @@ pub const AUDIT_TOOLS: &[&str] = &[
 ];
 
 /// The surfaces the filter offers.
-pub const AUDIT_SURFACES: [Surface; 4] = [
+pub const AUDIT_SURFACES: [Surface; 5] = [
     Surface::Assist,
     Surface::Session,
+    Surface::Chat,
     Surface::Mcp,
     Surface::Agent,
 ];
@@ -391,6 +392,7 @@ pub fn surface_label(s: Surface) -> &'static str {
         Surface::Session => "In-app session",
         Surface::Mcp => "MCP",
         Surface::Agent => "ACP agent",
+        Surface::Chat => "Chat panel",
         Surface::Unspecified => "Unspecified",
         _ => "Other",
     }

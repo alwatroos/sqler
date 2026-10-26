@@ -50,7 +50,10 @@ pub use cancel::SessionCancel;
 pub use config::{RetryPolicy, SessionConfig, SessionLimits};
 pub use engine::{ExplorationSession, LimitKind, SessionError, TurnOutcome};
 pub use events::{MemoryEvents, SessionEvent, SessionEvents, SessionState};
-pub use prompt::{SESSION_PROMPT_VERSION, system_prompt};
+pub use prompt::{
+    CHAT_PROMPT_VERSION, PromptKind, SESSION_PROMPT_VERSION, chat_system_prompt, prompt_for,
+    system_prompt,
+};
 pub use transcript::{
     MAX_TRANSCRIPT_ENTRIES, NotRunReason, Notice, RerunRequest, SqlEntry, ToolCallEntry,
     ToolCallStatus, Transcript, TranscriptEntry,

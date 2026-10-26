@@ -81,5 +81,6 @@ consequences. SQLer uses the MADR format.
 | [0071](0071-sql-server-plugin.md) | SQL Server as an in-repo plugin with a host-provided engine: plugin vs core, cancel closes the connection, ring installed beside aws-lc-rs, API gaps | accepted |
 | [0072](0072-plugin-export-formats.md) | Plugin export formats: `FormatSource` overlay on the export registry, `plugin-<id>:<fmt>` ids and cleaned labels, blocking wait on the host runtime, interned strings, fixed failure texts, CLI for `plugin-` ids | accepted |
 | [0073](0073-tsql-dialect-and-manifest-dialect.md) | T-SQL dialect and the manifest `dialect` key: `Dialect::TSql` with a fail-safe classifier (strict scan for `KILL`, `EXEC`, lock hints and more), `GO` splitting, dialect carried as data to the gate, export, AI tools and editing; fixes gap G1 | accepted |
+| [0076](0076-ai-chat-panel.md) | AI chat panel: right-side panel holding one session under the reserved `TabId::CHAT_PANEL`, read-only by construction (no approver, `read_only` info), forced caps, no `open_results_tab`, `search_data` via `AssistSearch`, `Surface::Chat`, additive `workbench.toml` `chat_panel` | accepted |
 
 Unused numbers: 0048, 0049 (never assigned).

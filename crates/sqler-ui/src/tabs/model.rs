@@ -34,6 +34,10 @@ impl TabId {
     /// gets it.
     pub(crate) const PANEL_HISTORY: TabId = TabId(u64::MAX);
 
+    /// The reserved id under which the AI chat panel keeps its session (ADR-0076). No strip tab
+    /// ever gets it.
+    pub(crate) const CHAT_PANEL: TabId = TabId(u64::MAX - 1);
+
     /// The raw number, for keying UI elements.
     #[cfg(feature = "gui")]
     pub(crate) fn raw(self) -> u64 {

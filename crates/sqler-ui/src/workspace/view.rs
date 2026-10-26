@@ -284,6 +284,8 @@ pub(crate) struct WorkspaceView {
     /// The first action item of the status bar.
     status_first: FocusHandle,
     panel_focus: FocusHandle,
+    /// The AI chat panel on the right (ADR-0076).
+    chat_focus: FocusHandle,
     status_focus: FocusHandle,
     /// The handle that had the focus when a region was left (`F6`).
     region_memory: HashMap<Region, FocusHandle>,
@@ -527,6 +529,7 @@ impl WorkspaceView {
                 .collect(),
             status_first: cx.focus_handle().tab_stop(true),
             panel_focus: cx.focus_handle(),
+            chat_focus: cx.focus_handle(),
             status_focus: cx.focus_handle(),
             region_memory: HashMap::new(),
             tab_scroll: HashMap::new(),

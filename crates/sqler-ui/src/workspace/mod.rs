@@ -34,6 +34,8 @@ mod update;
 mod view;
 
 pub use action::{WorkspaceAction, register_commands};
+#[cfg(any(feature = "gui", test))]
+pub(crate) use ai::NO_PROVIDER;
 pub use bridge::{PendingConnect, PendingTrust, SessionBridge};
 pub use browser::{BrowserJob, BrowserJobResult, BrowserNote, CatalogResult, OpenDataJob};
 pub use edit::{

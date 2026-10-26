@@ -6,9 +6,13 @@
 //! comes back in `HostMsg::TurnDone`, like a query session comes back from a query job.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use sqler_ai_tools::session::{ExplorationSession, SessionConfig, SessionError, TurnOutcome};
-use sqler_ai_tools::{ConnectionInfo, Surface, ToolSet};
+use sqler_ai_api::AiProvider;
+use sqler_ai_tools::session::{
+    ExplorationSession, PromptKind, SessionConfig, SessionError, TurnOutcome,
+};
+use sqler_ai_tools::{Assist, AssistSearch, ConnectionInfo, Limits, Surface, ToolSet};
 use sqler_config::{AiConfig, ProviderConfig};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -19,6 +23,16 @@ use crate::ai::approval::ChannelApprover;
 use crate::ai::{AiAudit, AiProviderFactory};
 use crate::connections::{ConnectRequest, Connector};
 use crate::tabs::TabId;
+
+/// How strict the session is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SessionMode {
+    /// An AI session tab: approval-and-run with the user's approval (ADR-0053).
+    #[default]
+    Tab,
+    /// The chat panel (ADR-0076): read-only, always capped, no approver, no results tab.
+    ChatPanel,
+}
 
 /// Everything needed to build the session of a new tab.
 pub struct AiSessionStart {
@@ -38,6 +52,8 @@ pub struct AiSessionStart {
     pub audit: AiAudit,
     /// The host channel of the tab.
     pub tx: UnboundedSender<HostMsg>,
+    /// Tab or chat panel.
+    pub mode: SessionMode,
 }
 
 // Ids only: never the endpoint, the model or the connection details.
@@ -81,30 +97,94 @@ pub async fn build_session(
         config,
         audit,
         tx,
+        mode,
         ..
     } = start;
     let built = tokio::task::spawn_blocking(move || factory.build(&provider, None))
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())?;
-    let source = Arc::new(TabSource::new(info.clone(), request, connector));
-    let tools = ToolSet::configured(source.clone(), &config)
-        .with_ui_host(Arc::new(ChannelUiHost(tx.clone())));
-    let tools = audit.attach(tools, Surface::Session);
-    let approver = Arc::new(ChannelApprover::new(tx.clone(), HostMsg::Ask));
-    let session = ExplorationSession::new(
+    let parts = Parts {
         built,
-        tools,
         info,
-        Some(approver),
-        SessionConfig::new(model),
-    )
+        request,
+        config,
+        audit,
+        connector,
+        model,
+    };
+    let (source, session) = match mode {
+        SessionMode::Tab => tab_session(parts, &tx),
+        SessionMode::ChatPanel => chat_session(parts),
+    }
     .map_err(|err| match err {
         SessionError::ToolsUnsupported => NO_TOOLS.to_owned(),
         other => other.to_string(),
-    })?
-    .with_events(Arc::new(ChannelEvents(tx)));
-    Ok(SessionReady { session, source })
+    })?;
+    Ok(SessionReady {
+        session: session.with_events(Arc::new(ChannelEvents(tx))),
+        source,
+    })
+}
+
+/// What both session modes are built from.
+struct Parts {
+    built: Arc<dyn AiProvider>,
+    info: ConnectionInfo,
+    request: ConnectRequest,
+    config: AiConfig,
+    audit: AiAudit,
+    connector: Arc<dyn Connector>,
+    model: String,
+}
+
+type Built = Result<(Arc<TabSource>, ExplorationSession), SessionError>;
+
+fn tab_session(p: Parts, tx: &UnboundedSender<HostMsg>) -> Built {
+    let source = Arc::new(TabSource::new(p.info.clone(), p.request, p.connector));
+    let tools = ToolSet::configured(source.clone(), &p.config)
+        .with_ui_host(Arc::new(ChannelUiHost(tx.clone())));
+    let tools = p.audit.attach(tools, Surface::Session);
+    let approver = Arc::new(ChannelApprover::new(tx.clone(), HostMsg::Ask));
+    let session = ExplorationSession::new(
+        p.built,
+        tools,
+        p.info,
+        Some(approver),
+        SessionConfig::new(p.model),
+    )?;
+    Ok((source, session))
+}
+
+/// The chat panel (ADR-0076): the connection is read-only for the guard, so a statement that is
+/// not a read is refused before any approval; there is no approver and no host for a results
+/// tab; the caps are forced on whatever `unlimited` says.
+fn chat_session(p: Parts) -> Built {
+    let info = p.info.with_read_only(true);
+    let source = Arc::new(TabSource::new(info.clone(), p.request, p.connector));
+    let limits = &p.config.limits;
+    let capped = Limits::new(
+        limits.max_rows,
+        Duration::from_secs(u64::from(limits.timeout_secs)),
+        false,
+    );
+    let base = ToolSet::new(source.clone(), capped).with_redaction(p.config.redaction.clone());
+    let assist = Assist::new(
+        p.audit.attach(base.clone(), Surface::Chat),
+        p.built.clone(),
+        p.model.clone(),
+    );
+    let tools = p
+        .audit
+        .attach(base, Surface::Chat)
+        .with_data_search(Arc::new(AssistSearch::new(assist)));
+    let prompt = PromptKind::Chat {
+        max_rows: capped.max_rows,
+        timeout_secs: capped.timeout.as_secs(),
+    };
+    let config = SessionConfig::new(p.model).with_prompt(prompt);
+    let session = ExplorationSession::new(p.built, tools, info, None, config)?;
+    Ok((source, session))
 }
 
 /// One user turn. Lends the session; it comes back in [`TurnDone`].

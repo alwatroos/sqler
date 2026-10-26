@@ -1627,14 +1627,15 @@ mod ai_session_flow {
     use crate::ai::session::{
         AiSessionStart, AiSessionTab, ENTRY_GONE, HostMsg, MAX_ENTRIES, NO_TOOLS, SESSION_AI_OFF,
         SESSION_BUSY, SESSION_CONFIG_BROKEN, SESSION_EMPTY, SESSION_NO_CONNECTION,
-        SESSION_NOT_BUILT, SESSION_STARTING, STALE_ANSWER, SessionPhase, TAB_CLOSED, TurnDone,
-        UiCall, UiRequest, WRONG_CONNECTION, build_session, sql_footer,
+        SESSION_NOT_BUILT, SESSION_STARTING, STALE_ANSWER, SessionMode, SessionPhase, TAB_CLOSED,
+        TurnDone, UiCall, UiRequest, WRONG_CONNECTION, build_session, sql_footer,
     };
     use crate::ai::{AiAction, AiAudit, AiProviderFactory, AiStartup, AiState, NoProviders};
     use crate::query::{Phase, QueryTab, RunMode};
     use crate::sidebar::SidebarModel;
     use crate::tabs::{TabId, TabKind};
     use crate::workbench::SideView;
+    use crate::workspace::NO_PROVIDER;
     use crate::workspace::{Effect, SessionBridge, Workspace, WorkspaceAction};
 
     const WAIT: Duration = Duration::from_secs(10);
@@ -2177,6 +2178,31 @@ mod ai_session_flow {
 
         fn notice(&mut self) -> Option<String> {
             self.w.take_notice()
+        }
+
+        /// Opens the connection and shows the chat panel, which starts a chat. `self.tab`
+        /// becomes the reserved chat id.
+        fn open_chat_panel(&mut self) {
+            let effect = self.w.dispatch(WorkspaceAction::OpenConnection(0));
+            self.pump(effect);
+            let effect = self.w.dispatch_ai(AiAction::ToggleChat);
+            self.pump(effect);
+        }
+
+        /// Types into the chat composer and sends, as the panel does.
+        fn chat_say(&mut self, text: &str) -> Effect {
+            self.w.dispatch_ai(AiAction::SetChatDraft(text.to_owned()));
+            let effect = self.w.dispatch_ai(AiAction::SendChat);
+            if matches!(effect, Effect::RunAiTurn(_)) {
+                self.pump(effect);
+                return Effect::None;
+            }
+            effect
+        }
+
+        fn chat_ask(&mut self, text: &str) {
+            self.chat_say(text);
+            self.until_ready();
         }
     }
 
@@ -2837,6 +2863,7 @@ mod ai_session_flow {
                 config: config(),
                 audit: chat.w.ai_audit().unwrap().clone(),
                 tx,
+                mode: SessionMode::Tab,
             };
             build_session(start, chat.factory.clone(), chat.bridge.connector())
                 .await
@@ -3342,6 +3369,312 @@ mod ai_session_flow {
                 s.close().await.unwrap();
             });
         }
+    }
+
+    // The chat panel (ADR-0076).
+
+    fn chat_config(max_rows: u32, unlimited: bool) -> AiState {
+        let mut cfg = config();
+        cfg.limits.max_rows = max_rows;
+        cfg.limits.unlimited = unlimited;
+        AiState::new(cfg, vec![ProviderKind::Ollama], None)
+    }
+
+    fn sample_customers(id: &str) -> Script {
+        call(
+            id,
+            "sample_rows",
+            &serde_json::json!({"connection": "db", "table": "customers"}),
+        )
+    }
+
+    #[test]
+    fn the_chat_samples_rows_under_the_row_limit_even_when_unlimited() {
+        let p = scripted();
+        p.push_script(sample_customers("c1"));
+        p.push_script(run_query("c2", "select * from customers order by id"));
+        p.push_script(text("Here are three customers."));
+        let mut chat = Chat::with(None, p.clone(), chat_config(3, true), true);
+        let mem = Arc::new(sqler_ai_tools::MemoryAudit::new());
+        chat.w.ai_audit = Some(AiAudit::new(mem.clone()));
+        chat.open_chat_panel();
+        assert_eq!(chat.tab(), TabId::CHAT_PANEL);
+        assert!(chat.w.layout().chat_visible());
+        assert!(
+            chat.w.tabs().get(TabId::CHAT_PANEL).is_none(),
+            "no strip tab"
+        );
+        assert!(
+            !chat.w.queries.contains_key(&TabId::CHAT_PANEL),
+            "no query gate"
+        );
+        assert!(chat.session().info().read_only);
+        chat.chat_ask("Show me some customers");
+        let system = p.requests()[0].system.clone().unwrap();
+        assert!(system.contains("data analyst"), "{system}");
+        assert!(system.contains("Only reads can run"));
+        assert!(
+            system.contains("3 rows"),
+            "the forced cap, not the unlimited flag"
+        );
+        assert!(!system.contains("needs the user's approval"));
+        let sqls = chat.sqls();
+        assert_eq!(sqls.len(), 2);
+        // `sample_rows` asks for at most the cap, so it fits exactly; a wider read is cut.
+        assert_eq!(sqls[0].rows, 3);
+        assert_eq!(sqls[1].rows, 3);
+        assert_eq!(
+            sqls[1].truncated,
+            Some(sqler_ai_tools::Truncation::RowLimit)
+        );
+        assert!(sql_footer(sqls[1]).contains("row limit"));
+        assert_eq!(chat.asks, 0);
+        let entries = mem.entries();
+        assert!(entries.len() >= 2);
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.surface == sqler_ai_tools::Surface::Chat)
+        );
+        // The statement that ran can be copied, never re-run.
+        let ix = chat.session().dropped()
+            + chat
+                .entries()
+                .iter()
+                .position(|e| matches!(e, TranscriptEntry::Sql(_)))
+                .unwrap();
+        let effect = chat.w.dispatch_ai(AiAction::CopyChatSql {
+            entry: ix,
+            block: 0,
+        });
+        assert!(matches!(effect, Effect::Copy(_)), "{effect:?}");
+        assert!(!chat.seen.iter().any(|s| matches!(s, Seen::Run { .. })));
+    }
+
+    #[test]
+    fn the_chat_refuses_a_write_on_dev_and_on_prod_without_asking() {
+        for env in [Environment::Dev, Environment::Prod] {
+            let p = scripted();
+            p.push_script(run_query("c1", UPDATE));
+            p.push_script(text("I cannot change data here."));
+            let mut chat = Chat::with(Some(env), p, chat_config(100, false), true);
+            let mem = Arc::new(sqler_ai_tools::MemoryAudit::new());
+            chat.w.ai_audit = Some(AiAudit::new(mem.clone()));
+            chat.open_chat_panel();
+            chat.chat_ask("set customer 2 to GB");
+            assert!(
+                chat.tool_statuses().iter().any(|s| matches!(
+                    s,
+                    ToolCallStatus::Error { code, .. } if code == "read_only"
+                )),
+                "{env:?}: {:?}",
+                chat.tool_statuses()
+            );
+            assert_eq!(chat.asks, 0, "{env:?}");
+            assert_eq!(chat.country(2), "DE", "{env:?}");
+            assert!(chat.session().approvals().current().is_none());
+            let entries = mem.entries();
+            assert_eq!(entries.len(), 1, "{env:?}");
+            assert_eq!(
+                entries[0].approval,
+                sqler_ai_tools::ApprovalOutcome::Refused,
+                "{env:?}"
+            );
+            assert!(!chat.w.queries.contains_key(&TabId::CHAT_PANEL), "{env:?}");
+        }
+    }
+
+    #[test]
+    fn cancelling_the_chat_keeps_it_usable() {
+        let open = Arc::new(AtomicUsize::new(0));
+        let mut chat = Chat::new(
+            None,
+            Arc::new(StallProvider {
+                open: Arc::clone(&open),
+            }),
+        );
+        chat.open_chat_panel();
+        assert!(matches!(
+            chat.w.dispatch_ai(AiAction::CancelChat),
+            Effect::None
+        ));
+        chat.chat_say("think forever");
+        chat.until("the model is thinking", |_, _| {
+            open.load(Ordering::SeqCst) == 1
+        });
+        chat.w.dispatch_ai(AiAction::CancelChat);
+        chat.until_ready();
+        assert!(
+            chat.entries()
+                .contains(&TranscriptEntry::Notice(Notice::Cancelled))
+        );
+        // The next message is accepted.
+        chat.w.dispatch_ai(AiAction::SetChatDraft("again".into()));
+        let effect = chat.w.dispatch_ai(AiAction::SendChat);
+        assert!(matches!(effect, Effect::RunAiTurn(_)), "{effect:?}");
+        chat.pump(effect);
+        chat.until("the model is thinking again", |_, _| {
+            open.load(Ordering::SeqCst) == 1
+        });
+        chat.w.dispatch_ai(AiAction::CancelChat);
+        chat.until_ready();
+    }
+
+    #[test]
+    fn the_chat_explains_why_it_cannot_start() {
+        // AI is off for the connection.
+        let mut off = Chat::with(
+            None,
+            scripted(),
+            AiState::new(config(), vec![ProviderKind::Ollama], None),
+            false,
+        );
+        let effect = off.w.dispatch(WorkspaceAction::OpenConnection(0));
+        off.pump(effect);
+        assert_eq!(off.w.chat_gate(), Err(SESSION_AI_OFF));
+        let effect = off.w.dispatch_ai(AiAction::ToggleChat);
+        off.pump(effect);
+        assert!(off.w.layout().chat_visible());
+        assert!(off.w.chat().is_none());
+        assert_eq!(off.notice(), None, "showing the panel says nothing itself");
+        let effect = off.w.dispatch_ai(AiAction::NewChat);
+        assert!(matches!(effect, Effect::None));
+        assert_eq!(off.notice().as_deref(), Some(SESSION_AI_OFF));
+        // No Exploration model.
+        let mut bare = Chat::with(
+            None,
+            scripted(),
+            AiState::new(AiConfig::default(), vec![ProviderKind::Ollama], None),
+            true,
+        );
+        let effect = bare.w.dispatch(WorkspaceAction::OpenConnection(0));
+        bare.pump(effect);
+        assert_eq!(bare.w.chat_gate(), Err(NO_PROVIDER));
+        bare.w.dispatch_ai(AiAction::ToggleChat);
+        assert!(bare.w.chat().is_none());
+        bare.w.dispatch_ai(AiAction::NewChat);
+        assert_eq!(bare.notice().as_deref(), Some(NO_PROVIDER));
+        // Nothing to send to.
+        assert!(matches!(
+            bare.w.dispatch_ai(AiAction::SendChat),
+            Effect::None
+        ));
+    }
+
+    #[test]
+    fn chat_sql_is_copied_or_opened_but_never_run() {
+        let p = scripted();
+        p.push_script(text(
+            "Try this:\n```sql\nselect country, count(*) from customers group by country\n```",
+        ));
+        let mut chat = Chat::new(None, p);
+        chat.open_chat_panel();
+        chat.chat_ask("count per country");
+        let sql = "select country, count(*) from customers group by country";
+        let entry = chat.session().dropped()
+            + chat
+                .entries()
+                .iter()
+                .position(|e| matches!(e, TranscriptEntry::Assistant { .. }))
+                .unwrap();
+        // The commands are offered once there is SQL.
+        let id = crate::command::CommandId::new("ai:copy-chat-sql").unwrap();
+        assert_eq!(
+            crate::ai::action_for(&id, &chat.w),
+            Some(AiAction::CopyChatSql { entry, block: 0 })
+        );
+        let effect = chat
+            .w
+            .dispatch_ai(AiAction::CopyChatSql { entry, block: 0 });
+        assert!(
+            matches!(&effect, Effect::Copy(text) if text == sql),
+            "{effect:?}"
+        );
+        let effect = chat
+            .w
+            .dispatch_ai(AiAction::OpenChatSql { entry, block: 0 });
+        chat.pump(effect);
+        assert!(chat.seen.contains(&Seen::Connect {
+            seed: Some(sql.to_owned())
+        }));
+        assert!(!chat.seen.iter().any(|s| matches!(s, Seen::Run { .. })));
+        assert!(chat.w.ai_sessions.reruns.is_empty());
+        // A block or entry that is not there says so.
+        let effect = chat
+            .w
+            .dispatch_ai(AiAction::CopyChatSql { entry, block: 3 });
+        assert!(matches!(effect, Effect::None));
+        assert_eq!(chat.notice().as_deref(), Some(ENTRY_GONE));
+        chat.w.dispatch_ai(AiAction::OpenChatSql {
+            entry: 99,
+            block: 0,
+        });
+        assert_eq!(chat.notice().as_deref(), Some(ENTRY_GONE));
+    }
+
+    #[test]
+    fn hiding_keeps_the_chat_and_new_chat_closes_its_database_session() {
+        let p = scripted();
+        p.push_script(sample_customers("c1"));
+        p.push_script(text("done"));
+        let mut chat = Chat::new(None, p);
+        chat.open_chat_panel();
+        chat.chat_ask("sample");
+        let before = chat.entries().len();
+        assert!(before > 0);
+        // Hiding keeps the conversation; showing again does not start another.
+        chat.w.dispatch_ai(AiAction::ToggleChat);
+        assert!(!chat.w.layout().chat_visible());
+        let effect = chat.w.dispatch_ai(AiAction::ToggleChat);
+        assert!(matches!(effect, Effect::None));
+        assert_eq!(chat.entries().len(), before);
+        // A new chat discards it and releases the session its tools opened.
+        let closes = chat.closes.load(Ordering::SeqCst);
+        let effect = chat.w.dispatch_ai(AiAction::NewChat);
+        chat.pump(effect);
+        assert!(chat.seen.contains(&Seen::CloseSession));
+        assert_eq!(chat.closes.load(Ordering::SeqCst), closes + 1);
+        chat.until_ready();
+        assert_eq!(chat.entries().len(), 0);
+    }
+
+    #[test]
+    fn quitting_closes_the_chat_session() {
+        let p = scripted();
+        p.push_script(sample_customers("c1"));
+        p.push_script(text("done"));
+        let mut chat = Chat::new(None, p);
+        chat.open_chat_panel();
+        chat.chat_ask("sample");
+        let effect = chat.w.dispatch(WorkspaceAction::Quit);
+        // The query tab's session and the chat's (the browser has none open here).
+        let Effect::CloseSessions(sessions) = &effect else {
+            panic!("{effect:?}");
+        };
+        let count = sessions.len();
+        assert!(count >= 2, "{count}");
+        chat.pump(effect);
+        assert!(chat.closes.load(Ordering::SeqCst) >= count);
+    }
+
+    #[test]
+    fn the_chat_never_answers_a_ui_call() {
+        let mut chat = Chat::new(None, scripted());
+        chat.open_chat_panel();
+        let (tx, rx) = oneshot::channel();
+        let effect = chat.w.ai_session_message(
+            TabId::CHAT_PANEL,
+            HostMsg::Ui(UiCall {
+                request: UiRequest::OpenInEditor {
+                    connection: None,
+                    sql: "select 1".into(),
+                },
+                reply: tx,
+            }),
+        );
+        assert!(matches!(effect, Effect::None));
+        let answer = chat.rt.block_on(rx).unwrap();
+        assert!(matches!(answer, Err(ToolError::Host(m)) if m == WRONG_CONNECTION));
     }
 }
 

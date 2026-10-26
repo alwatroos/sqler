@@ -69,7 +69,7 @@ pub(crate) fn session_tab_body(
 }
 
 /// An empty state in the middle of the tab.
-fn centred(content: Div, cx: &Context<WorkspaceView>) -> AnyElement {
+pub(crate) fn centred(content: Div, cx: &Context<WorkspaceView>) -> AnyElement {
     div()
         .flex_1()
         .min_h_0()
@@ -218,7 +218,7 @@ fn entry_row(
             .text_size(px(size))
             .child(text.clone())
             .into_any_element(),
-        TranscriptEntry::ToolCall(call) => tool_row(call, cx),
+        TranscriptEntry::ToolCall(call) => tool_row(call, tool_status_text, cx),
         TranscriptEntry::Sql(sql) => sql_card(tab, index, sql, cx),
         TranscriptEntry::Notice(notice) => div()
             .text_size(px(size))
@@ -229,8 +229,12 @@ fn entry_row(
     })
 }
 
-/// The tool name and how the call ended.
-fn tool_row(call: &ToolCallEntry, cx: &Context<WorkspaceView>) -> AnyElement {
+/// The tool name and how the call ended, worded by `status_text`.
+pub(crate) fn tool_row(
+    call: &ToolCallEntry,
+    status_text: fn(&ToolCallStatus) -> String,
+    cx: &Context<WorkspaceView>,
+) -> AnyElement {
     let theme = cx.theme();
     let scale = ui_scale(cx);
     let color = match &call.status {
@@ -252,11 +256,7 @@ fn tool_row(call: &ToolCallEntry, cx: &Context<WorkspaceView>) -> AnyElement {
                 .text_size(px(scale.mono))
                 .child(call.tool.clone()),
         )
-        .child(
-            div()
-                .text_color(color)
-                .child(tool_status_text(&call.status)),
-        )
+        .child(div().text_color(color).child(status_text(&call.status)))
         .into_any_element()
 }
 
@@ -335,7 +335,7 @@ fn sql_card(
 }
 
 /// The answer the model is writing now.
-fn streaming_row(text: &str, cx: &Context<WorkspaceView>) -> AnyElement {
+pub(crate) fn streaming_row(text: &str, cx: &Context<WorkspaceView>) -> AnyElement {
     let muted = cx.theme().muted_foreground;
     div()
         .flex()
@@ -349,7 +349,7 @@ fn streaming_row(text: &str, cx: &Context<WorkspaceView>) -> AnyElement {
 }
 
 /// The input, the Send button and the state line.
-fn composer(
+pub(crate) fn composer(
     view: &WorkspaceView,
     tab: TabId,
     session: &AiSessionTab,

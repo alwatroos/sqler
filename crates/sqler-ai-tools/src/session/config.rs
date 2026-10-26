@@ -5,6 +5,8 @@
 
 use std::time::Duration;
 
+use crate::session::prompt::PromptKind;
+
 /// How a failed model step is retried. Only `RateLimited`, `Overloaded` and `Network` errors that arrive
 /// before any text or tool call are retried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +90,8 @@ pub struct SessionConfig {
     pub max_output_tokens: Option<u32>,
     /// The sampling temperature.
     pub temperature: Option<f32>,
+    /// Which system prompt the session gets.
+    pub prompt: PromptKind,
 }
 
 impl SessionConfig {
@@ -99,7 +103,15 @@ impl SessionConfig {
             limits: SessionLimits::default(),
             max_output_tokens: None,
             temperature: None,
+            prompt: PromptKind::Tab,
         }
+    }
+
+    /// The same configuration with another system prompt.
+    #[must_use]
+    pub fn with_prompt(mut self, prompt: PromptKind) -> Self {
+        self.prompt = prompt;
+        self
     }
 }
 

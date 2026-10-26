@@ -11,6 +11,7 @@ mod action;
 pub mod agent;
 pub mod approval;
 pub mod audit;
+pub mod chat;
 pub mod editor;
 pub mod hub;
 pub mod indicator;

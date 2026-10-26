@@ -28,6 +28,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("workbench:reset-layout", "View: Reset Layout"),
     ("workbench:set-side-width", "Set Side Panel Width"),
     ("workbench:set-panel-height", "Set Panel Height"),
+    ("workbench:set-chat-width", "Set Chat Panel Width"),
 ];
 
 /// The `pane:*` commands (editor groups): ID and title. Registered by the shell, not by
@@ -124,7 +125,11 @@ mod tests {
 
     #[test]
     fn action_for_every_no_arg_id() {
-        let args = ["workbench:set-side-width", "workbench:set-panel-height"];
+        let args = [
+            "workbench:set-side-width",
+            "workbench:set-panel-height",
+            "workbench:set-chat-width",
+        ];
         for (id, _) in COMMANDS {
             let got = action_for(&CommandId::new(id).unwrap());
             assert_eq!(got.is_none(), args.contains(id), "{id}");
