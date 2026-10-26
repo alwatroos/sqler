@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-26
+
 ### Added
 
 - **AI chat panel**: a read-only assistant on the right side of the window, next to the editor. Open it with **AI: Toggle Chat Panel** or the **Chat** item of the status bar. It samples and analyses data under the row and time caps of `ai.toml`, refuses every statement that would change data (there is no approval step), and lets you copy or open the SQL it produced in an editor tab without running it. Chat calls appear in the audit log as **Chat panel**. See [ADR-0076](docs/src/adr/0076-ai-chat-panel.md).
+- **Installers for every platform.** Releases now include a macOS `.dmg` (drag `SQLer.app` to Applications; ad-hoc signed and not notarised, see the install page for Open Anyway), a Linux `.deb` for x86_64 and aarch64 (`sudo apt install ./sqler-app-<target>.deb` puts `sqler` on `PATH` and adds a menu entry), and the Windows MSI now adds a Start menu shortcut. Each has a `.sha256` file and a line in `sha256.sum`.
+
+### Changed
+
+- Generate CREATE, SELECT, INSERT and DROP in the object browser open the script in a new SQL editor tab on the object's connection instead of a read-only DDL tab; nothing runs until you run it.
 
 ## [1.0.2] - 2026-10-26
 
@@ -19,12 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Generate CREATE, SELECT, INSERT and DROP in the object browser open the script in a new SQL editor tab on the object's connection instead of a read-only DDL tab; nothing runs until you run it.
 - CI: pull requests run only the format, lint and test checks (`CI`); release builds, binary size, spikes and benchmarks run on `main`, on demand or after a published release (ADR-0074).
-
-### Added
-
-- **Installers for every platform.** Releases now include a macOS `.dmg` (drag `SQLer.app` to Applications; ad-hoc signed and not notarised, see the install page for Open Anyway), a Linux `.deb` for x86_64 and aarch64 (`sudo apt install ./sqler-app-<target>.deb` puts `sqler` on `PATH` and adds a menu entry), and the Windows MSI now adds a Start menu shortcut. Each has a `.sha256` file and a line in `sha256.sum`.
 
 ## [1.0.1] - 2026-10-25
 
