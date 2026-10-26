@@ -4,24 +4,21 @@ name: UI framework spike
 # scripted --smoke check plus the measurement script on four targets.
 # Software renderers (lavapipe, WARP, VM Metal) count; the report line
 # "SPIKE display=..." must match the matrix entry, so X11 cannot pass as Wayland.
+# Triggers: push to main touching `spikes/ui-framework/**` or this file, workflow_dispatch. No pull_request
+# trigger (ADR-0074).
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "spikes/ui-framework/**"
-      - ".github/workflows/spike.yml"
-  # push only on main: a PR branch is covered by the pull_request trigger, so it no longer runs twice.
   push:
     branches: [main]
     paths:
       - "spikes/ui-framework/**"
       - ".github/workflows/spike.yml"
 
-# Cancel superseded runs on pull requests only; every main run completes (own group per run).
+# One group per run, never cancelled: every run completes.
 concurrency:
-  group: spike-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: spike-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

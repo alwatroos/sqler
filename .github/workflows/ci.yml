@@ -1,5 +1,9 @@
 name: CI
 
+# Triggers: pull_request, push to main, and workflow_dispatch (input `full`).
+# PR checks: fmt, clippy, tests, docs/deny/spdx lint and `CI result`; nothing builds a release bundle, benchmarks or
+# measures size (ADR-0074). Those run in bench.yml, size.yml, release.yml and benchmarks.yml, on main, on demand or
+# after a published release.
 on:
   pull_request:
   push:
@@ -318,7 +322,9 @@ jobs:
   screenshots-macos:
     name: screenshots (macos)
     needs: changes
-    if: needs.changes.outputs.ui == 'true'
+    # Advisory and macOS-bound, so it stays off pull requests: it would compete with `check (macos-latest)` for the
+    # macOS runner pool (ADR-0074).
+    if: github.event_name != 'pull_request' && needs.changes.outputs.ui == 'true'
     runs-on: macos-latest
     timeout-minutes: 30
     # A runner without a Metal device ends the process inside GPUI, so this job may not be green.
