@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use gpui::{
     AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, Styled as _, Subscription, Task, Window, div, relative,
+    ParentElement as _, Styled as _, Subscription, Task, Window, div,
 };
 use gpui_component::input::{
     Editor, EditorState, InputEvent, RangeDecoration, RangeDecorationCollection,
@@ -220,8 +220,20 @@ impl EditorViews {
                 .flex_1()
                 .min_h_0()
                 .w_full()
-                .child(Editor::new(&view.state).h(relative(1.))),
+                .flex()
+                .flex_col()
+                .child(Editor::new(&view.state).flex_1().min_h_0().w_full()),
         )
+    }
+
+    /// The laid-out bounds of the editor of `tab`, as of its last prepaint (tests only).
+    #[cfg(test)]
+    pub(crate) fn input_bounds(
+        &self,
+        tab: TabId,
+        cx: &gpui::App,
+    ) -> Option<gpui::Bounds<gpui::Pixels>> {
+        Some(self.views.get(&tab)?.state.read(cx).input_bounds())
     }
 
     /// Gives the editor of `tab` the keyboard focus.

@@ -36,6 +36,8 @@ use crate::workbench::{
 use crate::workspace::WorkspaceAction;
 
 mod agent;
+#[cfg(test)]
+mod layout_tests;
 
 /// How long a change of the layout waits before `workbench.toml` is written.
 const SAVE_DELAY: Duration = Duration::from_millis(500);

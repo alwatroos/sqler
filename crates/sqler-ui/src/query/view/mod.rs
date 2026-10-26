@@ -24,8 +24,13 @@ use crate::theme::icons::AppIcon;
 use crate::theme::widgets::{empty_state, kbd};
 use crate::workspace::WorkspaceView;
 
-/// The body of a query tab: the toolbar, then the SQL editor at full height. The results live in
-/// the bottom panel.
+/// The debug selector of the editor area of `tab` (tests measure it).
+pub(crate) fn editor_selector(tab: TabId) -> String {
+    format!("query-editor-{tab:?}")
+}
+
+/// The body of a query tab: the toolbar, the AI prompt bar when shown, then the SQL editor, which
+/// fills the rest of the body. The results live in the bottom panel.
 pub(crate) fn query_editor_body(
     view: &WorkspaceView,
     tab: TabId,
@@ -34,6 +39,7 @@ pub(crate) fn query_editor_body(
 ) -> AnyElement {
     div()
         .id("query-editor-body")
+        .debug_selector(move || format!("query-editor-body-{tab:?}"))
         .flex_1()
         .min_h_0()
         .w_full()
@@ -44,9 +50,12 @@ pub(crate) fn query_editor_body(
         .child(
             div()
                 .id("query-editor")
+                .debug_selector(move || editor_selector(tab))
                 .flex_1()
                 .min_h_0()
                 .w_full()
+                .flex()
+                .flex_col()
                 .child(editor),
         )
         .into_any_element()
