@@ -7,7 +7,8 @@
 #   release-guard.sh features            dist config (dist-workspace.toml and [package.metadata.dist] of sqler-app) and the resolved dependency tree of the release build
 #   release-guard.sh binary <file>       the binary holds no DuckDB engine marker
 #   release-guard.sh build-dir <dir>     the cargo build dir holds no libduckdb-sys build output
-#   release-guard.sh artifacts <dir>     no DuckDB file name, no DuckDB text in a text artifact
+#   release-guard.sh artifacts <dir>     no DuckDB file name, no DuckDB text in a text artifact (scripts, json, xml, wxs, sum, sha256,
+#                                        and the installer inputs: *.desktop, *.plist, the deb `control` file)
 #
 # Exit 0: pass. Exit 1: a violation (one `release-guard: <reason>` line per finding on stderr).
 # Exit 2: usage or parse error. A pass prints `release-guard: <mode> ok (<evidence>)` on stdout.
@@ -178,7 +179,7 @@ mode_artifacts() {
             fail "artifact file name mentions duckdb: $f"
         fi
         case $base in
-        *.sh | *.ps1 | *.json | *.xml | *.wxs | *.sum | *.sha256)
+        *.sh | *.ps1 | *.json | *.xml | *.wxs | *.sum | *.sha256 | *.desktop | *.plist | control)
             texts=$((texts + 1))
             if grep -a -i -q duckdb "$f"; then
                 fail "text artifact mentions duckdb: $f"
