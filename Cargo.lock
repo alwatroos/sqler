@@ -8193,7 +8193,7 @@ checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
 
 [[package]]
 name = "sqler-acp"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "agent-client-protocol",
  "serde",
@@ -8207,7 +8207,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-ai-anthropic"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
  "log",
@@ -8221,7 +8221,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-ai-api"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "serde_json",
  "thiserror 2.0.21",
@@ -8229,7 +8229,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-ai-mistral"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
  "log",
@@ -8243,7 +8243,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-ai-ollama"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
  "reqwest",
@@ -8255,7 +8255,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-ai-openai"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
  "reqwest",
@@ -8267,7 +8267,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-ai-tools"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "insta",
  "proptest",
@@ -8286,7 +8286,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-app"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
  "ring",
@@ -8318,7 +8318,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-catalog"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "sqler-driver-api",
  "sqler-driver-sqlite",
@@ -8328,7 +8328,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-cli"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -8352,7 +8352,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-completion"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "insta",
  "proptest",
@@ -8362,7 +8362,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-config"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "keyring",
  "proptest",
@@ -8375,14 +8375,14 @@ dependencies = [
 
 [[package]]
 name = "sqler-core"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "sqler-driver-api"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "sqler-core",
  "thiserror 2.0.21",
@@ -8390,7 +8390,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-driver-duckdb"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "duckdb",
  "sqler-driver-api",
@@ -8399,7 +8399,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-driver-mssql"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "futures-core",
  "rustls",
@@ -8411,7 +8411,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-driver-mysql"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "aws-lc-sys",
  "futures-core",
@@ -8424,7 +8424,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-driver-postgres"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "futures-core",
  "sqler-driver-api",
@@ -8435,7 +8435,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-driver-sqlite"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "futures-core",
  "sqler-driver-api",
@@ -8446,7 +8446,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-export"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "bytes",
  "calamine",
@@ -8463,7 +8463,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-import"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "proptest",
  "serde_json",
@@ -8474,7 +8474,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-mcp"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -8500,7 +8500,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-plugin-api"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "proptest",
  "semver",
@@ -8514,7 +8514,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-plugin-host"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "bytes",
  "http",
@@ -8541,7 +8541,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-sql"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "insta",
  "proptest",
@@ -8551,7 +8551,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-tunnel"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "crypto-bigint",
  "pem-rfc7468",
@@ -8566,7 +8566,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-ui"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "bytes",
  "gpui-component",
@@ -8606,7 +8606,7 @@ dependencies = [
 
 [[package]]
 name = "sqler-update"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
  "reqwest",
@@ -11603,7 +11603,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
  "ring",
