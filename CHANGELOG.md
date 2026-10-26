@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **AI chat panel**: a read-only assistant on the right side of the window, next to the editor. Open it with **AI: Toggle Chat Panel** or the **Chat** item of the status bar. It samples and analyses data under the row and time caps of `ai.toml`, refuses every statement that would change data (there is no approval step), and lets you copy or open the SQL it produced in an editor tab without running it. Chat calls appear in the audit log as **Chat panel**. See [ADR-0076](docs/src/adr/0076-ai-chat-panel.md).
 
+## [1.0.2] - 2026-10-26
+
+### Fixed
+
+- SQL editor: the editor fills the whole query tab below its toolbar again and follows window, side panel, bottom panel and split resizes (it showed only two or three lines).
+
+### Changed
+
+- CI: pull requests run only the format, lint and test checks (`CI`); release builds, binary size, spikes and benchmarks run on `main`, on demand or after a published release (ADR-0074).
+
 ## [1.0.1] - 2026-10-25
 
 ### Changed

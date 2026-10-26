@@ -1,33 +1,17 @@
 name: Binary size
 
 # Reports the release `sqler` size per OS next to the 80 MB budget (ADR-0069). Report only, never a gate.
+# Triggers: push to main and workflow_dispatch. There is no pull_request trigger (ADR-0074): the three-OS build
+# is the slowest check in the repository and PRs run `CI` only.
 on:
   push:
     branches: [main]
   workflow_dispatch:
-  # Pull requests: Linux only (the OS closest to the budget), and only when the shipped binary can change:
-  # crates outside `cargo tree -p sqler-app` and tests/benches/markdown are excluded. macOS and Windows run
-  # on main, on dispatch and on PRs labelled `full-ci` (read when the run starts; push again after labelling).
-  pull_request:
-    paths:
-      - "crates/**"
-      - "!crates/sqler-cli/**"
-      - "!crates/sqler-driver-duckdb/**"
-      - "!crates/**/tests/**"
-      - "!crates/**/benches/**"
-      - "!crates/**/*.md"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - "vendor/**"
-      # Compiled into the binary as the built-in SQL Server plugin manifest.
-      - "plugins/sqlserver/sqler.toml"
-      - ".github/workflows/size.yml"
 
-# Cancel superseded runs on pull requests only; every main run completes (own group per run).
+# One group per run, never cancelled: every run completes.
 concurrency:
-  group: size-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: size-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -44,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'full-ci') && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
       - name: Install toolchain from rust-toolchain.toml

@@ -1,19 +1,22 @@
 name: Benchmarks
 
-# 1.0 headline numbers (binary size, cold start, idle RSS, the five benches) measured by `cargo xtask bench` on the
-# release artifacts of a Release dry run, on one runner per OS (Linux, macOS, Windows).
+# Headline numbers (binary size, cold start, idle RSS, the five benches) measured by `cargo xtask bench` on the
+# release artifacts of a published Release run, on one runner per OS (Linux, macOS, Windows).
 #
-# - workflow_dispatch: measures the artifacts of the Release run given in `release-run-id`, or of the newest
-#   successful Release dry run (workflow_dispatch event, branch main) when the input is empty.
-# - workflow_run: starts after a Release run finishes and measures it only when that run was a successful dry run
-#   (a workflow_dispatch of Release) on main. Release runs on pull requests, tags and other branches never start a
-#   measurement.
-# - An explicit `release-run-id` is checked too: it must be a successful workflow_dispatch run of Release on main.
+# - workflow_run: starts after a Release run finishes and measures it only when that run succeeded, was started by a
+#   tag push or by a dispatch on a `v*` tag ref (the publishing runs) and its GitHub Release exists. Release runs on
+#   branches never start a measurement. `on: release: published` is not used: `host` creates the release
+#   with GITHUB_TOKEN, and an event raised by that token never starts another workflow (ADR-0074).
+# - workflow_dispatch: measures the artifacts of the Release run given in `release-run-id`, or of the run of the
+#   newest published release when the input is empty. An explicit `release-run-id` must be a successful publishing
+#   Release run too (a run on a branch is refused).
 # - There is no pull_request or push trigger: this is an informational measurement, never a PR check.
+# - It never gates release.yml or Tag release; a red run is a follow-up, not a reason to roll a release back
+#   (ADR-0074, RELEASING.md).
 #
 # This workflow never builds `sqler-app` and never uses `driver-duckdb`: it measures the binaries that the Release
 # workflow built and guarded (ADR-0070), and `cargo xtask bench` refuses a feature line holding `driver-duckdb`.
-# Release artifacts last 7 days; when none exist, dispatch a Release dry run first.
+# Release artifacts last 7 days, so a manual dispatch later than that fails: the release assets are the only copy then.
 # A breach of a budget (size, cold start, idle RSS) turns the run red, after the results were uploaded. The five
 # micro-benchmarks are reported only (bench.yml gates them), and on Linux the idle RSS is reported only: it is
 # measured on a software-rendered headless display (cage, pixman) and is not comparable with the desktop budget.
@@ -21,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       release-run-id:
-        description: "Run id of the Release dry run whose artifacts are measured (empty: the newest successful one on main)"
+        description: "Run id of a successful publishing Release run (empty: the run of the newest published release)"
         required: false
         default: ""
         type: string
@@ -42,10 +45,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Decides which Release run is measured and at which commit.
+  # Decides which Release run is measured and at which commit. Every path requires a successful Release run on a
+  # `vX.Y.Z[-pre]` ref whose GitHub Release exists, i.e. a publishing run.
   resolve:
     name: resolve the Release run
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success'
+      && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')
+      && startsWith(github.event.workflow_run.head_branch, 'v')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     outputs:
@@ -61,41 +67,64 @@ jobs:
           INPUT_RUN_ID: ${{ inputs.release-run-id }}
           WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
           WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_NAME: ${{ github.event.workflow_run.name }}
+          WORKFLOW_RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
+          # A run that is not a publishing one: an error for a manual request, a skipped measurement for a chained one.
+          reject() {
+            if [ "$EVENT" = "workflow_run" ]; then
+              echo "::notice::run ${run_id:-?} is not a successful publishing Release run; nothing to measure"
+              echo "run-id=" >> "$GITHUB_OUTPUT"
+              echo "sha=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::run ${run_id:-?} is not a successful publishing Release run${1:+ ($1)}"
+            exit 1
+          }
           run_id=""
           sha=""
           if [ "$EVENT" = "workflow_run" ]; then
             run_id="$WORKFLOW_RUN_ID"
             sha="$WORKFLOW_RUN_SHA"
-          elif [ -n "$INPUT_RUN_ID" ]; then
-            case "$INPUT_RUN_ID" in
-              *[!0-9]*) echo "::error::release-run-id must be a number"; exit 1 ;;
-            esac
-            run_id="$INPUT_RUN_ID"
-            info=$(gh run view "$run_id" --json headSha,headBranch,event,conclusion,workflowName --jq '[.workflowName,.event,.conclusion,.headBranch,.headSha] | @tsv') || {
-              echo "::error::cannot read Release run $run_id"; exit 1; }
-            IFS=$'\t' read -r wf_name wf_event wf_conclusion wf_branch sha <<< "$info"
-            if [ "$wf_name" != "Release" ] || [ "$wf_event" != "workflow_dispatch" ] || [ "$wf_conclusion" != "success" ] || [ "$wf_branch" != "main" ]; then
-              echo "::error::run $run_id is not a successful Release dry run (workflow_dispatch) on main"
-              exit 1
-            fi
+            wf_name="$WORKFLOW_RUN_NAME"
+            wf_branch="$WORKFLOW_RUN_BRANCH"
+            wf_conclusion="$WORKFLOW_RUN_CONCLUSION"
           else
-            run_id=$(gh run list --workflow release.yml --event workflow_dispatch --status success --branch main --limit 1 --json databaseId --jq '.[0].databaseId // empty')
-            if [ -n "$run_id" ]; then
-              sha=$(gh run view "$run_id" --json headSha --jq .headSha)
+            if [ -n "$INPUT_RUN_ID" ]; then
+              case "$INPUT_RUN_ID" in
+                *[!0-9]*) echo "::error::release-run-id must be a number"; exit 1 ;;
+              esac
+              run_id="$INPUT_RUN_ID"
+            else
+              tag=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')
+              if [ -z "$tag" ]; then
+                echo "::error::no published release found; nothing to measure"
+                exit 1
+              fi
+              run_id=$(gh run list --workflow release.yml --branch "$tag" --status success --limit 1 --json databaseId,headSha --jq '.[0].databaseId // empty')
+              if [ -z "$run_id" ]; then
+                echo "::error::no successful Release run found for $tag (its artifacts expire after 7 days)"
+                exit 1
+              fi
             fi
+            info=$(gh run view "$run_id" --json headSha,headBranch,conclusion,workflowName --jq '[.workflowName,.conclusion,.headBranch,.headSha] | @tsv') || {
+              echo "::error::cannot read Release run $run_id"; exit 1; }
+            IFS=$'\t' read -r wf_name wf_conclusion wf_branch sha <<< "$info"
           fi
-          if [ -z "$run_id" ] || [ -z "$sha" ]; then
-            echo "::error::no successful Release dry run found; dispatch a Release dry run first"
-            exit 1
-          fi
-          echo "Measuring Release run $run_id at $sha"
+          if [ "$wf_name" != "Release" ] || [ "$wf_conclusion" != "success" ]; then reject "workflow $wf_name, conclusion $wf_conclusion"; fi
+          if ! printf '%s' "$wf_branch" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then reject "ref $wf_branch is not a release tag"; fi
+          published=$(gh release view "$wf_branch" --json tagName --jq .tagName 2>/dev/null || true)
+          if [ "$published" != "$wf_branch" ]; then reject "no GitHub Release $wf_branch"; fi
+          if [ -z "$run_id" ] || [ -z "$sha" ]; then reject "no commit"; fi
+          echo "Measuring Release run $run_id of $wf_branch at $sha (artifacts expire 7 days after the run)"
           echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
   measure:
     name: measure (${{ matrix.target }})
     needs: resolve
+    if: needs.resolve.outputs.run-id != ''
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
