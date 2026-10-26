@@ -15,13 +15,13 @@ pub enum MenuEntry {
     OpenData,
     /// Open a SQL editor that starts with the `SELECT *` of the object.
     OpenInEditor,
-    /// Show the `CREATE` script.
+    /// Open a SQL editor with the `CREATE` script.
     GenerateCreate,
-    /// Show the `SELECT *` script.
+    /// Open a SQL editor with the `SELECT *` script.
     GenerateSelect,
-    /// Show the `INSERT` template.
+    /// Open a SQL editor with the `INSERT` template.
     GenerateInsert,
-    /// Show the `DROP` script.
+    /// Open a SQL editor with the `DROP` script (nothing runs).
     GenerateDrop,
     /// Drop the object after a confirmation.
     Drop,
