@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Generate CREATE, SELECT, INSERT and DROP in the object browser open the script in a new SQL editor tab on the object's connection instead of a read-only DDL tab; nothing runs until you run it.
+
 ## [1.0.1] - 2026-10-25
 
 ### Changed

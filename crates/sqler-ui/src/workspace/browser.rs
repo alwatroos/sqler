@@ -10,6 +10,7 @@
 //! the view carries out and reports back through `catalog_loaded`, `refresh_event` and
 //! `job_finished`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use sqler_catalog::{CacheKey, Catalog, CatalogError, RefreshEvent, RefreshOutcome};
@@ -51,6 +52,10 @@ pub(super) struct BrowserState {
     pub(super) dialect: Option<Dialect>,
     /// The refresh that is running and the node it started from.
     pub(super) refresh: Option<(TreeNodeId, CancelFlag, u64)>,
+    /// The script generations that are running, by ticket.
+    pub(super) scripts: HashMap<u64, CancelFlag>,
+    /// The last ticket given to a script generation.
+    pub(super) next_script: u64,
 }
 
 impl BrowserState {
@@ -59,6 +64,9 @@ impl BrowserState {
             catalog.shutdown();
         }
         if let Some((_, flag, _)) = &self.refresh {
+            flag.cancel();
+        }
+        for flag in self.scripts.values() {
             flag.cancel();
         }
     }
@@ -97,10 +105,14 @@ pub struct OpenDataJob {
 /// reports the outcome with [`Workspace::job_finished`].
 #[non_exhaustive]
 pub enum BrowserJob {
-    /// Generate a script for the DDL tab `tab`.
+    /// Generate a script to open in a SQL editor.
     Script {
-        /// The tab that shows the text.
-        tab: TabId,
+        /// The connection whose editor gets the script.
+        conn: ConnectionId,
+        /// The browser session the job belongs to.
+        generation: u64,
+        /// Tells this generation from the others of the same browser.
+        ticket: u64,
         /// What to connect to when the script needs a session.
         request: ConnectRequest,
         /// The catalog of the connection.
@@ -111,7 +123,7 @@ pub enum BrowserJob {
         object: DbObject,
         /// Which script.
         script: Script,
-        /// Set when the tab is closed.
+        /// Set when the browser ends.
         cancel: CancelFlag,
     },
     /// Load the fields for the properties tab `tab`.
@@ -137,9 +149,15 @@ pub enum BrowserJob {
 impl std::fmt::Debug for BrowserJob {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Script { tab, script, .. } => f
+            Self::Script {
+                conn,
+                ticket,
+                script,
+                ..
+            } => f
                 .debug_struct("Script")
-                .field("tab", tab)
+                .field("conn", conn)
+                .field("ticket", ticket)
                 .field("script", script)
                 .finish_non_exhaustive(),
             Self::Properties { tab, .. } => f
@@ -159,10 +177,14 @@ impl std::fmt::Debug for BrowserJob {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum BrowserJobResult {
-    /// The text for a DDL tab.
+    /// The text for a SQL editor.
     Script {
-        /// The tab.
-        tab: TabId,
+        /// The connection.
+        conn: ConnectionId,
+        /// The browser session the job belonged to.
+        generation: u64,
+        /// The ticket of the job.
+        ticket: u64,
         /// The script, or why there is none.
         result: Result<String, BrowserError>,
     },
@@ -189,8 +211,15 @@ impl BrowserJob {
     pub fn lost(&self) -> BrowserJobResult {
         let err = BrowserError::JobLost;
         match self {
-            Self::Script { tab, .. } => BrowserJobResult::Script {
-                tab: *tab,
+            Self::Script {
+                conn,
+                generation,
+                ticket,
+                ..
+            } => BrowserJobResult::Script {
+                conn: conn.clone(),
+                generation: *generation,
+                ticket: *ticket,
                 result: Err(err),
             },
             Self::Properties { tab, .. } => BrowserJobResult::Properties {
@@ -209,7 +238,9 @@ impl BrowserJob {
     pub fn run(self, connector: Arc<dyn Connector>) -> BoxFuture<'static, BrowserJobResult> {
         match self {
             Self::Script {
-                tab,
+                conn,
+                generation,
+                ticket,
                 request,
                 catalog,
                 dialect,
@@ -220,7 +251,12 @@ impl BrowserJob {
                 let result =
                     generate_script(connector, request, catalog, dialect, object, script, cancel)
                         .await;
-                BrowserJobResult::Script { tab, result }
+                BrowserJobResult::Script {
+                    conn,
+                    generation,
+                    ticket,
+                    result,
+                }
             }),
             Self::Properties {
                 tab,
@@ -666,16 +702,16 @@ impl Workspace {
             (MenuEntry::OpenData, TreeNodeKind::Object(obj)) => self.open_data_tab(conn, &obj),
             (MenuEntry::OpenInEditor, TreeNodeKind::Object(obj)) => self.open_in_editor(conn, &obj),
             (MenuEntry::GenerateCreate, TreeNodeKind::Object(obj)) => {
-                self.script_tab(conn, obj, Script::Create)
+                self.generate_into_editor(conn, obj, Script::Create)
             }
             (MenuEntry::GenerateSelect, TreeNodeKind::Object(obj)) => {
-                self.script_tab(conn, obj, Script::SelectStar)
+                self.generate_into_editor(conn, obj, Script::SelectStar)
             }
             (MenuEntry::GenerateInsert, TreeNodeKind::Object(obj)) => {
-                self.script_tab(conn, obj, Script::InsertTemplate)
+                self.generate_into_editor(conn, obj, Script::InsertTemplate)
             }
             (MenuEntry::GenerateDrop, TreeNodeKind::Object(obj)) => {
-                self.script_tab(conn, obj, Script::Drop)
+                self.generate_into_editor(conn, obj, Script::Drop)
             }
             (MenuEntry::Drop, TreeNodeKind::Object(obj)) => self.start_drop(conn, node, obj),
             (MenuEntry::CopyName, TreeNodeKind::Object(obj)) => {
@@ -784,7 +820,12 @@ impl Workspace {
         }
     }
 
-    fn script_tab(&mut self, conn: &ConnectionId, obj: DbObject, script: Script) -> Effect {
+    fn generate_into_editor(
+        &mut self,
+        conn: &ConnectionId,
+        obj: DbObject,
+        script: Script,
+    ) -> Effect {
         let Some(b) = self.browsers.get(conn) else {
             return Effect::None;
         };
@@ -798,26 +839,24 @@ impl Workspace {
             Ok(request) => request,
             Err(message) => return self.notify(message),
         };
-        let name = display_name(Some(dialect), &obj);
-        let Some((tab, close)) = self.open_object_preview(conn, TabKind::Ddl, &name) else {
+        let cancel = CancelFlag::new();
+        let Some(b) = self.browsers.get_mut(conn) else {
             return Effect::None;
         };
-        self.object_crumbs.insert(tab, object_segments(&obj));
-        let object_tab = ObjectTab::loading(format!("DDL: {name}"));
-        let cancel = object_tab.cancel.clone();
-        self.object_tabs.insert(tab, object_tab);
-        Self::after_close(
-            close,
-            Effect::RunJob(BrowserJob::Script {
-                tab,
-                request,
-                catalog,
-                dialect,
-                object: obj,
-                script,
-                cancel,
-            }),
-        )
+        b.next_script += 1;
+        let ticket = b.next_script;
+        b.scripts.insert(ticket, cancel.clone());
+        Effect::RunJob(BrowserJob::Script {
+            conn: conn.clone(),
+            generation: b.generation,
+            ticket,
+            request,
+            catalog,
+            dialect,
+            object: obj,
+            script,
+            cancel,
+        })
     }
 
     fn copy_tab_text(&mut self) -> Effect {
@@ -1007,14 +1046,25 @@ impl Workspace {
     /// Reports the outcome of an [`Effect::RunJob`].
     pub fn job_finished(&mut self, result: BrowserJobResult) -> Effect {
         match result {
-            BrowserJobResult::Script { tab, result } => {
-                if let Some(object_tab) = self.object_tabs.get_mut(&tab) {
-                    object_tab.content = match result {
-                        Ok(text) => ObjectTabContent::Script(text),
-                        Err(err) => ObjectTabContent::Failed(err.to_string()),
-                    };
+            BrowserJobResult::Script {
+                conn,
+                generation,
+                ticket,
+                result,
+            } => {
+                let pending = self
+                    .browsers
+                    .get_mut(&conn)
+                    .filter(|b| b.generation == generation)
+                    .and_then(|b| b.scripts.remove(&ticket));
+                if pending.is_none() {
+                    return Effect::None;
                 }
-                Effect::None
+                match result {
+                    Ok(text) => self.open_editor_on(&conn, Some(text)),
+                    Err(BrowserError::Cancelled) => Effect::None,
+                    Err(err) => self.notify(format!("Could not generate the script: {err}")),
+                }
             }
             BrowserJobResult::Properties { tab, result } => {
                 if let Some(object_tab) = self.object_tabs.get_mut(&tab) {
@@ -1074,6 +1124,8 @@ impl Workspace {
                 tree: ObjectTree::new(),
                 dialect,
                 refresh: None,
+                scripts: HashMap::new(),
+                next_script: 0,
             },
         );
         self.connect_browser(conn)
@@ -1645,27 +1697,17 @@ mod tests {
         let cancel = h.w.grid_cancels.get(&first).cloned().unwrap();
         assert!(!cancel.is_cancelled());
 
-        // DDL replaces it through the close path: the grid cancel fires and its state is gone.
-        h.click("users", BrowserAction::Entry(MenuEntry::GenerateCreate));
+        // Properties replaces it through the close path: the grid cancel fires and its state is gone.
+        h.click("users", BrowserAction::Entry(MenuEntry::Properties));
         assert!(cancel.is_cancelled());
         assert!(h.w.tabs().get(first).is_none());
         assert!(!h.w.grid_cancels.contains_key(&first));
         assert!(!h.w.grid_objects.contains_key(&first));
-        let ddl = h.w.tabs().active().unwrap();
-        assert_eq!(ddl.kind(), TabKind::Ddl);
-        assert_eq!(ddl.mode(), crate::tabs::TabMode::Preview);
-        let ddl = ddl.id();
-        assert_eq!(h.w.tabs().len(), 2);
-
-        // Properties replaces the DDL preview and clears its object tab.
-        h.click("users", BrowserAction::Entry(MenuEntry::Properties));
-        assert!(h.w.tabs().get(ddl).is_none());
-        assert!(h.w.object_tab(ddl).is_none());
         let props = h.w.tabs().active().unwrap();
         assert_eq!(props.kind(), TabKind::Properties);
         assert_eq!(props.mode(), crate::tabs::TabMode::Preview);
         assert_eq!(h.w.tabs().len(), 2);
-        assert_eq!(h.seen.jobs.len(), 2, "each open still starts its job");
+        assert_eq!(h.seen.jobs.len(), 1, "properties starts its job");
     }
 
     #[test]
@@ -1815,40 +1857,6 @@ mod tests {
     }
 
     #[test]
-    fn generate_create_fills_a_ddl_tab_and_the_tab_text_copies() {
-        let mut h = Harness::new(
-            Environment::Dev,
-            intro().with_definition(&users(), "unused"),
-        );
-        h.open();
-        h.click("Schemas (1)", BrowserAction::Expand);
-        h.click("main", BrowserAction::Expand);
-        h.click("Tables (2)", BrowserAction::Expand);
-        h.click("users", BrowserAction::Entry(MenuEntry::GenerateCreate));
-        let tab = h.w.tabs().active().unwrap().id();
-        assert_eq!(
-            h.w.tabs().active().unwrap().title(),
-            "DDL: \"main\".\"users\""
-        );
-        assert!(matches!(
-            h.w.object_tab(tab).unwrap().content,
-            ObjectTabContent::Loading
-        ));
-        h.run_job();
-        let ObjectTabContent::Script(text) = &h.w.object_tab(tab).unwrap().content else {
-            panic!(
-                "expected a script: {:?}",
-                h.w.object_tab(tab).unwrap().content
-            );
-        };
-        assert!(text.contains("CREATE TABLE \"main\".\"users\""), "{text}");
-        let effect = h.w.dispatch_browser(BrowserAction::CopyTabText);
-        h.apply(effect);
-        assert_eq!(h.seen.copies.len(), 1);
-        assert!(h.seen.copies[0].contains("CREATE TABLE"));
-    }
-
-    #[test]
     fn open_in_editor_seeds_a_new_editor_with_select_star() {
         let mut h = Harness::new(Environment::Dev, intro());
         h.open();
@@ -1868,47 +1876,149 @@ mod tests {
         assert!(h.seen.grids.is_empty(), "no grid is opened");
     }
 
+    /// Expands the tree, clicks `entry` on `users` and returns the number of tabs before.
+    fn generate(h: &mut Harness, entry: MenuEntry) -> usize {
+        expand_tables(h);
+        let before = h.w.tabs().len();
+        h.click("users", BrowserAction::Entry(entry));
+        before
+    }
+
+    /// The seed of the editor that the last generation opened.
+    fn generated_seed(h: &mut Harness) -> String {
+        let tab = h.w.tabs().active().unwrap().id();
+        assert_eq!(h.w.tabs().get(tab).unwrap().kind(), TabKind::Query);
+        assert!(h.w.editor_doc(tab).is_some());
+        h.w.take_editor_seed(tab).expect("a seed")
+    }
+
     #[test]
-    fn a_ddl_tab_opens_its_script_in_an_editor() {
+    fn generate_create_opens_an_editor_with_the_script() {
         let mut h = Harness::new(
             Environment::Dev,
             intro().with_definition(&users(), "unused"),
         );
-        h.open();
-        h.click("Schemas (1)", BrowserAction::Expand);
-        h.click("main", BrowserAction::Expand);
-        h.click("Tables (2)", BrowserAction::Expand);
-        h.click("users", BrowserAction::Entry(MenuEntry::GenerateCreate));
+        let before = generate(&mut h, MenuEntry::GenerateCreate);
+        assert_eq!(
+            h.w.tabs().len(),
+            before,
+            "no tab before the script is ready"
+        );
+        assert_eq!(h.seen.jobs.len(), 1);
+        h.run_job();
+        assert_eq!(h.w.tabs().len(), before + 1);
+        let tab = h.w.tabs().active().unwrap().id();
+        assert_eq!(h.w.tab_conns.get(&tab), Some(&conn_id(&h.w)));
+        let seed = generated_seed(&mut h);
+        assert!(seed.contains("CREATE TABLE \"main\".\"users\""), "{seed}");
+        assert!(h.seen.grids.is_empty());
+    }
+
+    #[test]
+    fn generate_select_opens_an_editor_with_select_star() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        generate(&mut h, MenuEntry::GenerateSelect);
+        h.run_job();
+        assert_eq!(
+            generated_seed(&mut h),
+            "SELECT *\nFROM \"main\".\"users\"\nLIMIT 1000;\n"
+        );
+        assert!(h.seen.grids.is_empty(), "nothing ran");
+    }
+
+    #[test]
+    fn generate_insert_and_drop_open_editors() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        generate(&mut h, MenuEntry::GenerateInsert);
+        h.run_job();
+        assert!(generated_seed(&mut h).starts_with("INSERT INTO"));
+        h.click("users", BrowserAction::Entry(MenuEntry::GenerateDrop));
+        h.run_job();
+        assert_eq!(generated_seed(&mut h), "DROP TABLE \"main\".\"users\";\n");
+        assert!(h.w.drop_flow.is_none(), "no confirmation dialog");
+        assert!(h.seen.grids.is_empty());
+    }
+
+    #[test]
+    fn a_failed_generation_notifies_and_opens_no_editor() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        let before = generate(&mut h, MenuEntry::GenerateSelect);
+        let BrowserJob::Script {
+            conn,
+            generation,
+            ticket,
+            ..
+        } = h.seen.jobs.remove(0)
+        else {
+            panic!("expected a script job");
+        };
+        let effect = h.w.job_finished(BrowserJobResult::Script {
+            conn,
+            generation,
+            ticket,
+            result: Err(BrowserError::NotFound),
+        });
+        h.apply(effect);
+        assert_eq!(h.w.tabs().len(), before);
+        let notice = h.w.take_notice().expect("a notice");
+        assert!(
+            notice.starts_with("Could not generate the script:"),
+            "{notice}"
+        );
+    }
+
+    #[test]
+    fn a_stale_script_result_is_ignored() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        let before = generate(&mut h, MenuEntry::GenerateSelect);
+        let effect = h.w.job_finished(BrowserJobResult::Script {
+            conn: conn_id(&h.w),
+            generation: 1,
+            ticket: 999,
+            result: Ok("select 1".into()),
+        });
+        assert!(matches!(effect, Effect::None));
+        assert_eq!(h.w.tabs().len(), before);
+    }
+
+    #[test]
+    fn ending_the_browser_cancels_a_pending_script() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        let before = generate(&mut h, MenuEntry::GenerateSelect);
+        let BrowserJob::Script { cancel, .. } = &h.seen.jobs[0] else {
+            panic!("expected a script job");
+        };
+        let cancel = cancel.clone();
+        assert!(!cancel.is_cancelled());
+        let id = conn_id(&h.w);
+        h.w.end_browser(&id);
+        assert!(cancel.is_cancelled());
+        h.run_job();
+        assert_eq!(h.w.tabs().len(), before);
+    }
+
+    #[test]
+    fn a_ddl_tab_opens_its_script_in_an_editor() {
+        let mut h = Harness::new(Environment::Dev, intro());
+        expand_tables(&mut h);
+        let conn = conn_id(&h.w);
+        let (ddl, _) =
+            h.w.open_object_preview(&conn, TabKind::Ddl, "main.users")
+                .unwrap();
+        let mut object_tab = ObjectTab::loading("DDL: main.users");
         // Still loading: nothing to open.
+        h.w.object_tabs.insert(ddl, object_tab);
         let effect = h.w.dispatch_browser(BrowserAction::OpenTabInEditor);
         h.apply(effect);
         assert!(h.w.take_notice().is_some());
-        h.run_job();
-        let ddl = h.w.tabs().active().unwrap().id();
+        object_tab = ObjectTab::loading("DDL: main.users");
+        object_tab.content = ObjectTabContent::Script("select 1".into());
+        h.w.object_tabs.insert(ddl, object_tab);
         let effect = h.w.dispatch_browser(BrowserAction::OpenTabInEditor);
         h.apply(effect);
         let editor = h.w.tabs().active().unwrap().id();
         assert_ne!(editor, ddl);
-        let seed = h.w.take_editor_seed(editor).unwrap();
-        assert!(seed.contains("CREATE TABLE \"main\".\"users\""), "{seed}");
-    }
-
-    #[test]
-    fn closing_an_object_tab_cancels_its_job() {
-        let mut h = Harness::new(Environment::Dev, intro());
-        h.open();
-        h.click("Schemas (1)", BrowserAction::Expand);
-        h.click("main", BrowserAction::Expand);
-        h.click("Tables (2)", BrowserAction::Expand);
-        h.click("users", BrowserAction::Entry(MenuEntry::GenerateCreate));
-        let tab = h.w.tabs().active().unwrap().id();
-        let cancel = h.w.object_tab(tab).unwrap().cancel.clone();
-        assert!(!cancel.is_cancelled());
-        h.w.dispatch(WorkspaceAction::CloseTab(tab));
-        assert!(cancel.is_cancelled());
-        assert!(h.w.object_tab(tab).is_none());
-        // The late result finds no tab.
-        h.run_job();
+        assert_eq!(h.w.take_editor_seed(editor).as_deref(), Some("select 1"));
     }
 
     #[test]
