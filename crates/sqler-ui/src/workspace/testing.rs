@@ -3473,13 +3473,31 @@ mod ai_session_flow {
             assert_eq!(chat.asks, 0, "{env:?}");
             assert_eq!(chat.country(2), "DE", "{env:?}");
             assert!(chat.session().approvals().current().is_none());
-            let entries = mem.entries();
-            assert_eq!(entries.len(), 1, "{env:?}");
-            assert_eq!(
-                entries[0].approval,
-                sqler_ai_tools::ApprovalOutcome::Refused,
-                "{env:?}"
-            );
+            // The schema context adds catalog reads to every chat turn; the refusal is the one
+            // entry that is not a read.
+            let refused: Vec<_> = mem
+                .entries()
+                .into_iter()
+                .filter(|e| e.approval == sqler_ai_tools::ApprovalOutcome::Refused)
+                .collect();
+            assert_eq!(refused.len(), 1, "{env:?}");
+            let reads = [
+                "list_tables",
+                "list_schemas",
+                "search_schema",
+                "describe_table",
+            ];
+            for e in mem.entries() {
+                if e.approval != sqler_ai_tools::ApprovalOutcome::Refused {
+                    assert!(
+                        reads.contains(&e.tool.as_str())
+                            && e.approval != sqler_ai_tools::ApprovalOutcome::Approved,
+                        "{env:?}: {} {:?}",
+                        e.tool,
+                        e.approval
+                    );
+                }
+            }
             assert!(!chat.w.queries.contains_key(&TabId::CHAT_PANEL), "{env:?}");
         }
     }

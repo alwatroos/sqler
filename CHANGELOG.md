@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **App icon.** SQLer now has an icon, shown by the macOS `.dmg` app bundle, the Linux `.deb` (hicolor theme and menu entry), the Windows MSI (Apps list and Start menu shortcut) and the Windows `sqler.exe`. The source is `assets/icon/sqler.svg`; regenerate the committed PNG, ICO and ICNS files with `cargo run -p xtask -- icons`.
 - SQL editor: `editor:toggle-line-comment` (Cmd/Ctrl+/) and `editor:toggle-block-comment` (Shift+Alt+A).
 
 ### Changed
@@ -20,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With text selected, Cmd/Ctrl+Enter and the Run button run exactly the selection; the editor text is never changed.
 - Run Statement finds statements separated by a blank line, without semicolons.
 - The AI chat panel's empty, starting and failed states wrap inside the panel at every width instead of overflowing it.
+- AI chat: the chat now sends a compact schema of the connection (selected and named tables first) and is told to use only existing tables and columns.
 
 ## [1.1.0] - 2026-10-26
 

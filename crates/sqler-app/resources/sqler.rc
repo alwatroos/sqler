@@ -1,0 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: The SQLer Authors
+// The application icon of sqler.exe; build.rs adds assets/icon to the include path.
+1 ICON "sqler.ico"

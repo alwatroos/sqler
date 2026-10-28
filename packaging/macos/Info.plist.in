@@ -8,6 +8,8 @@
 	<string>sqler</string>
 	<key>CFBundleIdentifier</key>
 	<string>io.github.alwatroos.sqler</string>
+	<key>CFBundleIconFile</key>
+	<string>sqler</string>
 	<key>CFBundleName</key>
 	<string>SQLer</string>
 	<key>CFBundleDisplayName</key>

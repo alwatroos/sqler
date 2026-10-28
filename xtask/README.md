@@ -13,6 +13,7 @@ cargo run -p xtask -- plugins build [--release] [<name>...]
 cargo run -p xtask -- plugins check
 cargo run -p xtask -- plugins list
 cargo run -p xtask -- plugins clean
+cargo run -p xtask -- icons
 cargo run -p xtask -- bench [--bin PATH] [--archive PATH] [--commit SHA] [--out DIR]
     [--source desktop|ci-runner] [--machine TEXT] [--runs N] [--warmup N] [--rss-runs N]
     [--skip cold-start|rss|size|benches]...
@@ -32,6 +33,10 @@ writes `bench-<date>-<commit7>-<os>.json` into `--out` (default `target/bench-re
 `plugins build` compiles the guest workspace in `plugins/` for `wasm32-wasip2` and stages every plugin as
 `target/plugins/<debug|release>/<id>/` (`sqler.toml` plus the component). The plugin table is
 `src/plugins/table.rs`.
+
+`icons` renders `assets/icon/sqler.svg` (the only source) with `resvg` into `assets/icon/png/sqler-<n>.png`, `sqler.ico`,
+`sqler.icns` and the docs favicon (`docs/theme/favicon.svg`, `favicon.png`). It takes no options (exit code 2 when given
+one) and writes the ICO and ICNS containers itself. The outputs are committed; see `assets/icon/README.md`.
 
 `release manifest` reads the cargo-dist plan manifest and the final release archives, builds the update manifest of
 `sqler-update` (sizes and SHA-256 per platform), signs it with Ed25519 and checks the result with the client's own

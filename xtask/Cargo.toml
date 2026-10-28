@@ -25,6 +25,7 @@ serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 zeroize.workspace = true
+resvg.workspace = true
 
 [dev-dependencies]
 sqler-config.workspace = true

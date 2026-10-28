@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- SPDX-FileCopyrightText: The SQLer Authors -->
+<!-- SQLer app icon. Source of every generated icon; see README.md in this directory. Paths and gradients only. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f343e"/>
+      <stop offset="1" stop-color="#282c33"/>
+    </linearGradient>
+    <linearGradient id="cyl" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#74ade8"/>
+      <stop offset="1" stop-color="#5a8fd0"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#body)" stroke="#363c46" stroke-width="2"/>
+  <!-- cylinder: side walls, bottom arc, three bands separated by dark curved gaps -->
+  <path d="M232 280 V750 A280 90 0 0 0 792 750 V280 Z" fill="url(#cyl)"/>
+  <path d="M232 430 A280 90 0 0 0 792 430" fill="none" stroke="#2c3038" stroke-width="22"/>
+  <path d="M232 590 A280 90 0 0 0 792 590" fill="none" stroke="#2c3038" stroke-width="22"/>
+  <!-- lighter top ellipse -->
+  <ellipse cx="512" cy="280" rx="280" ry="90" fill="#a6cbf5"/>
+  <!-- >_ prompt: dark halo first, light glyph on top -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M360 490 L480 590 L360 690 M540 710 H700" stroke="#282c33" stroke-width="124"/>
+    <path d="M360 490 L480 590 L360 690 M540 710 H700" stroke="#dce0e5" stroke-width="68"/>
+  </g>
+</svg>

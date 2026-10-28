@@ -57,9 +57,9 @@ pub(crate) fn terms(text: &str) -> Vec<String> {
     out
 }
 
-type Key = (Option<String>, Option<String>, String);
+pub(crate) type Key = (Option<String>, Option<String>, String);
 
-fn call(connection: &str, name: &str, args: &Value) -> ToolCall {
+pub(crate) fn call(connection: &str, name: &str, args: &Value) -> ToolCall {
     let mut args = args.clone();
     if let Some(map) = args.as_object_mut() {
         map.insert("connection".to_owned(), json!(connection));
@@ -79,7 +79,7 @@ fn text_of(value: &Value) -> Option<String> {
     value.as_str().map(str::to_owned)
 }
 
-async fn score(
+pub(crate) async fn score(
     tools: &ToolSet,
     connection: &str,
     terms: &[String],
