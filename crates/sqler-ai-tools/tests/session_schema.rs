@@ -295,3 +295,59 @@ async fn cancelling_during_the_build_ends_the_turn_cancelled() {
     assert_eq!(s.send(ASK).await, TurnOutcome::Cancelled);
     assert_eq!(p.requests().len(), 0);
 }
+
+/// A source whose connection has no catalog, so every schema tool fails.
+struct NoCatalog(Arc<SqliteSource>);
+
+impl SessionSource for NoCatalog {
+    fn connections(&self) -> Vec<ConnectionInfo> {
+        self.0.connections()
+    }
+
+    fn catalog(&self, _connection: &str) -> Option<Catalog> {
+        None
+    }
+
+    fn acquire<'a>(
+        &'a self,
+        connection: &'a str,
+    ) -> sqler_ai_api::BoxFuture<
+        'a,
+        Result<Box<dyn sqler_driver_api::Session>, sqler_ai_tools::ToolError>,
+    > {
+        self.0.acquire(connection)
+    }
+
+    fn release(
+        &self,
+        connection: &str,
+        session: Box<dyn sqler_driver_api::Session>,
+    ) -> sqler_ai_api::BoxFuture<'static, ()> {
+        self.0.release(connection, session)
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_failed_listing_says_no_schema_was_loaded_instead_of_an_empty_database() {
+    let base = SqliteSource::new("schema-none", None).await;
+    let source = Arc::new(NoCatalog(Arc::clone(&base)));
+    let p = provider();
+    p.push_script(text("ok"));
+    let tools = ToolSet::new(source, limits());
+    let mut s = ExplorationSession::new(
+        p.clone(),
+        tools,
+        base.info.clone(),
+        None,
+        chat_config(Some(SchemaContextOptions::default())),
+    )
+    .unwrap();
+    assert_eq!(s.send(ASK).await, TurnOutcome::Completed);
+    let system = p.requests()[0].system.clone().unwrap();
+    assert!(
+        system.contains("No schema was loaded for this turn"),
+        "{system}"
+    );
+    assert!(!system.contains("other_tables"), "{system}");
+    assert_eq!(s.schema_context(), None);
+}

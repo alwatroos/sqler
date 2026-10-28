@@ -273,15 +273,16 @@ fn payload(tables: &[String], others: &[String], truncated: bool) -> Value {
 /// Builds the schema context of one turn: the wrapped envelope with a compact line per table.
 ///
 /// Tables rank focus first, then by `search_schema` hits for the terms of `text`, then by name.
-/// The payload stays within `opts.token_budget` tokens (3 bytes each). A failed listing gives an
-/// empty payload, never an error.
+/// The payload stays within `opts.token_budget` tokens (3 bytes each). `None` when no table was
+/// listed or described (a failed listing, an empty database), so the model is never shown an
+/// empty database it could take for the truth.
 pub(crate) async fn build_schema_context(
     tools: &ToolSet,
     info: &ConnectionInfo,
     text: &str,
     focus: &[FocusTable],
     opts: SchemaContextOptions,
-) -> String {
+) -> Option<String> {
     let cap = opts.token_budget as usize * BYTES_PER_TOKEN;
     let listing = list_all(tools, &info.id).await;
     let scores = grounding::score(tools, &info.id, &grounding::terms(text))
@@ -344,7 +345,10 @@ pub(crate) async fn build_schema_context(
             truncated = true;
         }
     }
-    wrap_untrusted(&payload(&lines, &others, truncated))
+    if lines.is_empty() && others.is_empty() {
+        return None;
+    }
+    Some(wrap_untrusted(&payload(&lines, &others, truncated)))
 }
 
 #[cfg(test)]

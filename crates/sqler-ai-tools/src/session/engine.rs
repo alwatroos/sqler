@@ -255,7 +255,7 @@ impl ExplorationSession {
             Err(Cancelled) => Err(TurnOutcome::Cancelled),
             Ok(Err(_elapsed)) => Ok(()),
             Ok(Ok(context)) => {
-                self.schema = Some(context);
+                self.schema = context;
                 Ok(())
             }
         }
