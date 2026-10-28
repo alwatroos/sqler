@@ -49,11 +49,11 @@ pub(crate) fn chat_panel(
     let body = match ws.chat() {
         None => empty(view, cx),
         Some(chat) => match chat.phase() {
-            SessionPhase::Starting => centred(
+            SessionPhase::Starting => fitted(
                 empty_state(AppIcon::Sparkles, STARTING_TITLE, STARTING_LINE, cx),
                 cx,
             ),
-            SessionPhase::Failed(message) => centred(
+            SessionPhase::Failed(message) => fitted(
                 empty_state(AppIcon::CircleAlert, FAILED_TITLE, message.clone(), cx),
                 cx,
             ),
@@ -62,6 +62,7 @@ pub(crate) fn chat_panel(
     };
     div()
         .id("chat-panel")
+        .debug_selector(|| "chat-panel".to_owned())
         .track_focus(focus)
         .size_full()
         .flex()
@@ -174,8 +175,19 @@ fn empty(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> AnyElement {
         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
             view.dispatch_ai(action.clone(), cx);
         }));
-    centred(
+    fitted(
         empty_state(AppIcon::MessageSquare, CHAT_TITLE, line, cx).child(button),
+        cx,
+    )
+}
+
+/// An empty state of the chat panel, sized to the panel so its text wraps at any width.
+fn fitted(content: Div, cx: &Context<WorkspaceView>) -> AnyElement {
+    centred(
+        content
+            .w_full()
+            .min_w_0()
+            .debug_selector(|| "chat-empty".to_owned()),
         cx,
     )
 }
