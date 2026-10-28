@@ -80,6 +80,9 @@ pub(crate) fn create_private_file(path: &Path) -> Result<(), ConfigError> {
 }
 
 /// Sets mode `0600` on an existing file (Unix); a no-op elsewhere.
+///
+/// Keeps the same fallible signature on every target; off Unix it never fails.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 pub(crate) fn set_private(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
