@@ -249,6 +249,8 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("query:cancel", &["mod+."]),
     ("editor:new", &["mod+n"]),
     ("editor:format-sql", &["shift+alt+f"]),
+    ("editor:toggle-line-comment", &["mod+/"]),
+    ("editor:toggle-block-comment", &["shift+alt+a"]),
     ("editor:add-next-occurrence", &["mod+d"]),
     ("editor:trigger-completion", &["ctrl+space"]),
 ];

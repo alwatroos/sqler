@@ -9,7 +9,7 @@ use crate::workspace::{Effect, Workspace};
 
 use super::{EditorBuffer, RunMode, RunPort};
 
-/// The [`RunPort`] over `Workspace::run_query` and `Workspace::cancel_query`.
+/// The [`RunPort`] over `Workspace::run_editor_query` and `Workspace::cancel_query`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QueryRunPort;
 
@@ -52,7 +52,7 @@ impl RunPort for QueryRunPort {
         mode: RunMode,
         buffer: EditorBuffer,
     ) -> Result<Effect, String> {
-        Ok(ws.run_query(tab, query_mode(mode), run_snapshot(buffer)))
+        Ok(ws.run_editor_query(tab, query_mode(mode), run_snapshot(buffer)))
     }
 
     fn cancel(&mut self, ws: &mut Workspace, tab: TabId) -> Result<Effect, String> {
@@ -127,6 +127,52 @@ mod tests {
         };
         let effect = w.run_editor(&mut QueryRunPort, RunMode::Selection, Some(buffer));
         assert_eq!(started_sql(&effect), ["select 2"]);
+    }
+
+    #[test]
+    fn run_statement_with_a_selection_runs_exactly_the_selection() {
+        let (mut w, _) = open();
+        // A partial-line selection of the second statement, cursor elsewhere.
+        let start = SCRIPT.find("select 2").unwrap();
+        let buffer = EditorBuffer {
+            text: SCRIPT.to_owned(),
+            selection: start..start + "select".len(),
+            cursor: start + "select".len(),
+        };
+        let effect = w.run_editor(&mut QueryRunPort, RunMode::Statement, Some(buffer));
+        assert_eq!(started_sql(&effect), ["select"]);
+        // A multi-statement selection runs each statement; the editor text is never edited.
+        let buffer = EditorBuffer {
+            text: SCRIPT.to_owned(),
+            selection: 0..SCRIPT.len() - "select 3;".len(),
+            cursor: 0,
+        };
+        let (mut w, _) = open();
+        let effect = w.run_editor(&mut QueryRunPort, RunMode::Statement, Some(buffer));
+        assert!(matches!(effect, Effect::RunQuery { .. }), "{effect:?}");
+        assert_eq!(started_sql(&effect), ["select 1", "select 2"]);
+    }
+
+    #[test]
+    fn run_statement_splits_at_blank_lines() {
+        let (mut w, _) = open();
+        let text = "select 1\n\nselect 2";
+        let effect = w.run_editor(
+            &mut QueryRunPort,
+            RunMode::Statement,
+            Some(EditorBuffer::new(text, text.len())),
+        );
+        assert_eq!(started_sql(&effect), ["select 2"]);
+    }
+
+    #[test]
+    fn run_statement_with_a_selection_is_not_split_at_blank_lines() {
+        let (mut w, _) = open();
+        let text = "insert into t (a)\n\nselect 1";
+        let mut buffer = EditorBuffer::new(text, text.len());
+        buffer.selection = 0..text.len();
+        let effect = w.run_editor(&mut QueryRunPort, RunMode::Statement, Some(buffer));
+        assert_eq!(started_sql(&effect), [text]);
     }
 
     #[test]

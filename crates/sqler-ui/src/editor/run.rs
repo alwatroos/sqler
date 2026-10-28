@@ -14,7 +14,7 @@ use super::EditorBuffer;
 pub enum RunMode {
     /// The selected text.
     Selection,
-    /// The statement at the cursor.
+    /// The selection when there is one, else the statement at the cursor.
     Statement,
     /// The whole buffer.
     All,
