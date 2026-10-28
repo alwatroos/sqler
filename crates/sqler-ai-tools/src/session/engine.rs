@@ -18,6 +18,7 @@ use crate::session::config::SessionConfig;
 use crate::session::events::{EventHub, SessionEvent, SessionEvents, SessionState};
 use crate::session::prompt::{prompt_for, schema_section};
 use crate::session::repeat::RepeatGuard;
+use crate::session::restore::{PriorChat, prior_history};
 use crate::session::schema::{FocusTable, build_schema_context};
 use crate::session::transcript::{NotRunReason, Notice, Transcript, TranscriptEntry};
 use crate::source::ConnectionInfo;
@@ -174,6 +175,16 @@ impl ExplorationSession {
     #[must_use]
     pub fn with_events(self, events: Arc<dyn SessionEvents>) -> Self {
         self.events.set(events);
+        self
+    }
+
+    /// Seeds the session with a restored chat: its entries become the transcript (the stable
+    /// numbers continue from `prior.first_seq`) and its user and assistant text becomes the
+    /// history the model sees. Nothing is emitted, and no provider state is resumed.
+    #[must_use]
+    pub fn with_prior(mut self, prior: PriorChat) -> Self {
+        self.transcript = Transcript::restore(prior.entries, prior.first_seq);
+        self.history = prior_history(self.transcript.entries());
         self
     }
 

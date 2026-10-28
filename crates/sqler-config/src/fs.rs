@@ -53,6 +53,46 @@ pub(crate) fn write_atomic_private(
     write_atomic_with(path, contents.as_ref(), true)
 }
 
+/// Makes sure `path` exists and, on Unix, is private to the user (mode `0600`). Creates the parent
+/// directory when missing. A new file is created exclusively with that mode; an existing file keeps
+/// its content and only has its mode repaired. Elsewhere the profile ACL applies.
+pub(crate) fn create_private_file(path: &Path) -> Result<(), ConfigError> {
+    let werr = |source| ConfigError::Write {
+        path: path.to_owned(),
+        source,
+    };
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(werr)?;
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(werr(e)),
+    }
+    set_private(path).map_err(werr)
+}
+
+/// Sets mode `0600` on an existing file (Unix); a no-op elsewhere.
+pub(crate) fn set_private(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 fn write_atomic_with(path: &Path, contents: &[u8], private: bool) -> Result<(), ConfigError> {
     let werr = |source| ConfigError::Write {
         path: path.to_owned(),

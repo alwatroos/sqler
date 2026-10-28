@@ -282,6 +282,12 @@ pub enum Effect {
     /// session comes back in `HostMsg::TurnDone`; a lost job is reported with
     /// [`Workspace::ai_turn_lost`].
     RunAiTurn(Box<AiTurnJob>),
+    /// Read the list of saved chats (`ChatHistory::list` on the background executor, it blocks)
+    /// and report with [`Workspace::chat_history_listed`].
+    ListChats,
+    /// Read one saved chat (`ChatHistory::load` on the background executor, it blocks) and
+    /// report with [`Workspace::chat_loaded`].
+    LoadChat(sqler_config::ConversationId),
     /// Read the agent profiles (`load_agent_profiles` on the blocking pool, from the config
     /// directory) and report with [`Workspace::agent_profiles_loaded`].
     LoadAgentProfiles,
@@ -465,6 +471,8 @@ impl std::fmt::Debug for Effect {
                 .field("tab", &job.tab)
                 .field("turn", &job.turn)
                 .finish_non_exhaustive(),
+            Self::ListChats => f.write_str("ListChats"),
+            Self::LoadChat(id) => f.debug_tuple("LoadChat").field(id).finish(),
             Self::LoadAgentProfiles => f.write_str("LoadAgentProfiles"),
             // Ids only: never the profile's `env`.
             Self::StartAgent { start, .. } => f
@@ -590,6 +598,10 @@ pub struct Workspace {
     pub(super) ai: AiState,
     /// The AI session tabs.
     pub(super) ai_sessions: AiSessions,
+    /// The chat history store (ADR-0077); `None` without a configuration directory.
+    pub(super) chat_store: Option<sqler_config::ChatHistory>,
+    /// The list of saved chats in the chat panel.
+    pub(super) chat_list: super::chat_history::ChatList,
     /// The agent tabs and the profiles they pick from (ADR-0051).
     pub(super) agents: AgentTabs,
     /// The editor assistant of every query tab (ADR-0052).
@@ -670,6 +682,8 @@ impl Workspace {
             recent_connections: RecentConnections::default(),
             ai: AiState::default(),
             ai_sessions: AiSessions::default(),
+            chat_store: None,
+            chat_list: super::chat_history::ChatList::default(),
             agents: AgentTabs::default(),
             assist: EditorAssist::default(),
             plugins: PluginsState::default(),

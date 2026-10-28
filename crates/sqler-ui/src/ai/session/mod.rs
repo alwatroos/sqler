@@ -15,7 +15,7 @@ use sqler_ai_tools::session::{
     ToolCallStatus, TranscriptEntry,
 };
 use sqler_ai_tools::{ConnectionInfo, Truncation};
-use sqler_config::ConnectionId;
+use sqler_config::{ConnectionId, ConversationId};
 use tokio::sync::mpsc::UnboundedSender;
 
 mod host;
@@ -83,7 +83,8 @@ pub enum SessionPhase {
 
 /// The state of one AI session tab.
 pub struct AiSessionTab {
-    pub(crate) conn: ConnectionId,
+    /// `None` only for a restored chat whose connection was removed (ADR-0077).
+    pub(crate) conn: Option<ConnectionId>,
     pub(crate) info: ConnectionInfo,
     pub(crate) status: Option<AiStatus>,
     pub(crate) phase: SessionPhase,
@@ -100,6 +101,14 @@ pub struct AiSessionTab {
     pub(crate) source: Option<std::sync::Arc<TabSource>>,
     pub(crate) tx: UnboundedSender<HostMsg>,
     pub(crate) next_turn: u64,
+    /// The stored conversation this chat is saved in (the chat panel only, ADR-0077).
+    pub(crate) history: Option<ConversationId>,
+    /// The stable number up to which entries are stored: `persisted` is the next one to store.
+    pub(crate) persisted: usize,
+    /// The stable number below which stored entries were already trimmed away.
+    pub(crate) trimmed: usize,
+    /// Whether the transcript was restored from the chat history (ADR-0077).
+    pub(crate) restored: bool,
 }
 
 // Never the transcript or the draft.
@@ -123,6 +132,30 @@ impl AiSessionTab {
         status: Option<AiStatus>,
         tx: UnboundedSender<HostMsg>,
     ) -> Self {
+        Self::build(Some(conn), info, status, tx)
+    }
+
+    /// A chat restored from the history that cannot continue: its entries are shown and the
+    /// phase says why (the connection is gone, or AI cannot start for it).
+    #[must_use]
+    pub(crate) fn restored(
+        conn: Option<ConnectionId>,
+        info: ConnectionInfo,
+        status: Option<AiStatus>,
+        tx: UnboundedSender<HostMsg>,
+        reason: String,
+    ) -> Self {
+        let mut tab = Self::build(conn, info, status, tx);
+        tab.phase = SessionPhase::Failed(reason);
+        tab
+    }
+
+    fn build(
+        conn: Option<ConnectionId>,
+        info: ConnectionInfo,
+        status: Option<AiStatus>,
+        tx: UnboundedSender<HostMsg>,
+    ) -> Self {
         Self {
             conn,
             info,
@@ -139,13 +172,30 @@ impl AiSessionTab {
             source: None,
             tx,
             next_turn: 0,
+            history: None,
+            persisted: 0,
+            trimmed: 0,
+            restored: false,
         }
     }
 
-    /// The saved connection the session explores.
+    /// The saved connection the session explores; `None` when a restored chat's connection was
+    /// removed.
     #[must_use]
-    pub fn conn(&self) -> &ConnectionId {
-        &self.conn
+    pub fn conn(&self) -> Option<&ConnectionId> {
+        self.conn.as_ref()
+    }
+
+    /// Whether the transcript was restored from the chat history.
+    #[must_use]
+    pub fn is_restored(&self) -> bool {
+        self.restored
+    }
+
+    /// The stored conversation this chat is saved in, once it has an entry.
+    #[must_use]
+    pub fn history_id(&self) -> Option<&ConversationId> {
+        self.history.as_ref()
     }
 
     /// The connection as the tools see it.

@@ -14,6 +14,7 @@ mod assist;
 mod audit;
 mod bridge;
 mod browser;
+mod chat_history;
 #[cfg(feature = "gui")]
 pub(crate) mod chrome;
 #[cfg(feature = "gui")]
@@ -38,6 +39,7 @@ pub use action::{WorkspaceAction, register_commands};
 pub(crate) use ai::NO_PROVIDER;
 pub use bridge::{PendingConnect, PendingTrust, SessionBridge};
 pub use browser::{BrowserJob, BrowserJobResult, BrowserNote, CatalogResult, OpenDataJob};
+pub use chat_history::ChatList;
 pub use edit::{
     ApplyFinished, ClosePrompt, CloseTarget, EditConfirm, EditPreview, EditPushState,
     lost_apply_outcome,

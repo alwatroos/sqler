@@ -14,18 +14,22 @@
 //! tab's id in `Workspace::queries`, driven by `QueryTab::request` and answered through
 //! `confirm_query` / `dismiss_query_prompt`, which route here for an AI tab.
 
-use sqler_ai_tools::session::{FocusTable, TranscriptEntry};
+use sqler_ai_tools::session::{FocusTable, PriorChat, TranscriptEntry, prior_chat};
 use sqler_ai_tools::{ApprovalStage, ConnectionInfo, Decision, ToolError};
-use sqler_config::{ConnectionId, ProviderConfig, UseCase};
+use sqler_config::{
+    ConnectionId, ConversationId, ProviderConfig, StoredConversation, UseCase, contains_redaction,
+};
 use sqler_driver_api::CancelHandle;
 use sqler_driver_api::Session;
-use sqler_driver_api::sqler_core::{DbObject, ObjectKind};
+use sqler_driver_api::sqler_core::{DbObject, DriverId, ObjectKind};
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::ai::NO_PROVIDER;
 use super::browser::OpenDataJob;
 use super::state::{Effect, Workspace, tab_connection};
-use crate::ai::chat::chat_sql_blocks;
+use crate::ai::chat::{
+    CHAT_CONNECTION_REMOVED, REMOVED_CONNECTION, RESTORED_SQL_HIDDEN, chat_sql_blocks,
+};
 use crate::ai::session::{
     AiSessionStart, AiSessionTab, AiTurnJob, ENTRY_GONE, HostMsg, SESSION_AI_OFF, SESSION_BUSY,
     SESSION_CONFIG_BROKEN, SESSION_EMPTY, SESSION_NO_CONNECTION, SESSION_NOT_BUILT,
@@ -191,7 +195,7 @@ impl Workspace {
         // The gate of the production second confirmation (ADR-0024).
         self.queries.insert(tab, QueryTab::new());
         self.show_connection_tabs();
-        self.launch_session(tab, setup, SessionMode::Tab)
+        self.launch_session(tab, setup, SessionMode::Tab, None)
     }
 
     /// Everything a session on `conn` is built from, or the text that says why it cannot start.
@@ -233,7 +237,16 @@ impl Workspace {
     }
 
     /// Stores the tab state under `tab` and starts building its session.
-    fn launch_session(&mut self, tab: TabId, setup: SessionSetup, mode: SessionMode) -> Effect {
+    ///
+    /// `restore` is a saved chat to continue: its transcript fills the tab at once and seeds the
+    /// session; nothing is sent.
+    fn launch_session(
+        &mut self,
+        tab: TabId,
+        setup: SessionSetup,
+        mode: SessionMode,
+        restore: Option<(ConversationId, PriorChat)>,
+    ) -> Effect {
         let SessionSetup {
             conn,
             provider,
@@ -252,6 +265,14 @@ impl Workspace {
             // The unsent draft of the last run; nothing is started or sent from it.
             state.draft = draft;
         }
+        let prior = restore.map(|(id, prior)| {
+            state.entries.clone_from(&prior.entries);
+            state.dropped = prior.first_seq;
+            state.persisted = prior.first_seq + prior.entries.len();
+            state.history = Some(id);
+            state.restored = true;
+            prior
+        });
         self.ai_sessions.tabs.insert(tab, state);
         let start = AiSessionStart {
             tab,
@@ -263,6 +284,7 @@ impl Workspace {
             audit,
             tx,
             mode,
+            prior,
         };
         join(
             self.ensure_browser(&conn),
@@ -298,8 +320,11 @@ impl Workspace {
     }
 
     fn send_ai_message(&mut self, tab: TabId) -> Effect {
-        let Some(conn) = self.ai_sessions.get(tab).map(|t| t.conn.clone()) else {
+        let Some(chat) = self.ai_sessions.get(tab) else {
             return Effect::None;
+        };
+        let Some(conn) = chat.conn.clone() else {
+            return self.session_notice(CHAT_CONNECTION_REMOVED);
         };
         let enabled = self
             .sidebar
@@ -429,7 +454,9 @@ impl Workspace {
         if rerun.connection != t.info().id {
             return self.session_notice(WRONG_CONNECTION);
         }
-        let conn = t.conn.clone();
+        let Some(conn) = t.conn.clone() else {
+            return self.session_notice(CHAT_CONNECTION_REMOVED);
+        };
         let effect = self.open_editor_on(&conn, Some(rerun.sql.clone()));
         if let (true, Effect::Connect { request, .. }) = (run, &effect) {
             self.ai_sessions.reruns.insert(*request, rerun.sql);
@@ -468,7 +495,11 @@ impl Workspace {
         }
         match message {
             HostMsg::Event(event) => {
+                let entry = matches!(event, SessionEvent::Entry(_));
                 self.apply_session_event(tab, event);
+                if entry && tab == TabId::CHAT_PANEL {
+                    self.persist_chat();
+                }
                 Effect::None
             }
             HostMsg::Ask(ask) => {
@@ -493,6 +524,9 @@ impl Workspace {
                 t.approvals.deny_all();
                 if let Some(gate) = self.queries.get_mut(&tab) {
                     gate.dismiss();
+                }
+                if tab == TabId::CHAT_PANEL {
+                    self.persist_chat();
                 }
                 Effect::None
             }
@@ -572,7 +606,10 @@ impl Workspace {
             let _ = call.reply.send(Err(ToolError::Host(TAB_CLOSED.to_owned())));
             return Effect::None;
         };
-        let conn = t.conn.clone();
+        let Some(conn) = t.conn.clone() else {
+            let _ = call.reply.send(Err(ToolError::Host(TAB_CLOSED.to_owned())));
+            return Effect::None;
+        };
         let id = t.info().id.clone();
         let UiCall { request, reply } = call;
         let wrong = |name: Option<&str>| name.is_some_and(|n| n != id);
@@ -659,7 +696,7 @@ impl Workspace {
             .ai_sessions
             .tabs
             .iter()
-            .filter(|(_, t)| &t.conn == conn)
+            .filter(|(_, t)| t.conn.as_ref() == Some(conn))
             .map(|(id, _)| *id)
             .collect();
         tabs.into_iter()
@@ -750,13 +787,20 @@ impl Workspace {
             AiAction::SendChat => self.send_ai_message(TabId::CHAT_PANEL),
             AiAction::CancelChat => self.cancel_ai_session(TabId::CHAT_PANEL),
             AiAction::CopyChatSql { entry, block } => match self.chat_sql(entry, block) {
-                Some((_, sql)) => Effect::Copy(sql),
-                None => self.session_notice(ENTRY_GONE),
+                Ok((_, sql)) => Effect::Copy(sql),
+                Err(why) => self.session_notice(why),
             },
             AiAction::OpenChatSql { entry, block } => match self.chat_sql(entry, block) {
-                Some((conn, sql)) => self.open_editor_on(&conn, Some(sql)),
-                None => self.session_notice(ENTRY_GONE),
+                Ok((Some(conn), sql)) => self.open_editor_on(&conn, Some(sql)),
+                Ok((None, _)) => self.session_notice(CHAT_CONNECTION_REMOVED),
+                Err(why) => self.session_notice(why),
             },
+            history @ (AiAction::ToggleChatHistory
+            | AiAction::OpenPastChat(_)
+            | AiAction::DeletePastChat(_)
+            | AiAction::ClearChatHistory
+            | AiAction::ConfirmClearChatHistory
+            | AiAction::CancelClearChatHistory) => self.dispatch_chat_history(history),
             _ => Effect::None,
         }
     }
@@ -769,23 +813,119 @@ impl Workspace {
             .ok_or_else(|| SESSION_NO_CONNECTION.to_owned());
         let setup = started.and_then(|conn| self.session_setup(&conn, SessionMode::ChatPanel));
         match setup {
-            Ok(setup) => self.launch_session(TabId::CHAT_PANEL, setup, SessionMode::ChatPanel),
+            Ok(setup) => {
+                self.launch_session(TabId::CHAT_PANEL, setup, SessionMode::ChatPanel, None)
+            }
             Err(message) if notify => self.session_notice(message),
             Err(_) => Effect::None,
         }
     }
 
     /// The SQL of statement `block` of transcript entry `entry` of the chat, and the connection
-    /// it belongs to: the statement that ran (block 0) or a fenced block of an answer.
-    fn chat_sql(&self, entry: usize, block: usize) -> Option<(ConnectionId, String)> {
-        let chat = self.chat()?;
-        let sql = match chat.entry(entry)? {
-            TranscriptEntry::Sql(sql) if block == 0 => sql.rerun().sql,
-            TranscriptEntry::Assistant { text } => chat_sql_blocks(text).into_iter().nth(block)?,
-            _ => return None,
+    /// it belongs to (`None` when that connection was removed): the statement that ran (block 0)
+    /// or a fenced block of an answer.
+    ///
+    /// A statement restored from the history has no exact SQL: it gives its display text, or,
+    /// when values were hidden in it, the reason it cannot be used.
+    fn chat_sql(
+        &self,
+        entry: usize,
+        block: usize,
+    ) -> Result<(Option<ConnectionId>, String), &'static str> {
+        let chat = self.chat().ok_or(ENTRY_GONE)?;
+        let sql = match chat.entry(entry).ok_or(ENTRY_GONE)? {
+            TranscriptEntry::Sql(sql) if block == 0 => {
+                if sql.can_rerun() {
+                    sql.rerun().sql
+                } else if hides_values(&sql.display_sql) {
+                    return Err(RESTORED_SQL_HIDDEN);
+                } else {
+                    sql.display_sql.clone()
+                }
+            }
+            TranscriptEntry::Assistant { text } => chat_sql_blocks(text)
+                .into_iter()
+                .nth(block)
+                .ok_or(ENTRY_GONE)?,
+            _ => return Err(ENTRY_GONE),
         };
-        Some((chat.conn.clone(), sql))
+        Ok((chat.conn.clone(), sql))
     }
+
+    /// Replaces the chat on screen by the saved chat `id` (see `Workspace::chat_loaded`).
+    pub(super) fn restore_chat(
+        &mut self,
+        id: ConversationId,
+        stored: StoredConversation,
+    ) -> Effect {
+        let connection = stored.summary.connection.clone();
+        let prior = prior_chat(stored);
+        let closed = self.close_ai_session(TabId::CHAT_PANEL);
+        self.layout.reveal_chat();
+        let conn = self.saved_connection(&connection);
+        let setup = match &conn {
+            Some(conn) => self.session_setup(conn, SessionMode::ChatPanel),
+            None => Err(CHAT_CONNECTION_REMOVED.to_owned()),
+        };
+        match setup {
+            Ok(setup) => join(
+                closed,
+                self.launch_session(
+                    TabId::CHAT_PANEL,
+                    setup,
+                    SessionMode::ChatPanel,
+                    Some((id, prior)),
+                ),
+            ),
+            Err(reason) => {
+                self.show_restored_chat(id, prior, conn, &connection, reason);
+                closed
+            }
+        }
+    }
+
+    /// Puts a saved chat that cannot continue into the chat panel, read-only, with the reason.
+    fn show_restored_chat(
+        &mut self,
+        id: ConversationId,
+        prior: PriorChat,
+        conn: Option<ConnectionId>,
+        stored_connection: &str,
+        reason: String,
+    ) {
+        let config = conn.as_ref().and_then(|conn| {
+            let index = self.sidebar.index_of(conn)?;
+            Some(self.sidebar.entries()[index].config().clone())
+        });
+        let (name, driver, environment) = match &config {
+            Some(c) => (c.name.clone(), Some(c.driver.clone()), c.environment),
+            None => (REMOVED_CONNECTION.to_owned(), None, None),
+        };
+        let Some(driver) = driver.or_else(|| DriverId::new("unknown").ok()) else {
+            self.notice = Some(reason);
+            return;
+        };
+        let info = ConnectionInfo::new(stored_connection, name, driver, environment);
+        let status = conn
+            .as_ref()
+            .and_then(|c| self.sidebar.profile(c))
+            .and_then(|p| ai_status(self.ai.config(), Some(p.spec())));
+        let (tx, _host) = unbounded_channel();
+        let mut tab = AiSessionTab::restored(conn, info, status, tx, reason);
+        tab.entries = prior.entries;
+        tab.dropped = prior.first_seq;
+        tab.persisted = tab.dropped + tab.entries.len();
+        tab.history = Some(id);
+        tab.restored = true;
+        self.ai_sessions.tabs.insert(TabId::CHAT_PANEL, tab);
+    }
+}
+
+/// Whether a saved statement lost values to redaction. The credential redaction writes the quoted
+/// `'<redacted>'`; the store's own scrub (a URL password, a token) writes the bare `<redacted>`
+/// inside the text, so the bare form is checked too.
+fn hides_values(sql: &str) -> bool {
+    contains_redaction(sql) || sql.contains("<redacted>")
 }
 
 /// The table an object of the browser tree stands for: a table, view or materialized view is

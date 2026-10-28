@@ -249,7 +249,13 @@ impl Workspace {
             | AiAction::SendChat
             | AiAction::CancelChat
             | AiAction::CopyChatSql { .. }
-            | AiAction::OpenChatSql { .. }) => self.dispatch_chat(chat),
+            | AiAction::OpenChatSql { .. }
+            | AiAction::ToggleChatHistory
+            | AiAction::OpenPastChat(_)
+            | AiAction::DeletePastChat(_)
+            | AiAction::ClearChatHistory
+            | AiAction::ConfirmClearChatHistory
+            | AiAction::CancelClearChatHistory) => self.dispatch_chat(chat),
             // Routed above; kept so a new assist action cannot fall through unhandled.
             assist => self.dispatch_assist(assist, None),
         }

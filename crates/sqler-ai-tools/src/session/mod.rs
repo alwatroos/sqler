@@ -46,8 +46,12 @@
 //!
 //! # Secrets and persistence
 //!
-//! The [`Transcript`] is built from redacted data and lives in memory only, as long as the
-//! session object. The session writes nothing to disk and holds no keys.
+//! The [`Transcript`] is built from redacted data and lives in memory, as long as the session
+//! object. The session writes nothing to disk and holds no keys. The host may store entries in
+//! the chat history ([`stored_entry`]; the exact SQL of a statement is never part of the record)
+//! and seed a new session with a restored chat ([`ExplorationSession::with_prior`]). A restored
+//! chat continues on the user and assistant text only: no tool result and no provider state is
+//! sent again.
 
 mod approval;
 mod cancel;
@@ -56,6 +60,7 @@ mod engine;
 mod events;
 mod prompt;
 mod repeat;
+mod restore;
 mod schema;
 mod transcript;
 
@@ -67,6 +72,7 @@ pub use prompt::{
     CHAT_PROMPT_VERSION, PromptKind, SESSION_PROMPT_VERSION, chat_system_prompt, prompt_for,
     system_prompt,
 };
+pub use restore::{PRIOR_CONTEXT_MAX_BYTES, PriorChat, prior_chat, restored_entry, stored_entry};
 pub use schema::{DEFAULT_SCHEMA_TOKENS, FocusTable, SchemaContextOptions};
 pub use transcript::{
     MAX_TRANSCRIPT_ENTRIES, NotRunReason, Notice, RerunRequest, SqlEntry, ToolCallEntry,

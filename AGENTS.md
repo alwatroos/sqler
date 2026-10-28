@@ -34,7 +34,7 @@ Cargo workspace. Layered; dependencies flow downward only. Members are `crates/*
 | `sqler-ai-api` | L1 | `AiProvider` trait, message and tool types, streaming, token accounting |
 | `sqler-sql` | L1 | SQL text services on an own lexer (statement splitting, cursor lookup, placeholders, fail-safe classification, formatting), dialect handling, DDL generation; `sqlparser` only for later AST needs (ADR-0020) |
 | `sqler-plugin-api` | L1 | WIT package, manifest and capability model; wasmtime-free (host bindings live in `sqler-plugin-host`) |
-| `sqler-config` | L1 | Settings, keybindings, connection store, keychain |
+| `sqler-config` | L1 | Settings, keybindings, connection store, keychain, chat history store (`chat-history.db`) |
 | `sqler-tunnel` | L1 | SSH session and local port forward (russh); drivers connect to a local address |
 | `sqler-update` | L1 | Check-only update client: fetches one Ed25519-signed manifest from the GitHub Releases `latest/download` asset (`ring`, `reqwest`), reports a newer version, never downloads a binary; linked into `sqler-app` by the default-on feature `update` (R4, ADR-0066 note); trusted key since R17 |
 | `sqler-driver-postgres` | L2 | `PostgreSQL` driver (sqlx / tokio-postgres) |
@@ -338,6 +338,7 @@ End-of-iteration report, posted as `docs/reports/iteration-NNN.md`:
 | [0074](docs/src/adr/0074-pr-checks-and-post-release-benchmarks.md) | PR checks and post-release benchmarks: pull requests run `ci.yml` only; `bench`, `size`, spikes and `release` run on `main` or on dispatch; `benchmarks.yml` runs after a published release | accepted |
 | [0075](docs/src/adr/0075-platform-installers.md) | Platform installers: ad-hoc-signed `.dmg`, `.deb` (amd64, arm64) and the MSI with a Start menu shortcut, built by POSIX scripts from the guarded archive with built-in tools only; amends ADR-0064 | accepted |
 | [0076](docs/src/adr/0076-ai-chat-panel.md) | AI chat panel: right-side panel on the reserved `TabId::CHAT_PANEL`, read-only by construction (no approver), forced caps, no `open_results_tab`, `search_data` via `AssistSearch`, `Surface::Chat`, additive `workbench.toml` `chat_panel` | accepted |
+| [0077](docs/src/adr/0077-ai-chat-history-store.md) | AI chat history store: `chat-history.db` (SQLite via the existing `sqlx`) on a private worker thread, `user_version` migrations, corrupt moved aside / newer left off, `0600` + `secure_delete`, scrub and caps on the worker, 1 s batches, chat panel only, continue with prior context (no provider resume); amends ADR-0039, ADR-0045, ADR-0076 | accepted |
 
 ## 9. Roadmap status
 
@@ -415,6 +416,7 @@ M0 CI is in place (`ci.yml`, `pages.yml`, `deny.toml`); `bench.yml` covers bench
 
 ## 10. Gotchas
 
+- Chat history (ADR-0077): `sqler-config` has no runtime, so `ChatHistory` runs its own OS thread with a current-thread tokio runtime; every sqlx call must stay inside that thread's `block_on`, and `list`/`load` block, so call them on the background executor only. Scrubbing (`scrub_text`, caps) happens on that thread and is the single choke point: new stored kinds go through `fit_entry`, need a schema version bump, and must never carry exact SQL.
 - `clippy::doc_markdown` (pedantic) flags product names such as `SQLite`, `DuckDB` and `PostgreSQL` in docs; put them in backticks.
 - The `pedantic` group needs `priority = -1`, or `clippy::lint_groups_priority` fires.
 - A crate with `[lints] workspace = true` cannot override single lints. An FFI exception to `unsafe_code` needs its own `[lints]` table, documented.

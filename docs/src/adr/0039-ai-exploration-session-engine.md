@@ -79,6 +79,8 @@ The `Transcript` is a typed in-memory list: `User`, `Assistant`, `ToolCall`, `Sq
 
 None. The transcript lives as long as the session object (the tab). Nothing is written to disk, and the session holds no key or secret: the API key stays in the provider. If saving transcripts is ever added, it needs a new ADR (redaction, retention, the audit relation).
 
+Amended by [ADR-0077](0077-ai-chat-history-store.md): the AI chat panel transcript is now stored in `chat-history.db`, scrubbed and capped; the engine itself still writes nothing.
+
 ### Host duties
 
 The host (the session UI, T13) builds the `ToolSet` over a `SessionSource` that lends only the bound connection, sets `with_audit(.., Surface::Session)` and passes the approver. The session cannot check this.

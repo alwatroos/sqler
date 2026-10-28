@@ -12,6 +12,7 @@ use std::sync::Arc;
 use gpui::{AppContext as _, Context, Entity, FocusHandle, ScrollHandle, Subscription, Window};
 use gpui_component::input::{InputEvent, TextareaState};
 use sqler_ai_tools::ApprovalStage;
+use sqler_config::{ChatHistory, ChatHistoryStatus, ConversationId};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::WorkspaceView;
@@ -40,6 +41,8 @@ pub(crate) struct AiSessionInputs {
     tabs: HashMap<TabId, SessionUi>,
 }
 
+/// How long quitting waits for the chat history to commit and close.
+const CHAT_HISTORY_CLOSE: std::time::Duration = std::time::Duration::from_millis(100);
 /// The fewest rows the composer shows, empty or not.
 pub(crate) const COMPOSER_MIN_ROWS: usize = 2;
 /// The most rows the composer grows to; longer text scrolls inside it.
@@ -250,7 +253,87 @@ impl WorkspaceView {
         match effect {
             Effect::StartAiSession { start, host } => self.start_ai_session(*start, host, cx),
             Effect::RunAiTurn(job) => self.run_ai_turn(*job, cx),
+            Effect::ListChats => self.list_chats(cx),
+            Effect::LoadChat(id) => self.load_chat(id, cx),
             _ => {}
+        }
+    }
+
+    /// Reads the saved chats on the background executor (the store blocks) and shows them.
+    fn list_chats(&mut self, cx: &mut Context<Self>) {
+        let Some(store) = self.ws.chat_history().cloned() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { store.list() })
+                .await;
+            this.update(cx, |view, cx| {
+                view.ws.chat_history_listed(result);
+                view.push_chat_history_notice();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Reads one saved chat on the background executor and opens it.
+    fn load_chat(&mut self, id: ConversationId, cx: &mut Context<Self>) {
+        let Some(store) = self.ws.chat_history().cloned() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let wanted = id.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { store.load(&wanted) })
+                .await;
+            this.update(cx, |view, cx| {
+                let effect = view.ws.chat_loaded(id, result);
+                view.apply(effect, cx);
+                view.settle(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Reads the list once at start, so a history that was moved aside or is off is announced
+    /// at launch and not only when the list is opened.
+    pub(super) fn probe_chat_history(store: ChatHistory, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_executor()
+                .spawn(async move {
+                    let _ = store.list();
+                    store.status()
+                })
+                .await;
+            this.update(cx, |view, cx| {
+                if let ChatHistoryStatus::Off(text) = status {
+                    view.notices.push(text);
+                }
+                view.push_chat_history_notice();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Moves the store's one-time notice (a corrupt file was moved aside) to the notices.
+    fn push_chat_history_notice(&mut self) {
+        if let Some(notice) = self.ws.chat_history().and_then(ChatHistory::take_notice) {
+            self.notices.push(notice);
+        }
+    }
+
+    /// The app is quitting: commits and closes the chat history, waiting a moment at most.
+    pub(super) fn close_chat_history(&self) {
+        if let Some(store) = self.ws.chat_history() {
+            store.close(CHAT_HISTORY_CLOSE);
         }
     }
 
