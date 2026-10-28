@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **App icon.** SQLer now has an icon, shown by the macOS `.dmg` app bundle, the Linux `.deb` (hicolor theme and menu entry), the Windows MSI (Apps list and Start menu shortcut) and the Windows `sqler.exe`. The source is `assets/icon/sqler.svg`; regenerate the committed PNG, ICO and ICNS files with `cargo run -p xtask -- icons`.
+
 ## [1.1.0] - 2026-10-26
 
 ### Added

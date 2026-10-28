@@ -40,6 +40,11 @@ bin="$mnt/SQLer.app/Contents/MacOS/sqler"
 [ -x "$bin" ] || fail "SQLer.app/Contents/MacOS/sqler is missing or not executable"
 [ -L "$mnt/Applications" ] || fail "Applications is not a symlink"
 [ "$(readlink "$mnt/Applications")" = "/Applications" ] || fail "Applications does not point to /Applications"
+icns="$mnt/SQLer.app/Contents/Resources/sqler.icns"
+[ -s "$icns" ] || fail "SQLer.app/Contents/Resources/sqler.icns is missing or empty"
+[ "$(head -c 4 "$icns")" = "icns" ] || fail "sqler.icns does not start with the icns magic"
+[ "$(plutil -extract CFBundleIconFile raw "$mnt/SQLer.app/Contents/Info.plist")" = "sqler" ] ||
+    fail "CFBundleIconFile is not sqler"
 codesign --verify "$mnt/SQLer.app" || fail "codesign --verify failed for SQLer.app"
 "$bin" --version >"$vf" 2>&1 || true
 ver=$(cat "$vf")

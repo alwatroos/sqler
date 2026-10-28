@@ -158,6 +158,7 @@
                     Name='SQLer'
                     Description='SQLer SQL IDE'
                     Target='[#exe0]'
+                    Icon='SqlerIcon.ico'
                     WorkingDirectory='Bin'/>
                 <RegistryValue
                     Root='HKCU'
@@ -206,13 +207,11 @@
 
         
         <!--
-          Uncomment the following `Icon` and `Property` tags to change the product icon.
-
-          The product icon is the graphic that appears in the Add/Remove
-          Programs control panel for the application.
+          F6: the product icon, shown in Add/Remove Programs and on the Start menu shortcut. The Id keeps its `.ico`
+          extension because a shortcut icon requires it. The file is committed (xtask icons).
         -->
-        <!--<Icon Id='ProductICO' SourceFile='wix\Product.ico'/>-->
-        <!--<Property Id='ARPPRODUCTICON' Value='ProductICO' />-->
+        <Icon Id='SqlerIcon.ico' SourceFile='$(var.CargoTargetDir)\..\assets\icon\sqler.ico'/>
+        <Property Id='ARPPRODUCTICON' Value='SqlerIcon.ico'/>
 
         <Property Id='ARPHELPLINK' Value='https://github.com/alwatroos/sqler'/>
         

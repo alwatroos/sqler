@@ -8289,6 +8289,7 @@ name = "sqler-app"
 version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
+ "embed-resource",
  "ring",
  "semver",
  "serde_json",
@@ -11606,6 +11607,7 @@ name = "xtask"
 version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
+ "resvg 0.46.0",
  "ring",
  "serde",
  "serde_json",

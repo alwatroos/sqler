@@ -4,7 +4,7 @@
 //! The `plugins` task: build, check, list and clean the guest workspace in `plugins/`.
 
 mod args;
-mod build;
+pub(crate) mod build;
 mod component;
 mod table;
 
