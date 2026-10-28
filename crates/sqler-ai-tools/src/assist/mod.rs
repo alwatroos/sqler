@@ -22,7 +22,7 @@
 
 mod conversation;
 mod diff;
-mod grounding;
+pub(crate) mod grounding;
 mod parse;
 mod prompts;
 mod search;

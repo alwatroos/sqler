@@ -16,8 +16,9 @@ use crate::session::approval::SessionApprover;
 use crate::session::cancel::{Cancelled, SessionCancel, cancellable};
 use crate::session::config::SessionConfig;
 use crate::session::events::{EventHub, SessionEvent, SessionEvents, SessionState};
-use crate::session::prompt::prompt_for;
+use crate::session::prompt::{prompt_for, schema_section};
 use crate::session::repeat::RepeatGuard;
+use crate::session::schema::{FocusTable, build_schema_context};
 use crate::session::transcript::{NotRunReason, Notice, Transcript, TranscriptEntry};
 use crate::source::ConnectionInfo;
 use crate::toolset::ToolSet;
@@ -64,6 +65,9 @@ pub enum TurnOutcome {
     Failed(SessionError),
 }
 
+/// The longest the schema context of a turn may take to build.
+const SCHEMA_CONTEXT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// What one model step produced.
 struct StepData {
     text: String,
@@ -85,6 +89,9 @@ pub struct ExplorationSession {
     events: Arc<EventHub>,
     cancel: SessionCancel,
     repeat: RepeatGuard,
+    info: ConnectionInfo,
+    focus: Vec<FocusTable>,
+    schema: Option<String>,
 }
 
 impl std::fmt::Debug for ExplorationSession {
@@ -157,6 +164,9 @@ impl ExplorationSession {
             events,
             cancel: SessionCancel::default(),
             repeat,
+            info: connection,
+            focus: Vec::new(),
+            schema: None,
         })
     }
 
@@ -171,6 +181,17 @@ impl ExplorationSession {
     #[must_use]
     pub fn cancel_handle(&self) -> SessionCancel {
         self.cancel.clone()
+    }
+
+    /// Sets the tables the user is looking at; the next turn's schema context lists them first.
+    pub fn set_focus(&mut self, focus: Vec<FocusTable>) {
+        self.focus = focus;
+    }
+
+    /// The schema context of the last turn (the wrapped envelope), if one was built.
+    #[must_use]
+    pub fn schema_context(&self) -> Option<&str> {
+        self.schema.as_deref()
     }
 
     /// The transcript so far.
@@ -206,9 +227,38 @@ impl ExplorationSession {
             session: self,
             ended: false,
         };
-        let outcome = guard.session.turn().await;
+        let outcome = match guard.session.load_schema(&text).await {
+            Ok(()) => guard.session.turn().await,
+            Err(outcome) => outcome,
+        };
         guard.ended = true;
         guard.session.conclude(outcome)
+    }
+
+    /// Builds the schema context of this turn. `Err` is the outcome that ends the turn: only a
+    /// cancel does; a timeout or an empty listing leaves the turn without a schema.
+    async fn load_schema(&mut self, text: &str) -> Result<(), TurnOutcome> {
+        self.schema = None;
+        let Some(options) = self.config.schema_context else {
+            return Ok(());
+        };
+        let tools = self.tools.clone();
+        let info = self.info.clone();
+        let focus = self.focus.clone();
+        let build = build_schema_context(&tools, &info, text, &focus, options);
+        match cancellable(
+            &self.cancel,
+            tokio::time::timeout(SCHEMA_CONTEXT_TIMEOUT, build),
+        )
+        .await
+        {
+            Err(Cancelled) => Err(TurnOutcome::Cancelled),
+            Ok(Err(_elapsed)) => Ok(()),
+            Ok(Ok(context)) => {
+                self.schema = context;
+                Ok(())
+            }
+        }
     }
 
     fn push_user(&mut self, text: &str) {
@@ -291,7 +341,11 @@ impl ExplorationSession {
 
     fn request(&self) -> ChatRequest {
         let mut request = ChatRequest::new(self.config.model.clone(), self.history.clone());
-        request.system = Some(self.prompt.clone());
+        request.system = Some(if self.config.schema_context.is_some() {
+            format!("{}{}", self.prompt, schema_section(self.schema.as_deref()))
+        } else {
+            self.prompt.clone()
+        });
         request.tools = self.tools.definitions();
         request.max_output_tokens = self.config.max_output_tokens;
         request.temperature = self.config.temperature;

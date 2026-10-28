@@ -10,7 +10,7 @@ use crate::untrusted::{UNTRUSTED_CLOSE, UNTRUSTED_OPEN};
 pub const SESSION_PROMPT_VERSION: u32 = 1;
 
 /// The version of the chat panel's prompt text; bump it when its wording changes.
-pub const CHAT_PROMPT_VERSION: u32 = 1;
+pub const CHAT_PROMPT_VERSION: u32 = 2;
 
 /// Which system prompt a session gets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -60,6 +60,10 @@ pub fn chat_system_prompt(connection: &ConnectionInfo, max_rows: u32, timeout_se
          - Answer questions about the schema with the catalog tools only (`list_schemas`, \
          `list_tables`, `describe_table`, `describe_function`, `search_schema`). Do not fetch rows \
          for them.\n\
+         - Use only tables and columns that exist: those in the schema below or returned by the \
+         catalog tools. Never invent a table or column name; if what the user asks for does not \
+         exist, say so instead of writing SQL for it. Check a table the schema does not list with \
+         `search_schema` or `describe_table` first.\n\
          - For analysis, compute in the database: use aggregate queries (`COUNT`, `SUM`, `AVG`, \
          `MIN`, `MAX`, `GROUP BY`, distinct counts, null rates) instead of reading many rows and \
          reasoning over them yourself. Start from the schema, then aggregate.\n\
@@ -80,6 +84,24 @@ pub fn chat_system_prompt(connection: &ConnectionInfo, max_rows: u32, timeout_se
         open = UNTRUSTED_OPEN,
         close = UNTRUSTED_CLOSE,
     )
+}
+
+/// The part of a chat system prompt that carries the schema of the turn.
+///
+/// With the wrapped `envelope` it is the schema block; without one it tells the model that none
+/// was loaded.
+#[must_use]
+pub(crate) fn schema_section(envelope: Option<&str>) -> String {
+    match envelope {
+        Some(envelope) => format!(
+            "\n\nSchema of this database (`other_tables` are names only; `truncated` means more \
+             exist; look them up with the catalog tools):\n{envelope}"
+        ),
+        None => {
+            "\n\nNo schema was loaded for this turn; use the catalog tools before you write SQL."
+                .to_owned()
+        }
+    }
 }
 
 /// The system prompt for a session bound to `connection`.
@@ -178,6 +200,24 @@ mod tests {
         assert!(p.contains("summary of the findings"));
         assert!(p.contains("the SQL"));
         assert!(p.contains(UNTRUSTED_OPEN) && p.contains(UNTRUSTED_CLOSE));
+    }
+
+    #[test]
+    fn the_chat_prompt_v2_allows_only_existing_objects() {
+        let p = chat_prompt();
+        assert_eq!(CHAT_PROMPT_VERSION, 2);
+        assert!(p.contains("Use only tables and columns that exist"));
+        assert!(p.contains("Never invent a table or column name"));
+        assert!(p.contains("`search_schema` or `describe_table` first"));
+    }
+
+    #[test]
+    fn the_schema_section_wraps_the_envelope_or_says_none_was_loaded() {
+        let with = schema_section(Some("ENVELOPE"));
+        assert!(with.starts_with("\n\nSchema of this database"));
+        assert!(with.contains("`other_tables` are names only"));
+        assert!(with.ends_with("\nENVELOPE"));
+        assert!(schema_section(None).contains("No schema was loaded for this turn"));
     }
 
     #[test]

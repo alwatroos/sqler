@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 use crate::session::prompt::PromptKind;
+use crate::session::schema::SchemaContextOptions;
 
 /// How a failed model step is retried. Only `RateLimited`, `Overloaded` and `Network` errors that arrive
 /// before any text or tool call are retried.
@@ -92,6 +93,8 @@ pub struct SessionConfig {
     pub temperature: Option<f32>,
     /// Which system prompt the session gets.
     pub prompt: PromptKind,
+    /// The schema context sent with every turn; `None` sends none (the default).
+    pub schema_context: Option<SchemaContextOptions>,
 }
 
 impl SessionConfig {
@@ -104,6 +107,7 @@ impl SessionConfig {
             max_output_tokens: None,
             temperature: None,
             prompt: PromptKind::Tab,
+            schema_context: None,
         }
     }
 
@@ -111,6 +115,13 @@ impl SessionConfig {
     #[must_use]
     pub fn with_prompt(mut self, prompt: PromptKind) -> Self {
         self.prompt = prompt;
+        self
+    }
+
+    /// The same configuration with a schema context built and sent on every turn.
+    #[must_use]
+    pub fn with_schema_context(mut self, options: SchemaContextOptions) -> Self {
+        self.schema_context = Some(options);
         self
     }
 }
@@ -131,6 +142,9 @@ mod tests {
         let c = SessionConfig::new("m");
         assert_eq!(c.model, "m");
         assert_eq!(c.limits, l);
+        assert_eq!(c.schema_context, None);
+        let c = c.with_schema_context(SchemaContextOptions::default());
+        assert_eq!(c.schema_context, Some(SchemaContextOptions::default()));
     }
 
     #[test]
