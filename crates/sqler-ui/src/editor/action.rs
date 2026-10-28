@@ -13,6 +13,10 @@ pub enum EditorAction {
     New,
     /// Format the selection, or the whole buffer when nothing is selected.
     FormatSql,
+    /// Comment or uncomment the selected lines (or the cursor's line) with `--`.
+    ToggleLineComment,
+    /// Wrap the selection in `/* */`, or unwrap it.
+    ToggleBlockComment,
     /// Select the word at the cursor, then add the next occurrence of the selection.
     AddNextOccurrence,
     /// Add a cursor on the line above.
@@ -43,6 +47,11 @@ pub enum EditorKey {
 pub const COMMANDS: &[(&str, &str)] = &[
     ("editor:new", "Editor: New SQL Editor"),
     ("editor:format-sql", "Editor: Format SQL"),
+    ("editor:toggle-line-comment", "Editor: Toggle Line Comment"),
+    (
+        "editor:toggle-block-comment",
+        "Editor: Toggle Block Comment",
+    ),
     ("editor:add-next-occurrence", "Editor: Add Next Occurrence"),
     ("editor:add-cursor-above", "Editor: Add Cursor Above"),
     ("editor:add-cursor-below", "Editor: Add Cursor Below"),
@@ -73,6 +82,8 @@ impl EditorAction {
         match self {
             Self::New => "editor:new",
             Self::FormatSql => "editor:format-sql",
+            Self::ToggleLineComment => "editor:toggle-line-comment",
+            Self::ToggleBlockComment => "editor:toggle-block-comment",
             Self::AddNextOccurrence => "editor:add-next-occurrence",
             Self::AddCursorAbove => "editor:add-cursor-above",
             Self::AddCursorBelow => "editor:add-cursor-below",
@@ -89,6 +100,8 @@ pub fn action_for(id: &CommandId) -> Option<EditorAction> {
     Some(match id.as_str() {
         "editor:new" => EditorAction::New,
         "editor:format-sql" => EditorAction::FormatSql,
+        "editor:toggle-line-comment" => EditorAction::ToggleLineComment,
+        "editor:toggle-block-comment" => EditorAction::ToggleBlockComment,
         "editor:add-next-occurrence" => EditorAction::AddNextOccurrence,
         "editor:add-cursor-above" => EditorAction::AddCursorAbove,
         "editor:add-cursor-below" => EditorAction::AddCursorBelow,
@@ -117,9 +130,11 @@ mod tests {
 
     use super::*;
 
-    const ALL: [EditorAction; 8] = [
+    const ALL: [EditorAction; 10] = [
         EditorAction::New,
         EditorAction::FormatSql,
+        EditorAction::ToggleLineComment,
+        EditorAction::ToggleBlockComment,
         EditorAction::AddNextOccurrence,
         EditorAction::AddCursorAbove,
         EditorAction::AddCursorBelow,
@@ -181,8 +196,24 @@ mod tests {
             EditorAction::TriggerCompletion.command_id().to_string(),
             "editor:trigger-completion"
         );
+        assert_eq!(
+            EditorAction::ToggleLineComment.command_id().to_string(),
+            "editor:toggle-line-comment"
+        );
+        assert_eq!(
+            EditorAction::ToggleBlockComment.command_id().to_string(),
+            "editor:toggle-block-comment"
+        );
         let title = |id: &str| COMMANDS.iter().find(|(i, _)| *i == id).map(|(_, t)| *t);
         assert_eq!(title("editor:format-sql"), Some("Editor: Format SQL"));
+        assert_eq!(
+            title("editor:toggle-line-comment"),
+            Some("Editor: Toggle Line Comment")
+        );
+        assert_eq!(
+            title("editor:toggle-block-comment"),
+            Some("Editor: Toggle Block Comment")
+        );
         assert_eq!(
             title("editor:trigger-completion"),
             Some("Editor: Trigger Completion")
