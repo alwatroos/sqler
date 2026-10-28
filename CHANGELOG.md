@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- SQL editor: `editor:toggle-line-comment` (Cmd/Ctrl+/) and `editor:toggle-block-comment` (Shift+Alt+A).
+
+### Fixed
+
+- With text selected, Cmd/Ctrl+Enter and the Run button run exactly the selection; the editor text is never changed.
+- Run Statement finds statements separated by a blank line, without semicolons.
+
 ## [1.1.0] - 2026-10-26
 
 ### Added

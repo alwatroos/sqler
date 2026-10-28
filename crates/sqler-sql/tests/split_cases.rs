@@ -3,7 +3,10 @@
 
 //! Splitting and cursor-lookup cases per dialect.
 
-use sqler_sql::{Dialect, PlaceholderKind, SegmentKind, placeholders, split, statement_at};
+use sqler_sql::{
+    Dialect, PlaceholderKind, SegmentKind, SplitOptions, placeholders, split, split_with,
+    statement_at,
+};
 
 use Dialect::{MySql, Postgres, Sqlite};
 
@@ -525,4 +528,116 @@ fn unterminated_mysql_quoted_variable_swallows_the_rest() {
         check_tiling(MySql, text);
     }
     assert_eq!(stmts(MySql, "select @'a;b'; select 2").len(), 2);
+}
+
+/// Statement bodies when a blank line also ends a statement.
+fn blank_stmts(dialect: Dialect, text: &str) -> Vec<&str> {
+    let segs = split_with(dialect, text, SplitOptions::BLANK_LINES);
+    let mut at = 0;
+    for s in &segs {
+        assert_eq!(s.span.start, at, "{text:?}");
+        at = s.span.end;
+    }
+    assert_eq!(at, text.len(), "{text:?}");
+    segs.into_iter()
+        .filter(|s| s.kind == SegmentKind::Statement)
+        .map(|s| &text[s.body])
+        .collect()
+}
+
+#[test]
+fn tsql_control_of_flow_keeps_its_body() {
+    for text in [
+        "IF @x = 1\n\nDELETE FROM t",
+        "if exists (select 1)\n\nBEGIN\n  select 1\nEND",
+        "WHILE @i < 3\n\nSET @i = @i + 1",
+    ] {
+        assert_eq!(blank_stmts(Dialect::TSql, text), [text], "{text:?}");
+    }
+}
+
+#[test]
+fn blank_line_splits_statements() {
+    for d in Dialect::ALL {
+        assert_eq!(
+            blank_stmts(d, "select 1\n\nselect 2"),
+            ["select 1", "select 2"],
+            "{d:?}"
+        );
+        assert_eq!(
+            blank_stmts(d, "select 1\r\n\r\nSELECT 2\n  \n\ndelete from t"),
+            ["select 1", "SELECT 2", "delete from t"],
+            "{d:?}"
+        );
+        // A comment after the blank line belongs to the next statement.
+        assert_eq!(
+            blank_stmts(d, "select 1\n\n-- two\nselect 2"),
+            ["select 1", "-- two\nselect 2"],
+            "{d:?}"
+        );
+        assert_eq!(
+            blank_stmts(d, "-- note\n\nselect 2"),
+            ["-- note\n\nselect 2"],
+            "{d:?}"
+        );
+        // Semicolons still split, and a statement may end with one before the blank.
+        assert_eq!(
+            blank_stmts(d, "select 1;\n\nselect 2\n\nselect 3"),
+            ["select 1", "select 2", "select 3"],
+            "{d:?}"
+        );
+    }
+}
+
+#[test]
+fn blank_line_does_not_split_one_statement() {
+    for d in Dialect::ALL {
+        for text in [
+            "select a\n\nfrom t",
+            "with x as (select 1)\n\nselect * from x",
+            "select a\n\nunion\n\nselect b",
+            "select a union\n\nselect b",
+            "select 'a\n\nselect'",
+            "select /* a\n\nselect */ 1",
+            "select (1,\n\nselect 2)",
+            "select 1\n\nfoo bar",
+            "select a,\n\nselect b",
+        ] {
+            assert_eq!(blank_stmts(d, text), [text], "{d:?} {text:?}");
+        }
+    }
+}
+
+#[test]
+fn blank_line_keeps_routine_bodies() {
+    let pg = "create function f() returns int as $$\nselect 1;\n\nselect 2;\n$$ language sql";
+    assert_eq!(blank_stmts(Postgres, pg), [pg]);
+    let my = "DELIMITER //\ncreate procedure p() begin\nselect 1;\n\nselect 2;\nend//\nDELIMITER ;";
+    assert_eq!(blank_stmts(MySql, my), stmts(MySql, my));
+    let my2 = "DELIMITER //\nselect 1\n\nselect 2//";
+    assert_eq!(blank_stmts(MySql, my2), ["select 1\n\nselect 2"]);
+    let ts = "create procedure p as\nbegin\nselect 1\n\nselect 2\nend";
+    assert_eq!(blank_stmts(Dialect::TSql, ts), [ts]);
+    let ts2 = "begin\n\nselect 1\nend";
+    assert_eq!(blank_stmts(Dialect::TSql, ts2), [ts2]);
+    let ts3 = "select 1\n\nselect 2\nGO\nselect 3\n\nselect 4";
+    assert_eq!(
+        blank_stmts(Dialect::TSql, ts3),
+        ["select 1", "select 2", "select 3", "select 4"]
+    );
+}
+
+#[test]
+fn default_options_equal_split() {
+    for d in Dialect::ALL {
+        for text in [
+            "select 1\n\nselect 2",
+            "select 1; select 2;",
+            "create function f() returns int as $$ $$;\n\nselect 1",
+            "",
+        ] {
+            assert_eq!(split(d, text), split_with(d, text, SplitOptions::default()));
+        }
+        assert_eq!(stmts(d, "select 1\n\nselect 2"), ["select 1\n\nselect 2"]);
+    }
 }

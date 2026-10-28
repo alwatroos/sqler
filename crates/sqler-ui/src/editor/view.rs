@@ -17,8 +17,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, Styled as _, Subscription, Task, Window, div,
+    App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
+    KeyBinding, NoAction, ParentElement as _, Styled as _, Subscription, Task, Window, div,
 };
 use gpui_component::input::{
     Editor, EditorState, InputEvent, RangeDecoration, RangeDecorationCollection,
@@ -40,6 +40,22 @@ const ADD_CURSOR_ABOVE: &str = "input::AddCursorAbove";
 const ADD_CURSOR_BELOW: &str = "input::AddCursorBelow";
 /// The name of the editor's own "show completions" action.
 const SHOW_COMPLETIONS: &str = "input::ShowCompletions";
+
+/// The key context of the editor widget.
+const INPUT_CONTEXT: &str = "Input";
+
+/// Unbinds the editor's own `secondary-enter` binding, so Cmd/Ctrl+Enter reaches the workspace.
+///
+/// GPUI runs key bindings before the capture listeners of ancestors. `gpui-base` binds
+/// `secondary-enter` in the `Input` context to `Enter { secondary: true }`, which in a multi-line
+/// editor inserts a newline over the selection and stops the key. Nothing else is unbound.
+pub(crate) fn init_keys(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new(
+        "secondary-enter",
+        NoAction,
+        Some(INPUT_CONTEXT),
+    )]);
+}
 
 /// The brackets of the last text the cursor stood next to.
 struct BracketCache {
@@ -444,5 +460,99 @@ mod tests {
         assert_eq!(frame(cx), two);
         cx.update(|_, cx| set_frames(&frames, None, cx));
         assert_eq!(frame(cx), Vec::<std::ops::Range<usize>>::new());
+    }
+
+    /// A window with the editor inside a root that records the chords reaching its capture phase.
+    struct Host {
+        state: Entity<EditorState>,
+        seen: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl gpui::Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let seen = Rc::clone(&self.seen);
+            div()
+                .size_full()
+                .capture_key_down(move |event, _, _| {
+                    seen.borrow_mut().push(event.keystroke.unparse());
+                })
+                .child(Editor::new(&self.state))
+        }
+    }
+
+    const SCRIPT: &str = "select 1;\nselect 2;";
+
+    /// Presses each chord with `0..8` selected; returns the text, selection and recorded chords
+    /// after each press.
+    fn press_all(
+        cx: &mut gpui::TestAppContext,
+        bind: bool,
+        chords: &[&str],
+    ) -> Vec<(String, std::ops::Range<usize>, usize)> {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            if bind {
+                init_keys(cx);
+            }
+        });
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let host_seen = Rc::clone(&seen);
+        let (host, cx) = cx.add_window_view(|window, cx| {
+            let state = cx.new(|cx| {
+                EditorState::new(window, cx)
+                    .language(LANGUAGE)
+                    .line_number(true)
+            });
+            Host {
+                state,
+                seen: host_seen,
+            }
+        });
+        let state = host.read_with(cx, |h, _| h.state.clone());
+        cx.update(|window, cx| {
+            state.update(cx, |s, cx| s.set_value(SCRIPT, window, cx));
+            state.update(cx, |s, cx| s.set_selected_range(0..8, cx));
+            let handle = state.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+        });
+        let mut out = Vec::new();
+        for chord in chords {
+            cx.update(|_, cx| state.update(cx, |s, cx| s.set_selected_range(0..8, cx)));
+            let before = seen.borrow().len();
+            cx.simulate_keystrokes(chord);
+            let reached = seen.borrow().len() - before;
+            let (text, selection) = cx.update(|_, cx| {
+                let s = state.read(cx);
+                (s.text().to_string(), s.selected_range())
+            });
+            out.push((text, selection, reached));
+        }
+        out
+    }
+
+    /// The reproduction of the bug: without the unbinding the chord replaces the selection.
+    #[gpui::test]
+    fn without_init_keys_cmd_enter_replaces_the_selection(cx: &mut gpui::TestAppContext) {
+        let r = press_all(cx, false, &["secondary-enter"]);
+        assert_ne!(
+            r[0].0, SCRIPT,
+            "the editor swallowed the chord and edited the text"
+        );
+    }
+
+    #[gpui::test]
+    fn run_and_toggle_chords_reach_the_root_and_leave_the_text(cx: &mut gpui::TestAppContext) {
+        let chords = [
+            "secondary-e",
+            "secondary-enter",
+            "secondary-shift-enter",
+            "secondary-/",
+            "shift-alt-a",
+        ];
+        for (chord, (text, selection, reached)) in chords.iter().zip(press_all(cx, true, &chords)) {
+            assert_eq!(text, SCRIPT, "{chord} changed the text");
+            assert_eq!(selection, 0..8, "{chord} changed the selection");
+            assert_eq!(reached, 1, "{chord} did not reach the root listener");
+        }
     }
 }

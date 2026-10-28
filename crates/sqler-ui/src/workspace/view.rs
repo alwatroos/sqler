@@ -149,6 +149,7 @@ impl std::fmt::Debug for Startup {
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     crate::grid::view::init_keys(cx);
+    crate::editor::view::init_keys(cx);
 }
 
 /// Opens the main window and runs the application; returns when the app quits.
