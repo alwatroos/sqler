@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The AI chat panel's empty, starting and failed states wrap inside the panel at every width instead of overflowing it.
+
 ## [1.1.0] - 2026-10-26
 
 ### Added

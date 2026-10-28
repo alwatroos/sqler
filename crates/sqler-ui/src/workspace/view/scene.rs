@@ -639,7 +639,10 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Command("workbench:show-ai"),
         ],
         "ai-audit" => vec![Step::Command("ai:open-audit-log"), Step::AuditFixture],
-        "ai-side-view-empty" => vec![Step::Command("workbench:show-ai")],
+        "ai-side-view-empty" => vec![
+            Step::Command("workbench:show-ai"),
+            Step::Command("ai:toggle-chat"),
+        ],
         "ai-settings" => vec![Step::Command("ai:open-settings")],
         "ai-provider-editor" => vec![
             Step::Command("ai:open-settings"),
