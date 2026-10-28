@@ -13,6 +13,8 @@ use sqler_config::AiLimits;
 use super::session::tool_status_text;
 
 #[cfg(feature = "gui")]
+pub(crate) mod history_view;
+#[cfg(feature = "gui")]
 pub(crate) mod view;
 
 /// The title of the panel.
@@ -26,6 +28,49 @@ pub const CHAT_REFUSED_NOTE: &str =
 /// The line shown when the chat belongs to another connection than the active one.
 pub const CHAT_OTHER_CONNECTION: &str =
     "This chat is about {name}. Start a new chat for the active connection.";
+
+/// The title of the saved chats list.
+pub const HISTORY_TITLE: &str = "Chat history";
+/// The list when no chat is saved.
+pub const HISTORY_EMPTY: &str =
+    "No saved chats yet. Chats are saved here as you talk to the model.";
+/// The list when there is no configuration directory to keep chats in.
+pub const HISTORY_OFF_NO_DIR: &str = "Chat history is off: there is no configuration directory.";
+/// The list when `chat-history.db` was written by a newer `SQLer`.
+pub const HISTORY_OFF_NEWER: &str =
+    "Chat history is off: chat-history.db was written by a newer SQLer and is left as it is.";
+/// The notice when an unreadable `chat-history.db` was moved aside.
+pub const HISTORY_MOVED: &str =
+    "chat-history.db could not be read; it was moved aside and a new history was started.";
+/// The question of the "delete all" confirmation.
+pub const HISTORY_CONFIRM: &str = "Delete all saved chats? This cannot be undone.";
+/// The note shown at the top of a restored chat.
+pub const RESTORED_NOTE: &str =
+    "Restored chat: earlier tool results are not sent to the model again.";
+/// The note shown instead of the exact SQL of a restored statement saved with hidden values.
+pub const RESTORED_SQL_HIDDEN: &str =
+    "This statement was saved with values hidden, so it cannot be opened or copied.";
+/// The connection name of a saved chat whose connection was removed.
+pub const REMOVED_CONNECTION: &str = "Removed connection";
+/// The notice when something needs the connection of a restored chat that was removed.
+pub const CHAT_CONNECTION_REMOVED: &str = "The connection of this chat no longer exists.";
+/// The title of a saved chat that has no user message yet.
+pub const HISTORY_UNTITLED: &str = "Untitled chat";
+/// The note that replaces the composer of a restored chat that cannot continue.
+pub const HISTORY_CANNOT_CONTINUE: &str = "This chat cannot be continued.";
+
+/// One line of the saved chats list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatRow {
+    /// The stored conversation.
+    pub id: sqler_config::ConversationId,
+    /// The title: the first message.
+    pub title: String,
+    /// The connection name and the age, for example `shop · 2 h ago`.
+    pub line: String,
+    /// Whether this is the chat on screen.
+    pub current: bool,
+}
 
 /// The most SQL blocks of one answer the panel offers.
 const MAX_BLOCKS: usize = 8;

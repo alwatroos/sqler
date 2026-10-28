@@ -92,6 +92,12 @@ impl ConfigDir {
     pub fn connections_path(&self) -> PathBuf {
         self.root.join("connections.toml")
     }
+
+    /// Path of `chat-history.db`, the AI chat history store.
+    #[must_use]
+    pub fn chat_history_path(&self) -> PathBuf {
+        self.root.join("chat-history.db")
+    }
 }
 
 #[cfg(test)]
@@ -189,5 +195,9 @@ mod tests {
             Path::new("cfg").join("connections.toml")
         );
         assert_eq!(d.workbench_path(), Path::new("cfg").join("workbench.toml"));
+        assert_eq!(
+            d.chat_history_path(),
+            Path::new("cfg").join("chat-history.db")
+        );
     }
 }

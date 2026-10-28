@@ -18,6 +18,8 @@ serde.workspace = true
 toml.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
 
 # T5 (M2): keyring 4.x ships its native stores behind the `v1` feature, gated per target:
 # macOS Keychain, Windows Credential Manager, Secret Service over pure-Rust zbus elsewhere on unix.

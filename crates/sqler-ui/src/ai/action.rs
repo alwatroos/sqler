@@ -5,7 +5,7 @@
 //! Later AI features add their rows here (ADR-0050).
 
 use sqler_ai_tools::session::TranscriptEntry;
-use sqler_config::{ModelChoice, ProviderId, ProviderKind, UseCase};
+use sqler_config::{ConversationId, ModelChoice, ProviderId, ProviderKind, UseCase};
 
 use super::audit::AuditFilterChange;
 use super::chat::chat_sql_blocks;
@@ -145,6 +145,18 @@ pub enum AiAction {
         /// 0 for a statement that ran, else the index into `chat_sql_blocks` of the answer.
         block: usize,
     },
+    /// Show or hide the list of saved chats in the chat panel (ADR-0077).
+    ToggleChatHistory,
+    /// Open a saved chat: it replaces the current chat and can be continued.
+    OpenPastChat(ConversationId),
+    /// Delete one saved chat.
+    DeletePastChat(ConversationId),
+    /// Show the saved chats with the "delete all" confirmation armed. Deletes nothing itself.
+    ClearChatHistory,
+    /// Delete every saved chat (the answer to the armed confirmation).
+    ConfirmClearChatHistory,
+    /// Disarm the "delete all" confirmation.
+    CancelClearChatHistory,
 }
 
 impl AiAction {
@@ -176,6 +188,12 @@ impl AiAction {
                 | Self::CancelChat
                 | Self::CopyChatSql { .. }
                 | Self::OpenChatSql { .. }
+                | Self::ToggleChatHistory
+                | Self::OpenPastChat(_)
+                | Self::DeletePastChat(_)
+                | Self::ClearChatHistory
+                | Self::ConfirmClearChatHistory
+                | Self::CancelClearChatHistory
         )
     }
 
@@ -312,6 +330,12 @@ impl std::fmt::Debug for AiAction {
                 .field("entry", entry)
                 .field("block", block)
                 .finish(),
+            Self::ToggleChatHistory => f.write_str("ToggleChatHistory"),
+            Self::OpenPastChat(id) => f.debug_tuple("OpenPastChat").field(id).finish(),
+            Self::DeletePastChat(id) => f.debug_tuple("DeletePastChat").field(id).finish(),
+            Self::ClearChatHistory => f.write_str("ClearChatHistory"),
+            Self::ConfirmClearChatHistory => f.write_str("ConfirmClearChatHistory"),
+            Self::CancelClearChatHistory => f.write_str("CancelClearChatHistory"),
         }
     }
 }
@@ -356,6 +380,18 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("ai:cancel-chat", "AI: Cancel Chat Turn"),
     ("ai:copy-chat-sql", "AI: Copy Chat SQL"),
     ("ai:open-chat-sql", "AI: Open Chat SQL in Editor"),
+    ("ai:toggle-chat-history", "AI: Show Chat History"),
+    ("ai:clear-chat-history", "AI: Clear Chat History"),
+    ("ai:open-past-chat", "AI: Open Past Chat"),
+    ("ai:delete-past-chat", "AI: Delete Past Chat"),
+    (
+        "ai:confirm-clear-chat-history",
+        "AI: Confirm Clear Chat History",
+    ),
+    (
+        "ai:cancel-clear-chat-history",
+        "AI: Cancel Clear Chat History",
+    ),
 ];
 
 impl AiAction {
@@ -415,6 +451,12 @@ impl AiAction {
             Self::CancelChat => "ai:cancel-chat",
             Self::CopyChatSql { .. } => "ai:copy-chat-sql",
             Self::OpenChatSql { .. } => "ai:open-chat-sql",
+            Self::ToggleChatHistory => "ai:toggle-chat-history",
+            Self::ClearChatHistory => "ai:clear-chat-history",
+            Self::OpenPastChat(_) => "ai:open-past-chat",
+            Self::DeletePastChat(_) => "ai:delete-past-chat",
+            Self::ConfirmClearChatHistory => "ai:confirm-clear-chat-history",
+            Self::CancelClearChatHistory => "ai:cancel-clear-chat-history",
         };
         CommandId::new(id).expect("constant command ID is valid")
     }
@@ -499,6 +541,18 @@ pub fn action_for(id: &CommandId, ws: &Workspace) -> Option<AiAction> {
         | "ai:open-sql-in-editor" => session_action(id.as_str(), ws),
         "ai:toggle-chat" => Some(AiAction::ToggleChat),
         "ai:new-chat" => Some(AiAction::NewChat),
+        "ai:toggle-chat-history" => Some(AiAction::ToggleChatHistory),
+        "ai:clear-chat-history" => Some(AiAction::ClearChatHistory),
+        "ai:open-past-chat" => ws.next_past_chat().map(AiAction::OpenPastChat),
+        "ai:delete-past-chat" => ws.next_past_chat().map(AiAction::DeletePastChat),
+        "ai:confirm-clear-chat-history" => ws
+            .chat_list()
+            .confirming()
+            .then_some(AiAction::ConfirmClearChatHistory),
+        "ai:cancel-clear-chat-history" => ws
+            .chat_list()
+            .confirming()
+            .then_some(AiAction::CancelClearChatHistory),
         "ai:send-chat" | "ai:cancel-chat" | "ai:copy-chat-sql" | "ai:open-chat-sql" => {
             chat_action(id.as_str(), ws)
         }
@@ -709,6 +763,12 @@ mod tests {
             AiAction::CancelChat,
             AiAction::CopyChatSql { entry: 0, block: 0 },
             AiAction::OpenChatSql { entry: 0, block: 0 },
+            AiAction::ToggleChatHistory,
+            AiAction::OpenPastChat(sqler_config::ChatHistory::new_id()),
+            AiAction::DeletePastChat(sqler_config::ChatHistory::new_id()),
+            AiAction::ClearChatHistory,
+            AiAction::ConfirmClearChatHistory,
+            AiAction::CancelClearChatHistory,
         ]
     }
 
@@ -964,7 +1024,7 @@ mod tests {
         assert!(!text.contains(secret));
         assert!(text.contains("len"));
         let chat: Vec<AiAction> = all().into_iter().filter(AiAction::is_chat).collect();
-        assert_eq!(chat.len(), 7);
+        assert_eq!(chat.len(), 13);
         assert_eq!(draft.command_id().as_str(), "ai:send-chat");
         assert_eq!(AiAction::SendChat.command_id().as_str(), "ai:send-chat");
         assert_eq!(
@@ -988,5 +1048,37 @@ mod tests {
         ] {
             assert_eq!(act(id, &w), None, "{id}");
         }
+    }
+
+    #[test]
+    fn history_commands_follow_the_list() {
+        let mut w = Workspace::new(SidebarModel::default());
+        assert_eq!(
+            act("ai:toggle-chat-history", &w),
+            Some(AiAction::ToggleChatHistory)
+        );
+        assert_eq!(
+            act("ai:clear-chat-history", &w),
+            Some(AiAction::ClearChatHistory)
+        );
+        for id in [
+            "ai:open-past-chat",
+            "ai:delete-past-chat",
+            "ai:confirm-clear-chat-history",
+            "ai:cancel-clear-chat-history",
+        ] {
+            assert_eq!(act(id, &w), None, "{id}");
+        }
+        w.dispatch_ai(AiAction::ClearChatHistory);
+        assert_eq!(
+            act("ai:confirm-clear-chat-history", &w),
+            Some(AiAction::ConfirmClearChatHistory)
+        );
+        assert_eq!(
+            act("ai:cancel-clear-chat-history", &w),
+            Some(AiAction::CancelClearChatHistory)
+        );
+        let text = format!("{:?}", AiAction::ConfirmClearChatHistory);
+        assert_eq!(text, "ConfirmClearChatHistory");
     }
 }

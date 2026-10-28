@@ -128,6 +128,10 @@ pub const SCENES: &[Scene] = &[
         pending: None,
     },
     Scene {
+        name: "ai-chat-history",
+        pending: None,
+    },
+    Scene {
         name: "ai-audit",
         pending: None,
     },
@@ -365,6 +369,8 @@ enum Step {
     AiSend(&'static str),
     /// Types a draft into the composer of the AI chat panel without sending it.
     ChatDraft(&'static str),
+    /// Opens the list of saved chats in the chat panel with a few synthetic chats.
+    ChatHistoryFixture,
     /// Approves the statement the active AI session tab waits on.
     AiApprove,
     /// Opens an agent tab on `dev` with a canned conversation (no process runs).
@@ -647,6 +653,15 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::ChatDraft(SCENE_CHAT_DRAFT),
             Step::Pause(2),
         ],
+        "ai-chat-history" => vec![
+            open_step("dev", "select * from customers;"),
+            Step::Wait(Wait::Editors(1)),
+            Step::Command("workbench:show-ai"),
+            Step::Command("ai:toggle-chat"),
+            Step::Wait(Wait::ChatReady),
+            Step::ChatHistoryFixture,
+            Step::Pause(2),
+        ],
         "ai-audit" => vec![Step::Command("ai:open-audit-log"), Step::AuditFixture],
         "ai-side-view-empty" => vec![
             Step::Command("workbench:show-ai"),
@@ -779,6 +794,7 @@ fn store(scene: &Scene) -> Result<ConnectionStore, String> {
     let dev_ai = ai_on(matches!(
         scene.name,
         "ai-side-view"
+            | "ai-chat-history"
             | "ai-session"
             | "ai-generate"
             | "ai-explain"
@@ -909,7 +925,7 @@ impl AiProviderFactory for SceneProviders {
             ]);
             return Ok(Arc::new(provider));
         }
-        if self.scene == "ai-side-view" {
+        if matches!(self.scene, "ai-side-view" | "ai-chat-history") {
             // The chat panel only needs a model that can call tools, so its session is ready.
             let provider = provider.with_capabilities(Capabilities::new(true, false, false, None));
             return Ok(Arc::new(provider));
@@ -962,6 +978,7 @@ fn ai_startup(scene: &Scene) -> AiStartup {
         if matches!(
             scene.name,
             "ai-side-view"
+                | "ai-chat-history"
                 | "agent-tab"
                 | "agent-permission"
                 | "ai-settings"
@@ -1190,6 +1207,7 @@ impl WorkspaceView {
             Step::ChatDraft(text) => {
                 self.ai_type_draft(TabId::CHAT_PANEL, text, window, cx);
             }
+            Step::ChatHistoryFixture => self.open_chat_history_fixture(),
             Step::AiApprove => {
                 let (tab, session) = self
                     .ws
@@ -1222,6 +1240,45 @@ impl WorkspaceView {
         }
         cx.notify();
         Ok(())
+    }
+
+    /// Opens the saved chats list with synthetic chats of fixed ages (newest first).
+    fn open_chat_history_fixture(&mut self) {
+        use sqler_config::{ConversationId, ConversationSummary};
+
+        const HOUR_MS: i64 = 3_600_000;
+        const CHATS: [(&str, &str, i64); 3] = [
+            ("dev", "Which customers spend the most?", 2 * HOUR_MS),
+            (
+                "dev",
+                "How many orders were placed last month?",
+                27 * HOUR_MS,
+            ),
+            (
+                "staging",
+                "List the tables that have no primary key",
+                3 * 24 * HOUR_MS,
+            ),
+        ];
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(0));
+        let rows = CHATS
+            .iter()
+            .enumerate()
+            .map(|(i, (connection, title, ago))| {
+                let updated = now_ms - ago;
+                ConversationSummary::new(
+                    ConversationId::new(format!("scene-{i}")),
+                    *connection,
+                    *title,
+                    updated - HOUR_MS / 2,
+                    updated,
+                    2,
+                )
+            })
+            .collect();
+        self.ws.chat_history_fixture(rows);
     }
 
     /// Opens the import wizard with files "found" in a fixture home. The paths are shown with

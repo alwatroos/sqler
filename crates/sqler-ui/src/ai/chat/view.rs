@@ -13,9 +13,10 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 use sqler_ai_tools::session::{SqlEntry, ToolCallStatus, TranscriptEntry};
 
+use super::history_view::history_body;
 use super::{
-    CHAT_HELLO, CHAT_REFUSED_NOTE, CHAT_TITLE, caps_label, chat_sql_blocks, chat_tool_status_text,
-    other_connection_text,
+    CHAT_HELLO, CHAT_REFUSED_NOTE, CHAT_TITLE, HISTORY_CANNOT_CONTINUE, RESTORED_NOTE, caps_label,
+    chat_sql_blocks, chat_tool_status_text, other_connection_text,
 };
 use crate::ai::action::AiAction;
 use crate::ai::session::view::{centred, composer, streaming_row, tool_row};
@@ -46,19 +47,27 @@ pub(crate) fn chat_panel(
     let ws = view.workspace();
     let border = cx.theme().border;
     let bg = cx.theme().background;
-    let body = match ws.chat() {
-        None => empty(view, cx),
-        Some(chat) => match chat.phase() {
-            SessionPhase::Starting => fitted(
-                empty_state(AppIcon::Sparkles, STARTING_TITLE, STARTING_LINE, cx),
-                cx,
-            ),
-            SessionPhase::Failed(message) => fitted(
-                empty_state(AppIcon::CircleAlert, FAILED_TITLE, message.clone(), cx),
-                cx,
-            ),
-            SessionPhase::Ready | SessionPhase::Running { .. } => conversation(view, chat, cx),
-        },
+    let body = if ws.chat_list().is_open() {
+        history_body(view, cx)
+    } else {
+        match ws.chat() {
+            None => empty(view, cx),
+            Some(chat) => match chat.phase() {
+                SessionPhase::Starting => fitted(
+                    empty_state(AppIcon::Sparkles, STARTING_TITLE, STARTING_LINE, cx),
+                    cx,
+                ),
+                // A restored chat that cannot continue still shows what was said.
+                SessionPhase::Failed(_) if !chat.entries().is_empty() => {
+                    conversation(view, chat, cx)
+                }
+                SessionPhase::Failed(message) => fitted(
+                    empty_state(AppIcon::CircleAlert, FAILED_TITLE, message.clone(), cx),
+                    cx,
+                ),
+                SessionPhase::Ready | SessionPhase::Running { .. } => conversation(view, chat, cx),
+            },
+        }
     };
     div()
         .id("chat-panel")
@@ -109,6 +118,13 @@ fn header(view: &WorkspaceView, cx: &mut Context<WorkspaceView>) -> AnyElement {
         .flex_row()
         .items_center()
         .gap(px(SPACE[1]))
+        .child(
+            icon_button("chat-history", AppIcon::Clock, "Chat history").on_click(cx.listener(
+                |view, _: &ClickEvent, _, cx| {
+                    view.dispatch_ai(AiAction::ToggleChatHistory, cx);
+                },
+            )),
+        )
         .child(
             icon_button("chat-new", AppIcon::Plus, "Start a new chat").on_click(
                 cx.listener(|view, _: &ClickEvent, _, cx| view.dispatch_ai(AiAction::NewChat, cx)),
@@ -214,6 +230,15 @@ fn conversation(
                 .child(CHAT_HELLO),
         );
     }
+    if chat.is_restored() {
+        column = column.child(
+            div()
+                .id("chat-restored-note")
+                .text_size(px(ui_scale(cx).xs))
+                .text_color(muted)
+                .child(RESTORED_NOTE),
+        );
+    }
     if chat.dropped() > 0 {
         column = column.child(
             div()
@@ -243,7 +268,45 @@ fn conversation(
     if let Some(note) = other_connection(view, chat, cx) {
         body = body.child(note);
     }
+    if let SessionPhase::Failed(reason) = chat.phase() {
+        return body.child(cannot_continue(reason, cx)).into_any_element();
+    }
     body.child(composer(view, TabId::CHAT_PANEL, chat, cx))
+        .into_any_element()
+}
+
+/// The note and the New chat button that replace the composer of a restored chat that cannot
+/// continue.
+fn cannot_continue(reason: &str, cx: &mut Context<WorkspaceView>) -> AnyElement {
+    let (muted, border) = (cx.theme().muted_foreground, cx.theme().border);
+    div()
+        .id("chat-cannot-continue")
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(SPACE[2]))
+        .px(px(SPACE[4]))
+        .py(px(SPACE[3]))
+        .border_t_1()
+        .border_color(border)
+        .text_size(px(ui_scale(cx).xs))
+        .text_color(muted)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(format!("{HISTORY_CANNOT_CONTINUE} {reason}")),
+        )
+        .child(
+            Button::new("chat-failed-new")
+                .label("New chat")
+                .primary()
+                .small()
+                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                    view.dispatch_ai(AiAction::NewChat, cx);
+                })),
+        )
         .into_any_element()
 }
 
@@ -254,7 +317,7 @@ fn other_connection(
     cx: &mut Context<WorkspaceView>,
 ) -> Option<AnyElement> {
     let target = view.workspace().ai_target()?;
-    if &target == chat.conn() {
+    if Some(&target) == chat.conn() {
         return None;
     }
     let (muted, border) = (cx.theme().muted_foreground, cx.theme().border);

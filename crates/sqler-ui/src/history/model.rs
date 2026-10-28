@@ -249,7 +249,8 @@ pub fn history_row(entry: &HistoryEntry, connection_label: &str, now: SystemTime
     }
 }
 
-fn age(elapsed: Duration) -> String {
+/// How long ago, as the lists say it: `just now`, `5 min ago`, `3 h ago`, `2 d ago`.
+pub(crate) fn age(elapsed: Duration) -> String {
     let secs = elapsed.as_secs();
     match secs {
         0..=59 => "just now".to_owned(),

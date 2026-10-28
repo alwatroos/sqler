@@ -2859,11 +2859,12 @@ mod ai_session_flow {
                 provider: config().providers[0].clone(),
                 model: "m".into(),
                 info: chat.session().info().clone(),
-                request: chat.w.request_for(chat.session().conn()).unwrap(),
+                request: chat.w.request_for(chat.session().conn().unwrap()).unwrap(),
                 config: config(),
                 audit: chat.w.ai_audit().unwrap().clone(),
                 tx,
                 mode: SessionMode::Tab,
+                prior: None,
             };
             build_session(start, chat.factory.clone(), chat.bridge.connector())
                 .await

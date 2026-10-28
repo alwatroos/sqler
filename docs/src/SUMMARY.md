@@ -117,6 +117,7 @@
   - [ADR-0074: PR checks and post-release benchmarks](adr/0074-pr-checks-and-post-release-benchmarks.md)
   - [ADR-0075: Platform installers](adr/0075-platform-installers.md)
   - [ADR-0076: AI chat panel](adr/0076-ai-chat-panel.md)
+  - [ADR-0077: AI chat history store](adr/0077-ai-chat-history-store.md)
 - [Plugin development](plugin-development/index.md)
   - [Tutorial](plugin-development/tutorial.md)
   - [Manifest](plugin-development/manifest.md)

@@ -23,6 +23,7 @@ mod service;
 pub(crate) mod view;
 
 pub use action::{COMMANDS, HistoryCommand, action_for, register_commands};
+pub(crate) use model::age;
 pub use model::{
     HISTORY_PAGE, HistoryDialog, HistoryRow, HistoryScope, HistorySearch, HistoryTab, NamePurpose,
     SavedLoad, SavedPicker, SavedState, history_row,

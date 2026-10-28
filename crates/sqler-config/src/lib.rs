@@ -9,11 +9,14 @@
 //!
 //! `session.json` (the open editor tabs, the active tab and the unsent AI chat draft) lives there too. It holds SQL text, so it is user-only (mode `0600` on Unix) and stores connection ids, never names, URLs or secrets.
 //!
+//! `chat-history.db` (the AI chat panel's saved chats, SQLite) lives there too, user-only (mode `0600` on Unix, also for its `-wal`, `-shm` and `-journal` files). It is written by a private worker thread, with credentials scrubbed and every size capped (ADR-0077).
+//!
 //! Secrets (passwords, passphrases, AI provider API keys) live in the OS keychain through [`SecretStore`]; never in these files.
 
 #![forbid(unsafe_code)]
 
 mod ai;
+mod chat_history;
 mod connections;
 mod error;
 mod fs;
@@ -33,6 +36,12 @@ pub use ai::{
     AiConfigProblem, AiLimits, DEFAULT_AI_MAX_ROWS, DEFAULT_AI_TIMEOUT_SECS,
     DEFAULT_REDACTED_COLUMNS, ModelAssignments, ModelChoice, ProviderConfig, ProviderId,
     ProviderKind, QueryCaps, RedactionList, UseCase,
+};
+pub use chat_history::{
+    CHAT_HISTORY_SCHEMA_VERSION, ChatHistory, ChatHistoryError, ChatHistoryOptions,
+    ChatHistoryStatus, ConversationId, ConversationSummary, MAX_STORED_CONVERSATIONS,
+    MAX_STORED_ENTRY_BYTES, MAX_STORED_HISTORY_BYTES, MAX_STORED_ROWS, MAX_STORED_TEXT_BYTES,
+    MAX_STORED_TITLE_CHARS, StoredConversation, StoredEntry, StoredNotice, StoredStatus,
 };
 pub use connections::{
     CONNECTIONS_FORMAT_VERSION, ConnectionAi, ConnectionId, ConnectionProfile, ConnectionSpec,

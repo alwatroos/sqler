@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use sqler_ai_api::AiProvider;
 use sqler_ai_tools::session::{
-    ExplorationSession, FocusTable, PromptKind, SchemaContextOptions, SessionConfig, SessionError,
-    TurnOutcome,
+    ExplorationSession, FocusTable, PriorChat, PromptKind, SchemaContextOptions, SessionConfig,
+    SessionError, TurnOutcome,
 };
 use sqler_ai_tools::{Assist, AssistSearch, ConnectionInfo, Limits, Surface, ToolSet};
 use sqler_config::{AiConfig, ProviderConfig};
@@ -55,6 +55,9 @@ pub struct AiSessionStart {
     pub tx: UnboundedSender<HostMsg>,
     /// Tab or chat panel.
     pub mode: SessionMode,
+    /// A saved chat to continue: its transcript seeds the session (ADR-0077). Nothing is sent
+    /// until the user sends a message.
+    pub prior: Option<PriorChat>,
 }
 
 // Ids only: never the endpoint, the model or the connection details.
@@ -99,6 +102,7 @@ pub async fn build_session(
         audit,
         tx,
         mode,
+        prior,
         ..
     } = start;
     let built = tokio::task::spawn_blocking(move || factory.build(&provider, None))
@@ -122,6 +126,10 @@ pub async fn build_session(
         SessionError::ToolsUnsupported => NO_TOOLS.to_owned(),
         other => other.to_string(),
     })?;
+    let session = match prior {
+        Some(prior) => session.with_prior(prior),
+        None => session,
+    };
     Ok(SessionReady {
         session: session.with_events(Arc::new(ChannelEvents(tx))),
         source,

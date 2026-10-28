@@ -4,7 +4,8 @@
 //! The typed, in-memory transcript of a session.
 //!
 //! Everything in it comes from redacted [`CallReport`] data or from the user's and the model's
-//! text. Nothing is written to disk.
+//! text. Nothing is written to disk here; the UI stores entries through the chat history
+//! (ADR-0077), and [`Transcript::restore`] seeds a transcript from a stored chat.
 
 use std::time::Duration;
 
@@ -131,6 +132,13 @@ impl SqlEntry {
             sql: self.sql.clone(),
         }
     }
+
+    /// Whether the exact SQL is known, so the statement can be run again. `false` for a
+    /// statement restored from the chat history, which stores only the redacted display text.
+    #[must_use]
+    pub fn can_rerun(&self) -> bool {
+        !self.sql.is_empty()
+    }
 }
 
 /// A line the engine adds on its own.
@@ -219,6 +227,17 @@ impl Transcript {
             TranscriptEntry::Sql(s) => Some(s),
             _ => None,
         })
+    }
+
+    /// A transcript seeded with restored entries: the last [`MAX_TRANSCRIPT_ENTRIES`] of them,
+    /// where `dropped` is the stable number of `entries[0]`.
+    pub(crate) fn restore(mut entries: Vec<TranscriptEntry>, mut dropped: usize) -> Self {
+        if entries.len() > MAX_TRANSCRIPT_ENTRIES {
+            let excess = entries.len() - MAX_TRANSCRIPT_ENTRIES;
+            entries.drain(..excess);
+            dropped += excess;
+        }
+        Self { entries, dropped }
     }
 
     pub(crate) fn push(&mut self, entry: TranscriptEntry) {

@@ -354,6 +354,14 @@ impl WorkspaceView {
             .with_plugins(&startup.plugins)
             .with_update(&startup.update)
             .with_export_sources(startup.export_sources);
+        // The chat history store (ADR-0077) opens on its own thread and never blocks here.
+        let chat_store = startup
+            .history_dir
+            .as_ref()
+            .map(|dir| sqler_config::ChatHistory::open(dir.chat_history_path()));
+        if let Some(store) = chat_store.clone() {
+            ws = ws.with_chat_history(store);
+        }
         ws.set_system_appearance(appearance_of(window.appearance()));
         apply(ws.appearance(), ws.settings().settings().ui_font_size, cx);
         // Follow the OS while the preference is "follow system". Nothing changes in the
@@ -575,6 +583,9 @@ impl WorkspaceView {
             view.notices.push(notice);
         }
         view.apply(attach, cx);
+        if let Some(store) = chat_store {
+            Self::probe_chat_history(store, cx);
+        }
         view.session_task = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(SESSION_CHECKPOINT).await;
@@ -1319,6 +1330,7 @@ impl WorkspaceView {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per effect
     pub(crate) fn apply(&mut self, effect: Effect, cx: &mut Context<Self>) {
         match effect {
             // `run_command` opens the palette for the object menu; it needs the window.
@@ -1406,7 +1418,10 @@ impl WorkspaceView {
             Effect::SaveAiConfig { .. } | Effect::TestAiProvider { .. } => {
                 self.apply_ai(effect, cx);
             }
-            Effect::StartAiSession { .. } | Effect::RunAiTurn(_) => {
+            Effect::StartAiSession { .. }
+            | Effect::RunAiTurn(_)
+            | Effect::ListChats
+            | Effect::LoadChat(_) => {
                 self.apply_ai_session(effect, cx);
             }
             Effect::LoadAgentProfiles | Effect::StartAgent { .. } => self.apply_agent(effect, cx),

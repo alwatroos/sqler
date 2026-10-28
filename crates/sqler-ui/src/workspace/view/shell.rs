@@ -631,6 +631,8 @@ impl WorkspaceView {
 
     /// Writes `session.json` now (the app is quitting).
     pub(super) fn save_session_now(&mut self, cx: &mut Context<Self>) {
+        // The saved chats are committed and the store closed, for at most a moment (ADR-0077).
+        self.close_chat_history();
         self.session_save = None;
         self.session_task = Task::ready(());
         let (Some(dir), Some(state)) = (self.workbench_dir.clone(), self.session_to_write(cx))
