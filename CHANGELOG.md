@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-28
+
 ### Added
 
 - **AI chat history.** The AI chat panel now keeps its conversations in `chat-history.db` in the configuration directory (readable by you only), so past chats come back after a restart. Open the list with the Clock button in the panel header or **AI: Show Chat History**, open a chat to read it, or continue it as a new turn; delete one chat or use **Clear history**. Credentials are scrubbed, result rows are capped, and the exact SQL is never stored. See ADR-0077.
