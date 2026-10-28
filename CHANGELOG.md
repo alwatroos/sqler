@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- AI chat: the chat now sends a compact schema of the connection (selected and named tables first) and is told to use only existing tables and columns.
+
 ## [1.1.0] - 2026-10-26
 
 ### Added

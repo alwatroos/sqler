@@ -32,6 +32,18 @@
 //! [`SessionCancel`] (from [`ExplorationSession::cancel_handle`]) is raced at every await.
 //! Dropping the `send` future cancels the turn too.
 //!
+//! # Schema context
+//!
+//! A chat session with [`SessionConfig::with_schema_context`] builds a compact schema of the
+//! connection before the first model step of every turn and appends it to the system prompt:
+//! one line per table (columns, types, primary and foreign keys), focus tables
+//! ([`ExplorationSession::set_focus`]) first, then tables named in the user text, then the rest,
+//! within `token_budget` tokens. The context is read through the session's own tool set
+//! (`list_tables`, `search_schema`, `describe_table`), so it is redacted, audited and wrapped
+//! in the untrusted-data envelope like any tool result. It runs no statement and is not part of
+//! the transcript or of the tool call limits. If it cannot be built in time the turn goes on
+//! without it.
+//!
 //! # Secrets and persistence
 //!
 //! The [`Transcript`] is built from redacted data and lives in memory only, as long as the
@@ -44,6 +56,7 @@ mod engine;
 mod events;
 mod prompt;
 mod repeat;
+mod schema;
 mod transcript;
 
 pub use cancel::SessionCancel;
@@ -54,6 +67,7 @@ pub use prompt::{
     CHAT_PROMPT_VERSION, PromptKind, SESSION_PROMPT_VERSION, chat_system_prompt, prompt_for,
     system_prompt,
 };
+pub use schema::{DEFAULT_SCHEMA_TOKENS, FocusTable, SchemaContextOptions};
 pub use transcript::{
     MAX_TRANSCRIPT_ENTRIES, NotRunReason, Notice, RerunRequest, SqlEntry, ToolCallEntry,
     ToolCallStatus, Transcript, TranscriptEntry,

@@ -64,6 +64,17 @@ Every schema description, plan and driver error reaches the model as the redacte
 
 Providers with tool support get only `search_schema` and `describe_table`; the others get one request with the grounding included. Explain with a plan uses `explain_query` with `analyze: false` and only for read statements.
 
+### Chat schema context
+
+The chat panel (not the AI session tab) sends a compact schema of the connection with every turn, so a small local model does not invent tables and columns. It is appended to the chat system prompt (chat prompt version 2) before the first model step of the turn.
+
+- **Order.** The table selected in the object browser first (an index or trigger counts as its table), then tables named in your message (found with `search_schema`, best match first), then the remaining tables by name.
+- **Line format.** One line per table: `schema.table(col type PK, col type NOT NULL, col type -> ref_table.col, ...)`. A primary key column is marked `PK`, a non-null column `NOT NULL`, a single-column foreign key `-> schema.table.column`; a multi-column foreign key follows the columns as `FK(a,b) -> ref(x,y)`. Without a schema the database name is used, and without both just the table name.
+- **Budget.** 1024 tokens by default (3072 bytes at 3 bytes per token) for the JSON payload, at most 8 tables described with columns. Other tables are listed by name in `other_tables`; `truncated: true` means more exist than fit. The model looks those up with the catalog tools.
+- **Envelope and redaction.** The text is built from `list_tables`, `search_schema` and `describe_table` results of the chat's own tool set. It is therefore redacted, written to the audit log (surface **Chat panel**) and wrapped in the untrusted-data envelope like any tool result. No statement is run to build it. If building takes more than 10 s or fails, the turn goes on with a line telling the model that no schema was loaded.
+- **Cost.** Each turn adds roughly 2 to 20 cached catalog reads to the audit log.
+- **Rule.** Chat prompt v2 tells the model to use only tables and columns that exist and to check an unlisted table with `search_schema` or `describe_table` first.
+
 ## Changing a template
 
 1. Edit the `.md` file. Keep the first-line marker and every `{{placeholder}}` the code fills.

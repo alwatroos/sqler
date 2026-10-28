@@ -14,11 +14,12 @@
 //! tab's id in `Workspace::queries`, driven by `QueryTab::request` and answered through
 //! `confirm_query` / `dismiss_query_prompt`, which route here for an AI tab.
 
-use sqler_ai_tools::session::TranscriptEntry;
+use sqler_ai_tools::session::{FocusTable, TranscriptEntry};
 use sqler_ai_tools::{ApprovalStage, ConnectionInfo, Decision, ToolError};
 use sqler_config::{ConnectionId, ProviderConfig, UseCase};
 use sqler_driver_api::CancelHandle;
 use sqler_driver_api::Session;
+use sqler_driver_api::sqler_core::{DbObject, ObjectKind};
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::ai::NO_PROVIDER;
@@ -304,6 +305,17 @@ impl Workspace {
             return self.session_notice(SESSION_AI_OFF);
         }
         let catalog = self.ready_catalog(&conn);
+        // Only the chat panel sends a schema context: the selected tree object goes first.
+        let focus: Vec<FocusTable> = if tab == TabId::CHAT_PANEL {
+            self.browsers
+                .get(&conn)
+                .and_then(|b| b.tree.object(b.tree.selected()?))
+                .and_then(focus_table)
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
         let Some(t) = self.ai_sessions.tabs.get_mut(&tab) else {
             return Effect::None;
         };
@@ -337,6 +349,7 @@ impl Workspace {
             session: *session,
             text,
             tx: t.tx.clone(),
+            focus,
         }))
     }
 
@@ -768,5 +781,54 @@ impl Workspace {
             _ => return None,
         };
         Some((chat.conn.clone(), sql))
+    }
+}
+
+/// The table an object of the browser tree stands for: a table, view or materialized view is
+/// itself, an index or trigger is its table, anything else is none.
+fn focus_table(obj: &DbObject) -> Option<FocusTable> {
+    let name = match obj.kind {
+        ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView => obj.name.clone(),
+        _ => obj.parent.table.clone()?,
+    };
+    Some(FocusTable::new(
+        obj.parent.database.clone(),
+        obj.parent.schema.clone(),
+        name,
+    ))
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use sqler_driver_api::sqler_core::ObjectPath;
+
+    use super::*;
+
+    fn path() -> ObjectPath {
+        ObjectPath::root().in_database("shop").in_schema("public")
+    }
+
+    #[test]
+    fn tables_and_views_map_to_themselves() {
+        for kind in [
+            ObjectKind::Table,
+            ObjectKind::View,
+            ObjectKind::MaterializedView,
+        ] {
+            let focus = focus_table(&DbObject::new(kind, path(), "orders")).unwrap();
+            assert_eq!(
+                focus,
+                FocusTable::new(Some("shop".into()), Some("public".into()), "orders")
+            );
+        }
+    }
+
+    #[test]
+    fn a_child_object_maps_to_its_table_and_others_to_none() {
+        let parent = path().in_table("orders");
+        let index = DbObject::new(ObjectKind::Index, parent, "orders_idx");
+        assert_eq!(focus_table(&index).unwrap().name, "orders");
+        let schema = DbObject::new(ObjectKind::Schema, path(), "public");
+        assert_eq!(focus_table(&schema), None);
     }
 }
