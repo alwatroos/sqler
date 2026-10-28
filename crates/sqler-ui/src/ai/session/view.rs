@@ -5,11 +5,11 @@
 //! the composer. It only renders [`AiSessionTab`]; every button dispatches an [`AiAction`].
 
 use gpui::{
-    AnyElement, ClickEvent, Context, Div, FontWeight, InteractiveElement as _, IntoElement as _,
+    AnyElement, ClickEvent, Context, Div, FontWeight, InteractiveElement as _, IntoElement,
     ParentElement as _, StatefulInteractiveElement as _, Styled as _, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::Input;
+use gpui_component::input::{Enter, Textarea};
 use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 use sqler_ai_tools::session::{SqlEntry, ToolCallEntry, ToolCallStatus, TranscriptEntry};
 
@@ -348,6 +348,27 @@ pub(crate) fn streaming_row(text: &str, cx: &Context<WorkspaceView>) -> AnyEleme
         .into_any_element()
 }
 
+/// The composer row: the field takes the width left, the send element keeps its size and stays
+/// on the last line of a growing field. It never wraps.
+pub(crate) fn composer_row(field: impl IntoElement, send: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_end()
+        .gap(px(SPACE[2]))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                // The field emits `PressEnter` and lets a plain Enter propagate; where the
+                // platform then types the key's character, that would be a newline. Handling
+                // the action here ends the dispatch, so only Shift+Enter inserts one.
+                .on_action(|_: &Enter, _, _| {})
+                .child(field),
+        )
+        .child(div().flex_none().child(send))
+}
+
 /// The input, the Send button and the state line.
 pub(crate) fn composer(
     view: &WorkspaceView,
@@ -358,26 +379,19 @@ pub(crate) fn composer(
     let theme = cx.theme();
     let (border, muted, bg) = (theme.border, theme.muted_foreground, theme.background);
     let size = ui_scale(cx).xs;
-    let mut row = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(SPACE[2]))
-        .child(match view.ai_composer(tab) {
-            Some(input) => div().flex_1().min_w_0().child(Input::new(input)),
-            None => div().flex_1(),
-        })
-        .child(
-            Button::new("ai-send")
-                .label("Send")
-                .primary()
-                .small()
-                .disabled(session.is_running())
-                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                    view.ai_send(tab, window, cx);
-                })),
-        );
-    row = row.items_center();
+    let field = match view.ai_composer(tab) {
+        Some(input) => Textarea::new(input).into_any_element(),
+        None => div().flex_1().into_any_element(),
+    };
+    let send = Button::new("ai-send")
+        .label("Send")
+        .primary()
+        .small()
+        .disabled(session.is_running())
+        .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+            view.ai_send(tab, window, cx);
+        }));
+    let row = composer_row(field, send).debug_selector(|| "ai-composer".to_owned());
     let line = if session.is_running() {
         state_label(session.state())
     } else {

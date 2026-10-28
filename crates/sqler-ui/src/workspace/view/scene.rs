@@ -289,6 +289,8 @@ enum Wait {
     },
     /// The active AI session tab is idle and ready for a message.
     AiReady,
+    /// The chat panel's session is built and ready for a message.
+    ChatReady,
     /// The active AI session tab shows an approval card.
     AiApproval,
     /// The production confirmation of the active AI session tab is open.
@@ -314,6 +316,7 @@ impl Wait {
             Self::RunDone => "the run to end".to_owned(),
             Self::Table { name, .. } => format!("table {name} in the object browser"),
             Self::AiReady => "the AI session to be ready".to_owned(),
+            Self::ChatReady => "the AI chat to be ready".to_owned(),
             Self::AiApproval => "the approval card".to_owned(),
             Self::AiGate => "the production confirmation".to_owned(),
             Self::PromptInput => "the AI prompt bar".to_owned(),
@@ -360,6 +363,8 @@ enum Step {
     AuditFixture,
     /// Types a message into the composer of the active AI session tab and sends it.
     AiSend(&'static str),
+    /// Types a draft into the composer of the AI chat panel without sending it.
+    ChatDraft(&'static str),
     /// Approves the statement the active AI session tab waits on.
     AiApprove,
     /// Opens an agent tab on `dev` with a canned conversation (no process runs).
@@ -637,6 +642,10 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             open_step("dev", "select * from customers;"),
             Step::Wait(Wait::Editors(1)),
             Step::Command("workbench:show-ai"),
+            Step::Command("ai:toggle-chat"),
+            Step::Wait(Wait::ChatReady),
+            Step::ChatDraft(SCENE_CHAT_DRAFT),
+            Step::Pause(2),
         ],
         "ai-audit" => vec![Step::Command("ai:open-audit-log"), Step::AuditFixture],
         "ai-side-view-empty" => vec![
@@ -840,6 +849,10 @@ fn update_startup(scene: &str) -> crate::update::UpdateStartup {
     ScriptedUpdates::startup(true, outcome).1
 }
 
+/// The two-line draft the chat panel shows in the `ai-side-view` scene (synthetic).
+const SCENE_CHAT_DRAFT: &str =
+    "Which customers spend the most?\nShow the top five with their order totals.";
+
 /// The model the scenes' mock provider lists.
 const SCENE_MODEL: &str = "qwen2.5-coder:7b";
 
@@ -894,6 +907,11 @@ impl AiProviderFactory for SceneProviders {
                     stop: StopReason::EndTurn,
                 }),
             ]);
+            return Ok(Arc::new(provider));
+        }
+        if self.scene == "ai-side-view" {
+            // The chat panel only needs a model that can call tools, so its session is ready.
+            let provider = provider.with_capabilities(Capabilities::new(true, false, false, None));
             return Ok(Arc::new(provider));
         }
         if !matches!(self.scene, "ai-session" | "ai-session-prod-confirm") {
@@ -1169,6 +1187,9 @@ impl WorkspaceView {
                     .ok_or("no AI session tab is active")?;
                 self.ai_type_and_send(tab, text, window, cx);
             }
+            Step::ChatDraft(text) => {
+                self.ai_type_draft(TabId::CHAT_PANEL, text, window, cx);
+            }
             Step::AiApprove => {
                 let (tab, session) = self
                     .ws
@@ -1354,6 +1375,10 @@ impl WorkspaceView {
                 .ws
                 .active_ai_session()
                 .is_some_and(|(_, s)| matches!(s.phase(), crate::ai::SessionPhase::Ready)),
+            Wait::ChatReady => self
+                .ws
+                .chat()
+                .is_some_and(|c| matches!(c.phase(), crate::ai::SessionPhase::Ready)),
             Wait::AiApproval => self
                 .ws
                 .active_ai_session()

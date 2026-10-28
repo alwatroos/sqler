@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{AppContext as _, Context, Entity, FocusHandle, ScrollHandle, Subscription, Window};
-use gpui_component::input::{InputEvent, InputState};
+use gpui_component::input::{InputEvent, TextareaState};
 use sqler_ai_tools::ApprovalStage;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -23,7 +23,7 @@ use crate::workspace::Effect;
 
 /// What one open AI session tab keeps on the view side.
 struct SessionUi {
-    composer: Entity<InputState>,
+    composer: Entity<TextareaState>,
     /// The Deny button's focus: the default focus of an approval card.
     deny: FocusHandle,
     scroll: ScrollHandle,
@@ -40,9 +40,33 @@ pub(crate) struct AiSessionInputs {
     tabs: HashMap<TabId, SessionUi>,
 }
 
+/// The fewest rows the composer shows, empty or not.
+pub(crate) const COMPOSER_MIN_ROWS: usize = 2;
+/// The most rows the composer grows to; longer text scrolls inside it.
+pub(crate) const COMPOSER_MAX_ROWS: usize = 8;
+
+/// The state of an AI composer: a multi-line field that grows with its text, where a plain Enter
+/// emits `PressEnter` without a newline and Shift+Enter inserts one.
+pub(crate) fn composer_state(
+    placeholder: String,
+    window: &mut Window,
+    cx: &mut Context<TextareaState>,
+) -> TextareaState {
+    TextareaState::new(window, cx)
+        .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MAX_ROWS)
+        .submit_on_enter(true)
+        .placeholder(placeholder)
+}
+
+/// Whether `event` sends the message: a plain Enter only. Shift+Enter also emits `PressEnter`
+/// (after it inserted the newline) and must not send.
+pub(crate) fn composer_sends(event: &InputEvent) -> bool {
+    matches!(event, InputEvent::PressEnter { shift: false, .. })
+}
+
 impl WorkspaceView {
     /// The composer input of an AI session tab.
-    pub(crate) fn ai_composer(&self, tab: TabId) -> Option<&Entity<InputState>> {
+    pub(crate) fn ai_composer(&self, tab: TabId) -> Option<&Entity<TextareaState>> {
         self.ai_session_inputs.tabs.get(&tab).map(|ui| &ui.composer)
     }
 
@@ -146,7 +170,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> SessionUi {
         let placeholder = format!("Ask about the data in {connection}\u{2026}");
-        let composer = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let composer = cx.new(|cx| composer_state(placeholder, window, cx));
         let subscription = cx.subscribe_in(
             &composer,
             window,
@@ -160,7 +184,9 @@ impl WorkspaceView {
                     };
                     view.dispatch_ai(draft, cx);
                 }
-                InputEvent::PressEnter { .. } => view.ai_send(tab, window, cx),
+                e @ InputEvent::PressEnter { .. } if composer_sends(e) => {
+                    view.ai_send(tab, window, cx);
+                }
                 _ => {}
             },
         );
@@ -174,9 +200,10 @@ impl WorkspaceView {
         }
     }
 
-    /// Fills the composer of a session tab (a scene types this way) and sends it.
+    /// Fills the composer of a session tab or the chat panel and sets the draft (a scene types
+    /// this way).
     #[cfg(feature = "screenshots")]
-    pub(super) fn ai_type_and_send(
+    pub(super) fn ai_type_draft(
         &mut self,
         tab: TabId,
         text: &str,
@@ -187,7 +214,24 @@ impl WorkspaceView {
             ui.composer
                 .update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
         }
-        self.dispatch_ai(AiAction::SetSessionDraft(tab, text.to_owned()), cx);
+        let draft = if tab == TabId::CHAT_PANEL {
+            AiAction::SetChatDraft(text.to_owned())
+        } else {
+            AiAction::SetSessionDraft(tab, text.to_owned())
+        };
+        self.dispatch_ai(draft, cx);
+    }
+
+    /// Fills the composer of a session tab (a scene types this way) and sends it.
+    #[cfg(feature = "screenshots")]
+    pub(super) fn ai_type_and_send(
+        &mut self,
+        tab: TabId,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ai_type_draft(tab, text, window, cx);
         self.ai_send(tab, window, cx);
     }
 
@@ -259,5 +303,198 @@ impl WorkspaceView {
             }
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui::{
+        AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
+        ParentElement as _, Pixels, Render, Styled as _, TestAppContext, VisualTestContext, Window,
+        div, px,
+    };
+    use gpui_component::button::Button;
+    use gpui_component::input::{InputEvent, InputState, Textarea, TextareaState};
+    use sqler_config::CHAT_PANEL_SIZE_RANGE;
+
+    use super::{composer_sends, composer_state};
+    use crate::ai::session::view::composer_row;
+
+    /// Reproduction (F4/AC1): the old composer was a single-line `InputState`, which cannot hold
+    /// a newline, so Shift+Enter could never start a new line.
+    #[gpui::test]
+    fn the_old_single_line_composer_cannot_hold_a_newline(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (state, cx) = cx.add_window_view(|window, cx| {
+            struct Old(Entity<InputState>);
+            impl Render for Old {
+                fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                    div()
+                        .size_full()
+                        .child(gpui_component::input::Input::new(&self.0))
+                }
+            }
+            Old(cx.new(|cx| InputState::new(window, cx)))
+        });
+        let input = state.read_with(cx, |o, _| o.0.clone());
+        cx.update(|window, cx| {
+            let handle = input.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+        });
+        cx.simulate_input("a");
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("b");
+        let value = cx.update(|_, cx| input.read(cx).value().to_string());
+        assert!(
+            !value.contains('\n'),
+            "the single-line input held {value:?}"
+        );
+    }
+
+    /// A composer row of a set width with a send button, counting the sends.
+    struct Host {
+        state: Entity<TextareaState>,
+        width: Pixels,
+        _sub: gpui::Subscription,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(self.width).child(
+                composer_row(
+                    div()
+                        .debug_selector(|| "field".to_owned())
+                        .child(Textarea::new(&self.state)),
+                    div()
+                        .debug_selector(|| "send".to_owned())
+                        .child(Button::new("send").label("Send")),
+                )
+                .debug_selector(|| "row".to_owned()),
+            )
+        }
+    }
+
+    fn host(cx: &mut TestAppContext) -> (Entity<Host>, Rc<Cell<usize>>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::editor::view::init_keys(cx);
+        });
+        let sends = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&sends);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let state = cx.new(|cx| composer_state("Ask".to_owned(), window, cx));
+            let sub = cx.subscribe_in(
+                &state,
+                window,
+                move |_: &mut Host, _, event: &InputEvent, _, _| {
+                    if composer_sends(event) {
+                        counted.set(counted.get() + 1);
+                    }
+                },
+            );
+            Host {
+                state,
+                width: px(400.),
+                _sub: sub,
+            }
+        });
+        let state = view.read_with(cx, |h, _| h.state.clone());
+        cx.update(|window, cx| {
+            let handle = state.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+        });
+        (view, sends, cx)
+    }
+
+    fn value(view: &Entity<Host>, cx: &mut VisualTestContext) -> String {
+        let state = view.read_with(cx, |h, _| h.state.clone());
+        cx.update(|_, cx| state.read(cx).value().to_string())
+    }
+
+    #[gpui::test]
+    fn enter_sends_and_inserts_no_newline(cx: &mut TestAppContext) {
+        let (view, sends, cx) = host(cx);
+        cx.simulate_input("hello");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(sends.get(), 1);
+        assert_eq!(value(&view, cx), "hello");
+    }
+
+    #[gpui::test]
+    fn shift_enter_inserts_a_newline_and_does_not_send(cx: &mut TestAppContext) {
+        let (view, sends, cx) = host(cx);
+        cx.simulate_input("a");
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("b");
+        assert_eq!(sends.get(), 0);
+        assert_eq!(value(&view, cx), "a\nb");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(sends.get(), 1);
+        assert_eq!(value(&view, cx), "a\nb");
+    }
+
+    #[test]
+    fn composer_sends_only_plain_enter() {
+        let enter = |shift| InputEvent::PressEnter {
+            secondary: false,
+            shift,
+        };
+        assert!(composer_sends(&enter(false)));
+        assert!(!composer_sends(&enter(true)));
+        assert!(!composer_sends(&InputEvent::Change));
+    }
+
+    fn lines(view: &Entity<Host>, cx: &mut VisualTestContext, n: usize) -> Pixels {
+        let state = view.read_with(cx, |h, _| h.state.clone());
+        let text = vec!["line"; n].join("\n");
+        cx.update(|window, cx| state.update(cx, |s, cx| s.set_value(text, window, cx)));
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.debug_bounds("field").expect("the field").size.height
+    }
+
+    #[gpui::test]
+    fn the_composer_grows_then_stops_at_the_max(cx: &mut TestAppContext) {
+        let (view, _, cx) = host(cx);
+        cx.run_until_parked();
+        let h0 = cx.debug_bounds("field").expect("the field").size.height;
+        let h4 = lines(&view, cx, 4);
+        let h20 = lines(&view, cx, 20);
+        let h30 = lines(&view, cx, 30);
+        assert!(h0 < h4, "{h0:?} < {h4:?}");
+        assert!(h4 < h20, "{h4:?} < {h20:?}");
+        assert!((h20 - h30).abs() <= px(1.), "{h20:?} vs {h30:?}");
+    }
+
+    #[gpui::test]
+    fn the_composer_fits_at_every_chat_width(cx: &mut TestAppContext) {
+        let (view, _, cx) = host(cx);
+        let tolerance = px(1.);
+        for width in [
+            *CHAT_PANEL_SIZE_RANGE.start(),
+            380.,
+            *CHAT_PANEL_SIZE_RANGE.end(),
+        ] {
+            view.update(cx, |h, cx| {
+                h.width = px(width);
+                cx.notify();
+            });
+            lines(&view, cx, 3);
+            let row = cx.debug_bounds("row").expect("the row");
+            let field = cx.debug_bounds("field").expect("the field");
+            let send = cx.debug_bounds("send").expect("the button");
+            assert!(
+                send.right() <= row.right() + tolerance,
+                "{width}: {send:?} in {row:?}"
+            );
+            assert!(field.size.width > px(0.), "{width}: {field:?}");
+            assert!(
+                (send.bottom() - row.bottom()).abs() <= tolerance,
+                "{width}: {send:?} in {row:?}"
+            );
+        }
     }
 }

@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - SQL editor: `editor:toggle-line-comment` (Cmd/Ctrl+/) and `editor:toggle-block-comment` (Shift+Alt+A).
 
+### Changed
+
+- The composers of the AI chat panel and the AI session tab are now multi-line boxes that grow with their text up to eight lines; Enter sends and Shift+Enter starts a new line.
+
 ### Fixed
 
 - With text selected, Cmd/Ctrl+Enter and the Run button run exactly the selection; the editor text is never changed.

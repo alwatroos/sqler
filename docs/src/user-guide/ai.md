@@ -144,6 +144,8 @@ connection** / **Turn off** (`ai:toggle-connection`); the list of providers with
 is stored; and the buttons **AI settings** and **Test provider** (`ai:test-provider`). Without a
 provider it explains how to set one up.
 
+The AI view, with the chat panel open on the right and a two-line message in its composer:
+
 ![The AI view](../screenshots/after/ai-side-view-dark.png)
 
 ![The AI view before a provider is set up](../screenshots/after/ai-side-view-empty-dark.png)
@@ -172,7 +174,7 @@ The model sees the schema through the same tools as the rest of AI (table and co
 
 An AI session tab is a conversation with the model about one connection. Open it with **AI: Open Session** (`ai:open-session`) or the **Sessions** section of the AI view; it opens on the connection of the active tab. The connection must have AI turned on and a provider with a model set, otherwise the command explains what is missing. You can open several session tabs on one connection; each has its own database session and its own transcript. The tab is pinned and titled `AI: {connection}`.
 
-Type in the composer and press **Send** (`ai:send-message`). The transcript shows your messages, the streamed answer, each tool call, and each SQL statement that ran with its row count. Schema questions use the catalog tools and fetch no rows.
+Type in the composer and press Enter or **Send** (`ai:send-message`). Shift+Enter starts a new line. The composer grows with the text up to eight lines, then scrolls. The transcript shows your messages, the streamed answer, each tool call, and each SQL statement that ran with its row count. Schema questions use the catalog tools and fetch no rows.
 
 ![An AI session tab with an approval card](../screenshots/after/ai-session-dark.png)
 
@@ -193,6 +195,8 @@ Type in the composer and press **Send** (`ai:send-message`). The transcript show
 ### AI chat panel
 
 The chat panel is a conversation about one connection that sits on the right side of the window, next to the editor. Open or hide it with **AI: Toggle Chat Panel** (`ai:toggle-chat`) or the **Chat** item at the right of the status bar. The first time it is shown it starts a chat on the connection of the active tab; drag its left edge to resize it (280 to 900 px). Whether it is shown and its width are remembered between sessions.
+
+The chat composer works like the one of an AI session tab: Enter or **Send** (`ai:send-chat`) sends the message, Shift+Enter starts a new line, and the box grows with the text up to eight lines, then scrolls.
 
 **Read-only.** The chat only reads. A statement that would change data is refused before anything runs, on every connection, `prod` or not, and there is no approval card. The panel shows such a call as "refused (read-only chat)" and a note that you can open the SQL in an editor to run it yourself. The chat has no results tab and no "open in editor" tool of its own.
 
