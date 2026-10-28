@@ -245,10 +245,14 @@ impl Workspace {
             ..
         } = setup;
         let (tx, host) = unbounded_channel();
-        self.ai_sessions.tabs.insert(
-            tab,
-            AiSessionTab::new(conn.clone(), info.clone(), status, tx.clone()),
-        );
+        let mut state = AiSessionTab::new(conn.clone(), info.clone(), status, tx.clone());
+        if tab == TabId::CHAT_PANEL
+            && let Some(draft) = self.pending_chat_draft.take()
+        {
+            // The unsent draft of the last run; nothing is started or sent from it.
+            state.draft = draft;
+        }
+        self.ai_sessions.tabs.insert(tab, state);
         let start = AiSessionStart {
             tab,
             provider,

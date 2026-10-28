@@ -14,7 +14,7 @@ mod status;
 pub(crate) mod view;
 mod welcome;
 
-use sqler_config::{ConfigDir, WorkbenchLoad};
+use sqler_config::{ConfigDir, SessionLoad, WorkbenchLoad};
 
 pub use action::{action_for, register_commands, register_pane_commands};
 pub use chrome::{ActivityItem, status_solid};
@@ -36,17 +36,22 @@ pub struct WorkbenchStartup {
     pub dir: Option<ConfigDir>,
     /// What loading `workbench.toml` gave.
     pub load: WorkbenchLoad,
+    /// What loading `session.json` (the open editor tabs and the chat draft) gave.
+    pub session: SessionLoad,
 }
 
 impl WorkbenchStartup {
-    /// Loads `workbench.toml` from `dir`; without a directory the result is
-    /// [`WorkbenchLoad::Missing`].
+    /// Loads `workbench.toml` and `session.json` from `dir`; without a directory both are
+    /// missing.
     #[must_use]
     pub fn load(dir: Option<ConfigDir>) -> Self {
         let load = dir
             .as_ref()
             .map_or(WorkbenchLoad::Missing, ConfigDir::load_workbench_state);
-        Self { dir, load }
+        let session = dir
+            .as_ref()
+            .map_or(SessionLoad::Missing, ConfigDir::load_session_state);
+        Self { dir, load, session }
     }
 }
 
@@ -65,6 +70,7 @@ mod tests {
         let s = WorkbenchStartup::load(None);
         assert!(s.dir.is_none());
         assert_eq!(s.load, WorkbenchLoad::Missing);
+        assert_eq!(s.session, SessionLoad::Missing);
     }
 
     #[test]
@@ -72,6 +78,7 @@ mod tests {
         let p = std::env::temp_dir().join(format!("sqler-ui-wb-{}", std::process::id()));
         let s = WorkbenchStartup::load(Some(ConfigDir::new(&p)));
         assert_eq!(s.load, WorkbenchLoad::Missing);
+        assert_eq!(s.session, SessionLoad::Missing);
         assert!(s.dir.is_some());
     }
 }

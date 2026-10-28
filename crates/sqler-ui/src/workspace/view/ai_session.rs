@@ -136,6 +136,16 @@ impl WorkspaceView {
                     .map(|s| s.info().name.clone())
                     .unwrap_or_default();
                 let ui = Self::new_session_ui(id, &name, window, cx);
+                // The unsent draft of the last run fills the new chat's composer. The change
+                // it causes sets the same draft again, which is harmless.
+                let restored = (id == TabId::CHAT_PANEL)
+                    .then(|| self.ws.chat().map(|c| c.draft().to_owned()))
+                    .flatten()
+                    .filter(|d| !d.is_empty());
+                if let Some(text) = restored {
+                    ui.composer
+                        .update(cx, |input, cx| input.set_value(text, window, cx));
+                }
                 self.ai_session_inputs.tabs.insert(id, ui);
             }
             let Some(session) = self.ws.ai_session(id) else {
