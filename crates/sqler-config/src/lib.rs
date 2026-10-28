@@ -7,6 +7,8 @@
 //! The query history (`history.jsonl`), saved queries (`queries.toml`) and the AI settings
 //! (`ai.toml`) and the plugin permission grants (`plugin-grants.toml`) and preferences (`plugin-prefs.toml`) and the update-check state (`update-state.toml`) live next to them.
 //!
+//! `session.json` (the open editor tabs, the active tab and the unsent AI chat draft) lives there too. It holds SQL text, so it is user-only (mode `0600` on Unix) and stores connection ids, never names, URLs or secrets.
+//!
 //! Secrets (passwords, passphrases, AI provider API keys) live in the OS keychain through [`SecretStore`]; never in these files.
 
 #![forbid(unsafe_code)]
@@ -21,6 +23,7 @@ mod paths;
 mod plugins;
 mod saved_queries;
 mod secrets;
+mod session;
 mod settings;
 mod update_state;
 mod workbench;
@@ -57,6 +60,10 @@ pub use saved_queries::{
 pub use secrets::{
     KEYCHAIN_SERVICE, KeychainStore, MemoryStore, ProviderKeyRef, Secret, SecretError, SecretKind,
     SecretRef, SecretStore,
+};
+pub use session::{
+    MAX_CHAT_DRAFT_BYTES, MAX_SESSION_BYTES, MAX_SESSION_TAB_BYTES, MAX_SESSION_TABS,
+    SESSION_VERSION, SessionLoad, SessionState, SessionTab, fit_session,
 };
 pub use settings::{
     DEFAULT_RESULT_PAGE_ROWS, FONT_SIZE_RANGE, RESULT_PAGE_ROWS_RANGE, Settings, ThemePreference,

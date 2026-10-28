@@ -6,7 +6,7 @@
 //! carried out here.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::Focusable as _;
@@ -25,7 +25,8 @@ use gpui_component::{ActiveTheme as _, Root, WindowExt as _};
 use sqler_catalog::{CacheKey, RefreshEvent};
 use sqler_config::{
     ConfigDir, ConnectionId, ConnectionStore, HistoryOptions, KeybindingOverrides, Modifiers,
-    Platform, SecretStore, WINDOW_SIZE_RANGE, WindowState, WorkbenchLoad, WorkbenchState,
+    Platform, SecretStore, SessionLoad, SessionState, WINDOW_SIZE_RANGE, WindowState,
+    WorkbenchLoad, WorkbenchState,
 };
 use tokio::sync::oneshot;
 
@@ -36,6 +37,7 @@ mod assist;
 mod audit;
 mod edit_ui;
 mod shell;
+use shell::SESSION_CHECKPOINT;
 
 use super::action::WorkspaceAction;
 use super::bridge::SessionBridge;
@@ -301,6 +303,17 @@ pub(crate) struct WorkspaceView {
     saved_state: Option<WorkbenchState>,
     save_task: Option<Task<()>>,
     save_failed: bool,
+    /// What `session.json` held last (read at startup, so startup writes nothing).
+    saved_session: Option<SessionState>,
+    /// The save of `session.json` in flight, if any.
+    session_save: Option<Task<()>>,
+    /// Held while `session.json` is written, so a late background write cannot overwrite the quit write.
+    session_write: Arc<Mutex<()>>,
+    /// The checkpoint loop; dropping it stops it.
+    session_task: Task<()>,
+    /// A save failed or tabs were dropped and the user was told; tell once per run.
+    session_failed: bool,
+    session_trimmed: bool,
     /// Keeps the window size observer alive.
     _bounds: Subscription,
     /// Keeps the OS appearance observer alive.
@@ -312,6 +325,7 @@ pub(crate) struct WorkspaceView {
 impl WorkspaceView {
     #[allow(clippy::too_many_lines)] // registers every command set and builds the state
     fn new(mut startup: Startup, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let session_load = std::mem::replace(&mut startup.workbench.session, SessionLoad::Missing);
         let sidebar = match startup.connections {
             Ok(store) => SidebarModel::from_store(store, startup.config_dir),
             Err(message) => SidebarModel::with_load_error(message),
@@ -415,6 +429,10 @@ impl WorkspaceView {
             window_size.clone_from(&state.window);
         }
         // What is on disk already; startup writes nothing.
+        let saved_session = match &session_load {
+            SessionLoad::Loaded(state) => Some(state.clone()),
+            _ => None,
+        };
         let saved_state = ws.workbench_state(palette.recent(), window_size.clone());
         for notice in keys.notices() {
             eprintln!("sqler: {notice}");
@@ -441,8 +459,9 @@ impl WorkspaceView {
         window.focus(&focus, cx);
         // Any way of quitting (window close, the OS menu) closes the open sessions, within the
         // short time the platform allows. The `app:quit` command waits longer (`CLOSE_LIMIT`).
-        let quit = cx.on_app_quit(|view, _| {
+        let quit = cx.on_app_quit(|view, cx| {
             view.save_workbench_now();
+            view.save_session_now(cx);
             view.ws.cancel_all_exports();
             for handle in view.ws.cancel_all_queries() {
                 drop(view.bridge.spawn(async move {
@@ -541,10 +560,29 @@ impl WorkspaceView {
             saved_state,
             save_task: None,
             save_failed: false,
+            saved_session,
+            session_save: None,
+            session_write: Arc::new(Mutex::new(())),
+            session_task: Task::ready(()),
+            session_failed: false,
+            session_trimmed: false,
             _bounds: bounds,
             _appearance: appearance,
             _quit: quit,
         };
+        let attach = view.ws.restore_tabs(&session_load);
+        if let Some(notice) = view.ws.take_notice() {
+            view.notices.push(notice);
+        }
+        view.apply(attach, cx);
+        view.session_task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(SESSION_CHECKPOINT).await;
+                if this.update(cx, Self::checkpoint_session).is_err() {
+                    break;
+                }
+            }
+        });
         GridProbe::start_if_requested(window, cx);
         if view.ws.plugins().available() {
             Self::schedule_plugins(window, cx);
@@ -1237,6 +1275,11 @@ impl WorkspaceView {
     /// Housekeeping after the workspace changed: cancel attempts nobody waits for, forget
     /// closed grids, queue the workspace's message and repaint.
     fn settle(&mut self, cx: &mut Context<Self>) {
+        // A restored tab that was just activated connects now.
+        let attach = self.ws.attach_active_restored();
+        if !matches!(attach, Effect::None) {
+            self.apply(attach, cx);
+        }
         let ws = &self.ws;
         self.tasks.retain(|request, _| ws.is_request_live(*request));
         if let Some(notice) = self.ws.take_notice() {

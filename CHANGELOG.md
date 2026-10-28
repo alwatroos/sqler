@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **App icon.** SQLer now has an icon, shown by the macOS `.dmg` app bundle, the Linux `.deb` (hicolor theme and menu entry), the Windows MSI (Apps list and Start menu shortcut) and the Windows `sqler.exe`. The source is `assets/icon/sqler.svg`; regenerate the committed PNG, ICO and ICNS files with `cargo run -p xtask -- icons`.
+- **Session restore.** Quitting and relaunching now brings back the open editor tabs with their exact text (unsaved included), in the same order, with the active tab and each tab's connection, plus the unsent AI chat draft. Only the active tab connects at launch; the others connect when first activated. The state is kept in a user-only `session.json`; see [ADR-0045](docs/src/adr/0045-workbench-state-persistence.md).
 - SQL editor: `editor:toggle-line-comment` (Cmd/Ctrl+/) and `editor:toggle-block-comment` (Shift+Alt+A).
 
 ### Changed

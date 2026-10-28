@@ -83,6 +83,18 @@ SQLer remembers the panel layout, the window size and your recently used command
 - A file written by a newer SQLer is read-only: SQLer uses the defaults and never overwrites it.
 - A file that cannot be parsed gives the defaults and one notice; the next save replaces it (the old file is copied to `workbench.toml.bak` first).
 
+### Open tabs
+
+SQLer also remembers your open editor tabs in `session.json` in the configuration directory (readable by you only, because it contains your SQL). After a restart each editor tab comes back in the same order with its exact text, including text you never saved, bound to the same connection, and the tab you were using is active again. The unsent draft in the AI chat panel is kept too; it appears in the composer of the next chat. The chat conversation itself is not restored.
+
+- Only the active tab connects at launch; the others connect when you first switch to them. Until then, running a query in such a tab says the connection is not available.
+- If a tab's connection has been deleted, the tab stays open with its text and no connection, and a notice tells you.
+- Only editor tabs are restored. Result grids, table, DDL and history tabs, cursor position, undo history and editor groups are not; all tabs return in one group.
+- The state is saved every 5 seconds and when you quit. A crash can lose the last few seconds of typing.
+- A tab larger than 1 MiB, or more than 50 tabs, are not kept, and a notice says so.
+- A missing file restores nothing. A file written by a newer SQLer is left untouched. A file that cannot be read gives one notice and is replaced on the next save (the old one is copied to `session.json.bak`).
+- Passwords, tokens and API keys are never written to the file; only the connection id is.
+
 ## Known limits
 
 - On quit open sessions are closed (ADR-0016): `app:quit` waits up to 2 s, the window-close hook only about 150 ms; a session that does not close in time is dropped.

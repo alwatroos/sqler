@@ -5,16 +5,18 @@
 //! focus regions (`F6`) and the debounced write of `workbench.toml`. Every decision lives in the
 //! headless `workbench` and `tabs` modules; this file only arranges their render functions.
 
+use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, FocusHandle, InteractiveElement as _,
-    IntoElement as _, MouseButton, ParentElement as _, SharedString, Styled as _, Window, div, px,
+    IntoElement as _, MouseButton, ParentElement as _, SharedString, Styled as _, Task, Window,
+    div, px,
 };
 use gpui_component::resizable::{
     ResizablePanelEvent, ResizableState, h_resizable, resizable_panel, v_resizable,
 };
-use sqler_config::Modifiers;
+use sqler_config::{Modifiers, SessionState};
 
 use super::WorkspaceView;
 use super::audit::audit_panel_body;
@@ -42,6 +44,8 @@ mod layout_tests;
 
 /// How long a change of the layout waits before `workbench.toml` is written.
 const SAVE_DELAY: Duration = Duration::from_millis(500);
+/// How often the open editor tabs are written to `session.json`.
+pub(super) const SESSION_CHECKPOINT: Duration = Duration::from_secs(5);
 
 /// The regions that have a handle of their own; the editor region is the groups.
 const HANDLE_REGIONS: [Region; 5] = [
@@ -582,6 +586,99 @@ impl WorkspaceView {
             self.saved_state = Some(state);
         }
     }
+
+    /// The `session.json` state now, if it needs writing: the text comes from the live editors.
+    fn session_to_write(&self, cx: &Context<Self>) -> Option<SessionState> {
+        self.workbench_dir.as_ref()?;
+        let editors = &self.editors;
+        let state = self
+            .ws
+            .session_state(&|tab| editors.buffer(tab, cx).map(|b| b.text))?;
+        (self.saved_session.as_ref() != Some(&state)).then_some(state)
+    }
+
+    /// Writes `session.json` in the background when the open tabs differ from what is on disk.
+    /// Runs every few seconds; a save still in flight is waited for.
+    pub(super) fn checkpoint_session(&mut self, cx: &mut Context<Self>) {
+        if self.session_save.is_some() {
+            return;
+        }
+        let (Some(dir), Some(state)) = (self.workbench_dir.clone(), self.session_to_write(cx))
+        else {
+            return;
+        };
+        let writer = Arc::clone(&self.session_write);
+        self.session_save = Some(cx.spawn(async move |this, cx| {
+            let to_write = state.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    // One writer at a time: the quit write waits for this one and lands last.
+                    let _turn = writer.lock().unwrap_or_else(PoisonError::into_inner);
+                    dir.save_session_state(&to_write)
+                })
+                .await;
+            this.update(cx, |view, cx| {
+                view.session_save = None;
+                // Only a write that succeeded is "on disk"; after a failure the same state is
+                // written again (the user hears about it once).
+                remember_saved(&mut view.saved_session, state, result.is_ok());
+                view.session_saved(result, cx);
+            })
+            .ok();
+        }));
+    }
+
+    /// Writes `session.json` now (the app is quitting).
+    pub(super) fn save_session_now(&mut self, cx: &mut Context<Self>) {
+        self.session_save = None;
+        self.session_task = Task::ready(());
+        let (Some(dir), Some(state)) = (self.workbench_dir.clone(), self.session_to_write(cx))
+        else {
+            return;
+        };
+        let _turn = self
+            .session_write
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let ok = dir.save_session_state(&state).is_ok();
+        remember_saved(&mut self.saved_session, state, ok);
+    }
+
+    /// Tells the user, once per run, that the tabs could not be written or were too large.
+    fn session_saved(
+        &mut self,
+        result: Result<usize, sqler_config::ConfigError>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(dropped) => {
+                self.session_failed = false;
+                if dropped > 0 && !self.session_trimmed {
+                    self.session_trimmed = true;
+                    self.notices.push(format!(
+                        "{dropped} editor tab(s) are too large to be kept across restarts."
+                    ));
+                    cx.notify();
+                }
+            }
+            Err(err) if !self.session_failed => {
+                self.session_failed = true;
+                self.notices.push(format!(
+                    "Could not save the open tabs (session.json): {err}"
+                ));
+                cx.notify();
+            }
+            Err(_) => {}
+        }
+    }
+}
+
+/// Records `state` as what `session.json` holds, but only after a write that succeeded.
+fn remember_saved(saved: &mut Option<SessionState>, state: SessionState, written: bool) {
+    if written {
+        *saved = Some(state);
+    }
 }
 
 /// Wraps `element` so it fills its resizable panel and may shrink.
@@ -609,8 +706,21 @@ fn to_u16(v: f32) -> u16 {
 mod tests {
     use std::time::Duration;
 
-    use super::{counts_rows, to_u16};
+    use super::{counts_rows, remember_saved, to_u16};
     use crate::query::StatementStatus;
+
+    #[test]
+    fn a_failed_save_is_not_recorded_as_saved() {
+        let state = sqler_config::SessionState {
+            chat_draft: "unsaved".to_owned(),
+            ..sqler_config::SessionState::default()
+        };
+        let mut saved = None;
+        remember_saved(&mut saved, state.clone(), false);
+        assert_eq!(saved, None, "the same state must be written again");
+        remember_saved(&mut saved, state.clone(), true);
+        assert_eq!(saved, Some(state));
+    }
 
     #[test]
     fn rows_show_only_for_a_finished_result_set() {

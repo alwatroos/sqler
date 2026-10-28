@@ -3,7 +3,7 @@
 
 //! `Workspace`: sidebar, tab strip and the sessions behind the tabs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::PathBuf;
 
@@ -64,6 +64,13 @@ pub enum Purpose {
     Browse(ConnectionId),
     /// "Test connection" from the form; the session is closed again.
     Test,
+    /// Give a restored editor tab, which has no session yet, its session.
+    Attach {
+        /// The restored tab.
+        tab: TabId,
+        /// Its saved connection.
+        conn: ConnectionId,
+    },
 }
 
 /// A change to the secret store that follows a save or a delete.
@@ -500,7 +507,7 @@ enum SettingsTab {
 pub struct Workspace {
     pub(super) sidebar: SidebarModel,
     pub(super) tabs: TabStrip,
-    sessions: HashMap<TabId, Box<dyn Session>>,
+    pub(super) sessions: HashMap<TabId, Box<dyn Session>>,
     pub(super) requests: HashMap<RequestId, Purpose>,
     next_request: u64,
     /// The drivers offered by the connection form.
@@ -566,8 +573,19 @@ pub struct Workspace {
     pub(super) layout: WorkbenchLayout,
     /// `workbench.toml` is from a newer `SQLer`: keep it as it is.
     workbench_newer: bool,
+    /// Restored editor tabs that have no session yet.
+    pub(super) restored: HashSet<TabId>,
+    /// Saved connection ids of restored tabs that could not be matched (the store is unreadable
+    /// or the connection is missing); written back so a bad moment does not drop the binding.
+    pub(super) orphan_conns: HashMap<TabId, String>,
+    /// The active tab the last attach check looked at.
+    pub(super) attach_seen: Option<TabId>,
+    /// `session.json` is from a newer `SQLer`: keep it as it is.
+    pub(super) session_newer: bool,
+    /// The restored chat draft, until a chat is started.
+    pub(super) pending_chat_draft: Option<String>,
     /// The connections opened last, most recent first.
-    recent_connections: RecentConnections,
+    pub(super) recent_connections: RecentConnections,
     /// The AI settings: providers, models, drafts and test status.
     pub(super) ai: AiState,
     /// The AI session tabs.
@@ -644,6 +662,11 @@ impl Workspace {
             exports: ExportCenter::default(),
             layout: WorkbenchLayout::default(),
             workbench_newer: false,
+            restored: HashSet::new(),
+            orphan_conns: HashMap::new(),
+            attach_seen: None,
+            session_newer: false,
+            pending_chat_draft: None,
             recent_connections: RecentConnections::default(),
             ai: AiState::default(),
             ai_sessions: AiSessions::default(),
@@ -1311,21 +1334,28 @@ impl Workspace {
         let Some(id) = self.sidebar.entries().get(index).map(|e| e.id().clone()) else {
             return Effect::None;
         };
-        let Some(profile) = self.sidebar.profile(&id) else {
+        let Some(connect) = self.connect_request_for(index) else {
             return Effect::None;
-        };
-        let connect = match ConnectRequest::from_profile(profile) {
-            Ok(connect) => connect,
-            Err(err) => {
-                self.sidebar.begin_connect(index);
-                self.sidebar.finish_connect(index, Err(err.to_string()));
-                return Effect::None;
-            }
         };
         self.sidebar.begin_connect(index);
         self.sidebar.select(index);
         let request = self.new_request(Purpose::Open(id));
         Effect::Connect { request, connect }
+    }
+
+    /// The connect request of the profile at `index`; a profile that cannot connect is shown as
+    /// a failure on its sidebar entry and gives `None`.
+    pub(super) fn connect_request_for(&mut self, index: usize) -> Option<ConnectRequest> {
+        let id = self.sidebar.entries().get(index)?.id().clone();
+        let profile = self.sidebar.profile(&id)?;
+        match ConnectRequest::from_profile(profile) {
+            Ok(connect) => Some(connect),
+            Err(err) => {
+                self.sidebar.begin_connect(index);
+                self.sidebar.finish_connect(index, Err(err.to_string()));
+                None
+            }
+        }
     }
 
     /// Shows the connection tabs when the settings tab was in front.
@@ -1354,6 +1384,8 @@ impl Workspace {
         self.grid_objects.remove(&id);
         self.close_object_tab(id);
         self.editors.remove(id);
+        self.restored.remove(&id);
+        self.orphan_conns.remove(&id);
         self.tab_conns.remove(&id);
         self.object_crumbs.remove(&id);
         self.queries.remove(&id);
@@ -1410,6 +1442,7 @@ impl Workspace {
             }
             Purpose::Browse(id) => self.browse_finished(&id, result),
             Purpose::Test => self.test_finished(request, result),
+            Purpose::Attach { tab, conn } => self.attach_finished(tab, &conn, result),
         }
     }
 
@@ -1509,7 +1542,7 @@ impl Workspace {
     /// Shows the trust dialog; a form on screen waits behind it. Any other dialog on screen
     /// (a confirmation, a name or a move dialog) or an earlier prompt is kept: the new prompt is
     /// not shown over it, and the user gets a notice to try again.
-    fn ask_host_key(&mut self, key: HostKeyPrompt, retry: Purpose) {
+    pub(super) fn ask_host_key(&mut self, key: HostKeyPrompt, retry: Purpose) {
         match &self.dialog {
             None => {}
             Some(Dialog::Form(_)) => self.parked = self.dialog.take(),
@@ -1548,7 +1581,13 @@ impl Workspace {
                 self.browsers.remove(&id);
                 Effect::None
             }
-            (Purpose::Open(_) | Purpose::Browse(_), Err(failure)) => {
+            (Purpose::Attach { tab, conn }, Ok(())) => {
+                if !self.restored.contains(&tab) {
+                    return Effect::None;
+                }
+                self.attach_tab(tab, &conn)
+            }
+            (Purpose::Open(_) | Purpose::Browse(_) | Purpose::Attach { .. }, Err(failure)) => {
                 self.notice = Some(failure.to_string());
                 Effect::None
             }
