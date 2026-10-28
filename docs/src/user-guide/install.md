@@ -109,9 +109,9 @@ The MSI and the `.exe` are unsigned, so SmartScreen may show "Windows protected 
 ## What the installers put on disk
 
 - The shell and PowerShell installers put the `sqler` binary in `~/.sqler/bin`, plus the `env` scripts and the `PATH` line described above.
-- The `.dmg` holds `SQLer.app` (the `sqler` binary and the licences inside the bundle); you copy it to `Applications`. It writes nothing else.
-- The `.deb` puts `/usr/bin/sqler`, `/usr/share/applications/sqler.desktop` and the licences in `/usr/share/doc/sqler`.
-- The MSI puts `sqler.exe` in `Program Files\sqler-app\bin`, adds a Start menu shortcut and offers an optional `PATH` entry.
+- The `.dmg` holds `SQLer.app` (the `sqler` binary, the `sqler.icns` icon and the licences inside the bundle); you copy it to `Applications`. It writes nothing else.
+- The `.deb` puts `/usr/bin/sqler`, `/usr/share/applications/sqler.desktop`, the icon (`sqler.png` in `/usr/share/icons/hicolor/<size>x<size>/apps` and `sqler.svg` in `scalable/apps`) and the licences in `/usr/share/doc/sqler`.
+- The MSI puts `sqler.exe` in `Program Files\sqler-app\bin`, adds a Start menu shortcut with the SQLer icon (also the Apps entry icon and the icon inside `sqler.exe`) and offers an optional `PATH` entry.
 - No installer creates `<config>` (the per-OS path is in [Settings](settings.md)) or `<config>/plugins`. That folder is yours: create it when you add a plugin. SQLer creates only `<config>/plugins/<id>/data`, and only for a plugin that reads its data scope. The built-in SQL Server needs no folder.
 - Uninstalling (deleting `~/.sqler`, removing the `.deb` with `apt remove sqler`, deleting `SQLer.app`, or removing the MSI in Apps) leaves `<config>` alone: your connections, `plugin-grants.toml` and the plugin preferences stay. Delete that folder yourself to remove everything.
 

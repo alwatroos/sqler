@@ -46,6 +46,16 @@ doc="$pkg/usr/share/doc/sqler"
 mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin" "$pkg/usr/share/applications" "$doc/licenses"
 install -m 755 "$bundle/sqler" "$pkg/usr/bin/sqler"
 install -m 644 "$here/sqler.desktop" "$pkg/usr/share/applications/sqler.desktop"
+# The app icon: hicolor PNGs plus the scalable SVG. dpkg's hicolor-icon-theme trigger refreshes the cache (no postinst).
+for n in 16 22 24 32 48 64 128 256 512; do
+    src="$root/assets/icon/png/sqler-$n.png"
+    [ -s "$src" ] || fail "assets/icon/png/sqler-$n.png is missing"
+    mkdir -p "$pkg/usr/share/icons/hicolor/${n}x${n}/apps"
+    install -m 644 "$src" "$pkg/usr/share/icons/hicolor/${n}x${n}/apps/sqler.png"
+done
+[ -s "$root/assets/icon/sqler.svg" ] || fail "assets/icon/sqler.svg is missing"
+mkdir -p "$pkg/usr/share/icons/hicolor/scalable/apps"
+install -m 644 "$root/assets/icon/sqler.svg" "$pkg/usr/share/icons/hicolor/scalable/apps/sqler.svg"
 for f in NOTICE THIRD-PARTY-LICENSES.txt; do
     [ -s "$bundle/$f" ] || fail "$f is missing from $bundle"
     install -m 644 "$bundle/$f" "$doc/$f"

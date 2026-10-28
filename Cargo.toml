@@ -116,6 +116,10 @@ wasmtime-wasi = { version = "50.0.0", default-features = false }
 wasmtime-wasi-http = { version = "50.0.0", default-features = false }
 # Dev only (P4): WAT text for the test components; the line wasmtime 50 resolves.
 wat = "1.262.0"
+# F6: icon tooling: resvg (xtask renders assets/icon), embed-resource (sqler-app build.rs, Windows);
+# both already transitive via gpui-pre.
+resvg = { version = "0.46.0", default-features = false }
+embed-resource = "3.0.12"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

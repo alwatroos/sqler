@@ -43,6 +43,8 @@ for f in LICENSE NOTICE THIRD-PARTY-LICENSES.txt; do
     [ -s "$bundle/$f" ] || fail "$f is missing from $bundle"
     install -m 644 "$bundle/$f" "$app/Resources/$f"
 done
+[ -s "$root/assets/icon/sqler.icns" ] || fail "assets/icon/sqler.icns is missing"
+install -m 644 "$root/assets/icon/sqler.icns" "$app/Resources/sqler.icns"
 cp -R "$bundle/licenses/." "$app/Resources/licenses/" || fail "licenses/ is missing from $bundle"
 
 short=${version%%-*}

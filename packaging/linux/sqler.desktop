@@ -6,5 +6,7 @@ Name=SQLer
 GenericName=SQL IDE
 Comment=Lightweight native SQL IDE
 Exec=sqler
+Icon=sqler
+StartupWMClass=sqler
 Terminal=false
 Categories=Development;Database;
