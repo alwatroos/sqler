@@ -6,7 +6,7 @@
 use std::ops::Range;
 
 use sqler_sql::{Dialect, Placeholder, PlaceholderKind, SegmentKind, StatementClass};
-use sqler_sql::{SplitOptions, classify, placeholders, split_with, statement_at};
+use sqler_sql::{classify, placeholders, split, statement_at};
 use thiserror::Error;
 
 use super::buffer::{BufferSnapshot, RunMode};
@@ -73,12 +73,12 @@ pub struct Plan {
 /// Plans a run of `buf` in `mode`.
 ///
 /// `Selection` runs the selected text (an empty selection acts like `Statement`); `Statement`
-/// runs the selected text when there is a selection, else the statement under the cursor; `All`
-/// runs every statement. Delimiter lines and comment-only pieces never run. Without a `dialect`
-/// the trimmed text is one statement of class `Unknown` with no placeholders.
+/// runs the selected text when there is a selection, else the statement under the cursor, up to
+/// its `;`; `All` runs every statement. A selection runs only its own text, split at `;`, the
+/// `MySQL` delimiter and T-SQL `GO`. Delimiter lines and comment-only pieces never run. Without
+/// a `dialect` the trimmed text is one statement of class `Unknown` with no placeholders.
 ///
-/// Statements end at `;`, the `MySQL` delimiter and T-SQL `GO`. See [`plan_with`] to also end
-/// them at blank lines.
+/// A blank line does not end a statement.
 ///
 /// # Errors
 /// [`PlanError::NothingToRun`] when there is no statement.
@@ -86,20 +86,6 @@ pub fn plan(
     dialect: Option<Dialect>,
     buf: &BufferSnapshot,
     mode: RunMode,
-) -> Result<Plan, PlanError> {
-    plan_with(dialect, buf, mode, SplitOptions::default())
-}
-
-/// Like [`plan`], splitting the text with `split`. Selected text is always split with the default
-/// options, so a selection is never cut at a blank line.
-///
-/// # Errors
-/// [`PlanError::NothingToRun`] when there is no statement.
-pub fn plan_with(
-    dialect: Option<Dialect>,
-    buf: &BufferSnapshot,
-    mode: RunMode,
-    split: SplitOptions,
 ) -> Result<Plan, PlanError> {
     let sel = buf.selection.clone();
     let selected = (mode != RunMode::All && sel.start < sel.end)
@@ -114,14 +100,8 @@ pub fn plan_with(
         (false, RunMode::Selection) => RunMode::Statement,
         _ => mode,
     };
-    // A selection splits only at `;`, the delimiter and `GO`, never at blank lines.
-    let split = if selected.is_some() {
-        SplitOptions::default()
-    } else {
-        split
-    };
     let ranges = match dialect {
-        Some(d) => segment_ranges(d, text, base, buf.cursor, mode, split),
+        Some(d) => segment_ranges(d, text, base, buf.cursor, mode),
         None => trimmed_range(text, base).into_iter().collect(),
     };
     let mut statements = Vec::with_capacity(ranges.len());
@@ -161,9 +141,8 @@ fn segment_ranges(
     base: usize,
     cursor: usize,
     mode: RunMode,
-    split: SplitOptions,
 ) -> Vec<Range<usize>> {
-    let segments = split_with(dialect, text, split);
+    let segments = split(dialect, text);
     let shift = |r: &Range<usize>| r.start + base..r.end + base;
     match mode {
         RunMode::All | RunMode::Selection => segments
@@ -203,12 +182,12 @@ mod tests {
         for d in Dialect::ALL {
             for mode in [RunMode::Selection, RunMode::Statement] {
                 let b = BufferSnapshot::with_selection(text, 0..text.len());
-                let p = plan_with(Some(d), &b, mode, SplitOptions::BLANK_LINES).unwrap();
+                let p = plan(Some(d), &b, mode).unwrap();
                 assert_eq!(sqls(&p), [text], "{d:?} {mode:?}");
             }
             let b = BufferSnapshot::at_cursor(text, 2);
-            let p = plan_with(Some(d), &b, RunMode::Statement, SplitOptions::BLANK_LINES).unwrap();
-            assert_eq!(sqls(&p), ["insert into t (a)"], "{d:?}");
+            let p = plan(Some(d), &b, RunMode::Statement).unwrap();
+            assert_eq!(sqls(&p), [text], "{d:?}");
         }
     }
 
@@ -279,46 +258,42 @@ mod tests {
         assert_eq!(sqls(&p), ["select 1"]);
     }
 
-    fn plan_blank(text: &str, cursor: usize, dialect: Dialect) -> Plan {
-        let b = BufferSnapshot::at_cursor(text, cursor);
-        plan_with(
-            Some(dialect),
-            &b,
-            RunMode::Statement,
-            SplitOptions::BLANK_LINES,
-        )
-        .unwrap()
-    }
-
     #[test]
-    fn blank_line_statement_reproduction() {
-        let text = "select 1\n\nselect 2";
-        // Reproduction of the bug: without the option it is one statement.
-        let b = BufferSnapshot::at_cursor(text, 15);
-        assert_eq!(sqls(&plan(PG, &b, RunMode::Statement).unwrap()), [text]);
+    fn blank_line_is_inside_one_statement() {
+        let text = "update t\n\nset x=1";
         for d in Dialect::ALL {
-            assert_eq!(sqls(&plan_blank(text, 15, d)), ["select 2"], "{d:?}");
-            assert_eq!(sqls(&plan_blank(text, 2, d)), ["select 1"], "{d:?}");
+            for cursor in [2, 12] {
+                let b = BufferSnapshot::at_cursor(text, cursor);
+                let p = plan(Some(d), &b, RunMode::Statement).unwrap();
+                assert_eq!(sqls(&p), [text], "{d:?} {cursor}");
+                assert_eq!(p.statements[0].class, StatementClass::Write, "{d:?}");
+            }
         }
     }
 
     #[test]
-    fn blank_line_pieces_are_classified_on_their_own() {
-        let text = "select 1\n\ndelete from t";
+    fn three_line_selection_runs_exactly_those_lines() {
+        let lines = [
+            "select 1;",
+            "select 2;",
+            "select 3;",
+            "select 4;",
+            "select 5;",
+        ];
+        let text = lines.join("\n");
+        let start = lines[0].len() + 1;
+        let end = start + lines[1..4].join("\n").len();
         for d in Dialect::ALL {
-            assert_eq!(
-                plan_blank(text, 2, d).statements[0].class,
-                StatementClass::Read
-            );
-            assert_eq!(
-                plan_blank(text, 15, d).statements[0].class,
-                StatementClass::Write,
-                "{d:?}"
-            );
+            for mode in [RunMode::Statement, RunMode::Selection] {
+                let b = BufferSnapshot::with_selection(&text, start..end);
+                let p = plan(Some(d), &b, mode).unwrap();
+                assert_eq!(
+                    sqls(&p),
+                    ["select 2", "select 3", "select 4"],
+                    "{d:?} {mode:?}"
+                );
+            }
         }
-        let b = BufferSnapshot::at_cursor(text, 0);
-        let p = plan_with(PG, &b, RunMode::All, SplitOptions::BLANK_LINES).unwrap();
-        assert_eq!(sqls(&p), ["select 1", "delete from t"]);
     }
 
     #[test]

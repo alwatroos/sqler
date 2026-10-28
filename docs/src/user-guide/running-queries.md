@@ -7,13 +7,17 @@ A query tab runs SQL on the connection it was opened for. Results appear below t
 | Command | Default key (macOS) | Default key (Linux, Windows) | What it runs |
 | ------- | ------------------- | ---------------------------- | ------------ |
 | `query:run-selection` | Cmd+E | Ctrl+E | The selected text. With no selection it runs the statement at the cursor. |
-| `query:run-statement` | Cmd+Enter | Ctrl+Enter | The selected text when there is a selection (the same as `query:run-selection`), else the statement at the cursor. When the cursor is on blank space after a statement, that statement runs. |
+| `query:run-statement` | Cmd+Enter | Ctrl+Enter | The selected text when there is a selection (the same as `query:run-selection`), else the statement at the cursor, up to its `;`. A blank line does not end a statement. When the cursor is on blank space after a statement, that statement runs. |
 | `query:run-all` | Cmd+Shift+Enter | Ctrl+Shift+Enter | Every statement of the buffer, in order. |
 | `query:cancel` | Cmd+. | Ctrl+. | Cancels the running query. |
 
 All four are in the command palette as "Query: Run Selection", "Query: Run Statement at Cursor", "Query: Run All" and "Query: Cancel". Statements are split on `;` the way the server reads them: strings, comments, dollar quotes and `BEGIN ... END` bodies are respected, and a `MySQL` `DELIMITER` line changes the terminator and is never sent to the server. A selection is split on its own text, so a selection holding two statements runs both. With text selected, Cmd/Ctrl+Enter and the Run button run exactly the selection and never change the editor text.
 
-In the editor a statement also ends at a blank line (a line with nothing but spaces) when the next thing after it is a statement keyword such as `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE` or `WITH`, so statements separated by a blank line run alone without semicolons. A blank line never splits inside parentheses, strings, comments, `BEGIN ... END` bodies, routine definitions or after a word that continues the statement (`UNION`, `AS`, `FROM`, `AND`, a trailing comma and so on); a `WITH` clause that ends in `)` stays joined to its query. To run a statement that contains a blank line, select it: a selection is never split at blank lines, only at `;`, the `MySQL` delimiter and `GO`. Queries run by other features (AI, history, export) split on `;` only. Starting a run clears the previous results of the tab. A run is refused while another one is running or waiting for input.
+Starting a run clears the previous results of the tab. A run is refused while another one is running or waiting for input.
+
+## Compared with pgAdmin and Superset
+
+Run follows pgAdmin 4 and Superset SQL Lab. With a selection, pgAdmin's Execute script (F5) sends only the highlighted text, Superset's Run becomes "Run selection", and SQLer's Run, Run Selection and the toolbar button run exactly the selection. Without a selection, pgAdmin's Execute query (Alt+F5, Option+F5 on macOS) and Superset's Run current query (Ctrl+Shift+Enter) run the statement around the cursor, bounded by semicolons, as SQLer's Run does; SQLer's Run All matches pgAdmin's Execute script, which sends the whole editor. See the pgAdmin 4 [Query Tool toolbar](https://www.pgadmin.org/docs/pgadmin4/latest/query_tool_toolbar.html) and [Query Tool](https://www.pgadmin.org/docs/pgadmin4/latest/query_tool.html) pages and the [Superset SQL Lab keyboard shortcuts](https://github.com/apache/superset/blob/master/superset-frontend/src/SqlLab/components/KeyboardShortcutButton/index.tsx).
 
 ## Toolbar
 
@@ -53,7 +57,7 @@ Object tabs (DDL, properties) and data tabs show breadcrumbs too: the connection
 | `SQLite` | `EXPLAIN QUERY PLAN <statement>` |
 | `SQL Server` and other drivers | not available: a notice says so and nothing runs |
 
-Explain never adds `ANALYZE`, so the statement is planned, not executed. It always uses the statement at the cursor (statements may be separated by a blank line, as in Run) and ignores a selection. If the statement already starts with `EXPLAIN`, the server rejects the doubled keyword. The plan comes back as an ordinary result. Explain goes through the same run path as Run, so on a `prod` connection `EXPLAIN` of a write (for example `EXPLAIN DELETE ...`) still asks for confirmation. `query:explain` has no default shortcut; bind one in `keybindings.toml` (see [Keybindings](keybindings.md)).
+Explain never adds `ANALYZE`, so the statement is planned, not executed. It always uses the statement at the cursor, up to its `;`, and ignores a selection. If the statement already starts with `EXPLAIN`, the server rejects the doubled keyword. The plan comes back as an ordinary result. Explain goes through the same run path as Run, so on a `prod` connection `EXPLAIN` of a write (for example `EXPLAIN DELETE ...`) still asks for confirmation. `query:explain` has no default shortcut; bind one in `keybindings.toml` (see [Keybindings](keybindings.md)).
 
 ## Parameters
 

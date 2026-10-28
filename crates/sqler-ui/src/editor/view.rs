@@ -44,17 +44,19 @@ const SHOW_COMPLETIONS: &str = "input::ShowCompletions";
 /// The key context of the editor widget.
 const INPUT_CONTEXT: &str = "Input";
 
-/// Unbinds the editor's own `secondary-enter` binding, so Cmd/Ctrl+Enter reaches the workspace.
+/// Unbinds the editor's own `secondary-enter` and `secondary-.` bindings, so Cmd/Ctrl+Enter
+/// (run) and Cmd/Ctrl+. (`query:cancel`) reach the workspace.
 ///
 /// GPUI runs key bindings before the capture listeners of ancestors. `gpui-base` binds
 /// `secondary-enter` in the `Input` context to `Enter { secondary: true }`, which in a multi-line
-/// editor inserts a newline over the selection and stops the key. Nothing else is unbound.
+/// editor inserts a newline over the selection and stops the key. It binds `secondary-.` to
+/// `ToggleCodeActions`, which also stops the key although the app registers no code-action
+/// provider, so the chord never cancelled a running query. Nothing else is unbound.
 pub(crate) fn init_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new(
-        "secondary-enter",
-        NoAction,
-        Some(INPUT_CONTEXT),
-    )]);
+    cx.bind_keys([
+        KeyBinding::new("secondary-enter", NoAction, Some(INPUT_CONTEXT)),
+        KeyBinding::new("secondary-.", NoAction, Some(INPUT_CONTEXT)),
+    ]);
 }
 
 /// The brackets of the last text the cursor stood next to.
@@ -540,6 +542,16 @@ mod tests {
         );
     }
 
+    /// The reproduction of the cancel bug: without the unbinding the editor swallows the chord.
+    #[gpui::test]
+    fn without_init_keys_cmd_dot_is_swallowed(cx: &mut gpui::TestAppContext) {
+        let r = press_all(cx, false, &["secondary-."]);
+        assert_eq!(
+            r[0].2, 0,
+            "the editor's code-action binding swallowed the chord"
+        );
+    }
+
     #[gpui::test]
     fn run_and_toggle_chords_reach_the_root_and_leave_the_text(cx: &mut gpui::TestAppContext) {
         let chords = [
@@ -547,6 +559,7 @@ mod tests {
             "secondary-enter",
             "secondary-shift-enter",
             "secondary-/",
+            "secondary-.",
             "shift-alt-a",
         ];
         for (chord, (text, selection, reached)) in chords.iter().zip(press_all(cx, true, &chords)) {
