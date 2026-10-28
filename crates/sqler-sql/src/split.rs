@@ -44,132 +44,6 @@ impl Segment {
     }
 }
 
-/// Options of [`split_with`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct SplitOptions {
-    /// Also end a statement at a top-level blank line.
-    pub blank_lines: bool,
-}
-
-impl SplitOptions {
-    /// Statements also end at a top-level blank line before a statement keyword.
-    pub const BLANK_LINES: Self = Self { blank_lines: true };
-}
-
-/// Words that can start a statement; a blank line only ends a statement before one of them.
-const STATEMENT_LEADS: &[&str] = &[
-    "SELECT",
-    "WITH",
-    "INSERT",
-    "UPDATE",
-    "DELETE",
-    "MERGE",
-    "UPSERT",
-    "REPLACE",
-    "CREATE",
-    "ALTER",
-    "DROP",
-    "TRUNCATE",
-    "RENAME",
-    "COMMENT",
-    "GRANT",
-    "REVOKE",
-    "EXPLAIN",
-    "DESCRIBE",
-    "SHOW",
-    "SET",
-    "RESET",
-    "USE",
-    "BEGIN",
-    "START",
-    "COMMIT",
-    "ROLLBACK",
-    "SAVEPOINT",
-    "RELEASE",
-    "VALUES",
-    "TABLE",
-    "CALL",
-    "EXEC",
-    "EXECUTE",
-    "DECLARE",
-    "PRAGMA",
-    "ANALYZE",
-    "VACUUM",
-    "REINDEX",
-    "REFRESH",
-    "CLUSTER",
-    "COPY",
-    "LOCK",
-    "UNLOCK",
-    "ATTACH",
-    "DETACH",
-    "PREPARE",
-    "DEALLOCATE",
-    "LISTEN",
-    "NOTIFY",
-    "DO",
-    "PRINT",
-    "OPTIMIZE",
-    "CHECKPOINT",
-    "KILL",
-    "BACKUP",
-    "RESTORE",
-    "DBCC",
-    "LOAD",
-    "FLUSH",
-];
-
-/// Words after which a statement is not finished.
-const CONTINUATION_WORDS: &[&str] = &[
-    "UNION",
-    "INTERSECT",
-    "EXCEPT",
-    "MINUS",
-    "ALL",
-    "DISTINCT",
-    "AS",
-    "AND",
-    "OR",
-    "NOT",
-    "IN",
-    "EXISTS",
-    "THEN",
-    "ELSE",
-    "BY",
-    "ON",
-    "FROM",
-    "JOIN",
-    "WHERE",
-    "INTO",
-    "EXPLAIN",
-    "ANALYZE",
-    "VERBOSE",
-];
-
-/// Whether `tok` leaves a statement open: an operator or separator, or a continuation word.
-fn is_continuation(src: &str, tok: &Token) -> bool {
-    match tok.kind {
-        TokenKind::Word => CONTINUATION_WORDS
-            .iter()
-            .any(|kw| tok.text(src).eq_ignore_ascii_case(kw)),
-        TokenKind::Punct | TokenKind::Op => tok.text(src).chars().next_back().is_some_and(|c| {
-            matches!(
-                c,
-                ',' | '(' | '.' | '=' | '<' | '>' | '+' | '-' | '*' | '/' | '|'
-            )
-        }),
-        _ => false,
-    }
-}
-
-/// A blank line seen at the top level of a statement that may end there.
-struct Blank {
-    /// The end of the last token before the blank line.
-    end: usize,
-    /// The start of the first comment after the blank line, if any.
-    trivia_first: Option<usize>,
-}
-
 /// Splits `text` into segments whose spans tile `0..text.len()` in order.
 ///
 /// A `;` (or the active `MySQL` custom delimiter) ends a statement unless it sits in a string,
@@ -194,22 +68,6 @@ struct Blank {
 /// Pure and linear in the size of `text`; it never panics.
 #[must_use]
 pub fn split(dialect: Dialect, text: &str) -> Vec<Segment> {
-    split_with(dialect, text, SplitOptions::default())
-}
-
-/// Like [`split`], with `options`.
-///
-/// With [`SplitOptions::blank_lines`] a statement also ends at a top-level blank line (a
-/// whitespace run with two or more line breaks), with no terminator, when all of these hold: the
-/// statement has content; it is outside parentheses, blocks and routine bodies; no `MySQL`
-/// custom delimiter is active; the next token that is not a comment is a statement keyword; and
-/// the statement does not end with an operator, separator or continuation word (`UNION`, `AS`,
-/// `FROM` ...), nor is it a `WITH` clause ending in `)`. Comments after the blank line belong to
-/// the next segment.
-///
-/// Pure and linear in the size of `text`; it never panics.
-#[must_use]
-pub fn split_with(dialect: Dialect, text: &str, options: SplitOptions) -> Vec<Segment> {
     let mut lexer = Lexer::new(dialect, text);
     let mut out = Vec::new();
     let mut delimiter: Option<&str> = None;
@@ -217,40 +75,11 @@ pub fn split_with(dialect: Dialect, text: &str, options: SplitOptions) -> Vec<Se
 
     while let Some(tok) = lexer.next() {
         if matches!(tok.kind, TokenKind::Whitespace) {
-            if options.blank_lines
-                && st.blank.is_none()
-                && delimiter.is_none()
-                && st.can_break(dialect)
-                && text[tok.start..tok.end]
-                    .bytes()
-                    .filter(|&b| b == b'\n')
-                    .count()
-                    >= 2
-            {
-                st.blank = Some(Blank {
-                    end: st.last_end,
-                    trivia_first: None,
-                });
-            }
             continue;
         }
         if tok.is_trivia() {
             st.note(&tok);
-            if let Some(blank) = st.blank.as_mut() {
-                blank.trivia_first.get_or_insert(tok.start);
-            }
             continue;
-        }
-        if let Some(blank) = st.blank.take()
-            && STATEMENT_LEADS.iter().any(|kw| tok.is_keyword(text, kw))
-        {
-            let next_first = blank.trivia_first;
-            let next_last = st.last_end;
-            st.last_end = blank.end;
-            out.push(st.finish(text, blank.end, None));
-            st = State::new(blank.end);
-            st.first = next_first;
-            st.last_end = next_last;
         }
         if dialect == Dialect::MySql
             && !st.significant
@@ -296,9 +125,6 @@ pub fn split_with(dialect: Dialect, text: &str, options: SplitOptions) -> Vec<Se
             st = State::new(tok.end);
         } else {
             st.note(&tok);
-            if options.blank_lines {
-                st.note_shape(dialect, text, &tok);
-            }
             st.significant = true;
         }
     }
@@ -504,32 +330,6 @@ struct State {
     pending_end: bool,
     /// T-SQL: a `BEGIN` was seen and the next token decides whether it opens a block.
     pending_begin: bool,
-    /// A blank line was seen where the statement may end; the next token decides.
-    blank: Option<Blank>,
-    /// What the blank-line rule needs to know about the statement so far.
-    shape: Shape,
-}
-
-/// The first word of a statement, as far as the blank-line rule cares.
-#[derive(Default, PartialEq, Eq, Clone, Copy)]
-enum Head {
-    #[default]
-    Other,
-    /// `WITH`.
-    With,
-    /// A T-SQL `IF`, `WHILE` or `ELSE`, whose body must stay joined.
-    Control,
-}
-
-/// The parts of a statement that decide whether a blank line may end it.
-#[derive(Default)]
-struct Shape {
-    /// The first word of the statement.
-    head: Head,
-    /// The last significant token leaves the statement open.
-    last_continues: bool,
-    /// The last significant token is `)`.
-    last_close: bool,
 }
 
 impl State {
@@ -545,8 +345,6 @@ impl State {
             paren_depth: 0,
             pending_end: false,
             pending_begin: false,
-            blank: None,
-            shape: Shape::default(),
         }
     }
 
@@ -556,44 +354,12 @@ impl State {
         self.last_end = tok.end;
     }
 
-    /// Updates the blank-line shape for a significant token (before `significant` is set).
-    fn note_shape(&mut self, dialect: Dialect, src: &str, tok: &Token) {
-        if !self.significant {
-            self.shape.head = if tok.is_keyword(src, "WITH") {
-                Head::With
-            } else if dialect == Dialect::TSql
-                && ["IF", "WHILE", "ELSE"]
-                    .iter()
-                    .any(|kw| tok.is_keyword(src, kw))
-            {
-                Head::Control
-            } else {
-                Head::Other
-            };
-        }
-        self.shape.last_continues = is_continuation(src, tok);
-        self.shape.last_close = tok.kind == TokenKind::Punct && src.as_bytes()[tok.start] == b')';
-    }
-
     fn can_split(&self, dialect: Dialect) -> bool {
         // A T-SQL routine body is only ended by `GO` or the end of the text.
         if dialect == Dialect::TSql && self.compound == Some(true) {
             return false;
         }
         self.block_depth == 0 && (dialect != Dialect::Postgres || self.paren_depth == 0)
-    }
-
-    /// Whether a blank line may end the statement here (see [`split_with`]).
-    fn can_break(&self, dialect: Dialect) -> bool {
-        self.significant
-            && self.can_split(dialect)
-            && self.paren_depth == 0
-            && self.compound != Some(true)
-            && !self.pending_begin
-            && !self.pending_end
-            && self.shape.head != Head::Control
-            && !self.shape.last_continues
-            && !(self.shape.head == Head::With && self.shape.last_close)
     }
 
     /// Updates compound detection, block depth and parenthesis depth for a significant token.

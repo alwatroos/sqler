@@ -41,9 +41,9 @@ The editor hands its text, selection and cursor to the query run commands, and t
 | Command | macOS | Windows and Linux | Runs |
 | --- | --- | --- | --- |
 | `query:run-selection` | Cmd+E | Ctrl+E | the selected text (the statement at the cursor when nothing is selected) |
-| `query:run-statement` | Cmd+Enter | Ctrl+Enter | the selection when there is one, else the statement at the cursor |
+| `query:run-statement` | Cmd+Enter | Ctrl+Enter | the selection when there is one, else the statement at the cursor, up to its `;` |
 | `query:run-all` | Cmd+Shift+Enter | Ctrl+Shift+Enter | every statement, in order |
-| `query:cancel` | Cmd+. | Ctrl+. | cancels the running statement |
+| `query:cancel` | Cmd+. | Ctrl+. | cancels the running statement, also while the editor has focus |
 
 With several cursors, the run commands read the main selection and cursor. Placeholders, the production confirmation and cancelling are described in [Running queries](running-queries.md).
 

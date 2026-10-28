@@ -11,7 +11,7 @@
 
 use sqler_driver_api::CancelHandle;
 use sqler_driver_api::sqler_core::Environment;
-use sqler_sql::{Dialect, SplitOptions};
+use sqler_sql::Dialect;
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::state::{Effect, Workspace};
@@ -20,7 +20,7 @@ use crate::grid::{GridLimits, GridTab, grid_channel_with};
 use crate::query::{
     BoundStatement, BufferSnapshot, EXPLAIN_UNSUPPORTED, ParamInput, ParamKind, Phase, QueryJob,
     QueryJobDone, QueryTab, RunError, RunEvent, RunId, RunMode, RunState, RunStop, Step,
-    ToolbarContext, explain_for, explain_supported, plan_with,
+    ToolbarContext, explain_for, explain_supported, plan,
 };
 use crate::tabs::{TabId, TabKind};
 
@@ -69,28 +69,10 @@ impl Workspace {
     ///
     /// Depending on the buffer and the connection this opens the parameter prompt, opens the
     /// production confirmation, or starts the run at once. A tab that is already running,
-    /// prompting or confirming refuses the request with a notice.
+    /// prompting or confirming refuses the request with a notice. A selection runs exactly its
+    /// own text; without one, `Statement` runs the statement at the cursor up to its `;`.
     #[allow(clippy::needless_pass_by_value)] // the editor hands its snapshot over
     pub fn run_query(&mut self, tab: TabId, mode: RunMode, buf: BufferSnapshot) -> Effect {
-        self.run_query_with(tab, mode, buf, SplitOptions::default())
-    }
-
-    /// Like [`Workspace::run_query`], for text typed in the editor: a statement also ends at a
-    /// top-level blank line before a statement keyword, and with a selection `Statement` runs
-    /// exactly the selection. Programmatic callers (AI, history, export) keep `run_query`.
-    #[allow(clippy::needless_pass_by_value)] // the editor hands its snapshot over
-    pub fn run_editor_query(&mut self, tab: TabId, mode: RunMode, buf: BufferSnapshot) -> Effect {
-        self.run_query_with(tab, mode, buf, SplitOptions::BLANK_LINES)
-    }
-
-    #[allow(clippy::needless_pass_by_value)] // the editor hands its snapshot over
-    fn run_query_with(
-        &mut self,
-        tab: TabId,
-        mode: RunMode,
-        buf: BufferSnapshot,
-        split: SplitOptions,
-    ) -> Effect {
         let Some((dialect, prod)) = self.query_context(tab) else {
             return Effect::None;
         };
@@ -110,7 +92,7 @@ impl Workspace {
         if !self.has_session(tab) {
             return self.query_notice("The connection of this tab is not available.");
         }
-        let plan = match plan_with(dialect, &buf, mode, split) {
+        let plan = match plan(dialect, &buf, mode) {
             Ok(plan) => plan,
             Err(err) => return self.query_notice(err.to_string()),
         };
@@ -147,7 +129,7 @@ impl Workspace {
             selection: buf.cursor..buf.cursor,
             ..buf
         };
-        let plan = match plan_with(dialect, &buf, RunMode::Statement, SplitOptions::BLANK_LINES) {
+        let plan = match plan(dialect, &buf, RunMode::Statement) {
             Ok(plan) => plan,
             Err(err) => return self.query_notice(err.to_string()),
         };
