@@ -27,6 +27,17 @@ over the tokens: linear time, no recursion.
 `Statement`, a `Delimiter` (a `MySQL` `DELIMITER x` line) or `Trivia` (only whitespace and
 comments). A `;` ends a statement only outside strings, quoted identifiers, comments, dollar
 quotes, `BEGIN ... END` blocks of triggers and routines, and (on `PostgreSQL`) parentheses.
+`split_with(dialect, text, SplitOptions { blank_lines: true })` also ends a statement at a top-level
+blank line (two or more line breaks) with no terminator. It does so only when the piece has content,
+sits outside parentheses, blocks and routine bodies, no `MySQL` custom delimiter is active, the next
+token that is not a comment is a statement keyword (`SELECT`, `WITH`, `INSERT`, ...), the piece does
+not end with an operator, a separator or a continuation word (`UNION`, `AS`, `FROM`, ...) and is not a
+`WITH` clause ending in `)`. Comments after the blank line belong to the next segment. `split` is
+`split_with` with the default options, so classification, transactions, intellisense and the AI write
+guard keep their boundaries; only the editor run path (`Workspace::run_editor_query`, editor explain)
+opts in. Each piece is classified on its own, so `select 1`, a blank line, then `delete from t` gives a
+`Read` and a `Write`; nothing is merged, so the fail-safe classification is not weakened.
+
 `statement_at(&segments, offset)` returns the statement containing the offset, else the nearest
 preceding one, else the first.
 

@@ -4,7 +4,9 @@
 //! Properties of splitting, cursor lookup and placeholders, and hostile inputs.
 
 use proptest::prelude::*;
-use sqler_sql::{Dialect, Segment, SegmentKind, placeholders, split, statement_at};
+use sqler_sql::{
+    Dialect, Segment, SegmentKind, SplitOptions, placeholders, split, split_with, statement_at,
+};
 
 const FRAGMENTS: &[&str] = &[
     ";",
@@ -116,6 +118,16 @@ proptest! {
             check_segments(&text, &segs);
             // Splitting is deterministic.
             prop_assert_eq!(&segs, &split(d, &text));
+        }
+    }
+
+    #[test]
+    fn blank_line_segments_tile_the_input(text in any_sql()) {
+        for d in Dialect::ALL {
+            let segs = split_with(d, &text, SplitOptions::BLANK_LINES);
+            check_segments(&text, &segs);
+            // Blank lines only ever add boundaries.
+            prop_assert!(segs.len() >= split(d, &text).len());
         }
     }
 

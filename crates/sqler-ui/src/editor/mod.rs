@@ -10,6 +10,7 @@
 mod action;
 mod brackets;
 mod buffer;
+mod comment;
 mod doc;
 mod format;
 pub mod intellisense;
@@ -23,6 +24,7 @@ pub(crate) mod view;
 pub use action::{COMMANDS, EditorAction, EditorKey, action_for, register_commands};
 pub use brackets::{BracketIndex, touches_bracket};
 pub use buffer::{EditorBuffer, TextEdit};
+pub use comment::{toggle_block_comment, toggle_line_comment};
 pub use doc::{EditorDoc, EditorDocs};
 pub use format::{FormatFailure, format_edit};
 pub use occurrence::{OccurrenceChain, OccurrenceStep, next_occurrence, word_at};
