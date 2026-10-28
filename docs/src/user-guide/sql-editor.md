@@ -28,6 +28,12 @@ When the cursor is next to `(`, `)`, `[`, `]`, `{` or `}`, both brackets of the 
 
 `editor:format-sql` (Shift+Alt+F) formats the selection, or the whole text when nothing is selected, with the formatter for the connection's dialect. It is one undo step. Nothing happens, and no undo step is recorded, when the text is already formatted. If the text has an unterminated string, quoted identifier or comment, SQLer shows where (line and column) and leaves the text unchanged. Formatting is not available for connections whose driver has no SQL dialect.
 
+## Comments
+
+`editor:toggle-line-comment` (Cmd+/ on macOS, Ctrl+/ on Windows and Linux) toggles a `-- ` comment on the cursor's line, or on every line of the selection. When every non-blank line is already commented, the comments are removed; otherwise all non-blank lines are commented at the smallest indentation, so the indentation is kept. Blank lines are left alone, and the selection stays on the same text. It is one undo step.
+
+`editor:toggle-block-comment` (Shift+Alt+A) wraps the selection in `/* */`, or unwraps it when the selection is already a block comment. With nothing selected it inserts `/*  */` and puts the cursor inside.
+
 ## Running queries
 
 The editor hands its text, selection and cursor to the query run commands, and the results appear in the Results view of the bottom panel, one grid per statement.
@@ -35,7 +41,7 @@ The editor hands its text, selection and cursor to the query run commands, and t
 | Command | macOS | Windows and Linux | Runs |
 | --- | --- | --- | --- |
 | `query:run-selection` | Cmd+E | Ctrl+E | the selected text (the statement at the cursor when nothing is selected) |
-| `query:run-statement` | Cmd+Enter | Ctrl+Enter | the statement at the cursor |
+| `query:run-statement` | Cmd+Enter | Ctrl+Enter | the selection when there is one, else the statement at the cursor |
 | `query:run-all` | Cmd+Shift+Enter | Ctrl+Shift+Enter | every statement, in order |
 | `query:cancel` | Cmd+. | Ctrl+. | cancels the running statement |
 

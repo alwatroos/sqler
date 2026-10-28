@@ -62,7 +62,7 @@ pub use params::{
     BoundStatement, ParamError, ParamForm, ParamInput, ParamKey, ParamKind, ParamRow, bind,
     parse_value,
 };
-pub use plan::{Plan, PlanError, PlannedStatement, plan};
+pub use plan::{Plan, PlanError, PlannedStatement, plan, plan_with};
 pub use run::{Phase, QueryTab, ResultEntry, RunError, RunEvent, RunId, StatementStatus, Step};
 pub use strip::{StatusTone, status_tone, status_word};
 pub use toolbar::{AiToolbar, RunState, ToolbarContext, ToolbarItem, toolbar_tooltip};

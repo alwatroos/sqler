@@ -15,7 +15,7 @@ use super::state::{Effect, Workspace};
 use crate::browser::ObjectTabContent;
 use crate::editor::{
     BracketIndex, EditorAction, EditorBuffer, EditorDoc, EditorKey, OccurrenceStep, RunMode,
-    RunPort, format_edit, synthetic,
+    RunPort, format_edit, synthetic, toggle_block_comment, toggle_line_comment,
 };
 use crate::tabs::TabId;
 
@@ -59,6 +59,16 @@ impl Workspace {
             EditorAction::TriggerCompletion => self.editor_key(EditorKey::ShowCompletions),
             EditorAction::FormatSql => match self.editor_target(buffer) {
                 Some((tab, buffer)) => self.format(tab, &buffer),
+                None => Effect::None,
+            },
+            EditorAction::ToggleLineComment => match self.editor_target(buffer) {
+                Some((tab, b)) => toggle_line_comment(&b)
+                    .map_or(Effect::None, |edit| Effect::EditorEdit { tab, edit }),
+                None => Effect::None,
+            },
+            EditorAction::ToggleBlockComment => match self.editor_target(buffer) {
+                Some((tab, b)) => toggle_block_comment(&b)
+                    .map_or(Effect::None, |edit| Effect::EditorEdit { tab, edit }),
                 None => Effect::None,
             },
             EditorAction::AddNextOccurrence => match self.editor_target(buffer) {
@@ -432,6 +442,33 @@ mod tests {
         let effect = w.dispatch_editor(EditorAction::FormatSql, Some(buffer("select 1", 0)));
         assert!(matches!(effect, Effect::None));
         assert!(w.take_notice().is_some());
+    }
+
+    #[test]
+    fn toggles_return_exactly_one_edit() {
+        let mut w = ws();
+        let tab = open(&mut w);
+        let line = w.dispatch_editor(EditorAction::ToggleLineComment, Some(buffer("select 1", 3)));
+        match line {
+            Effect::EditorEdit { tab: t, edit } => {
+                assert_eq!(t, tab);
+                assert_eq!(edit.text, "-- select 1");
+            }
+            other => panic!("expected EditorEdit, got {other:?}"),
+        }
+        let block = w.dispatch_editor(
+            EditorAction::ToggleBlockComment,
+            Some(buffer("select 1", 3)),
+        );
+        assert!(matches!(block, Effect::EditorEdit { .. }));
+    }
+
+    #[test]
+    fn toggles_need_an_editor() {
+        let mut w = ws();
+        let effect = w.dispatch_editor(EditorAction::ToggleLineComment, None);
+        assert!(matches!(effect, Effect::None));
+        assert_eq!(w.take_notice().as_deref(), Some("Open a SQL editor first."));
     }
 
     #[test]

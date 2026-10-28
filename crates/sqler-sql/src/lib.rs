@@ -55,4 +55,4 @@ pub use error::{DdlError, FormatError};
 pub use format::{FormatOptions, format};
 pub use lexer::{Token, TokenKind, tokenize};
 pub use placeholder::{Placeholder, PlaceholderKind, placeholders};
-pub use split::{Segment, SegmentKind, split, statement_at};
+pub use split::{Segment, SegmentKind, SplitOptions, split, split_with, statement_at};

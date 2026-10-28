@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use sqler_ai_api::AiProvider;
 use sqler_ai_tools::session::{
-    ExplorationSession, PromptKind, SessionConfig, SessionError, TurnOutcome,
+    ExplorationSession, FocusTable, PromptKind, SchemaContextOptions, SessionConfig, SessionError,
+    TurnOutcome,
 };
 use sqler_ai_tools::{Assist, AssistSearch, ConnectionInfo, Limits, Surface, ToolSet};
 use sqler_config::{AiConfig, ProviderConfig};
@@ -182,7 +183,10 @@ fn chat_session(p: Parts) -> Built {
         max_rows: capped.max_rows,
         timeout_secs: capped.timeout.as_secs(),
     };
-    let config = SessionConfig::new(p.model).with_prompt(prompt);
+    // The chat sends a compact schema of the connection with every turn (F3).
+    let config = SessionConfig::new(p.model)
+        .with_prompt(prompt)
+        .with_schema_context(SchemaContextOptions::default());
     let session = ExplorationSession::new(p.built, tools, info, None, config)?;
     Ok((source, session))
 }
@@ -199,9 +203,11 @@ pub struct AiTurnJob {
     pub text: String,
     /// The host channel of the tab.
     pub tx: UnboundedSender<HostMsg>,
+    /// The tables the user is looking at; their schema is sent first. Empty for a tab.
+    pub focus: Vec<FocusTable>,
 }
 
-// Never the message.
+// Never the message or the focus.
 impl std::fmt::Debug for AiTurnJob {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AiTurnJob")
@@ -237,8 +243,10 @@ impl AiTurnJob {
             mut session,
             text,
             tx,
+            focus,
             ..
         } = self;
+        session.set_focus(focus);
         let outcome = session.send(text).await;
         // A closed channel means the tab is gone; the session is dropped with the message.
         let _ = tx.send(HostMsg::TurnDone(Box::new(TurnDone {

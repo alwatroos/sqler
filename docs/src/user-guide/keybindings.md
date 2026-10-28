@@ -28,6 +28,8 @@ See [Command palette](command-palette.md). Cmd+Shift+P (macOS) or Ctrl+Shift+P (
 | `settings:open` | Cmd+, | Ctrl+, |
 | `editor:new` | Cmd+N | Ctrl+N |
 | `editor:format-sql` | Shift+Alt+F | Shift+Alt+F |
+| `editor:toggle-line-comment` | Cmd+/ | Ctrl+/ |
+| `editor:toggle-block-comment` | Shift+Alt+A | Shift+Alt+A |
 | `editor:add-next-occurrence` | Cmd+D | Ctrl+D |
 | `editor:trigger-completion` | Ctrl+Space | Ctrl+Space |
 | `query:run-selection` | Cmd+E | Ctrl+E |
@@ -45,12 +47,14 @@ Keyboard in the workbench: `F6` and `Shift+F6` cycle the regions (activity bar, 
 
 ## SQL editor
 
-The editor commands are in the palette under `Editor:`. The four above have default shortcuts; `editor:add-cursor-above`, `editor:add-cursor-below` and `editor:go-to-matching-bracket` have none, so run them from the palette or bind them in `keybindings.toml`.
+The editor commands are in the palette under `Editor:`. The six above have default shortcuts; `editor:add-cursor-above`, `editor:add-cursor-below` and `editor:go-to-matching-bracket` have none, so run them from the palette or bind them in `keybindings.toml`.
 
 | Command | Title |
 | ------- | ----- |
 | `editor:new` | Editor: New SQL Editor |
 | `editor:format-sql` | Editor: Format SQL |
+| `editor:toggle-line-comment` | Editor: Toggle Line Comment |
+| `editor:toggle-block-comment` | Editor: Toggle Block Comment |
 | `editor:add-next-occurrence` | Editor: Add Next Occurrence |
 | `editor:add-cursor-above` | Editor: Add Cursor Above |
 | `editor:add-cursor-below` | Editor: Add Cursor Below |

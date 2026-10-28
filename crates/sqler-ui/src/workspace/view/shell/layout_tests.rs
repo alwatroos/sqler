@@ -296,3 +296,38 @@ fn the_editor_fills_the_rest_with_the_chat_side_and_bottom_panels_open(cx: &mut 
     assert_fills(c4, e4, "chat closed again");
     assert!(near_f(e3.size.width, e4.size.width, chat));
 }
+
+#[gpui::test]
+fn the_chat_empty_state_fits_the_panel_at_every_width(cx: &mut TestAppContext) {
+    use sqler_config::CHAT_PANEL_SIZE_RANGE;
+
+    let (rig, cx) = open(cx);
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    workbench(&rig, cx, WorkbenchAction::ToggleChatPanel);
+    assert!(rig.view.read_with(cx, |v, _| v.ws.layout().chat_visible()));
+    assert!(rig.view.read_with(cx, |v, _| v.ws.chat().is_none()));
+    let tolerance = px(1.);
+    // The empty state keeps the horizontal padding of `centred` free on both sides.
+    let gutter = px(crate::theme::SPACE[4]);
+    for width in [
+        *CHAT_PANEL_SIZE_RANGE.start(),
+        380.,
+        *CHAT_PANEL_SIZE_RANGE.end(),
+    ] {
+        workbench(&rig, cx, WorkbenchAction::SetChatWidth(width as u16));
+        let panel = cx.debug_bounds("chat-panel").expect("the chat panel");
+        let empty = cx.debug_bounds("chat-empty").expect("the empty state");
+        assert!(
+            empty.left() + tolerance >= panel.left() + gutter,
+            "left edge out at {width}: {empty:?} in {panel:?}"
+        );
+        assert!(
+            empty.right() <= panel.right() - gutter + tolerance,
+            "right edge out at {width}: {empty:?} in {panel:?}"
+        );
+        assert!(
+            empty.size.width <= panel.size.width - gutter * 2. + tolerance,
+            "wider than the panel at {width}: {empty:?} in {panel:?}"
+        );
+    }
+}
