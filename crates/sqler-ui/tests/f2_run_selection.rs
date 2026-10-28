@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! Independent checks for F2: exact selection runs, blank-line splitting, comment toggling.
+//! Independent checks for F2: exact selection runs, blank lines inside one statement,
+//! comment toggles.
 
 #![allow(clippy::unwrap_used)]
 
-use sqler_sql::{Dialect, SplitOptions};
+use sqler_sql::{Dialect, StatementClass};
 use sqler_ui::editor::{EditorBuffer, TextEdit, toggle_block_comment, toggle_line_comment};
-use sqler_ui::query::{BufferSnapshot, RunMode, plan, plan_with};
+use sqler_ui::query::{BufferSnapshot, RunMode, plan};
 
 fn sqls(p: &sqler_ui::query::Plan) -> Vec<String> {
     p.statements.iter().map(|s| s.sql.clone()).collect()
@@ -28,41 +29,30 @@ fn selection_runs_exactly_the_selection_in_every_dialect() {
         let to = from + "22 from t".len();
         for mode in [RunMode::Selection, RunMode::Statement] {
             let b = BufferSnapshot::with_selection(text, from..to);
-            let p = plan_with(Some(d), &b, mode, SplitOptions::BLANK_LINES).unwrap();
+            let p = plan(Some(d), &b, mode).unwrap();
             assert_eq!(sqls(&p), ["22 from t"], "{d:?} {mode:?}");
             // multi-statement selection runs both, nothing else
             let start = text.find("select 22").unwrap();
             let end = text.find(" select 3").unwrap();
             let b = BufferSnapshot::with_selection(text, start..end);
-            let p = plan_with(Some(d), &b, mode, SplitOptions::BLANK_LINES).unwrap();
+            let p = plan(Some(d), &b, mode).unwrap();
             assert_eq!(sqls(&p), ["select 22 from t where a = 1"], "{d:?}");
             let b = BufferSnapshot::with_selection(text, 0..end);
-            let p = plan_with(Some(d), &b, mode, SplitOptions::BLANK_LINES).unwrap();
+            let p = plan(Some(d), &b, mode).unwrap();
             assert_eq!(sqls(&p).len(), 2, "{d:?}");
         }
     }
 }
 
 #[test]
-fn blank_line_splitting_without_semicolons() {
+fn blank_lines_do_not_split_without_semicolons() {
     let text = "select * from a\nwhere x = 1\n\nselect * from b\n\ndelete from c";
     for d in Dialect::ALL {
-        let at = |pos| {
+        for pos in [3, text.find("from b").unwrap(), text.len()] {
             let b = BufferSnapshot::at_cursor(text, pos);
-            plan_with(Some(d), &b, RunMode::Statement, SplitOptions::BLANK_LINES).unwrap()
-        };
-        assert_eq!(sqls(&at(3)), ["select * from a\nwhere x = 1"], "{d:?}");
-        assert_eq!(sqls(&at(text.find("from b").unwrap())), ["select * from b"]);
-        assert_eq!(sqls(&at(text.len())), ["delete from c"]);
-        // default plan (AI, history) keeps one statement
-        let b = BufferSnapshot::at_cursor(text, 3);
-        assert_eq!(
-            plan(Some(d), &b, RunMode::Statement)
-                .unwrap()
-                .statements
-                .len(),
-            1
-        );
+            let p = plan(Some(d), &b, RunMode::Statement).unwrap();
+            assert_eq!(sqls(&p), [text], "{d:?} {pos}");
+        }
     }
 }
 
@@ -76,24 +66,18 @@ fn blank_lines_inside_constructs_do_not_split() {
             "select 1 /* x\n\ny */ from t",
         ] {
             let b = BufferSnapshot::at_cursor(text, 1);
-            let p = plan_with(Some(d), &b, RunMode::All, SplitOptions::BLANK_LINES).unwrap();
+            let p = plan(Some(d), &b, RunMode::All).unwrap();
             assert_eq!(p.statements.len(), 1, "{d:?} {text:?}");
         }
     }
 }
 
 #[test]
-fn blank_line_pieces_classify_independently() {
+fn blank_line_joined_write_is_classified_as_write() {
     let b = BufferSnapshot::at_cursor("select 1\n\ndelete from t", 0);
-    let p = plan_with(
-        Some(Dialect::Postgres),
-        &b,
-        RunMode::All,
-        SplitOptions::BLANK_LINES,
-    )
-    .unwrap();
-    assert_eq!(p.statements.len(), 2);
-    assert_ne!(p.statements[0].class, p.statements[1].class);
+    let p = plan(Some(Dialect::Postgres), &b, RunMode::All).unwrap();
+    assert_eq!(p.statements.len(), 1);
+    assert_eq!(p.statements[0].class, StatementClass::Write);
 }
 
 #[test]
@@ -140,14 +124,14 @@ fn round2_selection_with_blank_line_is_one_statement() {
     for d in Dialect::ALL {
         for mode in [RunMode::Selection, RunMode::Statement] {
             let b = BufferSnapshot::with_selection(text, 0..text.len());
-            let p = plan_with(Some(d), &b, mode, SplitOptions::BLANK_LINES).unwrap();
+            let p = plan(Some(d), &b, mode).unwrap();
             assert_eq!(sqls(&p), [text], "{d:?} {mode:?}");
         }
-        // cursor, no selection: blank-line separated statements run one
+        // cursor, no selection: a blank line does not end a statement
         let t2 = "select 1\n\nselect 2\n\nselect 3";
         let b = BufferSnapshot::at_cursor(t2, t2.find('2').unwrap());
-        let p = plan_with(Some(d), &b, RunMode::Statement, SplitOptions::BLANK_LINES).unwrap();
-        assert_eq!(sqls(&p), ["select 2"], "{d:?}");
+        let p = plan(Some(d), &b, RunMode::Statement).unwrap();
+        assert_eq!(sqls(&p), [t2], "{d:?}");
     }
 }
 
@@ -159,13 +143,7 @@ fn round2_tsql_if_body_is_not_split() {
         "WHILE @i < 3\n\nBEGIN\n\nSET @i = @i + 1\n\nEND",
     ] {
         let b = BufferSnapshot::at_cursor(text, text.len());
-        let p = plan_with(
-            Some(Dialect::TSql),
-            &b,
-            RunMode::All,
-            SplitOptions::BLANK_LINES,
-        )
-        .unwrap();
+        let p = plan(Some(Dialect::TSql), &b, RunMode::All).unwrap();
         assert_eq!(p.statements.len(), 1, "{text:?} -> {:?}", sqls(&p));
     }
 }

@@ -9,7 +9,7 @@ use crate::workspace::{Effect, Workspace};
 
 use super::{EditorBuffer, RunMode, RunPort};
 
-/// The [`RunPort`] over `Workspace::run_editor_query` and `Workspace::cancel_query`.
+/// The [`RunPort`] over `Workspace::run_query` and `Workspace::cancel_query`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QueryRunPort;
 
@@ -52,7 +52,7 @@ impl RunPort for QueryRunPort {
         mode: RunMode,
         buffer: EditorBuffer,
     ) -> Result<Effect, String> {
-        Ok(ws.run_editor_query(tab, query_mode(mode), run_snapshot(buffer)))
+        Ok(ws.run_query(tab, query_mode(mode), run_snapshot(buffer)))
     }
 
     fn cancel(&mut self, ws: &mut Workspace, tab: TabId) -> Result<Effect, String> {
@@ -154,19 +154,19 @@ mod tests {
     }
 
     #[test]
-    fn run_statement_splits_at_blank_lines() {
+    fn run_statement_does_not_split_at_blank_lines() {
         let (mut w, _) = open();
-        let text = "select 1\n\nselect 2";
+        let text = "update t\n\nset x=1";
         let effect = w.run_editor(
             &mut QueryRunPort,
             RunMode::Statement,
             Some(EditorBuffer::new(text, text.len())),
         );
-        assert_eq!(started_sql(&effect), ["select 2"]);
+        assert_eq!(started_sql(&effect), [text]);
     }
 
     #[test]
-    fn run_statement_with_a_selection_is_not_split_at_blank_lines() {
+    fn run_statement_with_a_selection_runs_the_whole_selection() {
         let (mut w, _) = open();
         let text = "insert into t (a)\n\nselect 1";
         let mut buffer = EditorBuffer::new(text, text.len());

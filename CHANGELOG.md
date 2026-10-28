@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AI chat history.** The AI chat panel now keeps its conversations in `chat-history.db` in the configuration directory (readable by you only), so past chats come back after a restart. Open the list with the Clock button in the panel header or **AI: Show Chat History**, open a chat to read it, or continue it as a new turn; delete one chat or use **Clear history**. Credentials are scrubbed, result rows are capped, and the exact SQL is never stored. See ADR-0077.
 - **App icon.** SQLer now has an icon, shown by the macOS `.dmg` app bundle, the Linux `.deb` (hicolor theme and menu entry), the Windows MSI (Apps list and Start menu shortcut) and the Windows `sqler.exe`. The source is `assets/icon/sqler.svg`; regenerate the committed PNG, ICO and ICNS files with `cargo run -p xtask -- icons`.
 - **Session restore.** Quitting and relaunching now brings back the open editor tabs with their exact text (unsaved included), in the same order, with the active tab and each tab's connection, plus the unsent AI chat draft. Only the active tab connects at launch; the others connect when first activated. The state is kept in a user-only `session.json`; see [ADR-0045](docs/src/adr/0045-workbench-state-persistence.md).
 - SQL editor: `editor:toggle-line-comment` (Cmd/Ctrl+/) and `editor:toggle-block-comment` (Shift+Alt+A).
@@ -20,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - With text selected, Cmd/Ctrl+Enter and the Run button run exactly the selection; the editor text is never changed.
-- Run Statement finds statements separated by a blank line, without semicolons.
+- Cmd+. (macOS) / Ctrl+. (Windows, Linux) now cancels the running query while the editor has focus.
 - The AI chat panel's empty, starting and failed states wrap inside the panel at every width instead of overflowing it.
 - AI chat: the chat now sends a compact schema of the connection (selected and named tables first) and is told to use only existing tables and columns.
 
