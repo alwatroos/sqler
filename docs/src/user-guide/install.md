@@ -48,7 +48,7 @@ sudo mkdir -p /usr/local/bin
 sudo ln -s /Applications/SQLer.app/Contents/MacOS/sqler /usr/local/bin/sqler
 ```
 
-From 1.2.1 the `.dmg` and its app are Developer ID signed, notarised and stapled (see below).
+From 1.2.2 the `.dmg` and its app are Developer ID signed, notarised and stapled (see below).
 
 ### macOS: signed and notarised
 
