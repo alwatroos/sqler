@@ -126,6 +126,11 @@ SQLER_SIGN_LOCAL_TEST=1 APPLE_CERTIFICATE_P12_BASE64=$(base64 < "$d/id.p12") APP
 Expected: exit 0, a `sign-macos: dmg ok (...)` line before the final `ok` line, `( cd "$d/out" && shasum -a 256 -c *.sha256 )`
 passes, and the app in the mounted `.dmg` passes `codesign --verify --deep --strict` with the `runtime` flag.
 
+The local test never notarises, so it does not run the real `stapler`. `sh .github/scripts/sign-macos-staple-test.sh` covers
+that step with a stand-in `xcrun` that writes a 0600 `Contents/CodeResources` (as `stapler` does under the script's
+`umask 077`): it checks that the stapled app in the `.dmg` stays readable by other users and that `check-dmg.sh` rejects a
+0600 ticket file. It needs macOS and a C compiler, not cargo.
+
 To simulate the CI keychain handling, run the same command with `GITHUB_ACTIONS=true`: the temporary keychain is then put
 first in your user keychain search list and the original list is restored on exit.
 
