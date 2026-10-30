@@ -67,7 +67,7 @@ The signed binary is zipped (`ditto -c -k --keepParent`) and submitted with `xcr
 summary and issues only) and fails. The ticket is not stapled: `stapler` supports only `.app`, `.pkg` and `.dmg`, and
 the download is a tar archive with a bare binary. Gatekeeper fetches the ticket online on first run, and the script
 confirms that the ticket is online with `spctl --assess --type execute` (falling back to the document form; `source=Notarized Developer ID`, a bounded number of tries).
-A future `.app` or `.dmg` would be stapled.
+The `.app` and `.dmg` of the disk image are stapled (amendment 2).
 
 ### Order and checksums
 
@@ -174,3 +174,21 @@ Nothing else depends on them.
   never ship an unsigned macOS archive.
 - Cost and rollback: the owner carries the membership cost. Rollback is as in the section above, or a re-run after an
   Apple outage.
+
+## Amendment 2 (2026-10-30, A): the release `.dmg` is signed, notarised and stapled
+
+- On `v*` tag runs the `.dmg` is built in `sign (macOS)` (`sign-macos.sh --dmg`) from the Developer ID signed binary,
+  not in `build`. The ad-hoc `.dmg` that `build` uploads is replaced, together with its `.sha256`, only at the end of the
+  script, next to the archive files, so `global` hashes the final files and the update manifest (archives only) is
+  unchanged.
+- `SQLer.app` is signed with the hardened runtime, the entitlements of `packaging/macos/entitlements.plist` and a
+  secure timestamp; its zip is notarised and the ticket is stapled to the app. The `.dmg` made from the stapled app
+  (`build-dmg.sh --pack`, `ditto` keeps the ticket) is signed, notarised and stapled. This supersedes the sentence
+  "A future `.app` or `.dmg` would be stapled."
+- `check-dmg.sh --notarized` is the gate in `sign (macOS)`: the app verifies with `--deep --strict`, has the hardened
+  runtime and the entitlement, and the app and the `.dmg` are stapled and assessed by `spctl` as
+  `source=Notarized Developer ID`, besides the layout, icon and `--version` checks.
+- Fail closed: any signing, notarisation, stapling or verification failure fails the job; there is no unsigned or
+  ad-hoc `.dmg` fallback on a tag run.
+- Consequences: three notary submissions per macOS target (binary zip, app zip, `.dmg`), so six per run; the job
+  timeout is 120 minutes. Dispatch dry runs hold no secrets and keep the ad-hoc `.dmg` from `build` (ADR-0075 amendment 1).

@@ -78,3 +78,13 @@ the plan, so the installers do not change it. A test in `xtask` pins that.
 - The `.deb` `Depends` line pins a glibc version at least that of the Ubuntu 22.04 runners.
 - The `.deb` and MSI checks change the CI host; they must not be run on a developer machine.
 - Assumed and recorded in the task file: bundle id `io.github.alwatroos.sqler`, no icon key (no artwork exists).
+
+## Amendment 1 (2026-10-30, A): the macOS `.dmg` is Developer ID signed on tag runs
+
+- Dry runs (and the `build` job on every run) keep building, checking and uploading the ad-hoc signed `.dmg`
+  (`build-dmg.sh`, `check-dmg.sh`) without secrets.
+- On `v*` tag runs `sign (macOS)` rebuilds the `.dmg` from the signed binary, signs, notarises and staples the app and the
+  `.dmg` ([ADR-0065](0065-macos-signing-and-notarisation.md) amendment 2) and replaces the ad-hoc `.dmg` and its
+  `.sha256` in the artifact before `global` runs, so `sha256.sum` and the sidecars hash the final files. The update
+  manifest still covers archives only. `build-dmg.sh` gains `--app` and `--pack` modes for this; its default mode is
+  unchanged.

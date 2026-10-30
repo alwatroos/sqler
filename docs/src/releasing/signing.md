@@ -12,10 +12,11 @@ or signing or notarisation fails, the job fails and nothing publishes. There is 
 Windows stays unsigned by owner decision: there is no step, script or secret for it. The install page explains the
 SmartScreen warning. Linux downloads carry SHA-256 checksums only.
 
-The `.dmg` installers ([ADR-0075](../adr/0075-platform-installers.md)) are the exception on macOS: `build-dmg.sh` signs
-`SQLer.app` ad hoc (`codesign --sign -`, no identity) and nothing notarises it, on dry runs and on tag runs. It is built
-in `build (<target>)`, not in `sign (macOS)`. The `.tar.xz` archives stay Developer ID signed and notarised. Signing and
-notarising the `.dmg` would need its own step in `sign (macOS)` and is not done.
+The `.dmg` installers ([ADR-0075](../adr/0075-platform-installers.md)) follow the same rule on tag runs: `sign (macOS)`
+builds each `.dmg` from the signed binary (`sign-macos.sh --dmg`), signs `SQLer.app` (hardened runtime, entitlements,
+timestamp), notarises and staples the app, then signs, notarises and staples the `.dmg`, and replaces the ad-hoc `.dmg`
+that `build (<target>)` made. `check-dmg.sh --notarized` verifies the result before the upload. Dry runs have no secrets
+and keep the ad-hoc `.dmg`. That makes three notary submissions per macOS target (binary, app, `.dmg`).
 
 ## What the owner provides
 
@@ -51,8 +52,8 @@ rotate the secrets:
 
 All six secrets are required. The next `v*` tag run signs and notarises both macOS archives. The script also checks
 that the certificate is a Developer ID Application of `APPLE_TEAM_ID`, that the signature carries that team, and that
-the notarisation ticket is online (`spctl`, a few tries). Nothing is stapled: the download is a bare binary in a tar
-archive, which cannot carry a ticket.
+the notarisation ticket is online (`spctl`, a few tries). The archive's binary is not stapled: a bare binary in a tar
+archive cannot carry a ticket. The `SQLer.app` inside the `.dmg` and the `.dmg` itself are stapled.
 
 ## Check a signed download
 
@@ -111,6 +112,19 @@ certificate and password set the script exits 2 and lists the four missing names
 with all six set, a garbage `APPLE_API_KEY_P8_BASE64` exits 1 with `does not hold a .p8 private key`; and with a dummy
 PEM key and the self-signed certificate it exits 1 with `not one valid Developer ID Application identity`, leaving the
 archive untouched.
+
+To try the `.dmg` path (`--dmg`, no notarisation or stapling in the local test), put `LICENSE`, `NOTICE`,
+`THIRD-PARTY-LICENSES.txt` and a `licenses/` directory next to the binary in `$d/in/sqler-app-aarch64-apple-darwin`,
+re-create the archive, copy the archive and its `.sha256` into `$d/out`, then run
+`sh packaging/macos/build-dmg.sh "$d/in/sqler-app-aarch64-apple-darwin" 0.0.0 aarch64-apple-darwin "$d/out"` and:
+
+```sh
+SQLER_SIGN_LOCAL_TEST=1 APPLE_CERTIFICATE_P12_BASE64=$(base64 < "$d/id.p12") APPLE_CERTIFICATE_PASSWORD=test \
+  sh .github/scripts/sign-macos.sh --dmg 0.0.0 "$d/out" "$d/out/sqler-app-aarch64-apple-darwin.tar.xz"
+```
+
+Expected: exit 0, a `sign-macos: dmg ok (...)` line before the final `ok` line, `( cd "$d/out" && shasum -a 256 -c *.sha256 )`
+passes, and the app in the mounted `.dmg` passes `codesign --verify --deep --strict` with the `runtime` flag.
 
 To simulate the CI keychain handling, run the same command with `GITHUB_ACTIONS=true`: the temporary keychain is then put
 first in your user keychain search list and the original list is restored on exit.
