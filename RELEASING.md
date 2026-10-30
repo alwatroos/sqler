@@ -142,9 +142,10 @@ Jobs in order:
 2. `guard (features)`: rejects a feature line or dependency tree that could ship the excluded engine.
 3. `build (<target>)`, once for each of the 5 targets: the archive `sqler-app-<triple>.tar.xz` (`.zip` on Windows)
    with a `.sha256` file each, the MSI on Windows (installed and checked on the runner), a `.dmg` on each macOS
-   target (ad-hoc signed, not notarised) and a `.deb` on each Linux target (installed and checked on the runner), each
+   target (ad-hoc signed here; replaced on tag runs by step 4) and a `.deb` on each Linux target (installed and checked on the runner), each
    with a `.sha256` file, the guards against the excluded engine, the `--version` smoke check and the size line.
-4. `sign (macOS)` (environment `release`): signs and notarises both macOS archives; fails if a secret is missing.
+4. `sign (macOS)` (environment `release`): signs and notarises both macOS archives, and builds, signs, notarises and
+   staples both `.dmg` files (replacing the ad-hoc ones, then `check-dmg.sh --notarized`); fails if a secret is missing.
 5. In parallel after that:
    - `global artifacts`: `sha256.sum` (which also lists the `.dmg`, `.deb` and `.msi` files; the step fails when one is
      missing), the shell and PowerShell installers, the source archive and one
@@ -166,8 +167,10 @@ Work in a scratch directory and delete it afterwards.
   `sqler-app-aarch64-apple-darwin.dmg`, `sqler-app-x86_64-apple-darwin.dmg`,
   `sqler-app-x86_64-unknown-linux-gnu.deb`, `sqler-app-aarch64-unknown-linux-gnu.deb` and
   `sqler-app-x86_64-pc-windows-msvc.msi`. After downloading the release files into the scratch directory,
-  `sha256sum -c --ignore-missing sha256.sum` passes for every line. The `.dmg` is not notarised by design
-  ([ADR-0075](docs/src/adr/0075-platform-installers.md)).
+  `sha256sum -c --ignore-missing sha256.sum` passes for every line. Each `.dmg` is signed, notarised and
+  stapled ([ADR-0065](docs/src/adr/0065-macos-signing-and-notarisation.md) amendment 2): download it and run
+  `xcrun stapler validate <dmg>`, `spctl -a -t open --context context:primary-signature -v <dmg>` (it must print
+  `source=Notarized Developer ID`) and `sh packaging/macos/check-dmg.sh --notarized <dmg>`.
 - [ ] The feed verifies: `curl -fsSLo <scratch>/sqler-update.json https://github.com/alwatroos/sqler/releases/latest/download/sqler-update.json`,
   then `cargo run -p xtask -- release verify <scratch>/sqler-update.json` prints `ok key_id=9735ae5e612eaa24`, the
   version `1.0.0` and one line for each of the 5 platforms, none naming the excluded engine.

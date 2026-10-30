@@ -16,7 +16,7 @@ Targets: macOS (Apple silicon and Intel), Windows (x86_64) and Linux (x86_64 and
 | ---- | --- |
 | `sqler-app-<target>.tar.xz` | Archive for macOS and Linux |
 | `sqler-app-x86_64-pc-windows-msvc.zip` | Archive for Windows |
-| `sqler-app-<apple-target>.dmg` | macOS disk image with `SQLer.app` (not notarised) |
+| `sqler-app-<apple-target>.dmg` | macOS disk image with `SQLer.app` |
 | `sqler-app-<linux-target>.deb` | Debian and Ubuntu package |
 | `sqler-app-x86_64-pc-windows-msvc.msi` | Windows installer |
 | `sqler-app-installer.sh` | Shell installer for macOS and Linux |
@@ -48,13 +48,13 @@ sudo mkdir -p /usr/local/bin
 sudo ln -s /Applications/SQLer.app/Contents/MacOS/sqler /usr/local/bin/sqler
 ```
 
-The `.dmg` and its app are signed ad hoc only and are not notarised on any release (see below).
+From the release after 1.2.0 the `.dmg` and its app are Developer ID signed, notarised and stapled (see below).
 
 ### macOS: signed and notarised
 
-Releases from 1.0.1 are signed with a Developer ID certificate and notarised by Apple, so they open without the Gatekeeper prompt.
+Releases from 1.0.1 are signed with a Developer ID certificate and notarised by Apple, so they open without the Gatekeeper prompt. The `.dmg` and the `SQLer.app` inside it are signed, notarised and stapled as well, so they also open offline.
 
-This applies to the `.tar.xz` archives. The `.dmg` is **not notarised on any release**, so Gatekeeper blocks its first start, as it does for the archive of release 1.0.0. Either open System Settings > Privacy & Security and choose Open Anyway next to the SQLer message, or remove the quarantine flag:
+The next paragraph applies only to the 1.0.0 archive and to the `.dmg` of releases up to and including 1.2.0, which were signed ad hoc and not notarised: Gatekeeper blocks their first start. Either open System Settings > Privacy & Security and choose Open Anyway next to the SQLer message, or remove the quarantine flag:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/SQLer.app

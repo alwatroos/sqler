@@ -16,13 +16,15 @@ name: Release
 #   dispatches this workflow on the tag instead. The tag is derived from GITHUB_REF in the `mode` step, checked
 #   against the workspace version and passed to dist explicitly.
 # - `sign (macOS)` (ADR-0065) runs on `v*` tag runs only, in the environment `release`, between `build` and `global`: it
-#   signs and notarises the macOS archives with the six APPLE_* secrets (fails if one is missing) and re-uploads them;
-#   `global` hashes after it.
+#   signs and notarises the macOS archives and builds, signs, notarises and staples the macOS `.dmg` (replacing
+#   the ad-hoc one of `build`) with the six APPLE_* secrets (fails if one is missing) and re-uploads them; `global`
+#   hashes after it.
 # - `update manifest` (ADR-0066, R5) runs on `v*` tag runs only, in the environment `release`: it signs sqler-update.json with
 #   SQLER_UPDATE_SIGNING_KEY (when set) and `host` attaches it to the release. `update manifest (dry run)` runs the
 #   same path on dispatch dry runs with a TEST ONLY key it generates itself, no secret, and publishes nothing.
-# - Installers (ADR-0075), built inside each `build` job from the extracted archive: macOS `.dmg` (drag to Applications,
-#   ad-hoc signed, never notarised), Linux `.deb` (dpkg-deb), Windows `.msi` (cargo-dist, with a Start menu shortcut).
+# - Installers (ADR-0075), built inside each `build` job from the extracted archive: macOS `.dmg` (drag to Applications;
+#   ad-hoc signed in `build` and on dry runs, replaced on tag runs by the Developer ID signed, notarised and stapled
+#   one from `sign (macOS)`, ADR-0065), Linux `.deb` (dpkg-deb), Windows `.msi` (cargo-dist, with a Start menu shortcut).
 #   Each is installed or mounted and run in CI (packaging/*/check-*); `global` adds the `.dmg` and `.deb` hashes to
 #   sha256.sum. The update manifest still covers the archives only.
 #
@@ -344,7 +346,7 @@ jobs:
           PUBLISHING: ${{ needs.plan.outputs.publishing }}
         run: |
           if [ "$PUBLISHING" = "true" ]; then
-            echo "::notice title=macOS signing::signed and notarised in sign (macOS) (ADR-0065)"
+            echo "::notice title=macOS signing::archives and dmgs are signed and notarised in sign (macOS), replacing the ad-hoc dmg (ADR-0065)"
           else
             echo "::notice title=Unsigned macOS build::dry run; the archives of this run are unsigned, signing runs only on v* tag runs (ADR-0065)"
           fi
@@ -379,7 +381,8 @@ jobs:
             ${{ env.BUILD_MANIFEST_NAME }}
           retention-days: 7
 
-  # Signs and notarises the two macOS archives (ADR-0065). The only job that reads the six APPLE_* secrets, and it runs
+  # Signs and notarises the two macOS archives and the two macOS disk images (ADR-0065). The only job that reads the
+  # six APPLE_* secrets, and it runs
   # on a `v*` tag run (push, or dispatch on the tag) only, in the environment `release` (deployment rule: tags `v*`; it
   # also holds the update signing key). It FAILS if any of the six secrets is missing or if signing or notarisation
   # fails, so nothing publishes (fail closed). There is no unsigned fallback: macOS is never published unsigned.
@@ -390,7 +393,7 @@ jobs:
       - build
     if: ${{ needs.plan.outputs.publishing == 'true' }}
     runs-on: macos-14
-    timeout-minutes: 60
+    timeout-minutes: 120
     environment: release
     permissions:
       contents: read
@@ -419,6 +422,13 @@ jobs:
             echo "::error title=Apple secrets missing::${missing# } not set in environment release; macOS is never published unsigned (ADR-0065)"
             exit 1
           fi
+      - id: version
+        name: Workspace version
+        shell: bash
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p;}' Cargo.toml | head -n 1)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Fetch the arm64 archive
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -430,7 +440,7 @@ jobs:
           name: artifacts-build-local-x86_64-apple-darwin
           path: ${{ runner.temp }}/macos/x86_64-apple-darwin
       - id: sign-arm64
-        name: Sign and notarise (aarch64)
+        name: "Sign and notarise (aarch64: archive and dmg)"
         shell: bash
         env:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
@@ -441,9 +451,12 @@ jobs:
           APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
           DIR: ${{ runner.temp }}/macos/aarch64-apple-darwin
           TARGET: aarch64-apple-darwin
-        run: sh .github/scripts/sign-macos.sh "$DIR/sqler-app-$TARGET.tar.xz" "$DIR/$TARGET-dist-manifest.json"
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          test -f "$DIR/sqler-app-$TARGET.dmg"
+          sh .github/scripts/sign-macos.sh --dmg "$VERSION" "$DIR" "$DIR/sqler-app-$TARGET.tar.xz" "$DIR/$TARGET-dist-manifest.json"
       - id: sign-x64
-        name: Sign and notarise (x86_64)
+        name: "Sign and notarise (x86_64: archive and dmg)"
         shell: bash
         env:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
@@ -454,9 +467,12 @@ jobs:
           APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
           DIR: ${{ runner.temp }}/macos/x86_64-apple-darwin
           TARGET: x86_64-apple-darwin
-        run: sh .github/scripts/sign-macos.sh "$DIR/sqler-app-$TARGET.tar.xz" "$DIR/$TARGET-dist-manifest.json"
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          test -f "$DIR/sqler-app-$TARGET.dmg"
+          sh .github/scripts/sign-macos.sh --dmg "$VERSION" "$DIR" "$DIR/sqler-app-$TARGET.tar.xz" "$DIR/$TARGET-dist-manifest.json"
       # Each signed archive is checked again from the files that will be uploaded, then replaces the build artifact.
-      - name: Verify the signed aarch64 archive
+      - name: Verify the signed aarch64 archive and dmg
         shell: bash
         env:
           DIR: ${{ runner.temp }}/macos/aarch64-apple-darwin
@@ -474,8 +490,17 @@ jobs:
           sh .github/scripts/release-guard.sh binary "$bin"
           "$bin" --version | grep -Eq '^sqler [0-9]'
           (cd "$DIR" && shasum -a 256 -c "sqler-app-$TARGET.tar.xz.sha256")
+          sh packaging/macos/check-dmg.sh --notarized "$DIR/sqler-app-$TARGET.dmg"
+          (cd "$DIR" && shasum -a 256 -c "sqler-app-$TARGET.dmg.sha256")
           sh .github/scripts/release-guard.sh artifacts "$DIR"
-      - name: Verify the signed x86_64 archive
+      - name: Make sure Rosetta 2 is available for the x86_64 verify
+        shell: bash
+        run: |
+          if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+            arch -x86_64 /usr/bin/true
+          fi
+      - name: Verify the signed x86_64 archive and dmg
         shell: bash
         env:
           DIR: ${{ runner.temp }}/macos/x86_64-apple-darwin
@@ -492,6 +517,8 @@ jobs:
           codesign -d --entitlements - --xml "$bin" 2>/dev/null | grep -q 'com.apple.security.cs.allow-unsigned-executable-memory'
           sh .github/scripts/release-guard.sh binary "$bin"
           (cd "$DIR" && shasum -a 256 -c "sqler-app-$TARGET.tar.xz.sha256")
+          sh packaging/macos/check-dmg.sh --notarized "$DIR/sqler-app-$TARGET.dmg"
+          (cd "$DIR" && shasum -a 256 -c "sqler-app-$TARGET.dmg.sha256")
           sh .github/scripts/release-guard.sh artifacts "$DIR"
       - name: Upload the signed aarch64 artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

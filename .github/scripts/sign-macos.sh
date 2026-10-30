@@ -2,10 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: The SQLer Authors
 #
-# Signs and notarises the `sqler` binary inside a macOS release archive (ADR-0065). Only the `sign (macOS)` job of
-# release.yml runs it with real secrets.
+# Signs and notarises the `sqler` binary inside a macOS release archive and, with --dmg, also builds, signs, notarises
+# and staples the disk image (ADR-0065). Only the `sign (macOS)` job of release.yml runs it with real secrets.
 #
-#   sign-macos.sh <archive.tar.xz> [<dist-manifest.json>]
+#   sign-macos.sh [--dmg <version> <out-dir>] <archive.tar.xz> [<dist-manifest.json>]
+#
+# --dmg (must come first; <archive> must be named sqler-app-<triple>.tar.xz, else exit 2): after the binary is signed
+# and notarised, SQLer.app is staged from it with `packaging/macos/build-dmg.sh --app`, signed (hardened runtime,
+# entitlements, secure timestamp), its zip notarised and the app stapled; then `build-dmg.sh --pack` makes the disk
+# image, which is signed, notarised and stapled (two more notary submissions). At the end it replaces
+# <out-dir>/sqler-app-<triple>.dmg and its .sha256 sidecar (the ad-hoc dmg of the `build` job) next to the archive
+# files. Without --dmg the behaviour is exactly the archive-only flow.
 #
 # Environment (all six are required outside the local test; a missing one exits 2 and names the variable only):
 #   APPLE_CERTIFICATE_P12_BASE64  base64 of the Developer ID Application .p12
@@ -21,12 +28,13 @@
 #   SQLER_SIGN_LOCAL_TEST=1       local test: only the certificate and its password are required; no secure timestamp,
 #                                 accepts an untrusted self-signed identity, no team check, never notarises
 #
-# Notarisation is mandatory outside the local test. The ticket is confirmed online with spctl and is NOT stapled: the
-# bare binary in a .tar.xz cannot carry a ticket.
+# Notarisation is mandatory outside the local test. The ticket of the bare binary is confirmed online with spctl and is
+# NOT stapled: a binary in a .tar.xz cannot carry a ticket. The app and the dmg of --dmg are stapled.
 #
 # Exit 0: the archive is replaced in place (signed and notarised), the `<archive>.sha256` sidecar digest is
 # rewritten (the hex only, dist's format is kept) and, when a manifest is given and holds the archive, its
-# `.artifacts["<archive name>"].checksums.sha256` is updated. The last stdout line is
+# `.artifacts["<archive name>"].checksums.sha256` is updated. With --dmg the line
+# `sign-macos: dmg ok (sqler-app-<triple>.dmg, sha256 <hex>, notarised: yes|no)` comes before the last stdout line, which is
 # `sign-macos: ok (<archive name>, sha256 <hex>, notarised: yes|no)` (`no` only in the local test).
 # Exit 1: failure; archive, sidecar and manifest are untouched (all work happens on a copy in a temp dir and the
 # files are replaced at the very end). Exit 2: usage error or a required variable missing.
@@ -54,6 +62,15 @@
 #   # then: extract, `codesign --verify --strict --verbose=2`, `codesign -dvv` (flags=0x10000(runtime)),
 #   # `codesign -d --entitlements - <bin>`, and `( cd "$d" && shasum -a 256 -c *.sha256 )`.
 # A wrong APPLE_CERTIFICATE_PASSWORD must exit 1 and leave the archive byte-identical.
+#
+# Local --dmg test (the recipe above, plus the dmg of the default build; run from the repository root):
+#   mkdir "$d/out"; cp "$d"/sqler-app-aarch64-apple-darwin.tar.xz* "$d/out/"
+#   sh packaging/macos/build-dmg.sh "$d/in/sqler-app-aarch64-apple-darwin" 0.0.0 aarch64-apple-darwin "$d/out"
+#   (needs LICENSE, NOTICE, THIRD-PARTY-LICENSES.txt and licenses/ next to the binary in the bundle dir)
+#   SQLER_SIGN_LOCAL_TEST=1 APPLE_CERTIFICATE_P12_BASE64=$(base64 < "$d/id.p12") APPLE_CERTIFICATE_PASSWORD=test \
+#     sh .github/scripts/sign-macos.sh --dmg 0.0.0 "$d/out" "$d/out/sqler-app-aarch64-apple-darwin.tar.xz"
+#   # then: `( cd "$d/out" && shasum -a 256 -c *.sha256 )`, attach the dmg and `codesign --verify --deep --strict` the app
+#   # (flags=0x10000(runtime)). The local test never notarises or staples, so `check-dmg.sh --notarized` does not apply.
 set -eu
 umask 077
 
@@ -72,7 +89,7 @@ die() {
 }
 
 usage() {
-    echo "usage: sign-macos.sh <archive.tar.xz> [<dist-manifest.json>]" >&2
+    echo "usage: sign-macos.sh [--dmg <version> <out-dir>] <archive.tar.xz> [<dist-manifest.json>]" >&2
     exit 2
 }
 
@@ -104,6 +121,21 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+dmg_mode=no
+dmg_version=''
+dmg_out=''
+if [ "${1:-}" = "--dmg" ]; then
+    [ $# -ge 4 ] || usage
+    dmg_mode=yes
+    dmg_version=$2
+    dmg_out=$3
+    shift 3
+    [ -n "$dmg_version" ] || usage
+    [ -d "$dmg_out" ] || {
+        echo "sign-macos: $dmg_out is not a directory" >&2
+        exit 2
+    }
+fi
 [ $# -ge 1 ] && [ $# -le 2 ] || usage
 archive=$1
 manifest=${2:-}
@@ -119,7 +151,20 @@ entitlements=${SQLER_SIGN_ENTITLEMENTS:-packaging/macos/entitlements.plist}
 notary_timeout=${SQLER_NOTARY_TIMEOUT:-20m}
 local_test=${SQLER_SIGN_LOCAL_TEST:-0}
 
-for tool in security codesign openssl tar base64 shasum jq awk sed find ditto xcrun spctl; do
+triple=''
+if [ "$dmg_mode" = yes ]; then
+    case $(basename "$archive") in
+    sqler-app-?*.tar.xz) triple=$(basename "$archive" .tar.xz) ; triple=${triple#sqler-app-} ;;
+    *)
+        echo "sign-macos: with --dmg the archive must be named sqler-app-<triple>.tar.xz" >&2
+        exit 2
+        ;;
+    esac
+fi
+
+tools="security codesign openssl tar base64 shasum jq awk sed find ditto xcrun spctl"
+[ "$dmg_mode" = yes ] && tools="$tools hdiutil plutil"
+for tool in $tools; do
     command -v "$tool" >/dev/null 2>&1 || die "required tool not found: $tool"
 done
 [ -f "$entitlements" ] || die "entitlements file not found: $entitlements"
@@ -246,7 +291,7 @@ cn=$(printf '%s\n' "$idlist" | awk -v h="$identity" '$2 == h' | sed -n 's/^[^"]*
 # Work on a copy of the archive contents.
 ex="$work/extract"
 mkdir "$ex"
-tar -xJf "$archive" -C "$ex" || die "cannot extract $base"
+(umask 022 && tar -xJf "$archive" -C "$ex") || die "cannot extract $base"
 bins=$(find "$ex" -type f -name sqler)
 nbins=$(printf '%s\n' "$bins" | awk 'NF { n++ } END { print n + 0 }')
 [ "$nbins" -eq 1 ] || die "expected one sqler binary in $base, found $nbins"
@@ -257,11 +302,18 @@ if [ "$local_test" = 1 ]; then
 else
     stamp=--timestamp
 fi
-# Signs with the given identity; codesign's output is kept for a redacted diagnosis.
+# sign_with <identity> <path> [runtime]: signs <path>; codesign's output is kept for a redacted diagnosis. With
+# `runtime` the hardened runtime and the entitlements are applied (code); a disk image gets neither.
 cs_out="$work/codesign.out"
 sign_with() {
-    codesign --force --options runtime "$stamp" --entitlements "$entitlements" --keychain "$kc" --sign "$1" "$bin" \
-        >"$cs_out" 2>&1
+    if [ "${3:-}" = runtime ]; then
+        # umask 022 for codesign: it writes _CodeSignature/CodeResources, which other users must be able to read.
+        # The output file is opened here, still under 077.
+        (umask 022 && codesign --force --options runtime "$stamp" --entitlements "$entitlements" --keychain "$kc" \
+            --sign "$1" "$2") >"$cs_out" 2>&1
+    else
+        (umask 022 && codesign --force "$stamp" --keychain "$kc" --sign "$1" "$2") >"$cs_out" 2>&1
+    fi
 }
 # Counts only; neither identity nor team appears in the output.
 diagnose() {
@@ -273,33 +325,33 @@ diagnose() {
         -e 's/Developer ID [A-Za-z ]*:[^(]*([A-Z0-9]\{10\})/<redacted>/g' \
         -e 's/([A-Z0-9]\{10\})/(<team>)/g' "$cs_out" | head -n 10 | sed 's/^/sign-macos: codesign: /' >&2
 }
-if ! sign_with "$identity"; then
-    if [ -n "$cn" ] && sign_with "$cn"; then
-        say "signed using the common name (the hash was not resolved)"
-    else
-        diagnose
-        die "codesign failed"
+# sign_path <path> [runtime]: the identity hash first, the common name as a fallback.
+sign_path() {
+    if ! sign_with "$identity" "$@"; then
+        if [ -n "$cn" ] && sign_with "$cn" "$@"; then
+            say "signed using the common name (the hash was not resolved)"
+        else
+            diagnose
+            die "codesign failed"
+        fi
     fi
-fi
-codesign --verify --strict --verbose=2 "$bin" || die "the signature does not verify"
-codesign -dv --verbose=2 "$bin" 2>&1 | grep -Eq 'flags=0x[0-9a-f]+\(.*runtime' || die "the signature lacks the hardened runtime flag"
-if [ "$local_test" != 1 ]; then
-    codesign -dv --verbose=2 "$bin" 2>&1 | grep -qx "TeamIdentifier=$APPLE_TEAM_ID" ||
+}
+# team_check <path>: the signature's team equals APPLE_TEAM_ID (silent; never printed). Skipped in the local test.
+team_check() {
+    [ "$local_test" = 1 ] && return 0
+    codesign -dv --verbose=2 "$1" 2>&1 | grep -qx "TeamIdentifier=$APPLE_TEAM_ID" ||
         die "the signature's team does not match APPLE_TEAM_ID"
-fi
-say "signed sqler in $base (hardened runtime)"
-
-if [ "$notarise" = yes ]; then
-    zip="$work/notarise.zip"
-    ditto -c -k --keepParent "$bin" "$zip" || die "cannot zip the binary for notarisation"
+}
+# notarise <file> <label>: submits and waits; anything but Accepted prints the reduced log and exits 1.
+notarise() {
     result="$work/notary.json"
     submit_rc=0
-    xcrun notarytool submit "$zip" --key "$p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+    xcrun notarytool submit "$1" --key "$p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
         --wait --timeout "$notary_timeout" --output-format json >"$result" 2>"$work/notary.err" || submit_rc=$?
     status=$(jq -r '.status // empty' "$result" 2>/dev/null || true)
     subid=$(jq -r '.id // empty' "$result" 2>/dev/null || true)
     if [ "$status" != Accepted ]; then
-        echo "sign-macos: notarisation of $base ended with status '${status:-none}' (notarytool exit $submit_rc)" >&2
+        echo "sign-macos: notarisation of $2 ended with status '${status:-none}' (notarytool exit $submit_rc)" >&2
         if [ -n "$subid" ]; then
             nlog="$work/notary-log.json"
             if xcrun notarytool log "$subid" --key "$p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
@@ -309,6 +361,32 @@ if [ "$notarise" = yes ]; then
         fi
         exit 1
     fi
+}
+# staple <path> <label>: staples and validates; the ticket CDN may lag right after Accepted, so it retries.
+staple() {
+    i=0
+    ok=no
+    while [ "$i" -lt "$ticket_tries" ]; do
+        if xcrun stapler staple "$1" >/dev/null 2>&1 && xcrun stapler validate "$1" >/dev/null 2>&1; then
+            ok=yes
+            break
+        fi
+        i=$((i + 1))
+        [ "$i" -lt "$ticket_tries" ] && sleep 20
+    done
+    [ "$ok" = yes ] || die "cannot staple the notarisation ticket to $2"
+}
+
+sign_path "$bin" runtime
+codesign --verify --strict --verbose=2 "$bin" || die "the signature does not verify"
+codesign -dv --verbose=2 "$bin" 2>&1 | grep -Eq 'flags=0x[0-9a-f]+\(.*runtime' || die "the signature lacks the hardened runtime flag"
+team_check "$bin"
+say "signed sqler in $base (hardened runtime)"
+
+if [ "$notarise" = yes ]; then
+    zip="$work/notarise.zip"
+    ditto -c -k --keepParent "$bin" "$zip" || die "cannot zip the binary for notarisation"
+    notarise "$zip" "$base"
     say "notarised sqler in $base"
     # The ticket cannot be stapled to a bare binary: confirm it online (the CDN may lag).
     i=0
@@ -334,6 +412,63 @@ if [ "$notarise" = yes ]; then
     fi
     [ "$ok" = yes ] || die "notarised but the ticket is not online yet for $base"
     say "ticket online for sqler in $base (not stapled: bare binary in a tar archive)"
+fi
+
+# --dmg: SQLer.app from the signed binary, signed (and notarised, stapled), then the disk image the same way.
+if [ "$dmg_mode" = yes ]; then
+    dmg_name="sqler-app-$triple.dmg"
+    appdir="$work/app"
+    dmgdir="$work/dmg"
+    mkdir "$appdir" "$dmgdir"
+    # umask 022: the script-wide 077 would leave the staged app unreadable to other users.
+    (umask 022 && sh packaging/macos/build-dmg.sh --app "$(dirname "$bin")" "$dmg_version" "$appdir" >&2) ||
+        die "cannot stage SQLer.app"
+    app="$appdir/SQLer.app"
+    sign_path "$app" runtime
+    codesign --verify --deep --strict "$app" >/dev/null 2>&1 || die "the SQLer.app signature does not verify"
+    codesign -dv --verbose=2 "$app" 2>&1 | grep -Eq 'flags=0x[0-9a-f]+\(.*runtime' ||
+        die "the SQLer.app signature lacks the hardened runtime flag"
+    team_check "$app"
+    say "signed SQLer.app (hardened runtime)"
+    if [ "$notarise" = yes ]; then
+        appzip="$work/app-notarise.zip"
+        ditto -c -k --keepParent "$app" "$appzip" || die "cannot zip SQLer.app for notarisation"
+        notarise "$appzip" "SQLer.app"
+        say "notarised SQLer.app"
+        staple "$app" "SQLer.app"
+        say "stapled SQLer.app"
+    fi
+    (umask 022 && sh packaging/macos/build-dmg.sh --pack "$app" "$dmg_version" "$triple" "$dmgdir" >&2) ||
+        die "cannot build the disk image"
+    dmg="$dmgdir/$dmg_name"
+    sign_path "$dmg"
+    codesign --verify --strict "$dmg" >/dev/null 2>&1 || die "the dmg signature does not verify"
+    team_check "$dmg"
+    say "signed $dmg_name"
+    if [ "$notarise" = yes ]; then
+        notarise "$dmg" "$dmg_name"
+        say "notarised $dmg_name"
+        staple "$dmg" "$dmg_name"
+        i=0
+        ok=no
+        while [ "$i" -lt "$ticket_tries" ]; do
+            sp=$(spctl --assess --type open --context context:primary-signature -v "$dmg" 2>&1 || true)
+            if printf '%s\n' "$sp" | grep -q 'source=Notarized Developer ID'; then
+                ok=yes
+                break
+            fi
+            i=$((i + 1))
+            [ "$i" -lt "$ticket_tries" ] && sleep 20
+        done
+        if [ "$ok" != yes ]; then
+            printf '%s\n' "${sp:-}" | grep -E '^(source|override)=' >&2 || true
+            die "$dmg_name is stapled but not assessed as Notarized Developer ID"
+        fi
+        say "stapled $dmg_name"
+    fi
+    (cd "$dmgdir" && shasum -a 256 "$dmg_name" >"$dmg_name.sha256") || die "cannot hash $dmg_name"
+    dmg_hex=$(awk '{ print $1 }' "$dmgdir/$dmg_name.sha256")
+    [ "${#dmg_hex}" -eq 64 ] || die "cannot hash $dmg_name"
 fi
 
 # Re-pack with the same top-level entries. tar has no signature: the archive is rebuilt, not signed.
@@ -376,6 +511,11 @@ if [ -f "$work/sidecar" ]; then
 fi
 if [ -f "$work/manifest" ]; then
     replace "$work/manifest" "$manifest"
+fi
+if [ "$dmg_mode" = yes ]; then
+    replace "$dmgdir/$dmg_name" "$dmg_out/$dmg_name"
+    replace "$dmgdir/$dmg_name.sha256" "$dmg_out/$dmg_name.sha256"
+    say "dmg ok ($dmg_name, sha256 $dmg_hex, notarised: $notarise)"
 fi
 
 say "ok ($base, sha256 $hex, notarised: $notarise)"
