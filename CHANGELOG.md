@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.2.1] - 2026-10-30
+## [1.2.2] - 2026-10-30
+
+Version 1.2.1 was tagged but never released because its macOS signing verification step failed; this release ships the fixed build.
 
 ### Changed
 
