@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-30
+
 ### Changed
 
 - **macOS `.dmg` is signed, notarised and stapled.** The release `.dmg` for Apple silicon and Intel now contains a Developer ID signed `SQLer.app` (hardened runtime) and is itself signed, notarised and stapled, so it opens without a Gatekeeper block. See ADR-0065 amendment 2.
