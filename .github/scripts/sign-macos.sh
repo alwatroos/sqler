@@ -27,6 +27,8 @@
 #   SQLER_TICKET_TRIES            attempts of the online ticket check, 20 s apart (default 6)
 #   SQLER_SIGN_LOCAL_TEST=1       local test: only the certificate and its password are required; no secure timestamp,
 #                                 accepts an untrusted self-signed identity, no team check, never notarises
+#   SQLER_SIGN_LOCAL_STAPLE=1     with the local test: also staple the app and the dmg with the `xcrun` found first in PATH
+#                                 (a stand-in that writes Contents/CodeResources, see sign-macos-staple-test.sh)
 #
 # Notarisation is mandatory outside the local test. The ticket of the bare binary is confirmed online with spctl and is
 # NOT stapled: a binary in a .tar.xz cannot carry a ticket. The app and the dmg of --dmg are stapled.
@@ -150,6 +152,9 @@ fi
 entitlements=${SQLER_SIGN_ENTITLEMENTS:-packaging/macos/entitlements.plist}
 notary_timeout=${SQLER_NOTARY_TIMEOUT:-20m}
 local_test=${SQLER_SIGN_LOCAL_TEST:-0}
+# Local test only: also run staple() (with whatever `xcrun` is first in PATH, e.g. a stand-in) on the app and the dmg.
+stapler_test=0
+[ "$local_test" = 1 ] && [ "${SQLER_SIGN_LOCAL_STAPLE:-0}" = 1 ] && stapler_test=1
 
 triple=''
 if [ "$dmg_mode" = yes ]; then
@@ -363,11 +368,15 @@ notarise() {
     fi
 }
 # staple <path> <label>: staples and validates; the ticket CDN may lag right after Accepted, so it retries.
+# stapler writes the ticket as a new file (Contents/CodeResources of an app), which the script-wide umask 077 would
+# leave 0600: other users could not read the app (v1.2.1 sign verify). So stapler runs under umask 022 and, because a
+# tool that writes through a temporary file ignores the umask, every entry is then made readable by others (modes are
+# not part of the code seal; symlinks are skipped). A final check dies if anything is still unreadable.
 staple() {
     i=0
     ok=no
     while [ "$i" -lt "$ticket_tries" ]; do
-        if xcrun stapler staple "$1" >/dev/null 2>&1 && xcrun stapler validate "$1" >/dev/null 2>&1; then
+        if (umask 022 && xcrun stapler staple "$1" >/dev/null 2>&1) && xcrun stapler validate "$1" >/dev/null 2>&1; then
             ok=yes
             break
         fi
@@ -375,6 +384,9 @@ staple() {
         [ "$i" -lt "$ticket_tries" ] && sleep 20
     done
     [ "$ok" = yes ] || die "cannot staple the notarisation ticket to $2"
+    find "$1" ! -type l -exec chmod go+rX {} + || die "cannot make $2 readable by other users after stapling"
+    bad=$(find "$1" \( \( ! -type l ! -perm -o=r \) -o \( -type d ! -perm -o=x \) \) | head -n 1)
+    [ -z "$bad" ] || die "$2 has an entry other users cannot read after stapling"
 }
 
 sign_path "$bin" runtime
@@ -435,6 +447,8 @@ if [ "$dmg_mode" = yes ]; then
         ditto -c -k --keepParent "$app" "$appzip" || die "cannot zip SQLer.app for notarisation"
         notarise "$appzip" "SQLer.app"
         say "notarised SQLer.app"
+    fi
+    if [ "$notarise" = yes ] || [ "$stapler_test" = 1 ]; then
         staple "$app" "SQLer.app"
         say "stapled SQLer.app"
     fi
@@ -465,6 +479,9 @@ if [ "$dmg_mode" = yes ]; then
             die "$dmg_name is stapled but not assessed as Notarized Developer ID"
         fi
         say "stapled $dmg_name"
+    fi
+    if [ "$notarise" != yes ] && [ "$stapler_test" = 1 ]; then
+        staple "$dmg" "$dmg_name"
     fi
     (cd "$dmgdir" && shasum -a 256 "$dmg_name" >"$dmg_name.sha256") || die "cannot hash $dmg_name"
     dmg_hex=$(awk '{ print $1 }' "$dmgdir/$dmg_name.sha256")
