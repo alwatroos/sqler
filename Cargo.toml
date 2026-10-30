@@ -108,12 +108,12 @@ gpui_platform = { version = "=0.3.9", package = "gpui-pre-platform", features = 
 # LLVM-exception OR Apache-2.0 OR MIT (verified live on crates.io 2026-10-22).
 wit-parser = { version = "0.262.0", default-features = false, features = ["decoding"] }
 
-# Plugin host runtime (P4, ADR-0057): wasmtime 50.0.0, the newest non-yanked release (crates.io, 2026-10-22). All three crates
+# Plugin host runtime (P4, ADR-0057): wasmtime 50.0.1 (50.0.0 carries RUSTSEC-2026-0420..0424). All three crates
 # share the version; features are picked per crate. wasmtime-wasi-http has its default sender (tokio-rustls, webpki-roots,
 # CDLA-Permissive-2.0) switched off: egress goes through the host's own `Egress` trait.
-wasmtime = { version = "50.0.0", default-features = false }
-wasmtime-wasi = { version = "50.0.0", default-features = false }
-wasmtime-wasi-http = { version = "50.0.0", default-features = false }
+wasmtime = { version = "50.0.1", default-features = false }
+wasmtime-wasi = { version = "50.0.1", default-features = false }
+wasmtime-wasi-http = { version = "50.0.1", default-features = false }
 # Dev only (P4): WAT text for the test components; the line wasmtime 50 resolves.
 wat = "1.262.0"
 # F6: icon tooling: resvg (xtask renders assets/icon), embed-resource (sqler-app build.rs, Windows);

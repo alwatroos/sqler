@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Plugin runtime updated to wasmtime 50.0.1.** Fixes RUSTSEC-2026-0420 to RUSTSEC-2026-0424 (wasip3 UDP send address check, wasi-http content-length, `i31` and `nullref` argument checks, cross-engine struct type confusion, borrowed resource transfer). It only affects builds with the optional plugin host; the default build does not include wasmtime.
+
 ## [1.2.1] - 2026-10-30
 
 ### Changed
