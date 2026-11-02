@@ -11,7 +11,7 @@
 //! ([`UpdateError::NotConfigured`]).
 //!
 //! [`UpdateClient::download`] fetches the signed artifact for this platform and
-//! checks its size and sha256. [`install`] re-hashes a copy and swaps the
+//! checks its size and sha256. [`install()`] re-hashes a copy and swaps the
 //! program (or the whole `SQLer.app`) in place with a rollback.
 //!
 //! The crate is headless and depends on no other `sqler-*` crate. Whether and

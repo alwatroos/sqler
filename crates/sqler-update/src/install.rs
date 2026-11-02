@@ -228,6 +228,7 @@ pub fn install(
 }
 
 fn create_stage(stage: &Path) -> std::io::Result<()> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut b = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
