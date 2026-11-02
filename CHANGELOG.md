@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Username field in the connection form, filled from a pasted connection string.** Server databases have their own Username next to Password. Pasting `postgres://alice:secret@host:5432/db` into Target moves the user and password into those fields; the password goes to the keychain only, and the saved target still holds `?user=` and no user info. `SQLite` is unchanged.
+
 ## [1.2.2] - 2026-10-30
 
 Version 1.2.1 was tagged but never released because its macOS signing verification step failed; this release ships the fixed build.

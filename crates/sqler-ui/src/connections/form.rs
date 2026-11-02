@@ -40,6 +40,8 @@ pub enum FormField {
     Name,
     /// The target: a URL, a file path or whatever the driver reads.
     Target,
+    /// The database user (a text value).
+    DbUser,
     /// The accent colour as `#rrggbb` (empty for none).
     Color,
     /// TLS certificate authority bundle path.
@@ -188,6 +190,7 @@ pub struct ConnectionForm {
     original: Option<ConnectionProfile>,
     name: String,
     target: String,
+    db_user: String,
     color: String,
     ca_cert: String,
     client_cert: String,
@@ -228,6 +231,7 @@ impl ConnectionForm {
             original: None,
             name: String::new(),
             target: String::new(),
+            db_user: String::new(),
             color: String::new(),
             ca_cert: String::new(),
             client_cert: String::new(),
@@ -269,6 +273,10 @@ impl ConnectionForm {
         form.original = Some(profile.clone());
         form.name.clone_from(&spec.name);
         form.target.clone_from(&spec.target);
+        if uses_db_login(Some(&spec.driver)) && spec.target.contains("://") {
+            form.db_user = query_user(&spec.target).unwrap_or_default();
+            form.target = without_query_user(&spec.target);
+        }
         form.color = spec.color.clone().unwrap_or_default();
         form.driver = Some(spec.driver.clone());
         form.environment = spec.environment;
@@ -318,6 +326,7 @@ impl ConnectionForm {
         match field {
             FormField::Name => &self.name,
             FormField::Target => &self.target,
+            FormField::DbUser => &self.db_user,
             FormField::Color => &self.color,
             FormField::CaCert => &self.ca_cert,
             FormField::ClientCert => &self.client_cert,
@@ -335,7 +344,14 @@ impl ConnectionForm {
     pub fn set_text(&mut self, field: FormField, text: String) {
         match field {
             FormField::Name => self.name = text,
-            FormField::Target => self.target = text,
+            FormField::Target => {
+                self.target = text;
+                self.fill_from_target();
+            }
+            FormField::DbUser => {
+                self.db_user = text;
+                self.target = without_query_user(&self.target);
+            }
             FormField::Color => self.color = text,
             FormField::CaCert => self.ca_cert = text,
             FormField::ClientCert => self.client_cert = text,
@@ -352,6 +368,38 @@ impl ConnectionForm {
             }
         }
         self.errors.retain(|e| e.field != Some(field));
+    }
+
+    /// Whether the driver logs in with a user and password (all but `sqlite` and `duckdb`);
+    /// `false` without a driver.
+    #[must_use]
+    pub fn uses_db_login(&self) -> bool {
+        uses_db_login(self.driver.as_ref())
+    }
+
+    /// Moves user and password out of a target that carries them: the userinfo is split into the
+    /// Username and the password plan and removed from the target; a `?user=` is copied into the
+    /// Username and stays in the text.
+    fn fill_from_target(&mut self) {
+        if !self.uses_db_login() {
+            return;
+        }
+        if let Some((user, password, stripped)) = split_userinfo(&self.target) {
+            if !user.is_empty() {
+                self.db_user = decode(user);
+                self.errors.retain(|e| e.field != Some(FormField::DbUser));
+            }
+            if let Some(password) = password.filter(|p| !p.is_empty()) {
+                self.db_password = SecretField::Set(Secret::new(decode(password)));
+                self.errors
+                    .retain(|e| e.field != Some(FormField::DbPassword));
+            }
+            let stripped = without_query_user(&stripped);
+            self.target = stripped;
+        } else if let Some(user) = query_user(&self.target) {
+            self.db_user = user;
+            self.errors.retain(|e| e.field != Some(FormField::DbUser));
+        }
     }
 
     fn typed_secret(text: String, stored: bool) -> SecretField {
@@ -437,6 +485,7 @@ impl ConnectionForm {
     /// Chooses the driver.
     pub fn set_driver(&mut self, driver: DriverId) {
         self.driver = Some(driver);
+        self.fill_from_target();
     }
 
     /// The environment tag.
@@ -554,7 +603,8 @@ impl ConnectionForm {
         if self.driver.is_none() {
             errors.push(FieldError::general("choose a driver"));
         }
-        let target = self.target.trim();
+        let target_out = self.target_out();
+        let target = target_out.trim();
         if target.is_empty() {
             errors.push(FieldError::new(
                 FormField::Target,
@@ -567,7 +617,7 @@ impl ConnectionForm {
         {
             errors.push(FieldError::new(
                 FormField::Target,
-                "the target must not contain a user or password; use ?user=name and the password field",
+                "the target must not contain a user or password; use the Username and Password fields",
             ));
         }
         let color = self.color.trim();
@@ -583,7 +633,17 @@ impl ConnectionForm {
         if (self.ssh_enabled || wants_password) && !target.is_empty() && !target.contains("://") {
             errors.push(FieldError::new(
                 FormField::Target,
-                "an SSH tunnel and a password need a URL target (scheme://host:port/db?user=name)",
+                "an SSH tunnel and a password need a URL target (scheme://host:port/database)",
+            ));
+        }
+        if self.uses_db_login()
+            && !self.db_user.trim().is_empty()
+            && !target.is_empty()
+            && !target.contains("://")
+        {
+            errors.push(FieldError::new(
+                FormField::DbUser,
+                "a username needs a URL target (scheme://host:port/database)",
             ));
         }
         let tls = self.validate_tls(&mut errors);
@@ -617,6 +677,18 @@ impl ConnectionForm {
             db_password: db_plan,
             ssh_secret: ssh_plan,
         })
+    }
+
+    /// The target to store: for a login driver with a URL target, the user as the only `user`
+    /// parameter; otherwise the target as typed.
+    fn target_out(&self) -> String {
+        let target = self.target.trim();
+        let keeps_user = self.uses_db_login() || !self.db_user.trim().is_empty();
+        if keeps_user && target.contains("://") {
+            with_query_user(&without_query_user(target), self.db_user.trim())
+        } else {
+            target.to_owned()
+        }
     }
 
     fn validate_tls(&self, errors: &mut Vec<FieldError>) -> Option<TlsProfile> {
@@ -720,6 +792,124 @@ impl ConnectionForm {
             spec: valid.spec,
         })
     }
+}
+
+/// Whether a driver logs in with a user and password.
+fn uses_db_login(driver: Option<&DriverId>) -> bool {
+    driver.is_some_and(|d| !matches!(d.as_str(), "sqlite" | "duckdb"))
+}
+
+/// Splits `scheme://user:password@host/...` into the raw user, the raw password and the target
+/// without the userinfo. `None` without userinfo.
+fn split_userinfo(target: &str) -> Option<(&str, Option<&str>, String)> {
+    let (scheme, rest) = target.split_once("://")?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    let at = authority.rfind('@')?;
+    let info = &authority[..at];
+    let (user, password) = match info.split_once(':') {
+        Some((user, password)) => (user, Some(password)),
+        None => (info, None),
+    };
+    Some((
+        user,
+        password,
+        format!("{scheme}://{}{tail}", &authority[at + 1..]),
+    ))
+}
+
+/// Percent-encodes everything but `A-Za-z0-9-._~`.
+fn encode(text: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
+}
+
+/// Percent-decodes (`+` stays; invalid escapes stay as they are).
+fn decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| char::from(b).to_digit(16);
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2]))
+        {
+            out.push(u8::try_from(hi * 16 + lo).unwrap_or(b'?'));
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Splits a target into the part before `?`, the query and the fragment (with its `#`).
+fn split_query(target: &str) -> (&str, Option<&str>, &str) {
+    let (before, fragment) = target
+        .find('#')
+        .map_or((target, ""), |i| target.split_at(i));
+    match before.split_once('?') {
+        Some((path, query)) => (path, Some(query), fragment),
+        None => (before, None, fragment),
+    }
+}
+
+fn is_user_pair(pair: &str) -> bool {
+    let key = pair.split_once('=').map_or(pair, |(k, _)| k);
+    decode(key).eq_ignore_ascii_case("user")
+}
+
+/// The first non-empty `user` query parameter, decoded.
+fn query_user(target: &str) -> Option<String> {
+    let (_, query, _) = split_query(target);
+    query?
+        .split('&')
+        .filter(|pair| is_user_pair(pair))
+        .filter_map(|pair| pair.split_once('=').map(|(_, v)| decode(v)))
+        .find(|user| !user.is_empty())
+}
+
+/// The target without any `user` query parameter.
+fn without_query_user(target: &str) -> String {
+    let (path, query, fragment) = split_query(target);
+    let mut out = path.to_owned();
+    if let Some(query) = query {
+        let kept: Vec<&str> = query.split('&').filter(|p| !is_user_pair(p)).collect();
+        if !kept.is_empty() {
+            out.push('?');
+            out.push_str(&kept.join("&"));
+        }
+    }
+    out.push_str(fragment);
+    out
+}
+
+/// The target with `user=<encoded>` appended to the query; unchanged for an empty user.
+fn with_query_user(target: &str, user: &str) -> String {
+    if user.is_empty() {
+        return target.to_owned();
+    }
+    let (path, query, fragment) = split_query(target);
+    let mut out = path.to_owned();
+    out.push('?');
+    if let Some(query) = query.filter(|q| !q.is_empty()) {
+        out.push_str(query);
+        out.push('&');
+    }
+    out.push_str("user=");
+    out.push_str(&encode(user));
+    out.push_str(fragment);
+    out
 }
 
 #[cfg(test)]
@@ -838,10 +1028,10 @@ mod tests {
     #[test]
     fn user_info_in_the_target_is_refused() {
         let mut f = filled();
+        // Userinfo is filled into the fields now; a password parameter is still refused.
         for bad in [
-            "postgres://me@h/d",
-            "postgres://me:pw@h/d",
             "postgres://h/d?password=x",
+            "postgres://h/d?user=me&password=x",
         ] {
             f.set_text(FormField::Target, bad.into());
             let msg = f
@@ -986,6 +1176,7 @@ mod tests {
     #[test]
     fn password_and_tunnel_need_a_url_target() {
         let mut f = filled();
+        f.set_text(FormField::DbUser, String::new());
         f.set_text(FormField::Target, "app.db".into());
         assert!(f.validate().is_ok());
         f.set_text(FormField::DbPassword, "pw".into());
@@ -1000,7 +1191,7 @@ mod tests {
             .find(|(x, _)| *x == Some(FormField::Target));
         assert_eq!(
             msg.unwrap().1,
-            "an SSH tunnel and a password need a URL target (scheme://host:port/db?user=name)"
+            "an SSH tunnel and a password need a URL target (scheme://host:port/database)"
         );
         f.set_text(FormField::Target, "postgres://h/d?user=u".into());
         assert!(f.validate().is_ok());
@@ -1204,5 +1395,161 @@ mod tests {
     #[test]
     fn test_status_starts_idle() {
         assert_eq!(filled().test, TestStatus::Idle);
+    }
+
+    fn pasted() -> ConnectionForm {
+        let mut f = ConnectionForm::new_connection(Some(pg()), None);
+        f.set_text(FormField::Name, "Main".into());
+        f.set_text(
+            FormField::Target,
+            "postgres://alice:hunter2@db.example:5432/app".into(),
+        );
+        f
+    }
+
+    fn secret_of(f: &ConnectionForm) -> Option<String> {
+        match f.db_password() {
+            SecretField::Set(s) => Some(s.expose().to_owned()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn pasted_url_fills_username_and_password() {
+        let f = pasted();
+        assert_eq!(f.text(FormField::DbUser), "alice");
+        assert_eq!(secret_of(&f).as_deref(), Some("hunter2"));
+        assert_eq!(f.text(FormField::Target), "postgres://db.example:5432/app");
+        let v = f.validate().unwrap();
+        assert_eq!(v.spec.target, "postgres://db.example:5432/app?user=alice");
+        assert!(v.spec.password_in_keychain);
+        assert!(!format!("{f:?}").contains("hunter2"));
+        assert!(!format!("{:?}", v.spec).contains("hunter2"));
+    }
+
+    #[test]
+    fn userinfo_is_decoded_and_wins_over_the_query() {
+        let mut f = ConnectionForm::new_connection(Some(pg()), None);
+        f.set_text(FormField::Name, "Main".into());
+        f.set_text(
+            FormField::Target,
+            "postgres://al%40x:p%40ss@h/d?user=bob&sslmode=require".into(),
+        );
+        assert_eq!(f.text(FormField::DbUser), "al@x");
+        assert_eq!(secret_of(&f).as_deref(), Some("p@ss"));
+        assert_eq!(
+            f.validate().unwrap().spec.target,
+            "postgres://h/d?sslmode=require&user=al%40x"
+        );
+    }
+
+    #[test]
+    fn userinfo_without_a_password_keeps_the_password_plan() {
+        let mut f = ConnectionForm::edit(&saved_with_password());
+        f.set_text(FormField::Target, "postgres://carol@db/app".into());
+        assert_eq!(f.text(FormField::DbUser), "carol");
+        assert!(matches!(f.db_password(), SecretField::Keep));
+        assert_eq!(
+            f.validate().unwrap().spec.target,
+            "postgres://db/app?user=carol"
+        );
+    }
+
+    #[test]
+    fn query_user_shows_in_username() {
+        let mut f = ConnectionForm::new_connection(Some(pg()), None);
+        f.set_text(FormField::Name, "Main".into());
+        f.set_text(
+            FormField::Target,
+            "postgres://h/d?user=bob&sslmode=require".into(),
+        );
+        assert_eq!(f.text(FormField::DbUser), "bob");
+        assert!(f.text(FormField::Target).contains("user=bob"));
+        f.set_text(FormField::DbUser, "dave".into());
+        assert_eq!(f.text(FormField::Target), "postgres://h/d?sslmode=require");
+        let target = f.validate().unwrap().spec.target;
+        assert_eq!(target, "postgres://h/d?sslmode=require&user=dave");
+        assert_eq!(target.matches("user=").count(), 1);
+    }
+
+    #[test]
+    fn username_is_percent_encoded_on_save() {
+        let mut f = filled();
+        for (user, want) in [("a b", "a%20b"), ("a+b", "a%2Bb")] {
+            f.set_text(FormField::DbUser, user.into());
+            let target = f.validate().unwrap().spec.target;
+            assert_eq!(
+                target,
+                format!("postgres://db.example:5432/app?user={want}")
+            );
+            let back = ConnectionForm::edit(&saved(f.validate().unwrap().spec));
+            assert_eq!(back.text(FormField::DbUser), user);
+        }
+    }
+
+    #[test]
+    fn edit_shows_username_and_keeps_password() {
+        let p = saved_with_password();
+        let f = ConnectionForm::edit(&p);
+        assert_eq!(f.text(FormField::DbUser), "me");
+        assert_eq!(f.text(FormField::Target), "postgres://db/app");
+        assert!(matches!(f.db_password(), SecretField::Keep));
+        let v = f.validate().unwrap();
+        assert_eq!(v.spec.target, p.spec().target);
+        assert!(matches!(v.db_password, SecretField::Keep));
+    }
+
+    #[test]
+    fn sqlite_is_unaffected() {
+        let mut f = ConnectionForm::new_connection(DriverId::new("sqlite").ok(), None);
+        f.set_text(FormField::Name, "Local".into());
+        assert!(!f.uses_db_login());
+        f.set_text(FormField::Target, "app.db".into());
+        assert_eq!(f.text(FormField::Target), "app.db");
+        assert_eq!(f.validate().unwrap().spec.target, "app.db");
+        f.set_text(FormField::Target, "sqlite://me:pw@h/d".into());
+        assert_eq!(f.text(FormField::DbUser), "");
+        assert!(matches!(f.db_password(), SecretField::Clear));
+        assert!(has_error(&f, FormField::Target));
+    }
+
+    #[test]
+    fn hidden_username_survives_a_switch_to_sqlite() {
+        let mut f = ConnectionForm::new_connection(pg().into(), None);
+        f.set_text(FormField::Name, "Db".into());
+        f.set_text(FormField::Target, "postgres://h/d?user=alice".into());
+        f.set_driver(DriverId::new("sqlite").unwrap());
+        assert_eq!(
+            f.validate().unwrap().spec.target,
+            "postgres://h/d?user=alice"
+        );
+    }
+
+    #[test]
+    fn switching_to_a_login_driver_fills_from_the_target() {
+        let mut f = ConnectionForm::new_connection(DriverId::new("sqlite").ok(), None);
+        f.set_text(FormField::Target, "postgres://alice:hunter2@h/d".into());
+        assert_eq!(f.text(FormField::DbUser), "");
+        f.set_driver(pg());
+        assert_eq!(f.text(FormField::DbUser), "alice");
+        assert_eq!(secret_of(&f).as_deref(), Some("hunter2"));
+        assert_eq!(f.text(FormField::Target), "postgres://h/d");
+    }
+
+    #[test]
+    fn username_needs_a_url_target() {
+        let mut f = filled();
+        f.set_text(FormField::DbUser, String::new());
+        f.set_text(FormField::Target, "app.db".into());
+        assert!(f.validate().is_ok());
+        f.set_text(FormField::DbUser, "alice".into());
+        assert_eq!(
+            errors_of(&f)
+                .into_iter()
+                .find(|(x, _)| *x == Some(FormField::DbUser))
+                .map(|(_, m)| m)
+                .as_deref(),
+            Some("a username needs a URL target (scheme://host:port/database)")
+        );
     }
 }
