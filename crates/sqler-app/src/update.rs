@@ -1033,7 +1033,10 @@ mod tests {
     struct Rig {
         task: Task,
         rx: UnboundedReceiver<UpdateEvent>,
+        // Read only by the unix and macOS tests.
+        #[cfg_attr(not(unix), allow(dead_code))]
         relaunched: Log,
+        #[cfg_attr(not(unix), allow(dead_code))]
         exe: PathBuf,
         config: ConfigDir,
         _scratch: Scratch,
@@ -1132,6 +1135,8 @@ mod tests {
         mock::tar_xz_with(&[mock::Entry::File("sqler", &mock::fake_program("9.9.9"))])
     }
 
+    // Used only by the unix and macOS tests.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn is_download(e: &UpdateEvent, want: &DownloadEvent) -> bool {
         matches!(e, UpdateEvent::Download(d) if d == want)
     }
