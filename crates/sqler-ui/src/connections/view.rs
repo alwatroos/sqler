@@ -42,9 +42,10 @@ use crate::workspace::{Workspace, WorkspaceView};
 const SWATCH: f32 = 20.;
 
 /// The text fields of the form, in the order they are created.
-const TEXT_FIELDS: [FormField; 10] = [
+const TEXT_FIELDS: [FormField; 11] = [
     FormField::Name,
     FormField::Target,
+    FormField::DbUser,
     FormField::Color,
     FormField::CaCert,
     FormField::ClientCert,
@@ -68,7 +69,8 @@ pub(crate) struct DialogInputs {
 fn placeholder(field: FormField) -> &'static str {
     match field {
         FormField::Name => "e.g. Billing (prod)",
-        FormField::Target => "postgres://host:5432/database?user=name, or a file path",
+        FormField::Target => "postgres://host:5432/database, or a file path",
+        FormField::DbUser => "database user",
         FormField::Color => "#rrggbb",
         FormField::CaCert => "CA certificate file",
         FormField::ClientCert => "client certificate file",
@@ -131,7 +133,7 @@ impl DialogInputs {
                             .placeholder(placeholder(field))
                             .default_value(value)
                     });
-                    subscriptions.push(subscribe(&input, field, cx));
+                    subscriptions.push(subscribe(&input, field, window, cx));
                     fields.insert(field, input);
                 }
                 for field in [FormField::DbPassword, FormField::SshSecret] {
@@ -140,7 +142,7 @@ impl DialogInputs {
                             .masked(true)
                             .placeholder(placeholder(field))
                     });
-                    subscriptions.push(subscribe(&input, field, cx));
+                    subscriptions.push(subscribe(&input, field, window, cx));
                     fields.insert(field, input);
                 }
                 if let Some(name) = fields.get(&FormField::Name) {
@@ -234,19 +236,54 @@ impl DialogInputs {
 fn subscribe(
     input: &Entity<InputState>,
     field: FormField,
+    window: &mut Window,
     cx: &mut Context<WorkspaceView>,
 ) -> Subscription {
-    cx.subscribe(
+    cx.subscribe_in(
         input,
-        move |view, input, event: &InputEvent, cx| match event {
+        window,
+        move |view, input, event: &InputEvent, window, cx| match event {
             InputEvent::Change => {
                 let text = input.read(cx).value().to_string();
                 view.dispatch_connection(ConnectionAction::SetText { field, text }, cx);
+                sync_login_inputs(view, field, window, cx);
             }
             InputEvent::PressEnter { .. } => view.dispatch_connection(ConnectionAction::Save, cx),
             _ => {}
         },
     )
+}
+
+/// After a Target or Username change, copies the form's values back into the inputs whose text
+/// differs (the form moves user info out of the Target and into Username and Password).
+fn sync_login_inputs(
+    view: &mut WorkspaceView,
+    field: FormField,
+    window: &mut Window,
+    cx: &mut Context<WorkspaceView>,
+) {
+    if !matches!(field, FormField::Target | FormField::DbUser) {
+        return;
+    }
+    let Some(Dialog::Form(form)) = view.workspace().dialog() else {
+        return;
+    };
+    let mut updates: Vec<(FormField, String)> = Vec::new();
+    let mut wanted = vec![FormField::Target];
+    if field == FormField::Target {
+        wanted.push(FormField::DbUser);
+    }
+    for f in wanted {
+        updates.push((f, form.text(f).to_owned()));
+    }
+    if field == FormField::Target
+        && let SecretField::Set(secret) = form.db_password()
+    {
+        updates.push((FormField::DbPassword, secret.expose().to_owned()));
+    }
+    for (f, text) in updates {
+        view.set_form_input(f, &text, window, cx);
+    }
 }
 
 /// Theme colours the dialogs use, copied out of the theme.
@@ -297,8 +334,11 @@ fn chip(
         .text_size(px(size))
         .cursor_pointer()
         .child(label.into())
-        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+        .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
             view.dispatch_connection(action.clone(), cx);
+            if matches!(action, ConnectionAction::SetDriver(_)) {
+                sync_login_inputs(view, FormField::Target, window, cx);
+            }
         }));
     chip = if selected {
         chip.bg(colors.active).border_color(colors.ring)
@@ -578,6 +618,12 @@ fn form_panel(
             colors,
             cx,
         ))
+        .children(
+            form.uses_db_login()
+                .then(|| text_row("Username", FormField::DbUser, form, inputs, colors, cx))
+                .into_iter()
+                .flatten(),
+        )
         .child(password_block(
             "Password",
             SecretSlot::Db,

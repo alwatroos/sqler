@@ -3003,6 +3003,46 @@ mod tests {
     }
 
     #[test]
+    fn pasted_url_is_saved_as_user_param_and_keychain_secret() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        w.dispatch_connection(text(FormField::Name, "Main"));
+        w.dispatch_connection(text(
+            FormField::Target,
+            "postgres://alice:secret@db.example:5432/app",
+        ));
+        assert_eq!(form(&w).text(FormField::DbUser), "alice");
+        let secrets = saved_secrets(w.dispatch_connection(A::Save));
+        assert_eq!(describe(&secrets), ["set main:db-password"]);
+        let SecretOp::Set(_, secret) = &secrets[0] else {
+            panic!("expected a set");
+        };
+        assert_eq!(secret.expose(), "secret");
+        let profile = w.sidebar().profile(&id_of(&w, "Main")).unwrap();
+        let target = &profile.spec().target;
+        assert!(!target.contains("secret") && !target.contains("alice@"));
+        assert!(target.contains("user=alice"));
+        assert!(!format!("{secrets:?}").contains("secret"));
+    }
+
+    #[test]
+    fn edit_shows_the_username_and_saves_without_secret_ops() {
+        let mut w = manager();
+        w.dispatch_connection(A::New);
+        fill(&mut w, "Main");
+        w.dispatch_connection(text(FormField::DbPassword, "hunter2"));
+        saved_secrets(w.dispatch_connection(A::Save));
+        let id = id_of(&w, "Main");
+        let before = w.sidebar().profile(&id).unwrap().spec().target.clone();
+        w.dispatch_connection(A::Edit(id.clone()));
+        assert_eq!(form(&w).text(FormField::DbUser), "me");
+        assert!(!form(&w).text(FormField::Target).contains("user="));
+        let secrets = saved_secrets(w.dispatch_connection(A::Save));
+        assert!(secrets.is_empty());
+        assert_eq!(w.sidebar().profile(&id).unwrap().spec().target, before);
+    }
+
+    #[test]
     fn invalid_form_keeps_the_dialog_and_shows_errors() {
         let mut w = manager();
         w.dispatch_connection(A::New);
