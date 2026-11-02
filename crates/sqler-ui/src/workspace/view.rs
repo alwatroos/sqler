@@ -1270,7 +1270,9 @@ impl WorkspaceView {
         self.bridge.wait_all(runs, limit)
     }
 
-    /// Sets the text of a form input from outside (a colour swatch was clicked).
+    /// Sets the text of a form input from outside (a colour swatch was clicked, or the form moved
+    /// user info out of the Target). An input that already shows `text` is left alone, so the
+    /// change it would report cannot loop.
     pub(crate) fn set_form_input(
         &mut self,
         field: FormField,
@@ -1279,6 +1281,9 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         if let Some(input) = self.inputs.as_ref().and_then(|i| i.field(field)) {
+            if input.read(cx).value().as_ref() == text {
+                return;
+            }
             input.update(cx, |state, cx| state.set_value(text, window, cx));
         }
     }

@@ -610,7 +610,16 @@ fn steps_of(scene: &Scene) -> Vec<Step> {
             Step::Wait(Wait::Editors(1)),
             Step::Command("workbench:toggle-side-panel"),
         ],
-        "connection-dialog" => vec![Step::Command("connection:new")],
+        "connection-dialog" => {
+            let mut steps = vec![Step::Command("connection:new")];
+            // A server driver, so the Username row shows.
+            steps.extend(
+                DriverId::new("postgres")
+                    .ok()
+                    .map(|d| Step::Connection(ConnectionAction::SetDriver(d))),
+            );
+            steps
+        }
         "import-source" => vec![Step::ImportOpen, Step::Pause(2)],
         "import-preview" => vec![
             Step::ImportOpen,

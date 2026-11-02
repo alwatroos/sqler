@@ -80,8 +80,9 @@ The `id` is made from the name when SQLer creates the connection and does not ch
 it. Keep it when you edit the file by hand.
 
 A target that contains a secret is rejected, and the error does not repeat the target. This covers any
-user part in a `scheme://` URL and any `password`, `pwd`, `secret` or `token` parameter. Put the
-database user in the target as a parameter, for example `?user=app`.
+user part in a `scheme://` URL and any `password`, `pwd`, `secret` or `token` parameter. The database
+user is stored in the target as a parameter, for example `?user=app`; the connection form fills it from
+its Username field.
 
 ### `[connection.tls]`
 
@@ -154,10 +155,18 @@ path, or a client certificate without its key is reported next to the field, and
 
 ### Target rule
 
-The target is a file path (for example `SQLite`) or a URL `scheme://host:port/db?user=name`. Put the
-database user in the `user` parameter. A target with a user part, `password=` or a similar parameter
-is rejected, and the message points to the password field. An SSH tunnel and a database password need
-a URL target.
+The target is a file path (for example `SQLite`) or a URL `scheme://host:port/database`. For server
+databases the form has a **Username** field below Target. The user is saved in the stored target as
+`?user=name` (the form adds it, and moves an existing one to the end of the query). A target with
+`password=` or a similar parameter is rejected, and the message points to the Username and Password
+fields. An SSH tunnel, a database password and a username need a URL target. `SQLite` has no
+Username field and its path is never changed.
+
+Paste a connection string with a user, for example `postgres://alice:secret@db.example:5432/app`, into
+Target: SQLer moves `alice` into Username and `secret` into Password and removes both from Target.
+Percent escapes such as `%40` are decoded. A `?user=alice` in Target is also shown in Username, and
+changing Username changes the target. Paste the whole string; if you type a password that contains a
+raw `@`, use the Password field instead.
 
 ### Supported databases
 
@@ -179,7 +188,10 @@ The database password, the SSH password and the key passphrase have their own ma
 to the system keychain when you save, never to `connections.toml`; the file only gets the
 `..._in_keychain` flags. When you edit a connection that has a stored secret, the field shows that
 one is kept; type to replace it, or choose to clear it to remove the stored value on save. Saving a form without a password does not
-touch the keychain. See [Secrets](secrets.md).
+touch the keychain. A password taken from a pasted connection string is handled the same way: it is
+shown only in the masked Password field and goes to the keychain, never into the saved target. Editing
+a connection shows its Username; the stored password stays until you change it. See
+[Secrets](secrets.md).
 
 ### Import from other tools
 
