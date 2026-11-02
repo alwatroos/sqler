@@ -67,6 +67,10 @@ pem-rfc7468 = { version = "1.0.0", default-features = false, features = ["alloc"
 zeroize = { version = "1.9.1", default-features = false, features = ["alloc"] }
 agent-client-protocol = "3.4.0"
 tokio-util = { version = "0.7.20", default-features = false, features = ["compat"] }
+# In-app update install (ADR-0078): read the one program out of the release archive.
+lzma-rs = "0.3.0"
+tar = { version = "0.4.46", default-features = false }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 tokio-stream = { version = "0.1.19", default-features = false, features = ["net"] }
 # SQL Server (ADR-0054, P16): tiberius without its defaults (native-tls, winauth: no OpenSSL, no Windows auth);
 # only TDS 7.3 and rustls. No chrono/time/decimal features: dates and decimals are decoded from the raw fields.

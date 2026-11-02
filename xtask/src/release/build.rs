@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! Dist plan parsing, archive hashing and `Manifest` construction.
+//! Dist plan parsing, archive and macOS disk image hashing and `Manifest`
+//! construction.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -115,7 +116,34 @@ fn check_sidecar(dir: &Path, name: &str, sha: &str, required: bool) -> Result<()
     }
 }
 
-/// Build the manifest from a dist plan and the final archives in `artifacts`.
+/// The `.dmg` of a macOS triple. `None` (with a note) when it is missing under
+/// `--partial`.
+fn disk_image(
+    artifacts: &Path,
+    triple: &str,
+    tag: &str,
+    opts: &BuildOptions,
+) -> Result<Option<Download>, String> {
+    let dmg = format!("{APP_NAME}-{triple}.dmg");
+    let path = artifacts.join(&dmg);
+    if std::fs::symlink_metadata(&path).is_err() {
+        if opts.partial {
+            eprintln!("skipping `{dmg}`: not present");
+            return Ok(None);
+        }
+        return Err(format!("no disk image for `{triple}`"));
+    }
+    let (sha256, size) = hash_file(&path, &dmg)?;
+    check_sidecar(artifacts, &dmg, &sha256, !opts.partial)?;
+    Ok(Some(Download {
+        url: format!("https://github.com/{REPO}/releases/download/{tag}/{dmg}"),
+        sha256,
+        size,
+    }))
+}
+
+/// Build the manifest from a dist plan and the final archives (and, for the
+/// macOS triples, the `.dmg` disk images) in `artifacts`.
 ///
 /// # Errors
 ///
@@ -146,6 +174,7 @@ pub fn build(plan_json: &[u8], artifacts: &Path, opts: &BuildOptions) -> Result<
     let tag = expected_tag;
 
     let mut platforms = BTreeMap::new();
+    let mut bundles = BTreeMap::new();
     for name in &release.artifacts {
         let Some(item) = plan.artifacts.get(name) else {
             continue;
@@ -188,6 +217,11 @@ pub fn build(plan_json: &[u8], artifacts: &Path, opts: &BuildOptions) -> Result<
                 size,
             },
         );
+        if triple.ends_with("-apple-darwin")
+            && let Some(download) = disk_image(artifacts, triple, &tag, opts)?
+        {
+            bundles.insert(triple.clone(), download);
+        }
     }
     if opts.partial {
         if platforms.is_empty() {
@@ -207,6 +241,7 @@ pub fn build(plan_json: &[u8], artifacts: &Path, opts: &BuildOptions) -> Result<
         published: opts.published.clone(),
         notes_url: format!("https://github.com/{REPO}/releases/tag/{tag}"),
         platforms,
+        bundles,
     };
     let payload = serde_json::to_vec(&manifest).map_err(|_| "cannot encode manifest".to_owned())?;
     parse_manifest(&payload).map_err(|e| format!("built manifest is invalid: {e}"))?;
@@ -249,6 +284,13 @@ pub mod tests {
                 format!("{sha}  {name}\n"),
             )
             .unwrap();
+            if t.contains("-apple-darwin") {
+                let dmg = format!("sqler-app-{t}.dmg");
+                std::fs::write(dir.join(&dmg), dmg.as_bytes()).unwrap();
+                let sha = hex(ring::digest::digest(&ring::digest::SHA256, dmg.as_bytes()).as_ref());
+                std::fs::write(dir.join(format!("{dmg}.sha256")), format!("{sha}  {dmg}\n"))
+                    .unwrap();
+            }
         }
         Dir(dir)
     }
@@ -298,25 +340,52 @@ pub mod tests {
     }
 
     #[test]
-    fn installers_beside_archives_are_ignored() {
+    fn disk_images_become_bundles_and_other_installers_are_ignored() {
         let d = archives("installers");
-        for t in [
-            "aarch64-apple-darwin",
-            "x86_64-apple-darwin",
-            "x86_64-unknown-linux-gnu",
-            "aarch64-unknown-linux-gnu",
-        ] {
-            let ext = if t.contains("apple") { "dmg" } else { "deb" };
-            let name = format!("sqler-app-{t}.{ext}");
+        for t in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+            let name = format!("sqler-app-{t}.deb");
             std::fs::write(d.0.join(&name), name.as_bytes()).unwrap();
             std::fs::write(d.0.join(format!("{name}.sha256")), b"unused").unwrap();
         }
-        let m = build(PLAN.as_bytes(), &d.0, &opts(None, false)).unwrap();
+        std::fs::write(d.0.join("sqler-app-x86_64-pc-windows-msvc.msi"), b"msi").unwrap();
+        let m = build(PLAN.as_bytes(), &d.0, &opts(Some("v1.2.3"), false)).unwrap();
         assert_eq!(m.platforms.len(), 5);
+        assert_eq!(m.bundles.len(), 2);
+        let b = &m.bundles["aarch64-apple-darwin"];
+        assert_eq!(
+            b.url,
+            "https://github.com/alwatroos/sqler/releases/download/v1.2.3/sqler-app-aarch64-apple-darwin.dmg"
+        );
+        assert_eq!(b.size, "sqler-app-aarch64-apple-darwin.dmg".len() as u64);
+        assert!(m.bundles.contains_key("x86_64-apple-darwin"));
         let json = serde_json::to_string(&m).unwrap();
-        for ext in [".dmg", ".deb", ".msi"] {
+        for ext in [".deb", ".msi"] {
             assert!(!json.contains(ext), "{ext} leaked into the manifest");
         }
+    }
+
+    #[test]
+    fn a_missing_disk_image_fails_unless_partial() {
+        let d = archives("nodmg");
+        std::fs::remove_file(d.0.join("sqler-app-x86_64-apple-darwin.dmg")).unwrap();
+        let err = build(PLAN.as_bytes(), &d.0, &opts(None, false)).unwrap_err();
+        assert_eq!(err, "no disk image for `x86_64-apple-darwin`");
+        let m = build(PLAN.as_bytes(), &d.0, &opts(None, true)).unwrap();
+        assert_eq!(m.platforms.len(), 5);
+        assert_eq!(m.bundles.len(), 1);
+        assert!(!m.bundles.contains_key("x86_64-apple-darwin"));
+    }
+
+    #[test]
+    fn a_disk_image_sidecar_mismatch_fails() {
+        let d = archives("dmgside");
+        let side = d.0.join("sqler-app-aarch64-apple-darwin.dmg.sha256");
+        std::fs::write(&side, format!("{}  x\n", "0".repeat(64))).unwrap();
+        assert!(build(PLAN.as_bytes(), &d.0, &opts(None, false)).is_err());
+        assert!(build(PLAN.as_bytes(), &d.0, &opts(None, true)).is_err());
+        std::fs::remove_file(&side).unwrap();
+        assert!(build(PLAN.as_bytes(), &d.0, &opts(None, false)).is_err());
+        assert!(build(PLAN.as_bytes(), &d.0, &opts(None, true)).is_ok());
     }
 
     #[test]
@@ -345,6 +414,7 @@ pub mod tests {
         let m = build(PLAN.as_bytes(), &d.0, &opts(None, true)).unwrap();
         assert_eq!(m.platforms.len(), 4);
         assert!(!m.platforms.contains_key("x86_64-apple-darwin"));
+        assert!(!m.bundles.contains_key("x86_64-apple-darwin"));
     }
 
     #[test]

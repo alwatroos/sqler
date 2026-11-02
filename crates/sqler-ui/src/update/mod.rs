@@ -7,7 +7,8 @@
 //! Plain Rust, no `GPUI`. The setting `check_for_updates` is off by default and this model never
 //! asks the service for a check while it is off, not even for the manual command: it shows a hint
 //! instead. The service is armed only after the first frame. Only a version and a release-notes
-//! link ever reach the UI; nothing is downloaded or installed.
+//! link, plain download states and strings ever reach the UI; the download and the install run in
+//! the service (ADR-0078).
 
 #[cfg(any(test, feature = "screenshots"))]
 pub mod fake;
@@ -33,6 +34,9 @@ pub trait UpdateService: Send + Sync {
     fn check_now(&self);
     /// Remembers that the user dismissed the notice for this version.
     fn dismiss(&self, version: &str);
+    /// Installs the verified download of this version and restarts. The service reports through
+    /// [`DownloadEvent`]s.
+    fn install(&self, _version: &str) {}
 }
 
 /// What `run` takes from the binary for the update check.
@@ -82,6 +86,93 @@ pub enum UpdateEvent {
         /// How it ended.
         outcome: UpdateOutcome,
     },
+    /// The download or install of an announced version moved on.
+    Download(DownloadEvent),
+}
+
+/// A report about the download or install of one version. Every text is fixed and plain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadEvent {
+    /// Bytes arrived.
+    Progress {
+        /// The version.
+        version: String,
+        /// Bytes received.
+        received: u64,
+        /// Bytes expected.
+        total: u64,
+    },
+    /// The file passed the size and checksum checks.
+    Verified {
+        /// The version.
+        version: String,
+    },
+    /// The file was not downloaded or was refused.
+    Refused {
+        /// The version.
+        version: String,
+        /// Why.
+        reason: String,
+    },
+    /// The install began.
+    Installing {
+        /// The version.
+        version: String,
+    },
+    /// `SQLer` cannot replace itself here; the verified file is at `path`.
+    Manual {
+        /// The version.
+        version: String,
+        /// Why.
+        reason: String,
+        /// Where the verified file is.
+        path: String,
+    },
+    /// The install failed; the old version is intact.
+    InstallFailed {
+        /// The version.
+        version: String,
+        /// Why.
+        reason: String,
+    },
+    /// The new version is in place.
+    Restarting {
+        /// The version.
+        version: String,
+        /// Whether the service started the new version after this one exits.
+        relaunch: bool,
+    },
+}
+
+/// Where the download of the announced version stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadStatus {
+    /// Nothing (yet).
+    None,
+    /// Bytes are arriving.
+    Downloading {
+        /// Bytes received.
+        received: u64,
+        /// Bytes expected.
+        total: u64,
+    },
+    /// Downloaded and verified; ready to install.
+    Verified,
+    /// Not downloaded, with the reason.
+    Refused(String),
+    /// Installing.
+    Installing,
+    /// Cannot self-install; the file is at `path`.
+    Manual {
+        /// Why.
+        reason: String,
+        /// The verified file.
+        path: String,
+    },
+    /// The install failed, with the reason.
+    InstallFailed(String),
+    /// Installed; restarting.
+    Restarting,
 }
 
 /// How a check ended.
@@ -119,6 +210,8 @@ pub enum UpdateCommand {
     OpenNotes,
     /// Dismiss the notice.
     Dismiss,
+    /// Install the verified update and restart.
+    Install,
 }
 
 /// Work for the view to carry out.
@@ -134,6 +227,10 @@ pub enum UpdateEffect {
     Dismiss(String),
     /// Open this `https` URL in the browser.
     OpenUrl(String),
+    /// Call [`UpdateService::install`].
+    Install(String),
+    /// Quit the application (the new version is in place).
+    Quit,
 }
 
 /// Whether this build can check for updates.
@@ -165,6 +262,7 @@ const COMMANDS: &[(&str, &str)] = &[
         "settings:toggle-update-checks",
         "Toggle Automatic Update Checks",
     ),
+    ("app:install-update", "Install Update and Restart"),
 ];
 
 /// Registers the update commands.
@@ -188,6 +286,7 @@ pub fn action_for(id: &CommandId, enabled: bool) -> Option<UpdateCommand> {
         "app:open-release-notes" => Some(UpdateCommand::OpenNotes),
         "app:dismiss-update-notice" => Some(UpdateCommand::Dismiss),
         "settings:toggle-update-checks" => Some(UpdateCommand::SetEnabled(!enabled)),
+        "app:install-update" => Some(UpdateCommand::Install),
         _ => None,
     }
 }
@@ -206,6 +305,7 @@ impl UpdateCommand {
             Self::OpenNotes => 1,
             Self::Dismiss => 2,
             Self::SetEnabled(_) => 3,
+            Self::Install => 4,
         };
         CommandId::new(COMMANDS[index].0).expect("constant command ID is valid")
     }
@@ -213,6 +313,7 @@ impl UpdateCommand {
 
 const TOAST_NOT_IN_BUILD: &str = "Update checks are not part of this build.";
 const TOAST_NOT_CONFIGURED: &str = "Update checks are not configured in this build.";
+const TOAST_NO_VERIFIED: &str = "No verified update is ready to install.";
 const TOAST_OFF: &str = "Update checks are off. Turn them on in Settings > Updates.";
 
 /// The last finished check, for the status line.
@@ -232,6 +333,9 @@ pub struct UpdateModel {
     notice: Option<UpdateNotice>,
     last: Last,
     dismissed: Option<String>,
+    download: DownloadStatus,
+    /// The newest announced version, kept across a failed re-check.
+    announced: Option<String>,
 }
 
 impl UpdateModel {
@@ -249,6 +353,8 @@ impl UpdateModel {
             notice: None,
             last: Last::Never,
             dismissed: startup.dismissed.clone(),
+            download: DownloadStatus::None,
+            announced: None,
         }
     }
 
@@ -276,9 +382,61 @@ impl UpdateModel {
         self.notice.as_ref()
     }
 
-    /// One line about the last check.
+    /// Where the download of the announced version stands.
+    #[must_use]
+    pub fn download(&self) -> &DownloadStatus {
+        &self.download
+    }
+
+    /// Whether a verified file is ready to install (also after a failed install, for a retry).
+    #[must_use]
+    pub fn can_install(&self) -> bool {
+        matches!(
+            self.download,
+            DownloadStatus::Verified | DownloadStatus::InstallFailed(_)
+        )
+    }
+
+    /// The announced version the download belongs to.
+    fn announced(&self) -> Option<&str> {
+        self.announced.as_deref()
+    }
+
+    /// One line about the last check or, once a download started, about the update.
     #[must_use]
     pub fn status_line(&self) -> String {
+        if self.checking {
+            return "Checking\u{2026}".to_owned();
+        }
+        if let (Some(v), Last::Available(_)) = (self.announced(), &self.last) {
+            match &self.download {
+                DownloadStatus::None | DownloadStatus::Restarting => {}
+                DownloadStatus::Downloading { received, total } => {
+                    return format!(
+                        "Downloading SQLer {v} ({} of {} MB)",
+                        received / 1_000_000,
+                        total / 1_000_000
+                    );
+                }
+                DownloadStatus::Verified => return format!("SQLer {v} is ready to install"),
+                DownloadStatus::Refused(r) => {
+                    return format!("SQLer {v} was not downloaded: {r}");
+                }
+                DownloadStatus::Installing => return format!("Installing SQLer {v}\u{2026}"),
+                DownloadStatus::Manual { reason, .. } => {
+                    return format!("Install SQLer {v} by hand: {reason}");
+                }
+                DownloadStatus::InstallFailed(r) => {
+                    return format!("Could not install SQLer {v}: {r}");
+                }
+            }
+        }
+        self.check_line()
+    }
+
+    /// One line about the last check only (the Settings Status row); the download has its own row.
+    #[must_use]
+    pub fn check_line(&self) -> String {
         if self.checking {
             return "Checking\u{2026}".to_owned();
         }
@@ -313,11 +471,27 @@ impl UpdateModel {
                     (vec![UpdateEffect::CheckNow], None)
                 }
             },
+            UpdateCommand::Install => match self.availability {
+                Availability::Unavailable => (Vec::new(), Some(TOAST_NOT_IN_BUILD.to_owned())),
+                Availability::NotConfigured => (Vec::new(), Some(TOAST_NOT_CONFIGURED.to_owned())),
+                Availability::Ready if !self.can_install() => {
+                    (Vec::new(), Some(TOAST_NO_VERIFIED.to_owned()))
+                }
+                Availability::Ready => match self.announced().map(str::to_owned) {
+                    Some(v) => {
+                        self.download = DownloadStatus::Installing;
+                        (vec![UpdateEffect::Install(v)], None)
+                    }
+                    None => (Vec::new(), Some(TOAST_NO_VERIFIED.to_owned())),
+                },
+            },
             UpdateCommand::SetEnabled(on) => {
                 if self.availability != Availability::Ready {
                     return (Vec::new(), None);
                 }
                 if !on {
+                    self.download = DownloadStatus::None;
+                    self.announced = None;
                     // The service aborts the check; its late result must not linger.
                     self.checking = false;
                 }
@@ -348,7 +522,82 @@ impl UpdateModel {
 
     /// Takes a report of the service. Returns a toast text; only a manual check gets one.
     pub fn event(&mut self, event: UpdateEvent) -> Option<String> {
+        self.event_with_effects(event).1
+    }
+
+    /// Like [`Self::event`], but also returns the work for the view (the quit after an install).
+    pub fn event_with_effects(
+        &mut self,
+        event: UpdateEvent,
+    ) -> (Vec<UpdateEffect>, Option<String>) {
+        if let UpdateEvent::Download(download) = event {
+            return self.download_event(download);
+        }
+        (Vec::new(), self.check_event(event))
+    }
+
+    fn download_event(&mut self, event: DownloadEvent) -> (Vec<UpdateEffect>, Option<String>) {
+        use DownloadEvent as E;
+        let version = match &event {
+            E::Progress { version, .. }
+            | E::Verified { version }
+            | E::Refused { version, .. }
+            | E::Installing { version }
+            | E::Manual { version, .. }
+            | E::InstallFailed { version, .. }
+            | E::Restarting { version, .. } => version.clone(),
+        };
+        if self.announced() != Some(version.as_str()) {
+            return (Vec::new(), None);
+        }
         match event {
+            E::Progress {
+                received, total, ..
+            } => {
+                self.download = DownloadStatus::Downloading { received, total };
+                (Vec::new(), None)
+            }
+            E::Verified { .. } => {
+                self.download = DownloadStatus::Verified;
+                (Vec::new(), None)
+            }
+            E::Refused { reason, .. } => {
+                self.download = DownloadStatus::Refused(reason);
+                (Vec::new(), None)
+            }
+            E::Installing { .. } => {
+                self.download = DownloadStatus::Installing;
+                (Vec::new(), None)
+            }
+            E::Manual { reason, path, .. } => {
+                let toast = format!("{reason} Verified file: {path}");
+                self.download = DownloadStatus::Manual { reason, path };
+                (Vec::new(), Some(toast))
+            }
+            E::InstallFailed { reason, .. } => {
+                let toast = format!("Could not install SQLer {version}: {reason}");
+                self.download = DownloadStatus::InstallFailed(reason);
+                (Vec::new(), Some(toast))
+            }
+            E::Restarting { relaunch, .. } => {
+                self.download = DownloadStatus::Restarting;
+                if relaunch {
+                    (vec![UpdateEffect::Quit], None)
+                } else {
+                    (
+                        Vec::new(),
+                        Some(format!(
+                            "SQLer {version} is installed. Quit and reopen SQLer to use it."
+                        )),
+                    )
+                }
+            }
+        }
+    }
+
+    fn check_event(&mut self, event: UpdateEvent) -> Option<String> {
+        match event {
+            UpdateEvent::Download(_) => None,
             UpdateEvent::Started { .. } => {
                 self.checking = true;
                 None
@@ -358,10 +607,14 @@ impl UpdateModel {
                 let toast = match outcome {
                     UpdateOutcome::UpToDate { latest } => {
                         self.notice = None;
+                        self.download = DownloadStatus::None;
+                        self.announced = None;
                         self.last = Last::UpToDate(latest);
                         "SQLer is up to date.".to_owned()
                     }
                     UpdateOutcome::Available { version, notes_url } => {
+                        self.download = DownloadStatus::None;
+                        self.announced = Some(version.clone());
                         let hidden = !manual && self.dismissed.as_deref() == Some(&version);
                         self.last = Last::Available(version.clone());
                         let toast = format!(
@@ -423,6 +676,189 @@ mod tests {
         m.event(UpdateEvent::Finished { manual, outcome })
     }
 
+    fn dl(m: &mut UpdateModel, e: DownloadEvent) -> (Vec<UpdateEffect>, Option<String>) {
+        m.event_with_effects(UpdateEvent::Download(e))
+    }
+
+    fn up_to_date() -> UpdateOutcome {
+        UpdateOutcome::UpToDate {
+            latest: "1.0.0".into(),
+        }
+    }
+
+    fn verified_model() -> UpdateModel {
+        let mut m = ready();
+        finished(&mut m, false, available("1.1.0"));
+        dl(
+            &mut m,
+            DownloadEvent::Verified {
+                version: "1.1.0".into(),
+            },
+        );
+        m
+    }
+
+    #[test]
+    fn download_progress_and_status_lines() {
+        let mut m = ready();
+        finished(&mut m, false, available("1.1.0"));
+        dl(
+            &mut m,
+            DownloadEvent::Progress {
+                version: "1.1.0".into(),
+                received: 3_000_000,
+                total: 12_000_000,
+            },
+        );
+        assert_eq!(m.status_line(), "Downloading SQLer 1.1.0 (3 of 12 MB)");
+        assert!(!m.can_install());
+        dl(
+            &mut m,
+            DownloadEvent::Refused {
+                version: "1.1.0".into(),
+                reason: "no".into(),
+            },
+        );
+        assert_eq!(m.status_line(), "SQLer 1.1.0 was not downloaded: no");
+        dl(
+            &mut m,
+            DownloadEvent::Verified {
+                version: "1.1.0".into(),
+            },
+        );
+        assert_eq!(m.status_line(), "SQLer 1.1.0 is ready to install");
+        assert!(m.can_install());
+    }
+
+    #[test]
+    fn events_for_another_version_are_ignored() {
+        let mut m = ready();
+        finished(&mut m, false, available("1.1.0"));
+        dl(
+            &mut m,
+            DownloadEvent::Verified {
+                version: "1.0.5".into(),
+            },
+        );
+        assert_eq!(*m.download(), DownloadStatus::None);
+        assert!(!m.can_install());
+    }
+
+    #[test]
+    fn install_is_gated_and_asks_the_service() {
+        let mut m = ready();
+        assert_eq!(
+            m.command(UpdateCommand::Install, true),
+            (Vec::new(), Some(TOAST_NO_VERIFIED.to_owned()))
+        );
+        let mut m = verified_model();
+        assert_eq!(
+            m.command(UpdateCommand::Install, true),
+            (vec![UpdateEffect::Install("1.1.0".into())], None)
+        );
+        assert_eq!(*m.download(), DownloadStatus::Installing);
+        assert_eq!(m.status_line(), "Installing SQLer 1.1.0\u{2026}");
+        assert_eq!(
+            m.command(UpdateCommand::Install, true).1.as_deref(),
+            Some(TOAST_NO_VERIFIED)
+        );
+        let mut m = UpdateModel::new(&UpdateStartup::unavailable());
+        assert_eq!(
+            m.command(UpdateCommand::Install, true).1.as_deref(),
+            Some(TOAST_NOT_IN_BUILD)
+        );
+        assert_eq!(
+            model_for(false)
+                .command(UpdateCommand::Install, true)
+                .1
+                .as_deref(),
+            Some(TOAST_NOT_CONFIGURED)
+        );
+    }
+
+    #[test]
+    fn manual_failed_and_restarting_toasts() {
+        let mut m = verified_model();
+        let (_, toast) = dl(
+            &mut m,
+            DownloadEvent::Manual {
+                version: "1.1.0".into(),
+                reason: "By hand.".into(),
+                path: "/x/y".into(),
+            },
+        );
+        assert_eq!(toast.as_deref(), Some("By hand. Verified file: /x/y"));
+        assert_eq!(m.status_line(), "Install SQLer 1.1.0 by hand: By hand.");
+        let (_, toast) = dl(
+            &mut m,
+            DownloadEvent::InstallFailed {
+                version: "1.1.0".into(),
+                reason: "swap".into(),
+            },
+        );
+        assert_eq!(
+            toast.as_deref(),
+            Some("Could not install SQLer 1.1.0: swap")
+        );
+        assert_eq!(m.status_line(), "Could not install SQLer 1.1.0: swap");
+        assert!(m.can_install());
+        let (effects, toast) = dl(
+            &mut m,
+            DownloadEvent::Restarting {
+                version: "1.1.0".into(),
+                relaunch: true,
+            },
+        );
+        assert_eq!((effects, toast), (vec![UpdateEffect::Quit], None));
+        let (effects, toast) = dl(
+            &mut m,
+            DownloadEvent::Restarting {
+                version: "1.1.0".into(),
+                relaunch: false,
+            },
+        );
+        assert_eq!(effects, Vec::new());
+        assert_eq!(
+            toast.as_deref(),
+            Some("SQLer 1.1.0 is installed. Quit and reopen SQLer to use it.")
+        );
+    }
+
+    #[test]
+    fn a_new_check_or_turning_off_resets_the_download() {
+        let mut m = verified_model();
+        finished(&mut m, false, available("1.2.0"));
+        assert_eq!(*m.download(), DownloadStatus::None);
+        let mut m = verified_model();
+        finished(&mut m, false, up_to_date());
+        assert_eq!(*m.download(), DownloadStatus::None);
+        let mut m = verified_model();
+        m.command(UpdateCommand::SetEnabled(false), true);
+        assert_eq!(*m.download(), DownloadStatus::None);
+        // A failed re-check keeps the verified file.
+        let mut m = verified_model();
+        finished(
+            &mut m,
+            false,
+            UpdateOutcome::Failed {
+                message: "x".into(),
+            },
+        );
+        assert!(m.can_install());
+    }
+
+    #[test]
+    fn install_command_is_registered_at_index_four() {
+        assert_eq!(
+            UpdateCommand::Install.command_id().as_str(),
+            "app:install-update"
+        );
+        assert_eq!(
+            action_for(&UpdateCommand::Install.command_id(), true),
+            Some(UpdateCommand::Install)
+        );
+    }
+
     #[test]
     fn ids_are_valid_and_round_trip() {
         let mut registry = CommandRegistry::new();
@@ -435,6 +871,7 @@ mod tests {
             UpdateCommand::CheckNow,
             UpdateCommand::OpenNotes,
             UpdateCommand::Dismiss,
+            UpdateCommand::Install,
         ] {
             assert_eq!(action_for(&cmd.command_id(), true), Some(cmd));
         }

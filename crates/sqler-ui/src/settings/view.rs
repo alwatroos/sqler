@@ -18,7 +18,7 @@ use crate::ai::settings::view::ai_section;
 use crate::theme::SPACE;
 use crate::theme::icons::AppIcon;
 use crate::theme::widgets::{icon_button, section_header};
-use crate::update::{Availability, UpdateCommand};
+use crate::update::{Availability, DownloadStatus, UpdateCommand};
 use crate::workspace::chrome::{ICON_SM, field_row, ui_scale};
 use crate::workspace::{Workspace, WorkspaceAction, WorkspaceView};
 
@@ -144,7 +144,7 @@ fn update_section(
             .gap(px(SPACE[2]))
             .child(switch)
             .child(note(
-                "Asks GitHub Releases for a signed version file about once a day. Nothing is downloaded or installed; no personal data is sent.",
+                "Asks GitHub Releases for a signed version file about once a day. A newer version is downloaded and verified in the background and installed only when you choose Install and restart. No personal data is sent.",
             )),
         cx,
     ));
@@ -156,7 +156,7 @@ fn update_section(
         .on_click(cx.listener(|view, _, _, cx| {
             view.run_update_command(UpdateCommand::CheckNow, cx);
         }));
-    section.child(field_row(
+    section = section.child(field_row(
         "Status",
         div()
             .flex()
@@ -164,6 +164,33 @@ fn update_section(
             .items_center()
             .gap(px(SPACE[3]))
             .child(check)
+            .child(
+                div()
+                    .text_size(px(small))
+                    .text_color(muted)
+                    .child(model.check_line()),
+            ),
+        cx,
+    ));
+    if *model.download() == DownloadStatus::None {
+        return section;
+    }
+    let install = Button::new("updates-install")
+        .label("Install and restart")
+        .small()
+        .primary()
+        .disabled(!model.can_install())
+        .on_click(cx.listener(|view, _, _, cx| {
+            view.run_update_command(UpdateCommand::Install, cx);
+        }));
+    section.child(field_row(
+        "Update",
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(SPACE[3]))
+            .child(install)
             .child(
                 div()
                     .text_size(px(small))

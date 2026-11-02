@@ -50,6 +50,8 @@ sudo ln -s /Applications/SQLer.app/Contents/MacOS/sqler /usr/local/bin/sqler
 
 From 1.2.2 the `.dmg` and its app are Developer ID signed, notarised and stapled (see below).
 
+With **Check for updates** on (see [Settings](settings.md#updates)), `SQLer.app` updates itself from the signed `.dmg` of a newer release when its folder is writable (`/Applications` for admin users). Running SQLer from the mounted disk image is not updated; copy it to `Applications` first.
+
 ### macOS: signed and notarised
 
 Releases from 1.0.1 are signed with a Developer ID certificate and notarised by Apple, so they open without the Gatekeeper prompt. The `.dmg` and the `SQLer.app` inside it are signed, notarised and stapled as well, so they also open offline.
@@ -105,6 +107,15 @@ Or unpack the `.zip` and start `sqler.exe`.
 ### Windows: SmartScreen
 
 The MSI and the `.exe` are unsigned, so SmartScreen may show "Windows protected your PC". Choose More info, then Run anyway.
+
+## Updating
+
+With **Check for updates** on (see [Settings](settings.md#updates)), SQLer downloads a newer version, verifies it and offers **Install and restart**. What updates itself:
+
+- The shell-installer or archive `sqler` binary, when the folder it runs from is writable (`~/.sqler/bin`, or wherever you unpacked it).
+- `SQLer.app`, replaced whole from the signed `.dmg`, when its folder is writable (`/Applications` for admin users).
+
+What you update by hand: SQLer run from the mounted disk image, a `.deb` (`apt`), an MSI under Program Files (run the new MSI), Homebrew or Nix installs, and any folder SQLer cannot write to. SQLer then tells you where the verified file is. Releases up to 1.2.2 cannot update themselves; install the first release with this feature by hand.
 
 ## What the installers put on disk
 

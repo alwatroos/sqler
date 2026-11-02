@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! The error type of the update check.
+//! The error type of the update check, download and install.
 //!
 //! Every text is fixed. None holds a URL, a header, a path or server data.
 
@@ -48,6 +48,36 @@ pub enum UpdateError {
     /// The signature does not match the payload.
     #[error("the update manifest signature is invalid")]
     BadSignature,
+    /// The release has no download for this platform.
+    #[error("this release has no download for this platform")]
+    NoArtifact,
+    /// The artifact URL is not a release address.
+    #[error("the download address is not a trusted release address")]
+    UntrustedUrl,
+    /// The downloaded size differs from the signed size.
+    #[error("the downloaded file does not have the signed size")]
+    SizeMismatch,
+    /// The downloaded bytes differ from the signed checksum.
+    #[error("the downloaded file does not match the signed checksum")]
+    HashMismatch,
+    /// The file changed between verification and install.
+    #[error("the update file changed after it was verified")]
+    ChangedAfterVerification,
+    /// The archive or bundle does not hold the `SQLer` program.
+    #[error("the update archive does not contain the SQLer program")]
+    ArchiveLayout,
+    /// The new program reports another version.
+    #[error("the downloaded program reports a different version")]
+    VersionMismatch,
+    /// The macOS signature check failed.
+    #[error("the downloaded app does not pass the macOS signature check")]
+    BundleSignature,
+    /// The swap failed; the old version is unchanged.
+    #[error("the new version could not be put in place; the current version is unchanged")]
+    Swap,
+    /// A local file could not be read or written.
+    #[error("the update file could not be read or written")]
+    Io,
 }
 
 /// Maps a transport error. The URL is removed first.

@@ -74,9 +74,10 @@ fn manifest(a: &ManifestArgs, w: &mut dyn Write) -> Result<(), String> {
         let kid = envelope_key_id(&bytes)?;
         std::fs::write(&a.out, &bytes).map_err(|_| "cannot write the output file".to_owned())?;
         format!(
-            "signed {out_name} key_id={kid} version={} platforms={}{}",
+            "signed {out_name} key_id={kid} version={} platforms={} bundles={}{}",
             built.version,
             built.platforms.len(),
+            built.bundles.len(),
             if a.test_key { " (TEST ONLY key)" } else { "" }
         )
     } else {
@@ -85,9 +86,10 @@ fn manifest(a: &ManifestArgs, w: &mut dyn Write) -> Result<(), String> {
         bytes.push(b'\n');
         std::fs::write(&a.out, &bytes).map_err(|_| "cannot write the output file".to_owned())?;
         format!(
-            "unsigned manifest written {out_name} version={} platforms={}",
+            "unsigned manifest written {out_name} version={} platforms={} bundles={}",
             built.version,
-            built.platforms.len()
+            built.platforms.len(),
+            built.bundles.len()
         )
     };
     writeln!(w, "{line}").map_err(|e| write_error(&e))
@@ -109,6 +111,10 @@ fn verify(file: &Path, public_key_file: Option<&Path>, w: &mut dyn Write) -> Res
     .map_err(|e| write_error(&e))?;
     for (triple, d) in &m.platforms {
         writeln!(w, "{triple} {} {} {}", d.size, d.sha256, d.url).map_err(|e| write_error(&e))?;
+    }
+    for (triple, d) in &m.bundles {
+        writeln!(w, "bundle {triple} {} {} {}", d.size, d.sha256, d.url)
+            .map_err(|e| write_error(&e))?;
     }
     Ok(())
 }
@@ -160,7 +166,8 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.trim_end().ends_with("platforms=5 (TEST ONLY key)"),
+            text.trim_end()
+                .ends_with("platforms=5 bundles=2 (TEST ONLY key)"),
             "{text}"
         );
         assert!(!text.contains(std::env::temp_dir().to_string_lossy().as_ref()));
@@ -180,7 +187,9 @@ mod tests {
         .unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("ok key_id="), "{text}");
-        assert_eq!(text.lines().count(), 6, "{text}");
+        assert_eq!(text.lines().count(), 8, "{text}");
+        assert_eq!(text.lines().filter(|l| l.starts_with("bundle ")).count(), 2);
+        assert!(text.contains("bundle aarch64-apple-darwin "), "{text}");
     }
 
     #[test]
@@ -198,6 +207,7 @@ mod tests {
         let m: sqler_update::Manifest =
             serde_json::from_slice(&std::fs::read(d.0.join("m.json")).unwrap()).unwrap();
         assert_eq!(m.platforms.len(), 5);
+        assert_eq!(m.bundles.len(), 2);
     }
 
     #[test]

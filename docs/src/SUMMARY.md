@@ -118,6 +118,7 @@
   - [ADR-0075: Platform installers](adr/0075-platform-installers.md)
   - [ADR-0076: AI chat panel](adr/0076-ai-chat-panel.md)
   - [ADR-0077: AI chat history store](adr/0077-ai-chat-history-store.md)
+  - [ADR-0078: In-app update install](adr/0078-in-app-update-install.md)
 - [Plugin development](plugin-development/index.md)
   - [Tutorial](plugin-development/tutorial.md)
   - [Manifest](plugin-development/manifest.md)

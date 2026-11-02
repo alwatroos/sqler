@@ -5023,6 +5023,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lzma-rs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "297e814c836ae64db86b36cf2a557ba54368d03f6afcd7d947c266692f71115e"
+dependencies = [
+ "byteorder",
+ "crc",
+]
+
+[[package]]
 name = "mac"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8290,6 +8300,7 @@ version = "1.2.2"
 dependencies = [
  "base64 0.22.1",
  "embed-resource",
+ "lzma-rs",
  "ring",
  "semver",
  "serde_json",
@@ -8314,7 +8325,9 @@ dependencies = [
  "sqler-tunnel",
  "sqler-ui",
  "sqler-update",
+ "tar",
  "tokio",
+ "zip",
 ]
 
 [[package]]
@@ -8612,13 +8625,16 @@ name = "sqler-update"
 version = "1.2.2"
 dependencies = [
  "base64 0.22.1",
+ "lzma-rs",
  "reqwest",
  "ring",
  "semver",
  "serde",
  "serde_json",
+ "tar",
  "thiserror 2.0.21",
  "tokio",
+ "zip",
 ]
 
 [[package]]

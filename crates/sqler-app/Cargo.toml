@@ -53,7 +53,7 @@ ai-ollama = ["dep:sqler-ai-ollama"]
 ai-anthropic = ["dep:sqler-ai-anthropic"]
 ai-openai = ["dep:sqler-ai-openai"]
 ai-mistral = ["dep:sqler-ai-mistral"]
-# The opt-in update check (ADR-0066): the check-only client with its signed manifest. Nothing runs unless the user
+# The opt-in update check and in-app install (ADR-0066, ADR-0078): the client with its signed manifest. Nothing runs unless the user
 # turns `check_for_updates` on; without the feature the settings page says the build has no update checks.
 update = ["dep:sqler-update", "dep:semver"]
 # Plugins (ADR-0060; off by default, ADR-0054): the wasmtime host with the Cranelift compiler (`cl`, loads plain
@@ -96,3 +96,7 @@ tokio = { workspace = true, features = ["macros", "time", "net", "io-util", "rt"
 ring.workspace = true
 base64.workspace = true
 serde_json.workspace = true
+# The fixtures of the end-to-end install tests: tar.xz and zip artifacts.
+lzma-rs.workspace = true
+tar.workspace = true
+zip.workspace = true

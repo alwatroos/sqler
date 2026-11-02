@@ -859,19 +859,21 @@ fn startup(
 
 /// The update service of the scenes: scripted, so no request is ever made.
 fn update_startup(scene: &str) -> crate::update::UpdateStartup {
-    use crate::update::UpdateOutcome;
     use crate::update::fake::ScriptedUpdates;
-    let outcome = match scene {
-        "settings-updates" => UpdateOutcome::UpToDate {
-            latest: "1.0.0".to_owned(),
-        },
-        "update-notice" => UpdateOutcome::Available {
-            version: "1.1.0".to_owned(),
-            notes_url: "https://github.com/alwatroos/sqler/releases/tag/v1.1.0".to_owned(),
-        },
-        _ => return crate::update::UpdateStartup::unavailable(),
+    use crate::update::{DownloadEvent, UpdateOutcome};
+    if !matches!(scene, "settings-updates" | "update-notice") {
+        return crate::update::UpdateStartup::unavailable();
+    }
+    let outcome = UpdateOutcome::Available {
+        version: "1.1.0".to_owned(),
+        notes_url: "https://github.com/alwatroos/sqler/releases/tag/v1.1.0".to_owned(),
     };
-    ScriptedUpdates::startup(true, outcome).1
+    let verified = DownloadEvent::Verified {
+        version: "1.1.0".to_owned(),
+    };
+    let (service, startup) = ScriptedUpdates::startup(true, outcome);
+    let _ = service.with_download(vec![verified]);
+    startup
 }
 
 /// The two-line draft the chat panel shows in the `ai-side-view` scene (synthetic).

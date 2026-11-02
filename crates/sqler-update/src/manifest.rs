@@ -50,9 +50,13 @@ pub struct Manifest {
     pub notes_url: String,
     /// Downloads by Rust target triple.
     pub platforms: BTreeMap<String, Download>,
+    /// macOS disk images by `*-apple-darwin` triple (ADR-0078). Absent in
+    /// manifests of older releases.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bundles: BTreeMap<String, Download>,
 }
 
-/// One downloadable artifact. This crate never fetches it.
+/// One downloadable artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Download {
     /// `https` URL of the artifact.
@@ -93,7 +97,14 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, UpdateError> {
     if !is_https(&manifest.notes_url) {
         return Err(UpdateError::Malformed("notes_url"));
     }
-    for download in manifest.platforms.values() {
+    if manifest
+        .bundles
+        .keys()
+        .any(|triple| !triple.ends_with("-apple-darwin"))
+    {
+        return Err(UpdateError::Malformed("bundle triple"));
+    }
+    for download in manifest.platforms.values().chain(manifest.bundles.values()) {
         if !is_https(&download.url) {
             return Err(UpdateError::Malformed("download url"));
         }
@@ -160,6 +171,42 @@ mod tests {
             parse_manifest(b"not json"),
             Err(UpdateError::Malformed(_))
         ));
+    }
+
+    #[test]
+    fn bundles_round_trip_and_are_optional() {
+        let plain = parse_manifest(good().as_bytes()).unwrap();
+        assert!(plain.bundles.is_empty());
+        assert!(!serde_json::to_string(&plain).unwrap().contains("bundles"));
+        let with = good().replace(
+            r#""extra":true,"#,
+            &format!(
+                r#""bundles":{{"aarch64-apple-darwin":{{"url":"https://e.com/a.dmg","sha256":"{SHA}","size":5}}}},"#
+            ),
+        );
+        let m = parse_manifest(with.as_bytes()).unwrap();
+        assert_eq!(m.bundles["aarch64-apple-darwin"].size, 5);
+        let again = parse_manifest(&serde_json::to_vec(&m).unwrap()).unwrap();
+        assert_eq!(again, m);
+    }
+
+    #[test]
+    fn bundles_are_validated() {
+        for (triple, url) in [
+            ("x86_64-unknown-linux-gnu", "https://e.com/a.dmg"),
+            ("aarch64-apple-darwin", "http://e.com/a.dmg"),
+        ] {
+            let json = good().replace(
+                r#""extra":true,"#,
+                &format!(
+                    r#""bundles":{{"{triple}":{{"url":"{url}","sha256":"{SHA}","size":5}}}},"#
+                ),
+            );
+            assert!(matches!(
+                parse_manifest(json.as_bytes()),
+                Err(UpdateError::Malformed(_))
+            ));
+        }
     }
 
     #[test]

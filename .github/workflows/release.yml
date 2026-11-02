@@ -26,7 +26,8 @@ name: Release
 #   ad-hoc signed in `build` and on dry runs, replaced on tag runs by the Developer ID signed, notarised and stapled
 #   one from `sign (macOS)`, ADR-0065), Linux `.deb` (dpkg-deb), Windows `.msi` (cargo-dist, with a Start menu shortcut).
 #   Each is installed or mounted and run in CI (packaging/*/check-*); `global` adds the `.dmg` and `.deb` hashes to
-#   sha256.sum. The update manifest still covers the archives only.
+#   sha256.sum. The update manifest covers the archives plus the macOS `.dmg` as `bundles` (ADR-0078), which the app
+#   downloads and installs itself.
 #
 # The release feature set is the single `features = [...]` line in dist-workspace.toml, set per owner decision 12
 # (ADR-0064 amendment). `release-guard.sh` rejects `driver-duckdb` whatever that line holds (ADR-0070).
