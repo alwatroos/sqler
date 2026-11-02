@@ -12,6 +12,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::WorkspaceView;
 use crate::update::{UpdateCommand, UpdateEffect, UpdateEvent};
+use crate::workspace::WorkspaceAction;
 
 impl WorkspaceView {
     /// Schedules the start of the update service for after the first frame was drawn. A frame
@@ -68,6 +69,10 @@ impl WorkspaceView {
             cx.open_url(url);
             return;
         }
+        if matches!(effect, UpdateEffect::Quit) {
+            self.dispatch(WorkspaceAction::Quit, cx);
+            return;
+        }
         let Some(service) = self.update_service.as_ref() else {
             return;
         };
@@ -76,7 +81,8 @@ impl WorkspaceView {
             UpdateEffect::SetEnabled(enabled) => service.set_enabled(enabled),
             UpdateEffect::CheckNow => service.check_now(),
             UpdateEffect::Dismiss(version) => service.dismiss(&version),
-            UpdateEffect::OpenUrl(_) => {}
+            UpdateEffect::Install(version) => service.install(&version),
+            UpdateEffect::OpenUrl(_) | UpdateEffect::Quit => {}
         }
     }
 }

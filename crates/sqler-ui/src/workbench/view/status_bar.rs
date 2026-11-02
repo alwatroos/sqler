@@ -20,6 +20,7 @@ use crate::plugins::status::Shown;
 use crate::theme::icons::AppIcon;
 use crate::theme::widgets::env_chip;
 use crate::theme::{SPACE, env_accent, env_label, tooltip_text};
+use crate::update::DownloadStatus;
 use crate::workbench::{RunIndicator, StatusBarModel, status_solid};
 use crate::workspace::WorkspaceView;
 
@@ -242,25 +243,41 @@ pub(crate) fn status_bar(
     }
     // The announced version: a dismissible item, version and release-notes link only.
     if let Some(notice) = view.workspace().update().notice() {
-        let (version, tip) = (
-            format!("Update {}", notice.version),
-            format!(
-                "SQLer {} is available. Open the release notes.",
-                notice.version
+        let v = &notice.version;
+        let (command, icon, version, tip) = match view.workspace().update().download() {
+            DownloadStatus::Verified | DownloadStatus::InstallFailed(_) => (
+                "app:install-update",
+                AppIcon::RefreshCw,
+                format!("Restart to update {v}"),
+                format!("SQLer {v} is downloaded and verified. Install it and restart."),
             ),
-        );
+            DownloadStatus::Refused(reason) => (
+                "app:open-release-notes",
+                AppIcon::TriangleAlert,
+                format!("Update {v}"),
+                format!(
+                    "SQLer {v} is available. Not downloaded: {reason}. Open the release notes."
+                ),
+            ),
+            _ => (
+                "app:open-release-notes",
+                AppIcon::Info,
+                format!("Update {v}"),
+                format!("SQLer {v} is available. Open the release notes."),
+            ),
+        };
         right = right
             .child(
                 action_item(
                     "status-update",
                     colors,
                     None,
-                    "app:open-release-notes",
+                    command,
                     version.clone(),
                     Some(tip.into()),
                     cx,
                 )
-                .child(Icon::new(AppIcon::Info).size(px(12.)).text_color(text))
+                .child(Icon::new(icon).size(px(12.)).text_color(text))
                 .child(version),
             )
             .child(

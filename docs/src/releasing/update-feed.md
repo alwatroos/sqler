@@ -37,11 +37,15 @@ The file is one JSON envelope (`format`, `key_id`, `signature`, `payload`); `pay
 | `published` | UTC time of the job, `YYYY-MM-DDTHH:MM:SSZ` (informational) |
 | `notes_url` | `https://github.com/alwatroos/sqler/releases/tag/<tag>` |
 | `platforms` | one entry per target triple of `dist-workspace.toml` |
+| `bundles` | one entry per `*-apple-darwin` triple: the signed, notarised `.dmg` (ADR-0078). Optional; clients before 1.3 ignore it |
 
 A platform entry has `size` and `sha256` (computed over the final archive, after macOS signing, and checked against
 the `.sha256` sidecar) and `url`, which is the pinned tag URL `releases/download/<tag>/<archive>`. The archive is the
 `.tar.xz`, or the `.zip` on Windows (not the `.msi`). The `DuckDB` engine is not part of any archive and never in the
 manifest.
+
+A `bundles` entry has the same fields (`size`, `sha256`, `url`) and describes the release `.dmg` after signing and
+stapling. The client uses it to replace the whole `SQLer.app`; every other install uses the `platforms` archive.
 
 ## Release jobs
 
@@ -70,7 +74,7 @@ Both jobs are in `.github/workflows/release.yml` and call `xtask release manifes
    It prints `ok key_id=...`, the version and one line per platform (`<triple> <size> <sha256> <url>`). Use
    `--public-key-file crates/sqler-update/keys/<key id>.pub` to check against one key file.
 3. Read the manifest itself: `jq -r .payload sqler-update.json | base64 -d | jq .`.
-4. Download an archive from its `url` and compare: `shasum -a 256 <archive>` must equal that entry's `sha256`, and the
+4. Download an archive (or, for macOS, the `bundles` `.dmg`) from its `url` and compare: `shasum -a 256 <archive>` must equal that entry's `sha256`, and the
    file size must equal `size`.
 
 ## Rotation

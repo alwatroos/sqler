@@ -61,10 +61,11 @@ impl Workspace {
 
     /// Takes a report of the update service. A toast, if any, goes to the workspace notice.
     pub fn update_event(&mut self, event: UpdateEvent) -> Effect {
-        if let Some(toast) = self.update.event(event) {
+        let (effects, toast) = self.update.event_with_effects(event);
+        if let Some(toast) = toast {
             self.notice = Some(toast);
         }
-        Effect::None
+        Self::update_effects(effects)
     }
 }
 
@@ -99,6 +100,7 @@ mod tests {
             Effect::Update(UpdateEffect::SetEnabled(on)) => service.set_enabled(on),
             Effect::Update(UpdateEffect::CheckNow) => service.check_now(),
             Effect::Update(UpdateEffect::Dismiss(v)) => service.dismiss(&v),
+            Effect::Update(UpdateEffect::Install(v)) => service.install(&v),
             _ => {}
         }
     }
@@ -205,6 +207,29 @@ mod tests {
             ws.take_notice().as_deref(),
             Some("Could not check for updates: offline")
         );
+    }
+
+    #[test]
+    fn install_reaches_the_service_and_restarting_maps_to_quit() {
+        use crate::update::DownloadEvent;
+        let (mut ws, service) = workspace(true, up_to_date());
+        ws.update_event(UpdateEvent::Finished {
+            manual: false,
+            outcome: UpdateOutcome::Available {
+                version: "1.1.0".into(),
+                notes_url: "https://example.org/notes".into(),
+            },
+        });
+        ws.update_event(UpdateEvent::Download(DownloadEvent::Verified {
+            version: "1.1.0".into(),
+        }));
+        run(ws.dispatch_update(UpdateCommand::Install), &service);
+        assert_eq!(service.calls().installs, ["1.1.0"]);
+        let effect = ws.update_event(UpdateEvent::Download(DownloadEvent::Restarting {
+            version: "1.1.0".into(),
+            relaunch: true,
+        }));
+        assert!(matches!(effect, Effect::Update(UpdateEffect::Quit)));
     }
 
     #[test]

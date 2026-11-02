@@ -89,6 +89,9 @@ Source commands (all rows):
 | http | `http` | 1.5.0 | 2026-07-29 | T15. Request, response, header and status types of the HTTP front service. `MIT OR Apache-2.0`. Already in `Cargo.lock`. Checked 2026-10-21. Source: API |
 | subtle | `subtle` | 2.6.1 | 2024-06-24 | T15. `ConstantTimeEq` for the bearer-token compare. `BSD-3-Clause`. Already in `Cargo.lock` (RustCrypto). Checked 2026-10-21. Source: API |
 | tokio-util | `tokio-util` | 0.7.20 | 2026-10-09 | T15. `CancellationToken` for per-request cancellation and server shutdown. `MIT`. `default-features = false`. Already in `Cargo.lock`. Checked 2026-10-21. Source: API |
+| lzma-rs | `lzma-rs` | 0.3.0 | 2023-01-04 | ADR-0078 (`sqler-update`). Decodes the `.tar.xz` release archive in memory. Pure Rust, `MIT`. Default features (no logging). Newest stable is 0.3.0, not yanked. Old but the only pure-Rust xz decoder; no system `xz` is needed. Checked 2026-11-02. Source: API (`/api/v1/crates/lzma-rs`); `cargo info lzma-rs` |
+| tar | `tar` | 0.4.46 | 2026-05-18 | ADR-0078 (`sqler-update`). Reads the one `sqler` entry of the `.tar.xz` archive. `MIT OR Apache-2.0`; `rust-version` 1.63. `default-features = false` (no `xattr`, no `filetime` Unix extras needed for reading). Newest stable, not yanked. Already in `Cargo.lock`. Checked 2026-11-02. Source: API; `cargo info tar` |
+| zip | `zip` | 9.0.5 | 2026-10 | ADR-0078 (`sqler-update`). Reads `sqler.exe` from the Windows `.zip` archive. `MIT`; `rust-version` 1.88. Only the decoding features needed (`deflate`), no default features. 9.0.5 is the line already in `Cargo.lock`, so no second copy; the newest stable is 9.2.2 (2026-11-02), a day old and not chosen. Not yanked. Checked 2026-11-02. Source: API; `cargo info zip` |
 
 ## CI tools and actions
 

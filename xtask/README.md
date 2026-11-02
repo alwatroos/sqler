@@ -39,11 +39,11 @@ writes `bench-<date>-<commit7>-<os>.json` into `--out` (default `target/bench-re
 one) and writes the ICO and ICNS containers itself. The outputs are committed; see `assets/icon/README.md`.
 
 `release manifest` reads the cargo-dist plan manifest and the final release archives, builds the update manifest of
-`sqler-update` (sizes and SHA-256 per platform), signs it with Ed25519 and checks the result with the client's own
+`sqler-update` (sizes and SHA-256 per platform, plus the macOS `.dmg` of each `*-apple-darwin` triple under `bundles`, ADR-0078), signs it with Ed25519 and checks the result with the client's own
 verifier before it writes `--out`. The key is read from a file that others cannot read (never from argv or env), and
 it must be one of the keys compiled into `sqler-update`; `--test-key` signs with a throwaway key that is not
 compiled in (CI dry run, output is TEST ONLY). Without `--key-file` it writes the bare manifest JSON. `release verify`
-checks a signed file against the compiled-in keys, or against `--public-key-file`, and prints the platform entries.
+checks a signed file against the compiled-in keys, or against `--public-key-file`, and prints the platform entries and the `bundle` lines.
 Details: `docs/src/releasing/update-feed.md`.
 
 See [AGENTS.md](../AGENTS.md) for the project handbook.

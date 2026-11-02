@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: The SQLer Authors
 
-//! `UpdateClient`: one signed GET, no download.
+//! `UpdateClient`: one signed GET for the check; the download is in `download.rs`.
 
 use std::net::IpAddr;
 use std::time::Duration;
@@ -38,6 +38,9 @@ pub struct UpdateOffer {
     pub published: String,
     /// The artifact for this platform, `None` when the manifest has none.
     pub download: Option<Download>,
+    /// The macOS disk image for this platform, `None` when the manifest has
+    /// none (every non-macOS target, and releases before ADR-0078).
+    pub bundle: Option<Download>,
 }
 
 /// The Rust target triple of this build when it is one of the five release
@@ -62,14 +65,17 @@ pub fn current_target() -> Option<&'static str> {
 /// Checks a signed manifest for a newer version.
 ///
 /// It sends one `GET` with a `User-Agent` of `SQLer/<version> (update-check)`
-/// and no other identifying header, and never downloads an artifact.
+/// and no other identifying header. [`UpdateClient::download`] sends the same
+/// headers.
 #[derive(Debug, Clone)]
 pub struct UpdateClient {
-    client: Client,
-    feed: Url,
-    current: semver::Version,
+    pub(crate) client: Client,
+    pub(crate) feed: Url,
+    pub(crate) current: semver::Version,
     keys: Vec<TrustedKey>,
-    loopback: bool,
+    pub(crate) loopback: bool,
+    request: Duration,
+    pub(crate) stall: Duration,
 }
 
 impl UpdateClient {
@@ -104,13 +110,15 @@ impl UpdateClient {
                 "must use https unless it is a loopback address",
             ));
         }
-        let client = build_client(&current, loopback, CONNECT_TIMEOUT, REQUEST_TIMEOUT)?;
+        let client = build_client(&current, loopback, CONNECT_TIMEOUT)?;
         Ok(Self {
             client,
             feed,
             current,
             keys: embedded_keys(),
             loopback,
+            request: REQUEST_TIMEOUT,
+            stall: crate::DOWNLOAD_STALL_TIMEOUT,
         })
     }
 
@@ -121,7 +129,8 @@ impl UpdateClient {
         self
     }
 
-    /// Sets the connect and whole-request timeouts.
+    /// Sets the connect timeout and the whole-request timeout of the check. A
+    /// download has no whole-request timeout, only a stall timeout.
     ///
     /// # Errors
     ///
@@ -131,7 +140,8 @@ impl UpdateClient {
         connect: Duration,
         request: Duration,
     ) -> Result<Self, UpdateError> {
-        self.client = build_client(&self.current, self.loopback, connect, request)?;
+        self.client = build_client(&self.current, self.loopback, connect)?;
+        self.request = request;
         Ok(self)
     }
 
@@ -158,6 +168,7 @@ impl UpdateClient {
         let mut resp = self
             .client
             .get(self.feed.clone())
+            .timeout(self.request)
             .send()
             .await
             .map_err(from_reqwest)?;
@@ -182,11 +193,13 @@ impl UpdateClient {
         current_cmp.build = semver::BuildMetadata::EMPTY;
         if latest_cmp > current_cmp && latest.pre.is_empty() {
             let download = current_target().and_then(|t| manifest.platforms.get(t).cloned());
+            let bundle = current_target().and_then(|t| manifest.bundles.get(t).cloned());
             Ok(CheckOutcome::Available(UpdateOffer {
                 version: latest,
                 notes_url: manifest.notes_url,
                 published: manifest.published,
                 download,
+                bundle,
             }))
         } else {
             Ok(CheckOutcome::UpToDate { latest })
@@ -198,11 +211,9 @@ fn build_client(
     current: &semver::Version,
     loopback: bool,
     connect: Duration,
-    request: Duration,
 ) -> Result<Client, UpdateError> {
     let mut builder = Client::builder()
         .connect_timeout(connect)
-        .timeout(request)
         .user_agent(format!("SQLer/{current} (update-check)"))
         .redirect(Policy::custom(move |attempt| {
             redirect_decision(loopback, attempt)
@@ -238,7 +249,7 @@ fn redirect_decision(feed_loopback: bool, attempt: Attempt<'_>) -> reqwest::redi
     }
 }
 
-fn host_is_loopback(url: &Url) -> bool {
+pub(crate) fn host_is_loopback(url: &Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };

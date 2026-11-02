@@ -152,6 +152,8 @@ Jobs in order:
      `sqler-app_<triple>.cdx.xml` SBOM per target.
    - `update manifest` (environment `release`): signs `sqler-update.json` with `SQLER_UPDATE_SIGNING_KEY` and checks
      it with `xtask release verify`.
+     The manifest lists the five platform archives and, in `bundles`, the two macOS `.dmg` files (ADR-0078), all
+     hashed after signing.
 6. `host`: `gh release create` with every file and the notes of the `1.0.0` section of `CHANGELOG.md`, then checks
    that `sqler-update.json` is a release asset.
 

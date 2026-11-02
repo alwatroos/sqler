@@ -1,6 +1,6 @@
 [package]
 name = "sqler-update"
-description = "Check-only update client: a signed manifest from GitHub Releases, verified with Ed25519."
+description = "Update client: a signed manifest from GitHub Releases verified with Ed25519, and the download, check and install of the release artifact."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,6 +20,10 @@ semver.workspace = true
 ring.workspace = true
 base64.workspace = true
 thiserror.workspace = true
+lzma-rs.workspace = true
+tar.workspace = true
+zip.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "time", "process"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time", "sync"] }

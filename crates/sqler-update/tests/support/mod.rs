@@ -77,6 +77,22 @@ impl Reply {
         }
     }
 
+    /// A binary artifact body.
+    pub fn bytes(body: Vec<u8>) -> Self {
+        Self {
+            status: 200,
+            headers: vec![("Content-Type".into(), "application/octet-stream".into())],
+            body: Body::Full(body),
+        }
+    }
+
+    /// A body without `Content-Length`, ended by closing the connection.
+    pub fn unframed(body: &[u8]) -> Self {
+        let mut raw = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
+        raw.extend_from_slice(body);
+        Self::raw(raw)
+    }
+
     pub fn status(status: u16) -> Self {
         Self {
             status,
@@ -299,5 +315,127 @@ async fn serve(
             }
             client_closed.notify_one();
         }
+    }
+}
+
+/// Lowercase hex SHA-256.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .iter()
+        .fold(String::new(), |mut s, b| {
+            write!(s, "{b:02x}").unwrap();
+            s
+        })
+}
+
+/// One entry of a test archive.
+pub enum Entry<'a> {
+    File(&'a str, &'a [u8]),
+    Dir(&'a str),
+    Symlink(&'a str, &'a str),
+}
+
+/// A `.tar.xz` holding `entries`. Names are written verbatim, so `..` works.
+pub fn tar_xz_with(entries: &[Entry<'_>]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for entry in entries {
+        let mut h = tar::Header::new_gnu();
+        let (name, data, kind, link) = match entry {
+            Entry::File(n, d) => (*n, *d, tar::EntryType::Regular, None),
+            Entry::Dir(n) => (*n, &[][..], tar::EntryType::Directory, None),
+            Entry::Symlink(n, t) => (*n, &[][..], tar::EntryType::Symlink, Some(*t)),
+        };
+        h.set_entry_type(kind);
+        h.set_size(data.len() as u64);
+        h.set_mode(0o644);
+        let raw = h.as_old().name.len();
+        assert!(name.len() < raw);
+        let bytes = h.as_mut_bytes();
+        bytes[..name.len()].copy_from_slice(name.as_bytes());
+        if let Some(t) = link {
+            h.set_link_name(t).unwrap();
+        }
+        h.set_cksum();
+        out.extend_from_slice(h.as_bytes());
+        out.extend_from_slice(data);
+        let pad = (512 - data.len() % 512) % 512;
+        out.extend(std::iter::repeat_n(0_u8, pad));
+    }
+    out.extend(std::iter::repeat_n(0_u8, 1024));
+    let mut xz = Vec::new();
+    lzma_rs::xz_compress(&mut std::io::Cursor::new(out), &mut xz).unwrap();
+    xz
+}
+
+/// A `.zip` (stored) holding the regular files `entries`.
+pub fn zip_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in entries {
+        w.start_file(*name, opts).unwrap();
+        w.write_all(data).unwrap();
+    }
+    w.finish().unwrap().into_inner()
+}
+
+/// The text a fake `sqler` program prints for `--version`.
+pub fn fake_program(version: &str) -> Vec<u8> {
+    format!("#!/bin/sh\necho \"sqler {version}\"\n").into_bytes()
+}
+
+/// The `--version` output of a [`fake_program`], read from the file (nothing
+/// is executed, so there is no "text file busy" race).
+pub fn fake_probe(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let line = text.lines().find_map(|l| l.strip_prefix("echo \""))?;
+    Some(line.trim_end_matches('"').to_owned())
+}
+
+/// A minimal `SQLer.app` tree: `Contents/Info.plist` and a fake `sqler`.
+pub fn fake_app_tree(app: &std::path::Path, version: &str) {
+    let macos = app.join("Contents").join("MacOS");
+    std::fs::create_dir_all(&macos).unwrap();
+    std::fs::write(app.join("Contents").join("Info.plist"), "<plist/>").unwrap();
+    std::fs::write(macos.join("sqler"), fake_program(version)).unwrap();
+}
+
+/// Recursively copies a directory.
+pub fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let e = e.unwrap();
+        let dest = to.join(e.file_name());
+        if e.file_type().unwrap().is_dir() {
+            copy_tree(&e.path(), &dest);
+        } else {
+            std::fs::copy(e.path(), dest).unwrap();
+        }
+    }
+}
+
+/// A fresh temp dir, removed on drop.
+pub struct TempDir(pub std::path::PathBuf);
+
+impl TempDir {
+    pub fn new(case: &str) -> Self {
+        let dir =
+            std::env::temp_dir().join(format!("sqler-update-it-{}-{case}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
