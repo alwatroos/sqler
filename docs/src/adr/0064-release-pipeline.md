@@ -73,8 +73,9 @@ below does not depend on the value of the line. `driver-duckdb` never belongs in
 
 - `pull_request` only when `dist-workspace.toml`, `release.yml`, `release-guard.sh`, `crates/sqler-app/Cargo.toml` or
   `crates/sqler-app/wix/**` changes. It runs `plan`, `guard (features)` and the Linux x86_64 build (about 12 minutes,
-  uncached; no `rust-cache`, nothing runs on `main`, so a cache would never be saved). The label `full-ci` (read when
-  the run starts) adds every target, `global artifacts` and the SBOM.
+  uncached; no `rust-cache`, nothing runs on `main`, so a cache would never be saved; superseded: amendment 5
+  caches the `build` jobs). The label `full-ci` (read when the run starts) adds every target, `global artifacts` and
+  the SBOM.
 - `workflow_dispatch` (no inputs) is always a full dry run. It works once the file is on the default branch.
 - `push` of a tag `v[0-9]+.[0-9]+.[0-9]+*` is the only way to publish. `plan` computes
   `publishing = push && ref starts with refs/tags/v`; `host` (the Release) and `announce` need it explicitly, on top of
@@ -282,3 +283,34 @@ Delete `.github/workflows/release.yml`, `.github/scripts/release-guard.sh`, `dis
   by hand or creates a Release.
 - Tests: `tag-release-bump-test.sh` runs in the CI `docs` job (temp git repo, no network). The workflow itself is
   checked by `actionlint` and by the live run.
+
+## Amendment 5 (2026-11-03, release-speed T1): cached release builds and a prebuilt cargo-dist
+
+- cargo-dist is no longer built from source. The `plan` job and the non-Linux `build` jobs download the prebuilt
+  archive of GitHub release `v<cargo-dist-version>` for the runner's host triple and check it against the release's
+  `.sha256` file before use. Lost alternative: the official `cargo-dist-installer.sh | sh`, which runs an unchecked
+  script and writes into `~/.cargo/bin`, a directory rust-cache caches. The Linux `build` jobs still reuse the
+  `cargo-dist-cache` artifact of `plan`.
+- Each `build` job restores a `Swatinem/rust-cache` with the shared key `release-dist-<triple>`. Dispatch dry runs (on
+  `main` and on branches) save it; a tag run only restores it. A tag run can restore only caches of the default
+  branch, so the dry run on `main` before tagging warms the tag run. A bump commit changes `Cargo.lock`, so the exact
+  key misses and the prefix restore key is used. The packaged outputs (`target/distrib`) are removed after the last
+  upload so archives and installers never enter the cache.
+- `manifest-dry-run` and `manifest` restore a small shared `release-xtask` cache before `Build xtask`. Only the dry run
+  saves it; `manifest` (environment `release`) is restore-only and still builds xtask before any step can see
+  `SQLER_UPDATE_SIGNING_KEY`. No job in the environment `release` saves a cache.
+- `[profile.dist]` and `codegen-units` are unchanged (an owner decision). The workspace crates themselves still
+  rebuild; the saving comes from the dependencies and the skipped cargo-dist build.
+- Cache budget (ADR-0068, 10 GB limit): the five `release-dist-*` caches and `release-xtask` add to the CI caches.
+  Measured sizes (two branch dry runs, 2026-11-03): `release-dist-x86_64-unknown-linux-gnu` 0.95 GiB,
+  `release-dist-aarch64-unknown-linux-gnu` 0.94 GiB, `release-dist-x86_64-apple-darwin` 0.87 GiB,
+  `release-dist-aarch64-apple-darwin` 0.87 GiB, `release-dist-x86_64-pc-windows-msvc` 0.91 GiB and `release-xtask`
+  0.34 GiB: 4.87 GiB in total. The CI caches of `main` held 4.99 GiB at the same time, so both together are 9.86 GiB
+  of the 10 GiB limit and the headroom is about 0.14 GiB. GitHub evicts least recently used caches once the limit is
+  exceeded, so a release dry run on `main` can evict the CI caches (`rust-debug`, `rust-tc`); the next CI run then
+  rebuilds them. Branch dry runs should be followed by deleting their `release-*` caches.
+- Measured effect (same commit, same pinned toolchain, dry run): the baseline without caching took 57 min in total
+  (`build (x86_64-apple-darwin)` 49 min, `Install dist` 14 min on macOS and 8 min on Windows). The first run with the
+  new setup (cold caches) took 42 min in total (`build (x86_64-apple-darwin)` 37 min), and the second run (warm
+  caches) took 16 min in total (`build (x86_64-apple-darwin)` 12 min). Every `Install dist` step took at most 6 s.
+  The `sha256.sum` file names and the artifact names are identical to the baseline.

@@ -29,6 +29,8 @@ afterwards.
 - [ ] The final full Release dry run on `main` is green: `gh workflow run release.yml --ref main` (no inputs). A
   dispatch is always a full dry run and never publishes. Watch it with
   `gh run list --workflow release.yml --event workflow_dispatch --branch main --limit 1` and `gh run view <id>`.
+  The same run also saves the per-target build caches that the tag run restores (tag runs never save). GitHub drops a
+  cache unused for 7 days, so run it shortly before tagging.
   - [ ] The `update manifest (dry run)` job is green.
   - [ ] Size: each `build (...)` job prints a "Size report" line. The binary must be at most 83,886,080 bytes
     (80 MB) on every OS. Record the binary bytes and the headroom for each of the 5 targets in the release PR or
@@ -54,7 +56,7 @@ afterwards.
 - [ ] Windows is unsigned by owner decision: there is no step and no secret for it.
 - [ ] The release notes preview works. cargo-dist is installed in a scratch root at the version in
   `dist-workspace.toml`
-  (`cargo install --locked --version <version> --root <scratch> cargo-dist`, never in the repository), then:
+  (the prebuilt GitHub release archive of that version, unpacked into the scratch root, never in the repository), then:
   `dist plan --tag=v1.0.0 --output-format=json > <scratch>/plan.json`. `jq -r .announcement_github_body <scratch>/plan.json`
   shows the `1.0.0` section of `CHANGELOG.md`, and `sh .github/scripts/release-guard.sh artifacts <scratch>` passes
   (the notes must not name the excluded engine; the guard fails the tag run otherwise). This publishes nothing.
@@ -83,7 +85,8 @@ The owner runs these, or the team on the owner's explicit instruction.
    pre-flight is ticked.
 2. Pre-flight, not enforced by the workflow: a green `CI` run and a green `Release` dry run on the head of `main`.
    When `main` has moved since the last dry run, start a new one: Actions -> Release -> Run workflow, branch `main`,
-   no inputs. Check it with
+   no inputs. This dry run also saves the per-target build caches that the tag run restores (tag runs never save);
+   GitHub drops a cache unused for 7 days, so run it shortly before tagging. Check it with
    `gh run list --workflow release.yml --event workflow_dispatch --branch main --limit 1 --json status,conclusion,headSha`
    and `gh run list --workflow ci.yml --branch main --event push --limit 1 --json status,conclusion,headSha`.
 3. Actions -> "Tag release" -> Run workflow. Branch `main` (the job does not run on any other ref). Inputs:
