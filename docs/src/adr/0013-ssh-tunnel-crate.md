@@ -25,7 +25,7 @@ SQLer must reach a database behind an SSH bastion (SQLER_AGENT_PROMPT §3.1). A 
 
 ## Decision outcome
 
-Chosen: option 1, `russh` 0.64.1 (verified live, see [Dependencies](../dependencies.md)).
+Chosen: option 1, `russh` 0.64.1 (verified live, see [Dependencies](../dependencies.md)). Note 2026-11-03 (T5): the workspace now uses `russh` 0.65.0; the decision is unchanged.
 
 ### Crypto backend and RSA
 
