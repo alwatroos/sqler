@@ -302,4 +302,15 @@ Delete `.github/workflows/release.yml`, `.github/scripts/release-guard.sh`, `dis
 - `[profile.dist]` and `codegen-units` are unchanged (an owner decision). The workspace crates themselves still
   rebuild; the saving comes from the dependencies and the skipped cargo-dist build.
 - Cache budget (ADR-0068, 10 GB limit): the five `release-dist-*` caches and `release-xtask` add to the CI caches.
-  Measured sizes: to be recorded from the first branch dry runs.
+  Measured sizes (two branch dry runs, 2026-11-03): `release-dist-x86_64-unknown-linux-gnu` 0.95 GiB,
+  `release-dist-aarch64-unknown-linux-gnu` 0.94 GiB, `release-dist-x86_64-apple-darwin` 0.87 GiB,
+  `release-dist-aarch64-apple-darwin` 0.87 GiB, `release-dist-x86_64-pc-windows-msvc` 0.91 GiB and `release-xtask`
+  0.34 GiB: 4.87 GiB in total. The CI caches of `main` held 4.99 GiB at the same time, so both together are 9.86 GiB
+  of the 10 GiB limit and the headroom is about 0.14 GiB. GitHub evicts least recently used caches once the limit is
+  exceeded, so a release dry run on `main` can evict the CI caches (`rust-debug`, `rust-tc`); the next CI run then
+  rebuilds them. Branch dry runs should be followed by deleting their `release-*` caches.
+- Measured effect (same commit, same pinned toolchain, dry run): the baseline without caching took 57 min in total
+  (`build (x86_64-apple-darwin)` 49 min, `Install dist` 14 min on macOS and 8 min on Windows). The first run with the
+  new setup (cold caches) took 42 min in total (`build (x86_64-apple-darwin)` 37 min), and the second run (warm
+  caches) took 16 min in total (`build (x86_64-apple-darwin)` 12 min). Every `Install dist` step took at most 6 s.
+  The `sha256.sum` file names and the artifact names are identical to the baseline.
