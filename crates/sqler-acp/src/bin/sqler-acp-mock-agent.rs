@@ -24,7 +24,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Implementation,
     InitializeRequest, InitializeResponse, McpCapabilities, NewSessionRequest, NewSessionResponse,
     PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus,
@@ -32,7 +33,7 @@ use agent_client_protocol::schema::v1::{
     SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus,
     ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
-use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo};
+use agent_client_protocol::{Agent, ByteStreams, Client};
 use tokio::sync::Notify;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
@@ -223,7 +224,7 @@ async fn serve(state: Arc<State>) -> Result<(), agent_client_protocol::Error> {
         tokio::io::stdin().compat(),
     );
     Agent
-        .builder()
+        .v1()
         .name("sqler-acp-mock-agent")
         .on_receive_request(
             async move |request: InitializeRequest, responder, _cx| {

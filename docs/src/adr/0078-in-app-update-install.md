@@ -110,7 +110,7 @@ signed manifest is the gate, the signature check only catches a damaged bundle.
 | ----- | --- | ----- |
 | `lzma-rs` 0.3.0 | decode the `.tar.xz` stream | pure Rust, `MIT`, no unsafe in the path we use, small |
 | `tar` 0.4.46 | read the single entry | `MIT OR Apache-2.0`; `default-features = false` (no `xattr`) |
-| `zip` 9.0.5 | read `sqler.exe` from the Windows archive | `MIT`; already in `Cargo.lock` through an existing dependency; only the decoder features we need |
+| `zip` 9.3.0 (9.0.5 when chosen; bumped 2026-11-03, T5) | read `sqler.exe` from the Windows archive | `MIT`; already in `Cargo.lock` through an existing dependency; only the decoder features we need |
 | `tokio` features `fs`, `io-util`, `time`, `process` | streaming file write, stall timeout, tool timeouts | already linked; features only |
 
 The binary growth is measured with one capped release build and written in the pull request (the budget is ADR-0069);
