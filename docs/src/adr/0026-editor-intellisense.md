@@ -9,7 +9,7 @@ The SQL editor (ADR-0025) has no completion, hover or diagnostics. The pieces ex
 
 ## Decision drivers
 
-- Use the hooks `gpui-component` 0.8.0 already has: `EditorState::lsp_mut()` with `CompletionProvider` and `HoverProvider`, `diagnostics_mut()` and the `ShowCompletions` action.
+- Use the hooks `gpui-component` 0.9.0 already has: `EditorState::lsp_mut()` with `CompletionProvider` and `HoverProvider`, `diagnostics_mut()` and the `ShowCompletions` action.
 - Business logic headless and tested; views build-only (AGENTS.md §12).
 - No work on the UI thread proportional to the script or the schema.
 - A catalog refresh must show up without reopening the tab.
@@ -36,7 +36,7 @@ Chosen: option 1.
 
 **Snippets** are flattened to plain text (`${1:x}` becomes `x`, `$0` is removed), because the editor has no snippet engine.
 
-**Dependency.** `lsp-types` 0.97 is added as a direct dependency (optional, in feature `gui`). It must be the same 0.97 line as the one `gpui-component` 0.8.0 uses, otherwise the provider traits see a different type.
+**Dependency.** `lsp-types` 0.97 is added as a direct dependency (optional, in feature `gui`). It must be the same 0.97 line as the one `gpui-component` 0.9.0 uses, otherwise the provider traits see a different type.
 
 **Reliance on internals.** After a load completes the popup is requested again if the menu is open or the earlier answer was empty. Whether the menu is open is read from `completion_menu_state()`, which is `#[doc(hidden)]` in `gpui-component`. A bump must re-check it; if it disappears, re-request only when the earlier answer was empty.
 

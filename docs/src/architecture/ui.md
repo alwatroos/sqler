@@ -102,7 +102,7 @@ Sessions:
 
 Effects added: `StartCatalog`, `LoadCatalog`, `WatchRefresh`, `RunJob` (DDL, properties, DROP), `OpenData`, `Copy`, `ShowObjectMenu` and `Batch`. The only way to a DROP job is `DropFlow::confirm`: once, twice on a `prod` connection. A DROP that has not started is discarded when a connection dialog opens. Closing a DDL, properties or data tab cancels its job. On quit the bridge closes the catalog workers within a bound (`SessionBridge::wait_all`).
 
-`object:show-menu` (Shift+F10, Menu) opens the palette filtered to `Object: `, because `gpui-component` 0.8.0 cannot open a context menu from code. Right-click uses `ContextMenuExt` with the entries of `menu_for`. Up, Down, Left, Right and Enter on the focused sidebar go through `sidebar::key_command` to `object:*` commands. `TabKind::Ddl` and `TabKind::Properties` are read-only text and property-table bodies.
+`object:show-menu` (Shift+F10, Menu) opens the palette filtered to `Object: `, because `gpui-component` 0.9.0 (re-checked 2026-11-03) cannot open a context menu from code. Right-click uses `ContextMenuExt` with the entries of `menu_for`. Up, Down, Left, Right and Enter on the focused sidebar go through `sidebar::key_command` to `object:*` commands. `TabKind::Ddl` and `TabKind::Properties` are read-only text and property-table bodies.
 
 Benchmark: [Object browser tree](../benchmarks.md#object-browser-tree).
 

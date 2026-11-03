@@ -61,7 +61,7 @@ Click the sidebar, or move focus to it, and these work:
 | Enter | `object:open-data` (a notice on a node that has no data) |
 | Shift+F10 or Menu | `object:show-menu` |
 
-`gpui-component` 0.8.0 cannot open a context menu from code, so Shift+F10 and Menu open the [command palette](keybindings.md) filtered to `Object:`. It lists the commands below; the ones that do not apply to the selected node show a notice.
+`gpui-component` 0.9.0 (re-checked 2026-11-03) cannot open a context menu from code, so Shift+F10 and Menu open the [command palette](keybindings.md) filtered to `Object:`. It lists the commands below; the ones that do not apply to the selected node show a notice.
 
 ## Commands
 

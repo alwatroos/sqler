@@ -17,7 +17,7 @@ the driver seam of [ADR-0061](0061-plugin-drivers.md). Two things had to be sett
 ## Finding: `webpki-roots` is not in the dependency graph
 
 The ADR-0054 spike used `libduckdb-sys` 1.10506.1, whose non-optional build-dependency `ureq` (feature `rustls`)
-enabled `webpki-roots`. The engine uses `duckdb` **1.20000.0** (the newest stable on crates.io on 2026-10-23,
+enabled `webpki-roots`. The engine uses `duckdb` **1.20000.0** (bumped to 1.20000.1 on 2026-11-03, T5; the newest stable on crates.io on 2026-10-23,
 `default-features = false`, feature `bundled` only). Its `libduckdb-sys` 1.20000.0 has **no `ureq` build-dependency**:
 
 - `cargo tree -p sqler-driver-duckdb -e build -i webpki-roots` and `-e normal -i webpki-roots` both fail with

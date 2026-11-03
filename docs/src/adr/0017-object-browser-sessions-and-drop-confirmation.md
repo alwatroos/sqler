@@ -46,7 +46,7 @@ The statement comes from `drop_script` once, when `DropFlow::start` is called. I
 - Positive: no lock across `.await`; tree, menus and the DROP flow are tested headless; a refresh or DROP cannot stall the browser session.
 - Negative: each action opens a session, which is a connect (and an SSH tunnel) per action. Accepted for M2; a pool or a reused utility session can replace it later without changing the tree.
 - Negative: a connection costs two sessions (query tab and browser), plus the short-lived ones.
-- Negative: `gpui-component` 0.8.0 cannot open a context menu from code, so the keyboard path (Shift+F10, Menu) opens the command palette filtered to `Object: ` instead of a menu at the row.
+- Negative: `gpui-component` 0.8.0 (still true in 0.9.0, re-checked 2026-11-03, T5) cannot open a context menu from code, so the keyboard path (Shift+F10, Menu) opens the command palette filtered to `Object: ` instead of a menu at the row.
 - Negative: `DROP FUNCTION` for an overloaded `PostgreSQL` function fails with the server's error ([ADR-0015](0015-ddl-generation-dialects-and-quoting.md)).
 - Negative (known limit): while the DROP runs, the "Dropping..." step occludes the window until the server returns; a DROP that waits for a lock keeps the app modal. A cancel is left for a later item.
 - Not checked by CI (maintainer, on a display): the context menu, the DROP dialog and the prod second step, the DDL and properties tabs, scrolling 5,000 nodes, keyboard navigation and the clipboard.

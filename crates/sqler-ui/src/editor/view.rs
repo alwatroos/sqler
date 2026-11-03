@@ -44,18 +44,24 @@ const SHOW_COMPLETIONS: &str = "input::ShowCompletions";
 /// The key context of the editor widget.
 const INPUT_CONTEXT: &str = "Input";
 
-/// Unbinds the editor's own `secondary-enter` and `secondary-.` bindings, so Cmd/Ctrl+Enter
+/// Unbinds the editor's own Cmd/Ctrl+Enter and Cmd/Ctrl+. bindings, so Cmd/Ctrl+Enter
 /// (run) and Cmd/Ctrl+. (`query:cancel`) reach the workspace.
 ///
 /// GPUI runs key bindings before the capture listeners of ancestors. `gpui-base` binds
-/// `secondary-enter` in the `Input` context to `Enter { secondary: true }`, which in a multi-line
-/// editor inserts a newline over the selection and stops the key. It binds `secondary-.` to
+/// Cmd/Ctrl+Enter in the `Input` context to `Enter { secondary: true }`, which in a multi-line
+/// editor inserts a newline over the selection and stops the key. It binds Cmd/Ctrl+. to
 /// `ToggleCodeActions`, which also stops the key although the app registers no code-action
 /// provider, so the chord never cancelled a running query. Nothing else is unbound.
 pub(crate) fn init_keys(cx: &mut App) {
+    // `KeyBinding::new` no longer resolves `secondary-`: the secondary modifier is Cmd on macOS, Ctrl elsewhere.
+    let (enter, dot) = if cx.platform_info().os == gpui::OperatingSystem::Mac {
+        ("cmd-enter", "cmd-.")
+    } else {
+        ("ctrl-enter", "ctrl-.")
+    };
     cx.bind_keys([
-        KeyBinding::new("secondary-enter", NoAction, Some(INPUT_CONTEXT)),
-        KeyBinding::new("secondary-.", NoAction, Some(INPUT_CONTEXT)),
+        KeyBinding::new(enter, NoAction, Some(INPUT_CONTEXT)),
+        KeyBinding::new(dot, NoAction, Some(INPUT_CONTEXT)),
     ]);
 }
 
@@ -476,7 +482,8 @@ mod tests {
             div()
                 .size_full()
                 .capture_key_down(move |event, _, _| {
-                    seen.borrow_mut().push(event.keystroke.unparse());
+                    seen.borrow_mut()
+                        .push(event.keystroke.unparse(gpui::OperatingSystem::Linux));
                 })
                 .child(Editor::new(&self.state))
         }

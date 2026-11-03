@@ -2,7 +2,7 @@
 
 Design reference for the M4.5 UI/UX overhaul. It records how the shell works today, the target workbench, the visual system, the keyboard and accessibility model, persistence and budgets, and the screenshot strategy. The decisions are in ADR-0042 to ADR-0047. This page is design only: the build items (U1 to U7) deliver it step by step.
 
-SQLer keeps its own headless workbench model and draws it with GPUI plus `gpui-component` 0.8.0 building blocks. Layout state (activity view, side panel, editor groups, bottom panel, focus region) is plain Rust in `sqler-ui`, unit-tested, and stored additively in a new versioned `workbench.toml`. The views only render that state, and every action is a `Command` with an ID. Rejected: `gpui-component::dock::DockArea`, because its panels have their own close/serialize path, which would bypass `Workspace::request_close_tab` (prompts, session loan, grid cancel), and it is not headless-testable.
+SQLer keeps its own headless workbench model and draws it with GPUI plus `gpui-component` 0.9.0 building blocks. Layout state (activity view, side panel, editor groups, bottom panel, focus region) is plain Rust in `sqler-ui`, unit-tested, and stored additively in a new versioned `workbench.toml`. The views only render that state, and every action is a `Command` with an ID. Rejected: `gpui-component::dock::DockArea`, because its panels have their own close/serialize path, which would bypass `Workspace::request_close_tab` (prompts, session loan, grid cancel), and it is not headless-testable.
 
 ## Assumptions
 - No new key in `settings.toml` (it has `deny_unknown_fields`, so a newer key would break an older binary). Layout/recents go to `workbench.toml`.

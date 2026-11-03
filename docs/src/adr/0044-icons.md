@@ -21,7 +21,7 @@ No `AssetSource` is registered in `run`, so every `gpui-component` icon (menus, 
 
 ## Decision outcome
 
-Option 1. `gpui-kit-assets =0.8.0` is already resolved through `gpui-component`, so no new crate enters the tree; it becomes a direct dependency of `sqler-ui` at the same pinned version. The `icon_assets!` macro embeds only the selected Lucide icons (42 SVGs, +20 KiB), composed with `gpui_kit_assets::Assets` (the 106 component icons, which fixes today's blank component icons) behind `theme::icons::AppAssets`. `AppIcon` maps to `IconName`. The set is listed in [Workbench design](../architecture/workbench.md), section 3.
+Option 1. `gpui-kit-assets =0.8.0` (`=0.9.0` since the bump of 2026-11-03, T5, together with `gpui-component`) is already resolved through `gpui-component`, so no new crate enters the tree; it becomes a direct dependency of `sqler-ui` at the same pinned version. The `icon_assets!` macro embeds only the selected Lucide icons (42 SVGs, +20 KiB), composed with `gpui_kit_assets::Assets` (the 106 component icons, which fixes today's blank component icons) behind `theme::icons::AppAssets`. `AppIcon` maps to `IconName`. The set is listed in [Workbench design](../architecture/workbench.md), section 3.
 
 Licensing: the crate is Apache-2.0; Lucide icons are ISC with Feather-derived parts under MIT. The licence text is copied to `licenses/LUCIDE-ISC.txt` and listed in `docs/src/dependencies.md`. `cargo deny` must stay green.
 

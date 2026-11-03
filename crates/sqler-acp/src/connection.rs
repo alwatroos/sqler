@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     CancelNotification, ClientCapabilities, ContentBlock, FileSystemCapabilities, Implementation,
     InitializeRequest, NewSessionRequest, PermissionOptionKind as AcpOptionKind, PromptRequest,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
@@ -23,7 +23,7 @@ use agent_client_protocol::schema::v1::{
     ToolCallContent, ToolCallStatus as AcpStatus, ToolKind,
 };
 use agent_client_protocol::{
-    Agent, ByteStreams, Client, ConnectionTo, is_incoming_transport_closed,
+    Agent, ByteStreams, Client, is_incoming_transport_closed, v1::ConnectionTo,
 };
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -159,7 +159,7 @@ pub(crate) async fn supervise(launch: Launch) {
         ready,
     };
     let connection = Client
-        .builder()
+        .v1()
         .name("sqler")
         .on_receive_notification(
             async move |notification: SessionNotification, _cx| {
@@ -520,7 +520,7 @@ fn content_text(content: &[ToolCallContent]) -> Vec<String> {
         .collect()
 }
 
-fn chunk_text(chunk: &agent_client_protocol::schema::v1::ContentChunk) -> Option<String> {
+fn chunk_text(chunk: &agent_client_protocol::v1::schema::ContentChunk) -> Option<String> {
     match &chunk.content {
         ContentBlock::Text(t) => Some(t.text.clone()),
         _ => None,
@@ -529,9 +529,9 @@ fn chunk_text(chunk: &agent_client_protocol::schema::v1::ContentChunk) -> Option
 
 /// Map a protocol update. Only text content is carried; everything else becomes `Other`.
 pub(crate) fn map_update(
-    update: agent_client_protocol::schema::v1::SessionUpdate,
+    update: agent_client_protocol::v1::schema::SessionUpdate,
 ) -> SessionUpdate {
-    use agent_client_protocol::schema::v1::SessionUpdate as U;
+    use agent_client_protocol::v1::schema::SessionUpdate as U;
     match update {
         U::AgentMessageChunk(c) => chunk_text(&c).map_or(
             SessionUpdate::Other("non-text agent message"),
@@ -573,11 +573,11 @@ pub(crate) fn map_update(
                     content: e.content.clone(),
                     priority: format!("{:?}", e.priority).to_lowercase(),
                     status: match e.status {
-                        agent_client_protocol::schema::v1::PlanEntryStatus::Pending => "pending",
-                        agent_client_protocol::schema::v1::PlanEntryStatus::InProgress => {
+                        agent_client_protocol::v1::schema::PlanEntryStatus::Pending => "pending",
+                        agent_client_protocol::v1::schema::PlanEntryStatus::InProgress => {
                             "in_progress"
                         }
-                        agent_client_protocol::schema::v1::PlanEntryStatus::Completed => {
+                        agent_client_protocol::v1::schema::PlanEntryStatus::Completed => {
                             "completed"
                         }
                         _ => "unknown",
@@ -597,7 +597,7 @@ pub(crate) fn map_update(
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         ContentChunk, Plan, PlanEntry as AcpPlanEntry, PlanEntryPriority, PlanEntryStatus,
         SessionUpdate as U, ToolCall,
     };
