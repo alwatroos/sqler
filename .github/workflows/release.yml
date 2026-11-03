@@ -28,6 +28,9 @@ name: Release
 #   Each is installed or mounted and run in CI (packaging/*/check-*); `global` adds the `.dmg` and `.deb` hashes to
 #   sha256.sum. The update manifest covers the archives plus the macOS `.dmg` as `bundles` (ADR-0078), which the app
 #   downloads and installs itself.
+# - Caches: `build` restores a per-target cache (`release-dist-<triple>`) and the manifest jobs restore `release-xtask`.
+#   Dispatch dry runs save them, tag runs only restore. A tag can restore only default-branch caches, so the dry run
+#   on `main` warms the tag run.
 #
 # The release feature set is the single `features = [...]` line in dist-workspace.toml, set per owner decision 12
 # (ADR-0064 amendment). `release-guard.sh` rejects `driver-duckdb` whatever that line holds (ADR-0070).
@@ -72,15 +75,42 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install
-      # taiki-e/install-action has no manifest for cargo-dist; build the version pinned in dist-workspace.toml.
+      # Download the prebuilt release of the version pinned in dist-workspace.toml, checked against its sha256 file.
       - name: Install dist
         shell: bash
         run: |
           ver=$(sed -n 's/^cargo-dist-version *= *"\([^"]*\)".*/\1/p' dist-workspace.toml)
           test -n "$ver"
-          # Outside the repository, so rust-toolchain.toml does not select the toolchain for the tool build.
-          cd "$RUNNER_TEMP"
-          cargo install --locked --version "$ver" --root "$RUNNER_TEMP/dist" cargo-dist
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          test -n "$host"
+          if [[ "$host" == *windows* ]]; then asset="cargo-dist-$host.zip"; else asset="cargo-dist-$host.tar.xz"; fi
+          url="https://github.com/axodotdev/cargo-dist/releases/download/v$ver"
+          dl="$RUNNER_TEMP/dist-dl"
+          mkdir -p "$dl" "$RUNNER_TEMP/dist/bin"
+          curl -fsSL --retry 3 -o "$dl/$asset" "$url/$asset"
+          curl -fsSL --retry 3 -o "$dl/$asset.sha256" "$url/$asset.sha256"
+          expected=$(tr -d '\r' < "$dl/$asset.sha256" | awk '{print $1; exit}')
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum < "$dl/$asset" | awk '{print $1}')
+          else
+            actual=$(shasum -a 256 < "$dl/$asset" | awk '{print $1}')
+          fi
+          if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+            echo "::error title=Install dist::checksum mismatch for $asset (expected $expected, got $actual)"
+            exit 1
+          fi
+          if [[ "$host" == *windows* ]]; then
+            7z x -y -o"$(cygpath -m "$dl/x")" "$dl/$asset" > /dev/null
+            name=dist.exe
+          else
+            mkdir -p "$dl/x"
+            tar -xJf "$dl/$asset" -C "$dl/x"
+            name=dist
+          fi
+          found=$(find "$dl/x" -type f -name "$name" | head -n 1)
+          test -n "$found"
+          cp "$found" "$RUNNER_TEMP/dist/bin/"
+          chmod +x "$RUNNER_TEMP/dist/bin/$name"
           echo "$RUNNER_TEMP/dist/bin" >> "$GITHUB_PATH"
       - name: Cache dist for the Linux jobs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -191,6 +221,15 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install
+      # One cache per target triple. Dispatch dry runs (main and branches) save it, a tag run only restores it (a tag
+      # sees only default-branch caches, so the dry run on main warms it). Same key scheme as ci.yml: the default key
+      # hashes every installed rustc, which split caches at random.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          shared-key: release-dist-${{ join(matrix.targets, '-') }}
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Linux system packages (GPUI build)
         if: runner.os == 'Linux'
         shell: bash
@@ -216,14 +255,43 @@ jobs:
         run: |
           chmod +x "$RUNNER_TEMP/dist-cache/dist"
           echo "$RUNNER_TEMP/dist-cache" >> "$GITHUB_PATH"
+      # Same download as the plan job (sha256-checked prebuilt release); the Linux jobs reuse the plan job's binary.
       - name: Install dist
         if: matrix.runner != 'ubuntu-22.04'
         shell: bash
         run: |
           ver=$(sed -n 's/^cargo-dist-version *= *"\([^"]*\)".*/\1/p' dist-workspace.toml)
           test -n "$ver"
-          cd "$RUNNER_TEMP"
-          cargo install --locked --version "$ver" --root "$RUNNER_TEMP/dist" cargo-dist
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          test -n "$host"
+          if [[ "$host" == *windows* ]]; then asset="cargo-dist-$host.zip"; else asset="cargo-dist-$host.tar.xz"; fi
+          url="https://github.com/axodotdev/cargo-dist/releases/download/v$ver"
+          dl="$RUNNER_TEMP/dist-dl"
+          mkdir -p "$dl" "$RUNNER_TEMP/dist/bin"
+          curl -fsSL --retry 3 -o "$dl/$asset" "$url/$asset"
+          curl -fsSL --retry 3 -o "$dl/$asset.sha256" "$url/$asset.sha256"
+          expected=$(tr -d '\r' < "$dl/$asset.sha256" | awk '{print $1; exit}')
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum < "$dl/$asset" | awk '{print $1}')
+          else
+            actual=$(shasum -a 256 < "$dl/$asset" | awk '{print $1}')
+          fi
+          if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+            echo "::error title=Install dist::checksum mismatch for $asset (expected $expected, got $actual)"
+            exit 1
+          fi
+          if [[ "$host" == *windows* ]]; then
+            7z x -y -o"$(cygpath -m "$dl/x")" "$dl/$asset" > /dev/null
+            name=dist.exe
+          else
+            mkdir -p "$dl/x"
+            tar -xJf "$dl/$asset" -C "$dl/x"
+            name=dist
+          fi
+          found=$(find "$dl/x" -type f -name "$name" | head -n 1)
+          test -n "$found"
+          cp "$found" "$RUNNER_TEMP/dist/bin/"
+          chmod +x "$RUNNER_TEMP/dist/bin/$name"
           bin="$RUNNER_TEMP/dist/bin"
           if command -v cygpath >/dev/null 2>&1; then bin=$(cygpath -w "$bin"); fi
           echo "$bin" >> "$GITHUB_PATH"
@@ -383,6 +451,11 @@ jobs:
             ${{ steps.cargo-dist.outputs.paths }}
             ${{ env.BUILD_MANIFEST_NAME }}
           retention-days: 7
+      # Post steps (the cache save) run after every main step, so archives and installers must not be in target/.
+      - name: Drop packaged outputs before the cache save
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: rm -rf target/distrib
 
   # Signs and notarises the two macOS archives and the two macOS disk images (ADR-0065). The only job that reads the
   # six APPLE_* secrets, and it runs
@@ -670,6 +743,15 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install
+      # Small shared cache so xtask is not rebuilt cold. The `with:` block is identical in both manifest jobs
+      # (the cache version hashes the paths); only the dry run saves.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          shared-key: release-xtask
+          cache-bin: false
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Build xtask
         shell: bash
         run: cargo build -p xtask --locked
@@ -715,7 +797,8 @@ jobs:
   # Signs the update manifest (R5, ADR-0066) on a `v*` tag run (push, or dispatch on the tag) only, in the environment `release` (deployment rule:
   # tags `v*`). The only job that reads SQLER_UPDATE_SIGNING_KEY. xtask is built BEFORE any step can see the secret
   # and the signing step runs the prebuilt binary, so no build script runs while the key exists. `host` attaches the
-  # result to the release when it creates it. Without the secret the release simply carries no manifest.
+  # result to the release when it creates it. Without the secret the release simply carries no manifest. It restores the
+  # xtask cache saved by dry runs and never saves one.
   manifest:
     name: update manifest
     needs:
@@ -738,6 +821,15 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install
+      # Small shared cache so xtask is not rebuilt cold. The `with:` block is identical in both manifest jobs
+      # (the cache version hashes the paths); only the dry run saves.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          shared-key: release-xtask
+          cache-bin: false
+          save-if: false
       - name: Build xtask
         shell: bash
         run: cargo build -p xtask --locked
