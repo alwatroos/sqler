@@ -37,7 +37,7 @@ Chosen: Parquet option 1, XLSX option 1.
 | `parquet` | 60.0.0 | 2026-10-15 | `Apache-2.0` | 1.88 | Parquet writer; `default-features = false`, feature `snap` |
 | `snap` | 1.1.2 | 2026-07-15 | `BSD-3-Clause` | none | Snappy, pulled by `parquet/snap` |
 | `flate2` | 1.1.10 | 2026-08-28 | `MIT OR Apache-2.0` | 1.67 | deflate and CRC-32 of the zip; pure-Rust `miniz_oxide` backend, already in `Cargo.lock` |
-| `calamine` | 0.37.0 | 2026-10-18 | `MIT` | 1.88 | dev only: reads `.xlsx` back in tests |
+| `calamine` | 0.38.0 | 2026-11-02 | `MIT` | 1.88 | dev only: reads `.xlsx` back in tests |
 | `memory-stats` | 1.2.0 | 2024-06-26 | `MIT OR Apache-2.0` | none | dev only: RSS in the 1M-row memory test |
 | `bytes` | 1.12.1 | 2026-07-08 | `MIT` | 1.57 | dev only: `Bytes` as `ChunkReader` for the Parquet read-back |
 
