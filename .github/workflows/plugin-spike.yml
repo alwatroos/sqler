@@ -162,7 +162,7 @@ jobs:
           workspaces: spikes/plugin-runtime
           shared-key: plugin-spike-${{ matrix.os }}
           save-if: false
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: plugin-spike-guests
           path: ${{ env.GUESTS }}
@@ -205,7 +205,7 @@ jobs:
           workspaces: spikes/plugin-runtime
           shared-key: plugin-spike-ubuntu-latest
           save-if: false
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: plugin-spike-guests
           path: ${{ env.GUESTS }}
@@ -235,7 +235,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: plugin-spike-*
           path: ${{ runner.temp }}/artifacts
