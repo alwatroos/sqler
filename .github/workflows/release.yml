@@ -56,7 +56,9 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     outputs:
-      val: ${{ steps.plan.outputs.manifest }}
+      # Only the build matrix: the full manifest carries the changelog text, which GitHub drops as a possible secret
+      # when it contains a credential-like URL. Later jobs read the full manifest from the plan artifact.
+      matrix: ${{ steps.plan.outputs.matrix }}
       tag: ${{ steps.mode.outputs.tag }}
       tag-flag: ${{ steps.mode.outputs.tag-flag }}
       publishing: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(github.ref, 'refs/tags/v') }}
@@ -132,7 +134,7 @@ jobs:
           fi
           echo "dist ran successfully"
           cat plan-dist-manifest.json
-          echo "manifest=$(jq -c '.' plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(jq -c '.ci.github.artifacts_matrix' plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
       - name: Upload dist-manifest.json
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -163,13 +165,13 @@ jobs:
     needs:
       - plan
       - guard
-    if: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null }}
+    if: ${{ fromJson(needs.plan.outputs.matrix).include != null }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       # The matrix (runner, targets, dist-args) is computed by dist in the plan job.
-      matrix: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix }}
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TARGET: ${{ matrix.targets[0] }}
