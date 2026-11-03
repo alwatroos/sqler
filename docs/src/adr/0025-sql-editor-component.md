@@ -16,7 +16,7 @@ The SQL editor (T9) needs syntax highlighting for light and dark themes, multi-c
 
 ## Considered options
 
-1. `EditorState` of `gpui-component` 0.8.0 (0.9.0 since 2026-11-03, T5) in code-editor mode (language `sql`), plus headless logic for what it lacks.
+1. `EditorState` of `gpui-component` 0.8.0 in code-editor mode (language `sql`), plus headless logic for what it lacks.
 2. Our own editor widget on GPUI primitives.
 
 ## Decision outcome
@@ -27,7 +27,7 @@ An own widget needs text layout, IME, selection, undo, scrolling, line numbers a
 
 **Where the tab lives.** The existing `TabKind::Query` tab (one per connection, with its own session) is the SQL editor tab. No new variant. The header shows the connection name, colour and environment badge as for every tab. The text lives in an `EditorState`; the highlight theme follows `Theme::change` (default light and dark highlight themes of `gpui-component`).
 
-**Verified gaps in `gpui-component` 0.8.0 and how they are closed.** (Note 2026-11-03, T5: the workspace now uses 0.9.0; the gaps were verified against 0.8.0 and not re-verified for the bump, the editor tests pass on 0.9.0.)
+**Verified gaps in `gpui-component` 0.8.0 and how they are closed.**
 
 | Gap | How it is closed |
 | --- | ---------------- |

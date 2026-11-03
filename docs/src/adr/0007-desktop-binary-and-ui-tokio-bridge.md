@@ -34,7 +34,7 @@ Binary and layer:
 
 The `gui` feature:
 
-- `sqler-ui` has a cargo feature `gui` (not default) with the optional dependencies `gpui-component` 0.9.0, `gpui` (`gpui-pre` =0.3.11) and `gpui_platform` (`gpui-pre-platform` =0.3.11) (bumped from 0.8.0 / 0.3.9 on 2026-11-03, T5). The state types (`SidebarModel`, `TabStrip`, `Workspace`, `SessionBridge`) are plain Rust, so `cargo test -p sqler-ui` builds no GPUI and opens no window. The views (`*/view.rs`) are compiled only with `gui`, which `sqler-app` turns on. A workspace build compiles GPUI; the views are build-only on CI.
+- `sqler-ui` has a cargo feature `gui` (not default) with the optional dependencies `gpui-component` 0.8.0, `gpui` (`gpui-pre` =0.3.9) and `gpui_platform` (`gpui-pre-platform` =0.3.9). The state types (`SidebarModel`, `TabStrip`, `Workspace`, `SessionBridge`) are plain Rust, so `cargo test -p sqler-ui` builds no GPUI and opens no window. The views (`*/view.rs`) are compiled only with `gui`, which `sqler-app` turns on. A workspace build compiles GPUI; the views are build-only on CI.
 - Views only render state. Every click becomes a `WorkspaceAction`, which maps to a command ID (T4), runs through `Workspace::dispatch` and returns an `Effect` that the view carries out.
 
 The bridge:

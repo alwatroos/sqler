@@ -46,8 +46,6 @@ the tree holds exactly one GPUI:
   `gpui-component` 0.8.0 without a second GPUI in the tree. `cargo tree -i gpui-pre` succeeds, while
   `cargo tree -i gpui` and `cargo tree -i gpui-ce` match no package.
 - All dependencies come from crates.io; there are no git dependencies and no fork.
-- Note 2026-11-03 (T5): the versions above are those of the spike. The root workspace now uses `gpui-component` 0.9.0,
-  `gpui-pre` =0.3.11 and `gpui-pre-platform` =0.3.11 (the pins of 0.9.0); the decision is unchanged.
 
 Consequence of the name: the literal check `cargo tree -i gpui` from the original plan can never
 succeed; use `cargo tree -i gpui-pre`.

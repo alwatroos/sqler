@@ -102,15 +102,17 @@ hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"
 http-body-util = "0.1.5"
 http = "1.5.0"
 subtle = "2.6.1"
-gpui-component = { version = "0.9.0", features = ["tree-sitter-sql"] }
-# Lucide icon assets (ADR-0044); pinned to the version gpui-component 0.9.0 resolves.
-gpui-kit-assets = "=0.9.0"
-# Same 0.97 line as gpui-component 0.9.0 (its CompletionProvider/HoverProvider speak these types); AGENTS.md section 10.
+# GPUI group pinned to the 0.8.0 / 0.3.9 line. Not taken: gpui-component 0.9.0 / gpui-pre 0.3.11 adds icu_segmenter, naga 30
+# etc.; Linux release set 83,911,920 bytes = 25,840 over the 83,886,080 budget; checked 2026-11-03.
+gpui-component = { version = "0.8.0", features = ["tree-sitter-sql"] }
+# Lucide icon assets (ADR-0044); pinned to the version gpui-component 0.8.0 resolves.
+gpui-kit-assets = "=0.8.0"
+# Same 0.97 line as gpui-component 0.8.0 (its CompletionProvider/HoverProvider speak these types); AGENTS.md section 10.
 lsp-types = "0.97.0"
-gpui = { version = "=0.3.11", package = "gpui-pre" }
+gpui = { version = "=0.3.9", package = "gpui-pre" }
 # Dev only: PNG encode and downscale in the screenshot harness (already in the lockfile through gpui-pre).
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-gpui_platform = { version = "=0.3.11", package = "gpui-pre-platform", features = ["font-kit", "x11", "wayland"] }
+gpui_platform = { version = "=0.3.9", package = "gpui-pre-platform", features = ["font-kit", "x11", "wayland"] }
 # Dev only (P2, ADR-0055): parses the plugin WIT package in a test (`decoding` is what enables `Resolve::push_dir`). Apache-2.0 WITH
 # LLVM-exception OR Apache-2.0 OR MIT. 0.261 is the wasm-tools line wasmtime 50.0.1 resolves, so Cargo.lock holds one
 # wasmparser; wit-parser 0.263 and wat 1.263 not taken: they would add a second wasmparser/wasm-encoder line; checked 2026-11-03.
