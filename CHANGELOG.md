@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-03
+
+This is a maintenance release with no change to how SQLer looks or behaves.
+
+### Changed
+
+- Updated third-party dependencies: the Excel reader, the AI chat protocol library (ACP 5), the SSH library (russh 0.65), the zip, Parquet and TLS crypto libraries, and the logging crate.
+- Faster release and CI pipelines. This does not change the published files.
+
+### Security
+
+- **Excel reader updated to calamine 0.38.0.** Fixes RUSTSEC-2026-0436.
+
 ## [1.3.0] - 2026-11-02
 
 This is the first release that contains the in-app updater, so it must be installed by hand; from 1.3.0 on, SQLer can update itself (macOS included).
