@@ -10,7 +10,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     EnvVariable, HttpHeader, McpServer, McpServerHttp, McpServerStdio,
 };
 use zeroize::Zeroizing;
