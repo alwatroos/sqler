@@ -5,7 +5,7 @@ coding standards, the Definition of Done and the iteration workflow. Read it fir
 
 ## Building the book
 
-The book is built with mdBook 0.5.4 (latest stable on crates.io, checked 2026-10-20).
+The book is built with mdBook 0.5.4 (latest stable on crates.io, checked 2026-11-03).
 
 ```text
 cargo install mdbook --version 0.5.4 --locked

@@ -19,7 +19,7 @@ The MSI installs the same four files next to its `bin` folder. The shell and Pow
 only; they download the archive, so the bundle is in the archive they fetch.
 
 `THIRD-PARTY-LICENSES.txt` is not committed. The `plan` job of `release.yml` generates it once and every build job
-downloads it, so all targets ship the same bytes. To generate it locally (needs `cargo-about` 0.9.2 with its `cli`
+downloads it, so all targets ship the same bytes. To generate it locally (needs `cargo-about` 0.9.3 with its `cli`
 feature, `jq` and the Rust toolchain):
 
 ```sh
