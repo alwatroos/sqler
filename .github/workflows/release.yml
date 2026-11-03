@@ -12,8 +12,8 @@ name: Release
 # - Tag `vX.Y.Z` (a tag push, or a workflow_dispatch on the tag ref): the full run, then `host` creates the GitHub
 #   Release. Nothing else ever publishes.
 # tag-dispatch: a workflow_dispatch on a refs/tags/v* ref publishes like a tag push (R18).
-#   The "Tag release" workflow creates the tag with GITHUB_TOKEN, which does not trigger the tag push, so it
-#   dispatches this workflow on the tag instead. The tag is derived from GITHUB_REF in the `mode` step, checked
+#   The "Tag release" workflow pushes the release commit and tag with GITHUB_TOKEN, which does not trigger the tag
+#   push, so it dispatches this workflow on the tag instead. The tag is derived from GITHUB_REF in the `mode` step, checked
 #   against the workspace version and passed to dist explicitly.
 # - `sign (macOS)` (ADR-0065) runs on `v*` tag runs only, in the environment `release`, between `build` and `global`: it
 #   signs and notarises the macOS archives and builds, signs, notarises and staples the macOS `.dmg` (replacing

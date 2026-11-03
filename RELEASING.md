@@ -8,9 +8,10 @@ This is the checklist for cutting a release such as `v1.0.0`. The pipeline is `.
 
 - Releases are published on GitHub Releases only. There is no Homebrew, winget, Scoop or crates.io package (owner
   decision 4).
-- The owner cuts the release by running the "Tag release" workflow (see "Tag-time steps (owner)"). The team never
-  runs "Tag release", never dispatches it, never pushes a tag and never creates a Release. The team only prepares
-  `main` (the readiness items, the dry run) and hands over. The owner announces.
+- The owner cuts the release by running the "Tag release" workflow (see "Tag-time steps"), or the team does on the
+  owner's explicit instruction. Otherwise the team never runs "Tag release", never dispatches it, never pushes a tag
+  and never creates a Release; it only prepares `main` (the readiness items, the dry run) and hands over. The owner
+  announces.
 - Nothing outside this repository is posted by the team.
 - Use read-only `gh` calls while checking. Never print a secret value; check presence by name only.
 
@@ -64,37 +65,36 @@ afterwards.
 
 - The workflow reads the version from the tag, which must match `v[0-9]+.[0-9]+.[0-9]+*`.
 - `release.yml` publishes on a `v*` tag run: a tag push, or a `workflow_dispatch` whose ref is a `refs/tags/v*` tag
-  (this is what "Tag release" starts, because a tag created with `GITHUB_TOKEN` does not trigger the push event). A
+  (this is what "Tag release" starts, because a tag pushed with `GITHUB_TOKEN` does not trigger the push event). A
   dispatch on any branch stays a dry run and never publishes. In both cases the `mode` step takes the tag from
   `GITHUB_REF`, and `plan` passes it to `dist host --tag`.
 - The `plan` job runs `dist host --steps=create --tag=<tag>`. It fails when the version of the tag differs from the
   workspace version (`version` under `[workspace.package]` in `Cargo.toml`), so nothing builds or publishes
-  (ADR-0064). Bump the workspace version by PR before tagging.
+  (ADR-0064). "Tag release" bumps the manifests itself (`Cargo.toml` `[workspace.package]` version, the internal
+  path-dep versions and `Cargo.lock`), so no bump PR is needed. If the push to `main` is rejected, bump by PR and run
+  "Tag release" with `version` set to that version (tag only).
 - A `-` suffix (for example `v1.0.0-rc.1`) makes a pre-release. The update feed never serves a pre-release.
 
-## Tag-time steps (owner)
+## Tag-time steps
 
-Only the owner does these. The team never runs the "Tag release" workflow.
+The owner runs these, or the team on the owner's explicit instruction.
 
-1. The release readiness changes are merged, with the dated `CHANGELOG.md` heading, and the pre-flight is ticked.
-2. The Release dry run gate is strict. "Tag release" refuses to tag unless both of these exist for the exact commit
-   being tagged (the head of `main` when `sha` is empty):
-   - a successful `Release` run started by `workflow_dispatch` on `main` for that commit, and
-   - a successful `CI` run for that commit.
-
-   When `main` has moved since the last dry run (any merge, even docs), start a new one: Actions -> Release -> Run
-   workflow, branch `main`, no inputs, then wait for it to turn green before going on. Check it with
+1. The release readiness changes are merged, with the dated `CHANGELOG.md` heading for the target version, and the
+   pre-flight is ticked.
+2. Pre-flight, not enforced by the workflow: a green `CI` run and a green `Release` dry run on the head of `main`.
+   When `main` has moved since the last dry run, start a new one: Actions -> Release -> Run workflow, branch `main`,
+   no inputs. Check it with
    `gh run list --workflow release.yml --event workflow_dispatch --branch main --limit 1 --json status,conclusion,headSha`
-   and `gh run list --workflow ci.yml --branch main --event push --commit <sha> --limit 1 --json status,conclusion,headSha`; the `headSha` must be
-   the commit to tag.
-3. Actions -> "Tag release" -> Run workflow. Branch `main` (the workflow refuses any other ref). Inputs:
-   - `version`: `1.0.0` (no `v` prefix, no `+build`; a pre-release suffix such as `1.0.0-rc.1` is accepted).
-   - `sha`: leave empty (it then means the current head of `main`). To tag an earlier `main` commit, give 7 to 40
-     lowercase hex characters, and that commit needs its own green dry run and CI run.
-   - `confirm`: `release v1.0.0`, exactly.
-4. The workflow validates, creates the lightweight tag `v1.0.0` with `gh api`, dispatches `release.yml` on the tag and
-   writes the tag, the commit and the Release run link to the job summary. Open the link, or find the run with
-   `gh run list --workflow release.yml --event workflow_dispatch --branch v1.0.0 --limit 1`.
+   and `gh run list --workflow ci.yml --branch main --event push --limit 1 --json status,conclusion,headSha`.
+3. Actions -> "Tag release" -> Run workflow. Branch `main` (the job does not run on any other ref). Inputs:
+   - `bump`: `patch` (default), `minor` or `major`.
+   - `version`: optional exact version such as `1.0.0` (no `v` prefix, no `+build`; `1.0.0-rc.1` is accepted). It takes
+     precedence over `bump`.
+4. The workflow does, in order: bump and validate (semver, tag absent, a `## [X.Y.Z]` heading in `CHANGELOG.md`, all
+   manifests at the current version; nothing is written when a check fails); commit `chore(release): vX.Y.Z` to `main`
+   (skipped when the manifests already equal the version, never an empty commit); push the commit and the lightweight
+   tag in one atomic push; dispatch `release.yml` on the tag; write the tag, the commit and the Release run link to the
+   job summary. Find the run with `gh run list --workflow release.yml --event workflow_dispatch --branch v1.0.0 --limit 1`.
 
 ### What to verify afterwards
 
@@ -106,26 +106,27 @@ Only the owner does these. The team never runs the "Tag release" workflow.
 
 ### Failure modes
 
-- Validation fails: the job prints one line `tag-release-validate: <reason>` and stops before anything is written.
-  Typical reasons: the ref is not `main`; the version is not semver; `confirm` differs from `release vX.Y.Z`; the
-  `sha` is unknown or not on `main`; the `Cargo.toml` workspace version differs from `version`; `CHANGELOG.md` has no
-  `## [version]` heading or the section names the excluded engine; the tag already exists; the `release.yml` at the
-  commit has no `# tag-dispatch:` marker line (the commit is older than this feature); or the dry run or CI run for
-  that commit is missing or not successful. Fix the cause (new dry run, a PR to `main`, a corrected input) and run
-  "Tag release" again. Nothing was created, so there is nothing to clean up.
+- The bump fails: the job prints one line `::error::<reason>` and stops before anything is written. Typical reasons:
+  the version is not semver; `bump` is not patch, minor or major; the tag already exists; `CHANGELOG.md` has no
+  `## [version]` heading; the manifests are not all at the current version. Fix the cause and run "Tag release"
+  again. Nothing was written, so there is nothing to clean up.
+- Push rejected ("Push rejected" error, summary says so): branch protection or a ruleset refused the push of the
+  release commit to `main`, or the tag. The push is atomic, so nothing was written. As of 2026-11-03 `main` has a
+  ruleset that requires a pull request with no bypass actor, so the push of the release commit is expected to be
+  rejected (ADR-0064 amendment 4). Route: merge a PR that bumps the manifests to X.Y.Z, then run "Tag release" with
+  `version` = X.Y.Z. The manifests already match, so no commit is made and only the tag is pushed.
 - Environment policy risk: the environment `release` allows `v*` tags only. A dispatch on `refs/tags/v1.0.0` should
   match that rule like a push does, but this was never proven before the first release. If it does not, `sign (macOS)`
   fails with "not allowed to deploy", `host` never starts and nothing is published. The tag exists, so follow
   Rollback.
-- `GITHUB_TOKEN` ref creation risk: a tag ruleset, or the refusal of workflow-file changes without the `workflows`
-  permission, could reject the call that creates the tag. If so the job fails at "Create tag" with nothing created; use the
-  fallback below.
-- The tag was created but the dispatch failed or no run appeared: the summary says so. The owner starts the run with
+- `GITHUB_TOKEN` tag push risk: a tag ruleset could reject the tag push. If so the job fails at "Commit, tag and
+  push" with nothing written; use the fallback below.
+- The tag was pushed but the dispatch failed or no run appeared: the summary says so. The owner starts the run with
   `gh workflow run release.yml --ref v1.0.0`.
 
 ### Fallback (owner only)
 
-If "Tag release" cannot be used, the owner tags locally. The team never does this.
+If "Tag release" cannot be used, the owner tags locally (after the manifests are bumped by PR). The team never does this.
 
 1. `git fetch origin main`.
 2. Pick the `main` commit the dry run passed on.
@@ -192,13 +193,13 @@ Work in a scratch directory and delete it afterwards.
 
 - The tag run failed before `host`: nothing is published. The owner deletes the tag
   (`gh api --method DELETE repos/{owner}/{repo}/git/refs/tags/v1.0.0`, or `git push origin :refs/tags/v1.0.0` and the
-  local tag after the fallback route), fixes `main` by PR, repeats the dry run on the new head, then runs "Tag
-  release" again.
-- "Tag release" created the tag but the dispatch did not start: the owner runs
+  local tag after the fallback route), fixes `main` by PR (a bump PR is no longer needed for the version, "Tag release" bumps it), repeats the dry run on
+  the new head, then runs "Tag release" again.
+- "Tag release" pushed the tag but the dispatch did not start: the owner runs
   `gh workflow run release.yml --ref v1.0.0`.
 - A bad release is already published: do not reuse the tag. Mark it a pre-release in the GitHub UI, or delete it with
   `gh release delete v1.0.0 --cleanup-tag --yes`, so `latest` stops serving it. Then fix forward with `v1.0.1`
-  (the workspace version bump PR comes first).
+  ("Tag release" with the new bump or version; if its push is rejected, the bump PR comes first).
 - Never rotate the update key as a rollback. See [update-feed.md](docs/src/releasing/update-feed.md).
 
 ## Owner step
