@@ -68,7 +68,7 @@ Rejected:
   guard and the update-manifest dry run still run before every release, and now always over all five targets.
 - Benchmark regressions and size growth surface on a branch dispatch or after the merge on `main`, not on the PR.
 - Release artifacts last 7 days, so a manual `benchmarks.yml` dispatch later than that fails with a clear error.
-- `pr-run-mode = "skip"` was checked with dist 0.32.0: `dist plan --output-format=json` still lists all 5 entries in
+- `pr-run-mode = "skip"` was checked with dist 0.34.0: `dist plan --output-format=json` still lists all 5 entries in
   `.ci.github.artifacts_matrix.include` (the plan the dry run builds from) and reports `pr_run_mode` as `skip`.
 
 ## Rollback
