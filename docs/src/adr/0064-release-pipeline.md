@@ -250,3 +250,35 @@ Delete `.github/workflows/release.yml`, `.github/scripts/release-guard.sh`, `dis
 - Also unverified until the owner's run: that `GITHUB_TOKEN` may create the tag ref (a tag ruleset or the
   `workflows` permission rule could refuse it; nothing is created then). The fallback is the owner's local tag and push
   described in `RELEASING.md`.
+
+## Amendment 4 (2026-11-03, T1): one-click bump, tag and dispatch
+
+- Supersedes amendment 3's inputs (`version`, `sha`, `confirm`), its validator script and pre-check, the strict dry-run gate and the marker requirement. The `# tag-dispatch:` marker line stays in
+  `release.yml` as a comment. ADR-0074 "Tag release requires a green dry run" now reads "the pre-flight asks for a
+  green dry run": RELEASING.md keeps the CI and dry-run checks as pre-flight items, the workflow no longer enforces
+  them. Lost alternative: a `gh run list` gate, which would need the fake `gh` kept.
+- New flow: `tag-release.yml` takes `bump` (patch, minor, major; default patch) and an optional exact `version` that
+  wins over `bump`. The job runs only on `refs/heads/main`. `.github/scripts/tag-release-bump.sh` validates first
+  (semver, tag absent, `CHANGELOG.md` heading, all manifests at the current version) and writes nothing on a failure.
+  Lost alternative: `cargo set-version` and `cargo update -w`, which need the toolchain, `cargo-edit` and network for a
+  string edit.
+- Manifests bumped: `Cargo.toml` `[workspace.package]` version, the `version` of the internal path deps in
+  `[workspace.dependencies]`, and the `sqler-*` and `xtask` entries of `Cargo.lock`. External dependencies and spike
+  lockfiles are not touched.
+- Skip-commit rule: the commit `chore(release): vX.Y.Z` is made only when a manifest changed. When the manifests
+  already equal the version, only the tag is created, never an empty commit.
+- Atomic push: `git push --atomic origin HEAD:main refs/tags/vX.Y.Z`, so either both land or neither. Then
+  `release.yml` is dispatched on the tag (a `GITHUB_TOKEN` push does not start the tag trigger).
+- Branch protection (read-only check on 2026-11-03): `gh api repos/alwatroos/sqler/branches/main/protection` returned
+  404 "Branch not protected", so there is no classic protection (no `required_pull_request_reviews`,
+  `enforce_admins`, `restrictions` or `required_status_checks`). `gh api repos/alwatroos/sqler/rules/branches/main`
+  returned 200 with a repository ruleset (id 25467269, active, default branch, no bypass actors) with the rules
+  `deletion`, `non_fast_forward`, `required_linear_history` and `pull_request` (0 approvals, squash merge only). A
+  `GITHUB_TOKEN` push of the release commit to `main` is therefore expected to be rejected. Handling: the atomic push
+  writes nothing, the job fails with "Push rejected" and the summary says what to do: merge a PR that bumps the
+  manifests to X.Y.Z, then run Tag release with `version` = X.Y.Z, which takes the tag-only path. No ruleset or
+  protection setting is changed by this work.
+- Rule: the owner runs Tag release, or the team on the owner's explicit instruction. The team still never pushes a tag
+  by hand or creates a Release.
+- Tests: `tag-release-bump-test.sh` runs in the CI `docs` job (temp git repo, no network). The workflow itself is
+  checked by `actionlint` and by the live run.

@@ -110,7 +110,7 @@ sh .github/scripts/release-guard.sh features            # DuckDB guard of releas
 sh .github/scripts/release-guard.sh binary <file>       # no DuckDB engine marker in the binary
 sh .github/scripts/release-guard.sh build-dir <dir>     # no libduckdb-sys build output
 sh .github/scripts/release-guard.sh artifacts <dir>     # no DuckDB in artifact names or text artifacts
-sh .github/scripts/tag-release-validate-test.sh         # fixture cases of the owner-only "Tag release" validator (R18, ADR-0064 amendment 3): temp git repo and a fake gh, no network
+sh .github/scripts/tag-release-bump-test.sh   # fixture cases of the "Tag release" version bump (ADR-0064 amendment 4): temp git repo, no network
 sh packaging/macos/build-dmg.sh <bundle-dir> <version> <triple> <out-dir>   # builds sqler-app-<triple>.dmg (+ .sha256), ad hoc signed, from the extracted archive dir (ADR-0075); `--app <bundle-dir> <version> <app-out-dir>` stages an unsigned SQLer.app, `--pack <app> <version> <triple> <out-dir>` packs a ready app (used by sign-macos.sh --dmg); macOS only
 sh packaging/macos/check-dmg.sh [--notarized] <dmg>      # attaches the dmg read-only, asserts the layout and --version; --notarized (tag runs) also needs stapled, spctl-notarised dmg and app, hardened runtime
 sh packaging/linux/build-deb.sh <bundle-dir> <version> <triple> <out-dir>   # builds sqler-app-<triple>.deb (+ .sha256); SQLER_DEB_DEPENDS overrides the dpkg-shlibdeps result

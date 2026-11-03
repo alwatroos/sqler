@@ -1,31 +1,34 @@
 name: Tag release
 
-# Owner-triggered release tag (R18, ADR-0064 amendment 3). The OWNER runs this from Actions -> Tag release on `main`;
-# nobody else dispatches it. It validates (fail closed, `.github/scripts/tag-release-validate.sh`), creates the
-# lightweight tag `vX.Y.Z` through the API, then dispatches `release.yml` on that tag. A tag made with GITHUB_TOKEN does
-# not start the `push: tags` trigger of release.yml (GitHub blocks recursive triggers), but a dispatch does, and
-# release.yml publishes a dispatch on a `refs/tags/v*` ref like a tag push.
+# One-click release (ADR-0064 amendment 4). The owner (or the team, on the owner's explicit instruction) runs
+# Actions -> Tag release on `main` and picks the bump (patch by default) or an exact version. The workflow bumps the
+# version manifests (`.github/scripts/tag-release-bump.sh`: Cargo.toml and Cargo.lock; it validates first and writes
+# nothing on a failure), commits "chore(release): vX.Y.Z" to `main` (skipped when the manifests already equal the
+# version), pushes the commit and the lightweight tag `vX.Y.Z` in one atomic push, then dispatches `release.yml` on the
+# tag.
 #
-# Gate: a successful Release dry run (workflow_dispatch on main) and a successful CI push run, both on the exact
-# commit being tagged. Run the Release workflow on main first.
+# A push made with GITHUB_TOKEN does not start the `push: tags` trigger of release.yml (GitHub blocks recursive
+# triggers), but a dispatch does, and release.yml publishes a dispatch on a `refs/tags/v*` ref like a tag push.
+#
+# If branch protection or a ruleset rejects the push, nothing is written (atomic push). Merge a PR that bumps the
+# manifests, then run this workflow again with `version` set to that version: it takes the tag-only path.
+#
+# No CI-green or dry-run gate is enforced here; RELEASING.md keeps them as pre-flight items.
 #
 # Every input reaches a script through `env:` only; no expression is interpolated into a `run:` script.
 on:
   workflow_dispatch:
     inputs:
+      bump:
+        description: "Version bump"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
       version:
-        description: "Version without v, for example 1.0.0"
-        type: string
-        required: true
-      sha:
-        description: "Commit to tag (7-40 lowercase hex, on main). Empty means the head of main."
+        description: "Exact version instead of the bump, for example 1.0.0 (optional)"
         type: string
         required: false
         default: ""
-      confirm:
-        description: "Type exactly: release vX.Y.Z"
-        type: string
-        required: true
 
 permissions:
   contents: write
@@ -38,55 +41,58 @@ concurrency:
 jobs:
   tag:
     name: tag release
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-          persist-credentials: false
+          # Needed for the push; only first-party scripts run in this job.
+          persist-credentials: true
 
-      # Cheap checks (script, so they are testable offline) before any API call.
-      - name: Pre-check
+      - name: Bump version
+        id: bump
         shell: bash
         env:
+          BUMP: ${{ inputs.bump }}
           VERSION: ${{ inputs.version }}
-          CONFIRM: ${{ inputs.confirm }}
-          REF: ${{ github.ref }}
-        run: sh .github/scripts/tag-release-precheck.sh
+        run: sh .github/scripts/tag-release-bump.sh
 
-      - name: Validate
-        id: validate
+      - name: Commit, tag and push
+        id: push
         shell: bash
         env:
-          VERSION: ${{ inputs.version }}
-          SHA: ${{ inputs.sha }}
-          CONFIRM: ${{ inputs.confirm }}
-          REF: ${{ github.ref }}
-          MAIN_HEAD: ${{ github.sha }}
-          REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
-        run: sh .github/scripts/tag-release-validate.sh
-
-      - name: Create tag
-        id: tag
-        shell: bash
-        env:
-          REPO: ${{ github.repository }}
-          TAG: ${{ steps.validate.outputs.tag }}
-          SHA: ${{ steps.validate.outputs.sha }}
-          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.bump.outputs.tag }}
+          CHANGED: ${{ steps.bump.outputs.changed }}
         run: |
-          gh api --method POST "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA"
-          echo "created=true" >>"$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$CHANGED" = "true" ]; then
+            git add Cargo.toml Cargo.lock
+            git commit -m "chore(release): $TAG"
+          fi
+          git tag "$TAG"
+          if [ "$CHANGED" = "true" ]; then
+            git push --atomic origin HEAD:main "refs/tags/$TAG" || push_failed=1
+          else
+            git push origin "refs/tags/$TAG" || push_failed=1
+          fi
+          if [ "${push_failed:-0}" = "1" ]; then
+            echo "rejected=true" >>"$GITHUB_OUTPUT"
+            echo "::error title=Push rejected::the push of $TAG was rejected (branch protection, a ruleset or a race). Nothing was written."
+            exit 1
+          fi
+          echo "sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+          echo "pushed=true" >>"$GITHUB_OUTPUT"
 
       - name: Dispatch Release
         id: dispatch
         shell: bash
         env:
           REPO: ${{ github.repository }}
-          TAG: ${{ steps.validate.outputs.tag }}
-          SHA: ${{ steps.validate.outputs.sha }}
+          TAG: ${{ steps.bump.outputs.tag }}
+          SHA: ${{ steps.push.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           gh workflow run release.yml --repo "$REPO" --ref "$TAG"
@@ -109,24 +115,41 @@ jobs:
         shell: bash
         env:
           REPO: ${{ github.repository }}
-          TAG: ${{ steps.validate.outputs.tag }}
-          SHA: ${{ steps.validate.outputs.sha }}
-          VALIDATE: ${{ steps.validate.outcome }}
-          CREATED: ${{ steps.tag.outputs.created }}
+          TAG: ${{ steps.bump.outputs.tag }}
+          CHANGED: ${{ steps.bump.outputs.changed }}
+          BUMP_OUTCOME: ${{ steps.bump.outcome }}
+          SHA: ${{ steps.push.outputs.sha }}
+          PUSHED: ${{ steps.push.outputs.pushed }}
+          REJECTED: ${{ steps.push.outputs.rejected }}
           DISPATCHED: ${{ steps.dispatch.outputs.dispatched }}
           RUN_URL: ${{ steps.dispatch.outputs.run_url }}
         run: |
           {
             echo "## Tag release"
-            if [ "$VALIDATE" != "success" ]; then
-              echo "Validation did not pass (outcome: $VALIDATE). No tag was created. See the Validate step."
+            if [ "$BUMP_OUTCOME" = "failure" ]; then
+              echo "Validation failed, nothing written. See the Bump version step."
+            elif [ "$BUMP_OUTCOME" != "success" ]; then
+              echo "The job stopped before the bump (outcome: $BUMP_OUTCOME), nothing written. See the failed step."
+            elif [ "$REJECTED" = "true" ]; then
+              echo "- Tag: \`$TAG\`"
+              if [ "$CHANGED" = "true" ]; then
+                echo "- The push was rejected. Nothing was written (atomic push). Merge a PR that bumps the manifests to ${TAG#v}, then run Tag release with version=${TAG#v} (tag only)."
+              else
+                echo "- The tag push was rejected (for example by a tag ruleset). The manifests already match ${TAG#v}, so no bump PR is needed. Use the owner's local-tag fallback in RELEASING.md."
+              fi
+            elif [ "$PUSHED" != "true" ]; then
+              echo "- Tag: \`$TAG\`"
+              echo "- The job stopped before the push finished. See the failed step."
             else
               echo "- Tag: \`$TAG\`"
               echo "- Commit: \`$SHA\`"
-              if [ "$CREATED" != "true" ]; then
-                echo "- The tag was NOT created."
-              elif [ "$DISPATCHED" != "true" ]; then
-                echo "- The tag was created but the Release dispatch failed. The owner runs: \`gh workflow run release.yml --ref $TAG\`, or deletes the tag and retries."
+              if [ "$CHANGED" = "true" ]; then
+                echo "- Release commit: pushed to main"
+              else
+                echo "- Release commit: skipped (the manifests were already at ${TAG#v}), tag only"
+              fi
+              if [ "$DISPATCHED" != "true" ]; then
+                echo "- The tag was pushed but the Release dispatch failed. Run: \`gh workflow run release.yml --ref $TAG\`, or delete the tag and retry."
               elif [ -n "$RUN_URL" ]; then
                 echo "- Release run: $RUN_URL"
               else
@@ -135,6 +158,6 @@ jobs:
               fi
             fi
           } >>"$GITHUB_STEP_SUMMARY"
-          if [ "$CREATED" = "true" ] && [ "$DISPATCHED" != "true" ]; then
+          if [ "$PUSHED" = "true" ] && [ "$DISPATCHED" != "true" ]; then
             exit 1
           fi
