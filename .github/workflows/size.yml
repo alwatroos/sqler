@@ -137,7 +137,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
-      # cargo-bloat 0.12.1 is on crates.io (verified); install-action has no manifest for it. A failed install only
+      # cargo-bloat 0.12.1 is on crates.io (re-checked 2026-11-03); install-action has no manifest for it. A failed install only
       # skips the crates table: no secrets used, permissions stay contents: read.
       - name: Install cargo-bloat
         id: bloat

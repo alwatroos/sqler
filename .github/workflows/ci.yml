@@ -209,7 +209,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         if: needs.changes.outputs.rust == 'true'
         with:
-          tool: cargo-nextest@0.9.148
+          tool: cargo-nextest@0.9.151
       - name: Test
         if: needs.changes.outputs.rust == 'true' && (matrix.os == 'ubuntu-latest' || needs.changes.outputs.full == 'true')
         shell: bash
@@ -375,7 +375,7 @@ jobs:
           save-if: false
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest@0.9.148
+          tool: cargo-nextest@0.9.151
       - name: Start PostgreSQL (TLS on)
         run: sh crates/sqler-driver-postgres/tests/docker/start-postgres.sh "$RUNNER_TEMP/pg" >> "$GITHUB_ENV"
       - name: Database tests
@@ -512,7 +512,7 @@ jobs:
       - name: Install cargo-generate (source build, locked)
         if: needs.changes.outputs.plugins == 'true'
         shell: bash
-        run: cargo install cargo-generate --version 0.25.1 --locked
+        run: cargo install cargo-generate --version 0.26.0 --locked
       - name: Template (generate and build)
         if: needs.changes.outputs.plugins == 'true'
         shell: bash
@@ -625,7 +625,7 @@ jobs:
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest@0.9.148
+          tool: cargo-nextest@0.9.151
       # One feature set for every step, so the bundled C++ engine is compiled once and reused by the test build.
       - name: Clippy (engine, app and cli with driver-duckdb)
         run: cargo clippy -p sqler-driver-duckdb -p sqler-app -p sqler-cli --all-targets --features sqler-app/driver-duckdb,sqler-cli/driver-duckdb -- -D warnings

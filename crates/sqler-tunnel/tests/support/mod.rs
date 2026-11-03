@@ -88,6 +88,17 @@ impl server::Server for ServerState {
     }
 }
 
+impl SessionHandler {
+    /// Accept the user with the one registered client key, reject everything else.
+    fn check_key(&self, user: &str, key: &PublicKey) -> Auth {
+        if user == USER && self.state.client_key.as_ref() == Some(key) {
+            Auth::Accept
+        } else {
+            Auth::reject()
+        }
+    }
+}
+
 impl server::Handler for SessionHandler {
     type Error = russh::Error;
 
@@ -99,20 +110,20 @@ impl server::Handler for SessionHandler {
         }
     }
 
-    async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
-        if user == USER && self.state.client_key.as_ref() == Some(key) {
-            Ok(Auth::Accept)
-        } else {
-            Ok(Auth::reject())
-        }
+    async fn auth_publickey(
+        &mut self,
+        user: &str,
+        key: server::VerifiedPublicKey<'_>,
+    ) -> Result<Auth, Self::Error> {
+        Ok(self.check_key(user, key.public_key))
     }
 
     async fn auth_publickey_offered(
         &mut self,
         user: &str,
-        key: &PublicKey,
+        offer: server::PublicKeyOffer<'_>,
     ) -> Result<Auth, Self::Error> {
-        self.auth_publickey(user, key).await
+        Ok(self.check_key(user, offer.public_key))
     }
 
     async fn channel_open_direct_tcpip(
