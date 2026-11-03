@@ -209,7 +209,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         if: needs.changes.outputs.rust == 'true'
         with:
-          tool: cargo-nextest@0.9.148
+          tool: cargo-nextest@0.9.151
       - name: Test
         if: needs.changes.outputs.rust == 'true' && (matrix.os == 'ubuntu-latest' || needs.changes.outputs.full == 'true')
         shell: bash
@@ -375,7 +375,7 @@ jobs:
           save-if: false
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest@0.9.148
+          tool: cargo-nextest@0.9.151
       - name: Start PostgreSQL (TLS on)
         run: sh crates/sqler-driver-postgres/tests/docker/start-postgres.sh "$RUNNER_TEMP/pg" >> "$GITHUB_ENV"
       - name: Database tests
@@ -472,6 +472,8 @@ jobs:
     # No-op runs use an ubuntu runner instead of macOS/Windows.
     runs-on: ${{ needs.changes.outputs.plugins == 'true' && matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 30
+    env:
+      CARGO_GENERATE_VERSION: 0.26.0
     strategy:
       fail-fast: false
       matrix:
@@ -507,12 +509,25 @@ jobs:
       # The plugin template (plugins/template): generated outside the checkout (cargo-generate may add a crate
       # generated inside a workspace to its members), then built like a plugin developer would.
       # Built from source, pinned and locked. taiki-e/install-action has no manifest for cargo-generate and would
-      # fall back to an unverified prebuilt binary. Not cached: ADR-0068 saves caches on main only, and the build
-      # (about two minutes) runs only when the plugins filter is true.
-      - name: Install cargo-generate (source build, locked)
+      # fall back to an unverified prebuilt binary. The binary is cached under its own key (version, OS, arch), so
+      # a hit skips the roughly two-minute build. Following ADR-0068, it is saved on main only, after a miss.
+      - name: Restore cargo-generate
+        id: cargo-generate-cache
         if: needs.changes.outputs.plugins == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-generate*
+          key: cargo-generate-${{ env.CARGO_GENERATE_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install cargo-generate (source build, locked, on cache miss)
+        if: needs.changes.outputs.plugins == 'true' && steps.cargo-generate-cache.outputs.cache-hit != 'true'
         shell: bash
-        run: cargo install cargo-generate --version 0.25.1 --locked
+        run: cargo install cargo-generate --version "$CARGO_GENERATE_VERSION" --locked
+      - name: Save cargo-generate (main only)
+        if: needs.changes.outputs.plugins == 'true' && github.ref == 'refs/heads/main' && steps.cargo-generate-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-generate*
+          key: ${{ steps.cargo-generate-cache.outputs.cache-primary-key }}
       - name: Template (generate and build)
         if: needs.changes.outputs.plugins == 'true'
         shell: bash
@@ -625,7 +640,7 @@ jobs:
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest@0.9.148
+          tool: cargo-nextest@0.9.151
       # One feature set for every step, so the bundled C++ engine is compiled once and reused by the test build.
       - name: Clippy (engine, app and cli with driver-duckdb)
         run: cargo clippy -p sqler-driver-duckdb -p sqler-app -p sqler-cli --all-targets --features sqler-app/driver-duckdb,sqler-cli/driver-duckdb -- -D warnings

@@ -1,11 +1,24 @@
 name: Binary size
 
 # Reports the release `sqler` size per OS next to the 80 MB budget (ADR-0069). Report only, never a gate.
-# Triggers: push to main and workflow_dispatch. There is no pull_request trigger (ADR-0074): the three-OS build
-# is the slowest check in the repository and PRs run `CI` only.
+# Triggers: push to main touching size-relevant paths, and workflow_dispatch. There is no pull_request trigger
+# (ADR-0074): the three-OS build is the slowest check in the repository and PRs run `CI` only.
+# Paths: what feeds the `sqler-app` release build (crates, lockfile, toolchain, vendor, icon, plugin manifests, this
+# file), so a path-skipped merge holds no macOS runner (ADR-0074 amendment 1).
+# No required_status_checks rule exists on main today, so a path-skipped run blocks nothing.
 on:
   push:
     branches: [main]
+    paths:
+      - "crates/**"
+      - "!crates/**/README.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "vendor/**"
+      - "assets/icon/**"
+      - "plugins/*/sqler.toml"
+      - ".github/workflows/size.yml"
   workflow_dispatch:
 
 # One group per run, never cancelled: every run completes.
@@ -124,7 +137,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libfontconfig-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev
-      # cargo-bloat 0.12.1 is on crates.io (verified); install-action has no manifest for it. A failed install only
+      # cargo-bloat 0.12.1 is on crates.io (re-checked 2026-11-03); install-action has no manifest for it. A failed install only
       # skips the crates table: no secrets used, permissions stay contents: read.
       - name: Install cargo-bloat
         id: bloat

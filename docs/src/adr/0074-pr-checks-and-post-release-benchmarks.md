@@ -30,7 +30,7 @@ Adopted:
    | `ci.yml` | yes | yes | yes (`full`) | - |
    | `bench.yml` | no | yes | yes | - |
    | `benchmarks.yml` | no | no | yes | `workflow_run` of `Release`, publishing runs only |
-   | `size.yml` | no | yes | yes | - |
+   | `size.yml` | no | yes (size-relevant paths, amendment 1) | yes | - |
    | `spike.yml`, `plugin-spike.yml` | no | yes | yes | - |
    | `release.yml` | no | tags `v*` | yes (dry run; publishes on a `refs/tags/v*` ref) | - |
 
@@ -39,7 +39,8 @@ Adopted:
 2. **`bench.yml`** keeps absolute budgets on push to `main`. A dispatch on a branch compares the branch with its
    merge-base with `origin/main`, interleaved as before; this is the way to get the before/after numbers that
    AGENTS.md section 4 asks for.
-3. **`size.yml`** always builds the three OSes (the PR-only Linux subset and the `full-ci` label are gone).
+3. **`size.yml`** always builds the three OSes (the PR-only Linux subset and the `full-ci` label are gone) (on every
+   size-relevant push since amendment 1).
 4. **`benchmarks.yml`** runs after a successful *publishing* `Release` run (`workflow_run`, head ref `vX.Y.Z[-pre]`,
    the GitHub Release exists) or by hand against such a run. A run on a branch is refused. It never gates `release.yml`
    or Tag release; a red run is a follow-up.
@@ -67,9 +68,21 @@ Rejected:
   guard and the update-manifest dry run still run before every release, and now always over all five targets.
 - Benchmark regressions and size growth surface on a branch dispatch or after the merge on `main`, not on the PR.
 - Release artifacts last 7 days, so a manual `benchmarks.yml` dispatch later than that fails with a clear error.
-- `pr-run-mode = "skip"` was checked with dist 0.32.0: `dist plan --output-format=json` still lists all 5 entries in
+- `pr-run-mode = "skip"` was checked with dist 0.34.0: `dist plan --output-format=json` still lists all 5 entries in
   `.ci.github.artifacts_matrix.include` (the plan the dry run builds from) and reports `pr_run_mode` as `skip`.
 
 ## Rollback
 
 Revert the commit: the previous workflows and `dist-workspace.toml` are restored whole.
+
+## Amendment 1 (2026-11-03, T2): size.yml runs only on size-relevant merges
+
+- Reason: the `macos-latest` size builds of 13-32 min on every merge competed with PR `check (macos-latest)` for the
+  macOS pool, and the runner wait was measured as above 2 min on a PR run.
+- `size.yml` now runs on push to `main` only when the merge touches `crates/` (not a crate
+  `README.md`; the compiled-in prompt `.md` files still count), `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`,
+  `vendor/`, `assets/icon/`, `plugins/*/sqler.toml` or the workflow itself.
+- `workflow_dispatch` stays unfiltered and there is still no `pull_request` trigger.
+- Consequence: a docs-only merge, or one that changes only other
+  workflows, leaves no size line (a change to `size.yml` itself does run it); `gh workflow run size.yml --ref main`
+  gives one on demand. Rollback: remove the `paths:` key.

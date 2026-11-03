@@ -144,7 +144,7 @@ jobs:
         run: |
           git config --global core.autocrlf false
           git config --global core.longpaths true
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # On main: the tree of the measured Release run. A dispatch from another branch (to test changes to this
           # workflow or to xtask) uses that branch's tree; the artifacts and the recorded commit are still the Release run's.
@@ -153,7 +153,7 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Same cache scheme as bench.yml: the default key hashes every installed rustc, which split caches at random.
           add-rust-environment-hash-key: false
@@ -174,11 +174,11 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: hyperfine@2.0.0
       - name: Fetch the Release artifacts
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: artifacts-build-local-${{ matrix.target }}
           path: ${{ runner.temp }}/release
@@ -275,7 +275,7 @@ jobs:
           fi
       - name: Upload the results
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: benchmarks-${{ matrix.target }}
           path: |

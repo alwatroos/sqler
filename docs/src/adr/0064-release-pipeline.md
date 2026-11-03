@@ -22,8 +22,8 @@ separate work item.
 
 ## Considered Options and Decision Outcome
 
-Adopted: **cargo-dist 0.32.0** (crate `cargo-dist`, binary `dist`; latest stable on crates.io on 2026-10-23, released
-2026-05-22, `MIT OR Apache-2.0`). `dist-workspace.toml` is the single source. `.github/workflows/release.yml` started
+Adopted: **cargo-dist 0.34.0** (crate `cargo-dist`, binary `dist`; latest stable on crates.io on 2026-11-03, released
+2026-11-02, `MIT OR Apache-2.0`). `dist-workspace.toml` is the single source. `.github/workflows/release.yml` started
 from `dist generate` and is maintained by hand (`allow-dirty = ["ci"]`), because the path-gated PR trigger, the
 dry-run mode, the GPUI system packages, the DuckDB guard after the build, the `--version` smoke run, the size line and
 the secret-gated notice steps cannot be generated. After a dist upgrade, run `dist generate` into a scratch copy and

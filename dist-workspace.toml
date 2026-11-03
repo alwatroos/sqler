@@ -4,7 +4,7 @@ members = ["cargo:."]
 # Release pipeline (ADR-0064). cargo-dist builds, packages and, on a `v*` tag only, publishes `sqler-app`.
 # `.github/workflows/release.yml` is maintained by hand (allow-dirty); see the ADR before re-running `dist generate`.
 [dist]
-cargo-dist-version = "0.32.0"
+cargo-dist-version = "0.34.0"
 ci = "github"
 hosting = "github"
 create-release = true

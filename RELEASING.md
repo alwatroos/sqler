@@ -56,7 +56,7 @@ afterwards.
 - [ ] Windows is unsigned by owner decision: there is no step and no secret for it.
 - [ ] The release notes preview works. cargo-dist is installed in a scratch root at the version in
   `dist-workspace.toml`
-  (`cargo install --locked --version <version> --root <scratch> cargo-dist`, never in the repository), then:
+  (the prebuilt GitHub release archive of that version, unpacked into the scratch root, never in the repository), then:
   `dist plan --tag=v1.0.0 --output-format=json > <scratch>/plan.json`. `jq -r .announcement_github_body <scratch>/plan.json`
   shows the `1.0.0` section of `CHANGELOG.md`, and `sh .github/scripts/release-guard.sh artifacts <scratch>` passes
   (the notes must not name the excluded engine; the guard fails the tag run otherwise). This publishes nothing.
