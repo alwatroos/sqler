@@ -15,7 +15,7 @@ This is the first release that contains the in-app updater, so it must be instal
 
 - **SQLer can install its own updates.** With **Check for updates** on, a newer version is downloaded in the background, checked against the size and SHA-256 in the signed version file, and installed when you choose **Install and restart** (status bar, Settings, or the command `app:install-update`). It covers the archive binary and, on macOS, the whole `SQLer.app` from the signed `.dmg`. Package-manager installs, folders SQLer cannot write to and development builds still update by hand, and SQLer names the verified file. Turning the check off stops the download and deletes the downloaded files. The signed version file gains a `bundles` field for the macOS `.dmg` (old clients ignore it). Releases up to 1.2.2 cannot update themselves, so 1.3.0 itself must be installed by hand; on macOS the update then replaces the whole `SQLer.app`. See ADR-0078.
 
-- **Username field in the connection form, filled from a pasted connection string.** Server databases have their own Username next to Password. Pasting `postgres://USER:PASSWORD@host:5432/db` into Target moves the user and password into those fields; the password goes to the keychain only, and the saved target still holds `?user=` and no user info. `SQLite` is unchanged.
+- **Username field in the connection form, filled from a pasted connection string.** Server databases have their own Username next to Password. Pasting a connection string into Target moves the user and password into those fields; the password goes to the keychain only, and the saved target still holds `?user=` and no user info. `SQLite` is unchanged.
 
 ## [1.2.2] - 2026-10-30
 
