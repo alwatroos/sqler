@@ -4,6 +4,7 @@
 //! The connection sidebar: state (always built) and the `GPUI` view (feature `gui`).
 
 mod model;
+mod reconnect;
 #[cfg(feature = "gui")]
 pub(crate) mod view;
 
@@ -11,3 +12,4 @@ pub use model::{
     ConnectionStatus, GroupOption, RowKind, Selection, SidebarEntry, SidebarItem, SidebarModel,
     SidebarRow, changed_range, key_command,
 };
+pub use reconnect::ReconnectPrompt;
