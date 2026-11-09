@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-09
+
 ### Added
 
 - The results grid has Copy Value, Copy Column and Copy Column with Header in the right-click menu of a cell (the column copies also in the menu of a column header) and Export as CSV…, which opens the export dialog with CSV chosen; each is a command in the palette.
