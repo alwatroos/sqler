@@ -468,7 +468,7 @@ jobs:
       - plan
       - build
     if: ${{ needs.plan.outputs.publishing == 'true' }}
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 120
     environment: release
     permissions:

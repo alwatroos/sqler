@@ -1,0 +1,38 @@
+# TEMPORARY (release-macos-runner): proves macos-latest is accepted and has the signing tools. Delete before merge.
+name: macos-runner-probe
+
+on:
+  push:
+    branches: [release-macos-runner]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: probe (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Image and tools
+        shell: bash
+        run: |
+          sw_vers
+          uname -m
+          for t in security codesign openssl tar base64 shasum jq awk sed find ditto xcrun spctl hdiutil plutil; do command -v "$t"; done
+          xcrun --find notarytool
+          xcrun --find stapler
+      - name: Make sure Rosetta 2 is available for the x86_64 verify
+        shell: bash
+        run: |
+          if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+            arch -x86_64 /usr/bin/true
+          fi
+      - name: Staple test
+        shell: bash
+        run: sh .github/scripts/sign-macos-staple-test.sh
