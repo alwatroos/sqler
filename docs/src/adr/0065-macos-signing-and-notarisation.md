@@ -195,7 +195,7 @@ Nothing else depends on them.
 
 ## Amendment 3 (2026-11-09, release-macos-runner): `sign (macOS)` runs on `macos-latest`
 
-- GitHub stopped accepting `macos-14`: the v1.4.0 Release run 42661787697 was cancelled after about 3 s with "The
+- GitHub stopped accepting `macos-14`: `sign (macOS)` in the v1.4.0 Release run 42661787697 was cancelled after about 3 s with "The
   configuration 'macos-14-arm64-us-default' is not supported". The job now uses `macos-latest`, like every other macOS
   job in the repo.
 - The signing tools are system tools found through `xcrun`, with no pinned Xcode, no `DEVELOPER_DIR` and no OS-version

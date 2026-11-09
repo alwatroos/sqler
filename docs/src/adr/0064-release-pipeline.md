@@ -318,5 +318,5 @@ Delete `.github/workflows/release.yml`, `.github/scripts/release-guard.sh`, `dis
 ## Amendment 6 (2026-11-09, release-macos-runner): aarch64 macOS build runner
 
 The Targets table named `macos-14` as the `aarch64-apple-darwin` build runner. That label is retired. cargo-dist 0.34
-defaults to `macos-15` for this target, as seen in dry run 42661787697 (`build (aarch64-apple-darwin)`, success).
+defaults to `macos-15` for this target, as seen in the v1.4.0 Release run 42661787697 (`build (aarch64-apple-darwin)`, success).
 Nothing is pinned in `dist-workspace.toml`, and the other targets are unchanged.
