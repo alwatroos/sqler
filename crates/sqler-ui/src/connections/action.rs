@@ -84,6 +84,14 @@ pub enum ConnectionAction {
     ToggleGroup(GroupId),
     /// Select a group.
     SelectGroup(GroupId),
+    /// Ask to reconnect every open tab of a connection (or do it at once when nothing is at risk).
+    Reconnect(ConnectionId),
+    /// Reconnect after the confirmation was accepted.
+    ConfirmReconnect,
+    /// Close the reconnect confirmation without reconnecting.
+    DismissReconnect,
+    /// Cancel the reconnect attempts of a connection that are still running.
+    CancelReconnect(ConnectionId),
     /// Trust the SSH host key the dialog shows and try again.
     TrustHostKey,
     /// Do not trust the SSH host key.
@@ -99,6 +107,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("connection:delete", "Delete Connection"),
     ("connection:test", "Test Connection"),
     ("connection:cancel-test", "Cancel Connection Test"),
+    ("connection:reconnect", "Reconnect Connection"),
+    ("connection:cancel-reconnect", "Cancel Reconnect"),
     ("connection:save", "Save Connection"),
     ("connection:cancel", "Close Connection Dialog"),
     ("connection:move-to-group", "Move Connection to Group"),
@@ -146,6 +156,10 @@ impl ConnectionAction {
             | Self::SetAiSendRows(_)
             | Self::ClearSecret(_) => "connection:edit",
             Self::Delete(_) | Self::ConfirmDelete => "connection:delete",
+            Self::Reconnect(_) | Self::ConfirmReconnect | Self::DismissReconnect => {
+                "connection:reconnect"
+            }
+            Self::CancelReconnect(_) => "connection:cancel-reconnect",
             Self::Test => "connection:test",
             Self::CancelTest => "connection:cancel-test",
             Self::Save => "connection:save",
@@ -216,6 +230,14 @@ pub fn action_for(id: &CommandId, ws: &Workspace) -> Option<ConnectionAction> {
         "connection:delete" => selected.map(ConnectionAction::Delete),
         "connection:test" => (form_open || selected.is_some()).then_some(ConnectionAction::Test),
         "connection:cancel-test" => form_open.then_some(ConnectionAction::CancelTest),
+        "connection:reconnect" => ws
+            .reconnect_target()
+            .filter(|c| ws.can_reconnect(c))
+            .map(ConnectionAction::Reconnect),
+        "connection:cancel-reconnect" => ws
+            .reconnect_target()
+            .filter(|c| ws.is_reconnecting(c))
+            .map(ConnectionAction::CancelReconnect),
         "connection:save" => form_open.then_some(ConnectionAction::Save),
         "connection:cancel" => ws.dialog().is_some().then_some(ConnectionAction::Cancel),
         "connection:move-to-group" => selected.map(ConnectionAction::OpenMoveTo),
@@ -255,6 +277,10 @@ mod tests {
             ConnectionAction::Edit(c.clone()),
             ConnectionAction::Delete(c.clone()),
             ConnectionAction::ConfirmDelete,
+            ConnectionAction::Reconnect(c.clone()),
+            ConnectionAction::ConfirmReconnect,
+            ConnectionAction::DismissReconnect,
+            ConnectionAction::CancelReconnect(c.clone()),
             ConnectionAction::Test,
             ConnectionAction::CancelTest,
             ConnectionAction::Save,
@@ -340,6 +366,8 @@ mod tests {
             "connection:delete",
             "connection:test",
             "connection:cancel-test",
+            "connection:reconnect",
+            "connection:cancel-reconnect",
             "connection:save",
             "connection:cancel",
             "connection:move-to-group",
@@ -470,5 +498,31 @@ mod tests {
         ] {
             assert_eq!(act(id, &w), None, "{id}");
         }
+    }
+
+    #[test]
+    fn reconnect_commands_need_a_tab() {
+        let mut w = ws();
+        w.dispatch(crate::workspace::WorkspaceAction::SelectConnection(0));
+        let id = w.sidebar().selected_id().unwrap().clone();
+        assert_eq!(act("connection:reconnect", &w), None);
+        assert_eq!(act("connection:cancel-reconnect", &w), None);
+        let crate::workspace::Effect::Connect { request, .. } =
+            w.dispatch(crate::workspace::WorkspaceAction::OpenConnection(0))
+        else {
+            panic!("expected Connect");
+        };
+        let (session, _) = crate::workspace::testing::FakeSession::boxed();
+        w.connect_finished(request, Ok(session));
+        assert_eq!(
+            act("connection:reconnect", &w),
+            Some(ConnectionAction::Reconnect(id.clone()))
+        );
+        assert_eq!(act("connection:cancel-reconnect", &w), None);
+        w.dispatch_connection(ConnectionAction::Reconnect(id.clone()));
+        assert_eq!(
+            act("connection:cancel-reconnect", &w),
+            Some(ConnectionAction::CancelReconnect(id))
+        );
     }
 }
