@@ -1946,8 +1946,8 @@ mod tests {
         table.read_with(cx, |t, _| {
             let d = t.delegate();
             assert!(
-                d.copy_value_text(None).is_ok(),
-                "SelectAll has an active cell"
+                matches!(d.copy_value_text(None), Err(CopyError::NothingSelected)),
+                "SelectAll alone leaves no active cell"
             );
         });
         let (mut tab, _cancel) = GridTab::spawn_synthetic(1, 1, 1);
