@@ -140,8 +140,13 @@ pub(crate) fn query_error(e: &tiberius::error::Error) -> DriverError {
             message: error_text(e),
             sent: true,
         },
-        other => DriverError::ConnectionLost {
-            message: other.to_string(),
+        tiberius::error::Error::Io { kind, .. } => DriverError::ConnectionLost {
+            message: kind.to_string(),
+            sent: true,
+        },
+        // Other variants may carry connection details: a fixed text only.
+        _ => DriverError::ConnectionLost {
+            message: "the SQL Server connection broke".to_owned(),
             sent: true,
         },
     }
@@ -308,5 +313,26 @@ mod tests {
         };
         assert!(!error_text(&e).contains("other.internal"));
         assert!(!connect_text(&e).contains("1433"));
+    }
+
+    #[test]
+    fn a_non_server_error_has_no_tiberius_text() {
+        let routing = tiberius::error::Error::Routing {
+            host: "other.internal".to_owned(),
+            port: 1433,
+        };
+        let io = tiberius::error::Error::Io {
+            kind: std::io::ErrorKind::ConnectionReset,
+            message: "secret detail".to_owned(),
+        };
+        for e in [routing, io] {
+            let DriverError::ConnectionLost { message, sent } = query_error(&e) else {
+                panic!("not lost");
+            };
+            assert!(sent);
+            assert!(!message.contains("other.internal"));
+            assert!(!message.contains("secret"));
+            assert!(!message.contains("tiberius"));
+        }
     }
 }

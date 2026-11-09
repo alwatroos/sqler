@@ -31,6 +31,10 @@ pub(crate) const RESTORED_RETRY: &str = "Connection restored; running the query 
 pub(crate) const RESTORED_RUN_AGAIN: &str = "Connection lost and restored; run again.";
 /// Shown when the lost connection had an open transaction.
 pub(crate) const RESTORED_TX_LOST: &str = "Connection lost and restored; the open transaction was lost and its uncommitted changes are gone. Run again.";
+/// Shown when a `COMMIT` was sent and the connection dropped: the server may have committed.
+pub(crate) const RESTORED_COMMIT_UNKNOWN: &str = "Connection lost and restored; the commit may or may not have been applied. Check the data before you run again.";
+/// Shown when the retry waits for the user to confirm it (production).
+pub(crate) const RESTORED_CONFIRM: &str = "Connection restored; confirm to run the query again.";
 /// Shown when the re-run lost the connection too (one reconnect per run).
 pub(crate) const LOST_AGAIN: &str =
     "The connection was lost again; run the query again to reconnect.";
@@ -69,6 +73,7 @@ fn decide(
     sent: bool,
     read_only: bool,
     in_tx: bool,
+    commit_sent: bool,
     retry: bool,
     cancelled: bool,
 ) -> Decision {
@@ -76,6 +81,11 @@ fn decide(
         Decision::Nothing
     } else if retry {
         Decision::Notice(LOST_AGAIN)
+    } else if in_tx && commit_sent {
+        Decision::Reconnect {
+            rerun: false,
+            notice: RESTORED_COMMIT_UNKNOWN,
+        }
     } else if in_tx {
         Decision::Reconnect {
             rerun: false,
@@ -92,6 +102,16 @@ fn decide(
             notice: RESTORED_RUN_AGAIN,
         }
     }
+}
+
+/// Whether the SQL is a transaction commit (`COMMIT`, `COMMIT TRANSACTION`, `END`).
+fn is_commit(sql: &str) -> bool {
+    let first = sql
+        .trim_start()
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .next()
+        .unwrap_or_default();
+    first.eq_ignore_ascii_case("commit") || first.eq_ignore_ascii_case("end")
 }
 
 /// A run in progress: what it takes to stop it.
@@ -426,11 +446,17 @@ impl Workspace {
             .statements
             .first()
             .is_some_and(|s| s.class.is_read_only());
+        let commit_sent = sent
+            && active
+                .statements
+                .get(pos)
+                .is_some_and(|s| is_commit(&s.sql));
         let decision = decide(
             pos,
             sent,
             read_only,
             active.in_tx || self.in_transaction(tab),
+            commit_sent,
             active.retry,
             active.stop.is_cancelled(),
         );
@@ -460,8 +486,8 @@ impl Workspace {
         let Some(entry) = self.auto_retries.remove(&tab) else {
             return Effect::None;
         };
-        self.notice = Some(entry.notice.to_owned());
         let Some(statements) = entry.statements else {
+            self.notice = Some(entry.notice.to_owned());
             return Effect::None;
         };
         let prod = self.production(tab);
@@ -470,8 +496,18 @@ impl Workspace {
         };
         self.retry_marks.insert(tab);
         match query.retry(statements, prod) {
-            Ok(Step::Start(statements)) => self.start_query(tab, &statements),
-            Ok(_) => Effect::None,
+            Ok(Step::Start(statements)) => {
+                self.notice = Some(entry.notice.to_owned());
+                self.start_query(tab, &statements)
+            }
+            Ok(Step::Confirm) => {
+                self.notice = Some(RESTORED_CONFIRM.to_owned());
+                Effect::None
+            }
+            Ok(_) => {
+                self.notice = Some(entry.notice.to_owned());
+                Effect::None
+            }
             Err(err) => {
                 self.retry_marks.remove(&tab);
                 self.query_notice(err.to_string())
@@ -1100,21 +1136,29 @@ mod tests {
             rerun: false,
             notice: RESTORED_TX_LOST,
         };
-        // (pos, sent, read_only, in_tx, retry, cancelled)
-        assert_eq!(decide(0, false, false, false, false, false), again);
-        assert_eq!(decide(0, true, true, false, false, false), again);
-        assert_eq!(decide(0, true, false, false, false, false), user);
-        assert_eq!(decide(1, false, true, false, false, false), user);
-        assert_eq!(decide(0, false, false, true, false, false), tx);
+        // (pos, sent, read_only, in_tx, commit_sent, retry, cancelled)
+        assert_eq!(decide(0, false, false, false, false, false, false), again);
+        assert_eq!(decide(0, true, true, false, false, false, false), again);
+        assert_eq!(decide(0, true, false, false, false, false, false), user);
+        assert_eq!(decide(1, false, true, false, false, false, false), user);
+        assert_eq!(decide(0, false, false, true, false, false, false), tx);
+        let unknown = Decision::Reconnect {
+            rerun: false,
+            notice: RESTORED_COMMIT_UNKNOWN,
+        };
+        assert_eq!(decide(0, true, false, true, true, false, false), unknown);
         assert_eq!(
-            decide(0, false, true, false, true, false),
+            decide(0, false, true, false, false, true, false),
             Decision::Notice(LOST_AGAIN)
         );
         assert_eq!(
-            decide(0, false, true, true, true, false),
+            decide(0, false, true, true, false, true, false),
             Decision::Notice(LOST_AGAIN)
         );
-        assert_eq!(decide(0, false, true, false, true, true), Decision::Nothing);
+        assert_eq!(
+            decide(0, false, true, false, false, true, true),
+            Decision::Nothing
+        );
     }
 
     #[test]
@@ -1201,6 +1245,29 @@ mod tests {
         let effects = flat(w.connect_finished(request, Ok(fresh)));
         assert!(!effects.iter().any(|e| matches!(e, Effect::RunQuery { .. })));
         assert_eq!(w.take_notice().as_deref(), Some(RESTORED_TX_LOST));
+    }
+
+    #[test]
+    fn a_lost_commit_says_the_outcome_is_unknown() {
+        assert!(is_commit("  commit"));
+        assert!(is_commit("COMMIT TRANSACTION;"));
+        assert!(is_commit("end"));
+        assert!(!is_commit("select 1"));
+        assert!(!is_commit("committed_rows()"));
+        let mut w = ws();
+        let (dead, _) = LostSession::boxed(1, true);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, "begin");
+        let (_, _, effect) = finish_run(&mut w, tab, effect);
+        assert!(matches!(effect, Effect::None));
+        let effect = run_text(&mut w, tab, "commit");
+        let (at, sent, effect) = finish_run(&mut w, tab, effect);
+        assert_eq!((at, sent), (Some(0), true));
+        let request = connect_request(&effect);
+        let (fresh, _) = FakeSession::boxed();
+        let effects = flat(w.connect_finished(request, Ok(fresh)));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RunQuery { .. })));
+        assert_eq!(w.take_notice().as_deref(), Some(RESTORED_COMMIT_UNKNOWN));
     }
 
     #[test]
