@@ -4,7 +4,7 @@ You can take rows out of a [results grid](results-grid.md) in two ways. **Copy**
 
 ## Copy
 
-Copy the selected cells (or a row, a column, or everything with Mod+A) to the clipboard. The text follows what the grid shows: the column order and pinned columns as you arranged them, and the row order of the grid. Mod+C works while the grid has the focus; every copy is also in the palette, and in the menu of a right click on a row. A right click does not change the selection.
+Copy the selected cells (or a row, a column, or everything with Mod+A) to the clipboard. The text follows what the grid shows: the column order and pinned columns as you arranged them, and the row order of the grid. Mod+C works while the grid has the focus; every copy is also in the palette, and in the menu of a right click on a cell. A right click on a cell outside the selection first selects that cell; a right click inside the selection keeps it.
 
 | Command | Menu | Result |
 | ------- | ---- | ------ |
@@ -13,6 +13,13 @@ Copy the selected cells (or a row, a column, or everything with Mod+A) to the cl
 | `grid:copy-as-markdown` | Copy as Markdown | A Markdown table |
 | `grid:copy-as-json` | Copy as JSON | An array of objects, one per row |
 | `grid:copy-as-insert` | Copy as SQL INSERT | `INSERT` statements, 100 rows each |
+| `grid:copy-value` | Copy Value | The stored value of one cell, as plain text |
+| `grid:copy-column` | Copy Column | Every loaded value of one column, as TSV, no header |
+| `grid:copy-column-with-header` | Copy Column with Header | The same, with the column name on the first line |
+
+**Copy Value** copies the stored value of the cell you right clicked, the same text as **Copy value** in the [detail pane](results-grid.md#cell-detail): the text as stored, `0x` and the hex digits for binary. A NULL copies nothing and a notification says so. From the palette it acts on the active cell.
+
+**Copy Column** and **Copy Column with Header** copy all loaded rows of one column, in the order the grid shows them (sort and filter apply), with the TSV rules below. They are in the menu of a right click on a cell (the column of that cell, also when the cell is inside a larger selection) and in the right-click menu of a column header, which does not change the selection. From the palette they act on the column of the active cell.
 
 In the palette the titles start with "Results: ", for example "Results: Copy as Markdown".
 
@@ -34,6 +41,8 @@ The copied text is only put on the clipboard; SQLer does not log it or show it i
 - **Format**: CSV, JSON, SQL INSERT and Markdown table in every build. Excel (`.xlsx`) and Parquet are listed only when the build has them (the `export-xlsx` and `export-parquet` features); both are in the default desktop build and in the downloads. Every 1.0 download also has the plugin host, so the formats of plugins that are switched on follow the built-in ones as `<plugin name> (plugin): <label>`; they have no options, and a failing plugin ends the export with a short message and no file (see [Plugins](plugins.md#what-plugins-add) and [Exporters](../plugin-development/exporters.md)).
 - **Scope**: *Loaded rows (N)* (when the result is complete, *All N rows*), the rows the grid holds now, as displayed (with the current sort and filter, in the order you see them; N is the number of rows shown), *Selection (R × C)* when cells are selected, copied in the order you see them, and *All rows (runs the query again)*.
 - **Options**: for CSV the delimiter (`,` `;` Tab `|`), **Header row** and the NULL text; for Markdown the NULL text; for SQL the table name, an optional schema and the rows per `INSERT` (1 to 10,000). JSON, Parquet and Excel use their defaults.
+
+**Export as CSV…** (`grid:export-csv`, "Export Results as CSV…" in the palette, and in the menu of a right click on a cell) opens the same dialog with CSV already chosen. Scope and options are as they are in the dialog; nothing is written until you confirm.
 
 After **Export...** the system save dialog asks for the file. A progress line with a **Cancel** button (also `export:cancel`, "Cancel Export") is shown while the file is written. The file is written under a hidden name next to the target and renamed when the export is complete, so a cancelled or failed export leaves no half-written file and an existing file is replaced only by a complete one. Replacing a file keeps its permissions on Unix; a symbolic link at the target is replaced by a regular file and the file it pointed to is left alone. If the result changes while the dialog is open (the query runs again, the table is opened again), the export is cancelled with a notice. Closing the tab or quitting the app cancels its export.
 
