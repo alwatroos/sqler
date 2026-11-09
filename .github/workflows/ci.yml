@@ -197,15 +197,13 @@ jobs:
       - name: Format
         if: needs.changes.outputs.rust == 'true'
         run: cargo fmt --all --check
-      # Windows clippy runs in its own job (`clippy (windows-latest)`) in parallel with the tests; `CI result` gates on it.
-      # macOS on a PR lints and tests the crates with OS-facing code only (MAC_SKIP: pure logic, drivers, exporters, AI
-      # clients; Linux covers them). Main, dispatch and the label `full-ci` run everything.
+      # Windows and macOS clippy run in their own jobs (`clippy (windows-latest)`, `clippy (macos-latest)`) in parallel
+      # with the tests; `CI result` gates on both. macOS on a PR lints and tests the crates with OS-facing code only
+      # (MAC_SKIP: pure logic, drivers, exporters, AI clients; Linux covers them). Main, dispatch and the label
+      # `full-ci` run everything.
       - name: Clippy
-        if: needs.changes.outputs.rust == 'true' && matrix.os != 'windows-latest' && (matrix.os != 'macos-latest' || needs.changes.outputs.full == 'true')
+        if: needs.changes.outputs.rust == 'true' && matrix.os == 'ubuntu-latest'
         run: cargo clippy $WS --all-targets --features "$WS_FEATURES" -- -D warnings
-      - name: Clippy (macOS PR subset)
-        if: needs.changes.outputs.rust == 'true' && matrix.os == 'macos-latest' && needs.changes.outputs.full != 'true'
-        run: cargo clippy $WS $MAC_SKIP --all-targets --features "$WS_FEATURES" -- -D warnings
       - uses: taiki-e/install-action@v2
         if: needs.changes.outputs.rust == 'true'
         with:
@@ -259,7 +257,7 @@ jobs:
           cargo check -p sqler-export --no-default-features --features xlsx
 
   # Clippy for Windows, split out of `check (windows-latest)` so it runs beside the tests (the Windows job was the
-  # critical path). Linux and macOS keep clippy inside `check`. `CI result` makes this job part of the gate.
+  # critical path). Linux keeps clippy inside `check`; macOS has `clippy (macos-latest)`. `CI result` makes this job part of the gate.
   clippy-windows:
     name: clippy (windows-latest)
     needs: changes
@@ -282,6 +280,37 @@ jobs:
       - name: Clippy
         shell: bash
         run: cargo clippy $WS --all-targets --features "$WS_FEATURES" -- -D warnings
+
+  # Clippy for macOS, split out of `check (macos-latest)` like `clippy (windows-latest)` (ADR-0068, amendment 1): the
+  # macOS job was the critical path. Same commands and `full` conditions as the steps it replaces; `CI result` gates on it.
+  clippy-macos:
+    name: clippy (macos-latest)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The default key hashes every installed rustc; some runner images carry an extra 1.99.0, which split one
+          # cache into two keys and made restores miss at random. Toolchain changes still invalidate through the file hash.
+          add-rust-environment-hash-key: false
+          key: tc-${{ hashFiles('rust-toolchain.toml') }}
+          # Clippy builds the check profile, not the test tree `check` caches, so it keeps its own key.
+          shared-key: clippy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # macOS images may ship Xcode without the separately downloaded Metal toolchain.
+      - name: Metal toolchain
+        run: xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+      - name: Clippy
+        if: needs.changes.outputs.full == 'true'
+        run: cargo clippy $WS --all-targets --features "$WS_FEATURES" -- -D warnings
+      - name: Clippy (macOS PR subset)
+        if: needs.changes.outputs.full != 'true'
+        run: cargo clippy $WS $MAC_SKIP --all-targets --features "$WS_FEATURES" -- -D warnings
 
   screenshots:
     name: screenshots (linux)
@@ -619,7 +648,7 @@ jobs:
   # set). Linux only.
   duckdb:
     name: duckdb
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.full != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -662,7 +691,7 @@ jobs:
   ci-result:
     name: CI result
     if: always()
-    needs: [changes, check, clippy-windows, screenshots, db, deny, plugins, docs, spdx]
+    needs: [changes, check, clippy-windows, clippy-macos, screenshots, db, deny, plugins, docs, spdx]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

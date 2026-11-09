@@ -95,3 +95,64 @@ Rejected, with the number:
 
 Revert the commit: the previous workflows are restored whole. A single lever: set `full` to `true` in the `Resolve
 outputs` step of `ci.yml` to run the full matrix everywhere; add `save-if: true` to a rust-cache step to save from PRs.
+
+## Amendment 1 (2026-11-09, ci-speedup): `full=false` dispatches skip `duckdb`; macOS clippy is its own job
+
+- Reason: PR runs stayed slow after the first round of this ADR (median 1474 s, max 2678 s over the last 10 full
+  `pull_request` runs of `ci.yml`), and `check (macos-latest)` was the last job to finish in 6 of those 10 runs.
+  Its `Clippy` step took a median of 260 s (164 to 373 s).
+- Rule L0: a `workflow_dispatch` with `full=false` no longer runs the `duckdb` job (up to 120 min, not part of
+  `CI result`). A default or `full=true` dispatch still runs it. The timing dispatches below need this: without it every
+  one would hold a runner for the DuckDB build.
+- Lever L2, kept: `Clippy` and `Clippy (macOS PR subset)` moved from `check (macos-latest)` to a new job
+  `clippy (macos-latest)`, the same shape as `clippy (windows-latest)` (option 4 above). The commands and the `full`
+  conditions are unchanged, `check`'s `Clippy` step now runs on Linux only, and `CI result` needs the new job. The
+  rust-cache key is `clippy` and is saved on `main` only (no change to `save-if`). Decision: kept, because the keep rule
+  holds (both dispatches beat the before-run by at least 60 s and 10 %, and the PR's own run took 1303 s, not slower
+  than the 1474 s median). The evidence for it is weak, see the caveats below.
+- Lever L1 (a Windows Dev Drive under `target`): not applied. Windows was the last job in 2 of the 10 runs and
+  `clippy (windows-latest)` in none.
+
+Baseline (`pull_request` runs of `ci.yml`, 2026-11-09; created until `CI result`, wall seconds). Median of the 10 full
+runs 1474 s, max 2678 s; `check (macos-latest)` was the critical job in 6 of 10, Windows in 2, `plugins (macos-latest)` in 1,
+a runner wait in 1. Representative runs:
+
+| run | wall | critical job | its top steps |
+| --- | ---: | ------------ | ------------- |
+| 41691781645 | 1162 s (min) | `check (macos-latest)` | Test 502 s; Clippy 199 s |
+| 41708984646 | 1338 s | `check (macos-latest)` | Test macOS subset 489 s; Clippy macOS subset 290 s |
+| 41677566822 | 1546 s | `check (windows-latest)` | Test 809 s |
+| 41696427677 | 2678 s (max) | `check (macos-latest)` | Test 516 s; Clippy 373 s |
+
+Measurements (`workflow_dispatch`, `full=false`, branch `ci-speedup`, one after the other; created until `CI result`
+completed):
+
+| run | commit | change | created to `CI result` | last job (done at) | `check (macos-latest)` | `clippy (macos-latest)` |
+| --- | ------ | ------ | ---------------------: | ------------------ | ---------------------: | ----------------------: |
+| 42610348541 | 19be883 | before (L0 only) | 1368 s | `check (ubuntu-latest)` 1363 s | 225 s (clippy in it) | n/a |
+| 42613367016 | 1d708eb | L2 | 866 s | `check (windows-latest)` / `plugins (windows-latest)` 861 s | 346 s | 421 s (cold cache) |
+| 42615363661 | 1d708eb | L2 | 1061 s | `check (ubuntu-latest)` 1056 s | 590 s | 347 s (cold cache) |
+| 42618734734 (`pull_request`) | 7750a5e | L2 | 1303 s | `check (ubuntu-latest)` 1299 s | 483 s (macOS cache hit) | 409 s (cold cache) |
+
+- Both after-runs beat the before-run by at least 60 s and 10 % (502 s, 37 %; 307 s, 22 %).
+- The gain is not caused by the macOS split. In all three runs `check (macos-latest)` finished long before the end,
+  and `check (ubuntu-latest)` was the last job in two. The Linux, Windows and `clippy (windows-latest)` caches were
+  cold in every run (the cache store is at its 10 GB limit, with only `release-*` and one macOS `debug` set on
+  `main`), so their times swing by several hundred seconds: `check (ubuntu-latest)` ran 1354, 438 (it failed early on
+  a flaky `sqler-config::chat_history` test) and 1049 s. The split removes the clippy step from the macOS test job,
+  which is the critical job only when the macOS caches are warm and the Linux and Windows ones are too.
+  Treat the 37 % and 22 % as an upper bound.
+- PR run 42618734734 (`pull_request`, 7750a5e): 1303 s from creation to `CI result`, which is 171 s under the 1474 s
+  median, so the rule passes. It is one run against a median of ten, with cold Linux and Windows caches, and the
+  critical job was again `check (ubuntu-latest)` (Clippy 222 s, Test 507 s, no cache), not macOS. `check (macos-latest)`
+  took 483 s with a warm cache and `clippy (macos-latest)` 409 s (cold, so this should fall once `main` saves the
+  cache). The 171 s margin is within the run-to-run variance seen above, so the PR run shows that L2 is not slower,
+  not that it is faster. Every check name reported: `check (*)`, `plugins (*)`, `clippy (windows-latest)`,
+  `clippy (macos-latest)` and `CI result` (red only because of `deny`, as before); `duckdb` and `screenshots (macos)`
+  were skipped.
+- `CI result` was red in all three dispatches because `cargo deny` reports RUSTSEC-2026-0459 (`libsqlite3-sys`); the
+  lockfile is the one on `main`, so it is not part of this change.
+- Consequences: one more macOS runner per Rust PR competes for the shared pool (ADR-0074). `clippy (macos-latest)` is
+  cold until the first run on `main` saves its cache; check that it saves after the merge.
+- Rollback: L0, set the `duckdb` `if` back to `github.event_name == 'workflow_dispatch'`. L2, revert the commit that adds
+  `clippy-macos`: the two Clippy steps return to `check`, and the amendment above no longer holds.

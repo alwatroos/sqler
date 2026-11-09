@@ -157,7 +157,7 @@ impl WorkspaceView {
         }
     }
 
-    /// Runs `grid:export` or `export:cancel`.
+    /// Runs `grid:export`, `grid:export-csv` or `export:cancel`.
     pub(crate) fn run_export_command(
         &mut self,
         command: ExportCommand,
@@ -165,7 +165,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         let effect = match command {
-            ExportCommand::Open => {
+            ExportCommand::Open | ExportCommand::OpenCsv => {
                 let Some((target, table)) = self.export_subject() else {
                     window.push_notification("Open a results grid first.", cx);
                     return;
@@ -177,7 +177,11 @@ impl WorkspaceView {
                         return;
                     }
                 };
-                self.ws.open_export(target, &facts)
+                if command == ExportCommand::OpenCsv {
+                    self.ws.open_export_as(target, &facts, sqler_export::CSV)
+                } else {
+                    self.ws.open_export(target, &facts)
+                }
             }
             ExportCommand::Cancel => {
                 let Some(tab) = self.ws.tabs().active().map(crate::tabs::Tab::id) else {
