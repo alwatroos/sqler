@@ -257,7 +257,7 @@ jobs:
           cargo check -p sqler-export --no-default-features --features xlsx
 
   # Clippy for Windows, split out of `check (windows-latest)` so it runs beside the tests (the Windows job was the
-  # critical path). Linux and macOS keep clippy inside `check`. `CI result` makes this job part of the gate.
+  # critical path). Linux keeps clippy inside `check`; macOS has `clippy (macos-latest)`. `CI result` makes this job part of the gate.
   clippy-windows:
     name: clippy (windows-latest)
     needs: changes
