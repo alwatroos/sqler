@@ -15,7 +15,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::ContextMenuExt as _;
 use gpui_component::spinner::Spinner;
 use gpui_component::tooltip::Tooltip;
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _};
+use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 use sqler_config::{ConnectionId, GroupId};
 use sqler_driver_api::sqler_core::{Environment, ObjectKind};
 
@@ -29,7 +29,10 @@ use crate::theme::icons::AppIcon;
 use crate::theme::widgets::{empty_state, env_chip, icon_button, section_header};
 use crate::theme::{Appearance, SPACE, env_accent, tooltip_text};
 use crate::workbench::view::run_command_id;
-use crate::workspace::chrome::{ICON_SM, INDENT, RowState, hinted_item, list_row, ui_scale};
+use crate::workspace::chrome::{
+    DIALOG_W_MD, ICON_MD, ICON_SM, INDENT, RowState, dialog_footer, dialog_panel, dialog_title,
+    hinted_item, list_row, scrim, ui_scale,
+};
 use crate::workspace::{BrowserNote, Workspace, WorkspaceAction, WorkspaceView};
 
 /// Width of the failure message on an object row.
@@ -422,6 +425,10 @@ fn item(
                         disabled: false,
                     },
                     browser,
+                    ReconnectState {
+                        can: ws.can_reconnect(conn),
+                        running: ws.is_reconnecting(conn),
+                    },
                     cx,
                 )
             }
@@ -442,22 +449,33 @@ struct ConnectionBrowser {
     root_selected: bool,
 }
 
+/// Whether a connection row offers a reconnect, and whether one is running.
+#[derive(Clone, Copy)]
+struct ReconnectState {
+    can: bool,
+    running: bool,
+}
+
 /// A context menu with the given entries; each runs its command on `node` of `conn`. The
 /// shortcut hints are read when the menu opens.
 fn with_menu(
     row: gpui::Stateful<gpui::Div>,
     conn: &ConnectionId,
-    node: TreeNodeId,
+    node: Option<TreeNodeId>,
     entries: Vec<MenuEntry>,
+    reconnect: bool,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
-    if entries.is_empty() {
+    if entries.is_empty() && !reconnect {
         return row.into_any_element();
     }
     let weak = cx.weak_entity();
     let conn = conn.clone();
     row.context_menu(move |mut menu, _, cx| {
         for entry in &entries {
+            let Some(node) = node else {
+                break;
+            };
             let (weak, conn, entry) = (weak.clone(), conn.clone(), *entry);
             let hint = weak.upgrade().and_then(|view| {
                 view.read(cx)
@@ -470,6 +488,24 @@ fn with_menu(
                 hinted_item(entry.label(), entry_icon(entry), hint).on_click(move |_, _, cx| {
                     weak.update(cx, |view, cx| {
                         view.dispatch_object(&conn, node, BrowserAction::Entry(entry), cx);
+                    })
+                    .ok();
+                }),
+            );
+        }
+        if reconnect {
+            let (weak, conn) = (weak.clone(), conn.clone());
+            let hint = weak.upgrade().and_then(|view| {
+                view.read(cx)
+                    .shortcut_hint(&ConnectionAction::Reconnect(conn.clone()).command_id())
+            });
+            if !entries.is_empty() {
+                menu = menu.separator();
+            }
+            menu = menu.item(
+                hinted_item("Reconnect", Some(AppIcon::Plug), hint).on_click(move |_, _, cx| {
+                    weak.update(cx, |view, cx| {
+                        view.dispatch_connection(ConnectionAction::Reconnect(conn.clone()), cx);
                     })
                     .ok();
                 }),
@@ -592,7 +628,14 @@ fn object_row(
                 })),
             );
     }
-    with_menu(line, conn, node, ws.menu_entries(conn, node), cx)
+    with_menu(
+        line,
+        conn,
+        Some(node),
+        ws.menu_entries(conn, node),
+        false,
+        cx,
+    )
 }
 
 fn group_row(
@@ -701,6 +744,7 @@ fn connection_row(
     entry: &SidebarEntry,
     state: RowState,
     browser: Option<ConnectionBrowser>,
+    reconnect: ReconnectState,
     cx: &mut Context<WorkspaceView>,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -844,6 +888,22 @@ fn connection_row(
                             cx.stop_propagation();
                         })),
                 )
+                .child(if reconnect.running {
+                    action_button(
+                        ("reconnect-connection", index),
+                        "Cancel reconnect",
+                        ConnectionAction::CancelReconnect(id.clone()),
+                        cx,
+                    )
+                } else {
+                    action_button(
+                        ("reconnect-connection", index),
+                        "Reconnect",
+                        ConnectionAction::Reconnect(id.clone()),
+                        cx,
+                    )
+                    .disabled(!reconnect.can)
+                })
                 .child(action_button(
                     ("edit-connection", index),
                     "Edit",
@@ -864,12 +924,13 @@ fn connection_row(
                 )),
         );
     }
-    match browser {
-        Some(b) => {
-            let conn = b.conn.clone();
-            with_menu(container, &conn, b.root, b.menu, cx)
-        }
-        None => container.into_any_element(),
+    let can = reconnect.can && !reconnect.running;
+    if let Some(b) = browser {
+        let conn = b.conn.clone();
+        with_menu(container, &conn, Some(b.root), b.menu, can, cx)
+    } else {
+        let conn = entry.id().clone();
+        with_menu(container, &conn, None, Vec::new(), can, cx)
     }
 }
 
@@ -898,6 +959,67 @@ pub(crate) fn connections_empty(view: &WorkspaceView, cx: &mut Context<Workspace
                     view.dispatch_connection(ConnectionAction::New, cx);
                 })),
         ),
+    )
+}
+
+/// The reconnect confirmation: a full-window overlay; `None` when nothing waits for an answer.
+pub(crate) fn reconnect_overlay(
+    view: &WorkspaceView,
+    cx: &mut Context<WorkspaceView>,
+) -> Option<AnyElement> {
+    let prompt = view.workspace().reconnect_prompt()?;
+    let (title, lines) = (prompt.title(), prompt.prompt_lines());
+    let theme = cx.theme();
+    let (muted, danger) = (theme.muted_foreground, theme.danger);
+    let scale = ui_scale(cx);
+
+    let heading = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(SPACE[3]))
+        .child(
+            Icon::new(AppIcon::TriangleAlert)
+                .size(px(ICON_MD))
+                .text_color(danger),
+        )
+        .child(dialog_title(None, title, cx));
+    let mut body = div().flex().flex_col().gap(px(SPACE[2]));
+    for line in lines {
+        body = body.child(div().text_size(px(scale.sm)).text_color(muted).child(line));
+    }
+    let footer = dialog_footer(cx)
+        .child(
+            Button::new("reconnect-cancel")
+                .label("Cancel")
+                .outline()
+                .small()
+                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                    view.dispatch_connection(ConnectionAction::DismissReconnect, cx);
+                })),
+        )
+        .child(
+            Button::new("reconnect-confirm")
+                .label("Reconnect")
+                .primary()
+                .danger()
+                .small()
+                .on_click(cx.listener(|view, event: &ClickEvent, _, cx| {
+                    // A double click must not confirm by accident.
+                    if event.click_count() == 1 {
+                        view.dispatch_connection(ConnectionAction::ConfirmReconnect, cx);
+                    }
+                })),
+        );
+    Some(
+        scrim("reconnect-scrim", cx)
+            .child(
+                dialog_panel("reconnect-dialog", DIALOG_W_MD, cx)
+                    .child(heading)
+                    .child(body)
+                    .child(footer),
+            )
+            .into_any_element(),
     )
 }
 

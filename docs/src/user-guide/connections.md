@@ -127,7 +127,8 @@ the old entries.
 
 The sidebar lists your connections in their groups. Every action below is also a command in the
 command palette (`connection:new`, `connection:edit`, `connection:delete`, `connection:test`,
-`connection:cancel-test`, `connection:save`, `connection:cancel`, `connection:move-to-group`,
+`connection:cancel-test`, `connection:reconnect`, `connection:cancel-reconnect`,
+`connection:save`, `connection:cancel`, `connection:move-to-group`,
 `connection-group:new`, `connection-group:rename`, `connection-group:delete`).
 
 ### Sidebar
@@ -243,6 +244,28 @@ Test connects through the same path as opening a connection: it reads the passwo
 or the keychain), opens the SSH tunnel if configured, and connects to the database. It runs in the
 background; the form shows a spinner and a Cancel button, then "Connected" or the error. The test
 session and its tunnel are closed at once. A test works on an unsaved form.
+
+### Reconnect
+
+Use Reconnect when a connection went stale: the server restarted, the network dropped, or a VPN
+came back. Select the connection in the sidebar and press **Reconnect** (also in the connection's
+context menu and as the command `connection:reconnect`). It has no default key binding.
+
+Every tab that is open on the connection gets a new session; you do not have to close or reopen
+anything. Nothing is run again: the editor text, the results and the grid stay as they are, and the
+next statement you run uses the new session. The object browser of the connection restarts, so its
+tree is collapsed again. Tabs that are still waiting to connect after a restart, and table-data tabs
+(they connect on their own every time), are not touched.
+
+If a tab is inside an open transaction, or a query is running, SQLer asks first. The transaction
+ends with the old session: its uncommitted changes are lost. Running queries are cancelled. Press
+**Reconnect** in the dialog to go on, or **Cancel** (or Escape) to change nothing. While changes of a
+grid are being applied, Reconnect waits: it tells you to try again once they are applied.
+
+The old sessions stay in use until their replacements are ready. If the connection fails, the tabs
+keep their old sessions, the sidebar row shows the error, and you can try again. While a reconnect
+is running the button reads **Cancel reconnect** (`connection:cancel-reconnect`); it drops the
+attempts and keeps the old sessions.
 
 ### Delete
 

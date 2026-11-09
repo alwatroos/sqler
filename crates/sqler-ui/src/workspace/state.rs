@@ -18,7 +18,7 @@ use sqler_driver_api::{CancelHandle, Session};
 use sqler_sql::Dialect;
 
 use super::action::WorkspaceAction;
-use super::browser::{BrowserJob, BrowserState, OpenDataJob};
+use super::browser::{BrowserJob, BrowserState, BrowserStatus, OpenDataJob};
 use super::edit::EditFlow;
 use super::export::ExportCenter;
 use super::history::HistoryWorkspace;
@@ -43,7 +43,7 @@ use crate::plugins::contrib::{PluginUiEffect, PluginUiState};
 use crate::plugins::manager::{PluginEffect, PluginsState};
 use crate::query::{Phase, QueryJob, QueryTab, RunEvent, StatementStatus};
 use crate::settings::SettingsModel;
-use crate::sidebar::SidebarModel;
+use crate::sidebar::{ReconnectPrompt, SidebarModel};
 use crate::tabs::{Breadcrumbs, TabConnection, TabDecor, TabId, TabKind, TabStrip};
 use crate::theme::{self, Appearance};
 use crate::workbench::{
@@ -71,6 +71,22 @@ pub enum Purpose {
         /// Its saved connection.
         conn: ConnectionId,
     },
+    /// Replace the session of a tab that already has one (a reconnect).
+    Reconnect {
+        /// The tab that gets the new session.
+        tab: TabId,
+        /// Its saved connection.
+        conn: ConnectionId,
+    },
+}
+
+/// The reconnect attempts of one connection that are still running.
+#[derive(Debug, Default)]
+struct ReconnectRun {
+    /// Attempts not answered yet.
+    pending: usize,
+    /// The first failure seen, shown on the sidebar row once all attempts are answered.
+    failure: Option<String>,
 }
 
 /// A change to the secret store that follows a save or a delete.
@@ -614,6 +630,12 @@ pub struct Workspace {
     pub(super) plugin_writes: crate::plugins::WriteQueue,
     /// The update check: availability, the running check, the announced version (ADR-0066).
     pub(super) update: crate::update::UpdateModel,
+    /// The reconnect confirmation on screen.
+    reconnect_prompt: Option<ReconnectPrompt>,
+    /// The reconnect attempts running per connection.
+    reconnects: HashMap<ConnectionId, ReconnectRun>,
+    /// Sessions replaced by a reconnect while on loan to a job; the view closes them.
+    stale_sessions: Vec<Box<dyn Session>>,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -690,6 +712,9 @@ impl Workspace {
             plugin_ui: PluginUiState::default(),
             plugin_writes: crate::plugins::WriteQueue::default(),
             update: crate::update::UpdateModel::new(&crate::update::UpdateStartup::unavailable()),
+            reconnect_prompt: None,
+            reconnects: HashMap::new(),
+            stale_sessions: Vec::new(),
         }
     }
 
@@ -1401,6 +1426,11 @@ impl Workspace {
         self.restored.remove(&id);
         self.orphan_conns.remove(&id);
         self.tab_conns.remove(&id);
+        if let Some(prompt) = &self.reconnect_prompt
+            && !self.tab_conns.values().any(|c| *c == prompt.conn)
+        {
+            self.reconnect_prompt = None;
+        }
         self.object_crumbs.remove(&id);
         self.queries.remove(&id);
         self.history.forget_tab(id);
@@ -1457,6 +1487,7 @@ impl Workspace {
             Purpose::Browse(id) => self.browse_finished(&id, result),
             Purpose::Test => self.test_finished(request, result),
             Purpose::Attach { tab, conn } => self.attach_finished(tab, &conn, result),
+            Purpose::Reconnect { tab, conn } => self.reconnect_finished(tab, &conn, result),
         }
     }
 
@@ -1601,7 +1632,14 @@ impl Workspace {
                 }
                 self.attach_tab(tab, &conn)
             }
-            (Purpose::Open(_) | Purpose::Browse(_) | Purpose::Attach { .. }, Err(failure)) => {
+            (Purpose::Reconnect { tab, .. }, Ok(())) => self.reconnect_tab(tab),
+            (
+                Purpose::Open(_)
+                | Purpose::Browse(_)
+                | Purpose::Attach { .. }
+                | Purpose::Reconnect { .. },
+                Err(failure),
+            ) => {
                 self.notice = Some(failure.to_string());
                 Effect::None
             }
@@ -1621,8 +1659,17 @@ impl Workspace {
     }
 
     /// Gives a session back to its tab (a query job returns it).
+    ///
+    /// A reconnect may have stored a new session for the tab while this one was on loan; the
+    /// returning session is then stale and queued for closing. This relies on nothing but a
+    /// reconnect inserting a session for a tab whose session is lent out.
     pub(super) fn restore_session(&mut self, id: TabId, session: Box<dyn Session>) {
-        self.sessions.insert(id, session);
+        match self.sessions.entry(id) {
+            std::collections::hash_map::Entry::Occupied(_) => self.stale_sessions.push(session),
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(session);
+            }
+        }
     }
 
     /// Takes the tab's session out (for example to close it on quit).
@@ -1634,9 +1681,246 @@ impl Workspace {
     pub fn take_all_sessions(&mut self) -> Vec<Box<dyn Session>> {
         let mut sessions: Vec<Box<dyn Session>> =
             self.sessions.drain().map(|(_, session)| session).collect();
+        sessions.append(&mut self.stale_sessions);
         sessions.extend(self.shut_ai_sources());
         sessions.extend(self.shut_agent_sources());
         sessions
+    }
+
+    // ---- reconnect ----
+
+    /// Whether the connection has something to reconnect: a tab on it, or its browser.
+    #[must_use]
+    pub fn can_reconnect(&self, conn: &ConnectionId) -> bool {
+        self.tab_conns.values().any(|c| c == conn) || self.browsers.contains_key(conn)
+    }
+
+    /// Whether a reconnect attempt of the connection is running.
+    #[must_use]
+    pub fn is_reconnecting(&self, conn: &ConnectionId) -> bool {
+        self.requests
+            .values()
+            .any(|p| matches!(p, Purpose::Reconnect { conn: c, .. } if c == conn))
+    }
+
+    /// The connection the reconnect commands act on: the selected one, else the active tab's.
+    #[must_use]
+    pub fn reconnect_target(&self) -> Option<ConnectionId> {
+        self.sidebar.selected_id().cloned().or_else(|| {
+            let active = self.tabs.active()?.id();
+            self.tab_conns.get(&active).cloned()
+        })
+    }
+
+    /// The reconnect confirmation on screen, if any.
+    #[must_use]
+    pub fn reconnect_prompt(&self) -> Option<&ReconnectPrompt> {
+        self.reconnect_prompt.as_ref()
+    }
+
+    /// Takes the sessions a reconnect replaced while they were on loan; the view closes them.
+    pub fn take_stale_sessions(&mut self) -> Vec<Box<dyn Session>> {
+        std::mem::take(&mut self.stale_sessions)
+    }
+
+    /// The tabs of `conn` that hold a session (or have one on loan to a run).
+    fn reconnect_tabs(&self, conn: &ConnectionId) -> Vec<TabId> {
+        self.tabs
+            .iter()
+            .map(crate::tabs::Tab::id)
+            .filter(|t| self.tab_conns.get(t) == Some(conn))
+            .filter(|t| self.sessions.contains_key(t) || self.query_runs.contains_key(t))
+            .collect()
+    }
+
+    /// Whether an apply on a tab of `conn` blocks the reconnect (a notice says so).
+    fn reconnect_blocked_by_apply(&mut self, conn: &ConnectionId) -> bool {
+        let applying = self
+            .tab_conns
+            .iter()
+            .any(|(t, c)| c == conn && self.edit.is_applying(*t));
+        if applying {
+            self.notice = Some("Wait until the changes are applied, then reconnect.".to_owned());
+        }
+        applying
+    }
+
+    /// Starts a reconnect, or asks first when a transaction or a running query is at risk.
+    fn request_reconnect(&mut self, conn: &ConnectionId) -> Effect {
+        let Some(name) = self.sidebar.profile(conn).map(|p| p.spec().name.clone()) else {
+            return Effect::None;
+        };
+        if self.is_reconnecting(conn) {
+            return Effect::None;
+        }
+        if self.reconnect_blocked_by_apply(conn) {
+            return Effect::None;
+        }
+        let tabs = self.reconnect_tabs(conn);
+        let open_transactions = tabs.iter().filter(|t| self.in_transaction(**t)).count();
+        let running = tabs
+            .iter()
+            .filter(|t| self.query_runs.contains_key(t))
+            .count();
+        if open_transactions > 0 || running > 0 {
+            self.reconnect_prompt = Some(ReconnectPrompt {
+                conn: conn.clone(),
+                name,
+                open_transactions,
+                running,
+            });
+            return Effect::None;
+        }
+        self.start_reconnect(conn)
+    }
+
+    /// Cancels the running queries of the connection, opens a new session for each of its tabs
+    /// and restarts its browser.
+    fn start_reconnect(&mut self, conn: &ConnectionId) -> Effect {
+        if self.is_reconnecting(conn) || self.reconnect_blocked_by_apply(conn) {
+            return Effect::None;
+        }
+        let tabs = self.reconnect_tabs(conn);
+        let mut effects = Vec::new();
+        for tab in &tabs {
+            let running = self.query_runs.contains_key(tab)
+                && self.queries.get(tab).is_some_and(QueryTab::is_running);
+            if running {
+                effects.push(self.cancel_query(*tab));
+            }
+        }
+        for tab in &tabs {
+            effects.push(self.reconnect_tab(*tab));
+        }
+        if self.browsers.contains_key(conn) || !tabs.is_empty() {
+            self.end_browser(conn);
+            effects.push(self.ensure_browser(conn));
+        }
+        effects.retain(|e| !matches!(e, Effect::None));
+        match effects.len() {
+            0 => Effect::None,
+            _ => Effect::Batch(effects),
+        }
+    }
+
+    /// Opens a new session for one tab (no prompt, no browser restart).
+    pub(crate) fn reconnect_tab(&mut self, tab: TabId) -> Effect {
+        let Some(conn) = self.tab_conns.get(&tab).cloned() else {
+            return Effect::None;
+        };
+        let running = self
+            .requests
+            .values()
+            .any(|p| matches!(p, Purpose::Reconnect { tab: t, .. } if *t == tab));
+        if running {
+            return Effect::None;
+        }
+        let Some(index) = self.sidebar.index_of(&conn) else {
+            return Effect::None;
+        };
+        let Some(connect) = self.connect_request_for(index) else {
+            return Effect::None;
+        };
+        self.sidebar.begin_connect(index);
+        self.reconnects.entry(conn.clone()).or_default().pending += 1;
+        let request = self.new_request(Purpose::Reconnect { tab, conn });
+        Effect::Connect { request, connect }
+    }
+
+    /// The outcome of the connect attempt of one tab of a reconnect.
+    fn reconnect_finished(
+        &mut self,
+        tab: TabId,
+        conn: &ConnectionId,
+        result: Result<Box<dyn Session>, ConnectFailure>,
+    ) -> Effect {
+        let index = self.sidebar.index_of(conn);
+        let failure = result.as_ref().err().map(ToString::to_string);
+        let run_failure = match self.reconnects.get_mut(conn) {
+            Some(run) => {
+                run.pending = run.pending.saturating_sub(1);
+                if run.failure.is_none() {
+                    run.failure = failure;
+                }
+                let first = run.failure.clone();
+                if run.pending == 0 {
+                    self.reconnects.remove(conn);
+                }
+                first
+            }
+            None => failure,
+        };
+        if let Some(index) = index {
+            self.sidebar
+                .finish_connect(index, run_failure.map_or(Ok(()), Err));
+        }
+        let alive = index.is_some()
+            && self.tabs.get(tab).is_some()
+            && self.tab_conns.get(&tab) == Some(conn);
+        if !alive {
+            return match result {
+                Ok(session) => Effect::CloseSession(session),
+                Err(_) => Effect::None,
+            };
+        }
+        match result {
+            Ok(new) => {
+                self.edit.session_gone(tab);
+                self.restored.remove(&tab);
+                match self.sessions.insert(tab, new) {
+                    Some(old) => Effect::CloseSession(old),
+                    None => Effect::None,
+                }
+            }
+            Err(ConnectFailure::UnknownHostKey(key)) => {
+                self.ask_host_key(
+                    key,
+                    Purpose::Reconnect {
+                        tab,
+                        conn: conn.clone(),
+                    },
+                );
+                Effect::None
+            }
+            Err(_) => Effect::None,
+        }
+    }
+
+    /// Drops the reconnect attempts of a connection that are still running.
+    fn cancel_reconnect(&mut self, conn: &ConnectionId) -> Effect {
+        let mut cancelled: Vec<RequestId> = self
+            .requests
+            .iter()
+            .filter(|(_, p)| matches!(p, Purpose::Reconnect { conn: c, .. } if c == conn))
+            .map(|(r, _)| *r)
+            .collect();
+        cancelled.sort();
+        if cancelled.is_empty() {
+            return Effect::None;
+        }
+        let index = self.sidebar.index_of(conn);
+        for request in &cancelled {
+            self.requests.remove(request);
+            if let Some(index) = index {
+                self.sidebar.finish_connect(index, Ok(()));
+            }
+        }
+        self.reconnects.remove(conn);
+        let browsing = self
+            .browsers
+            .get(conn)
+            .is_some_and(|b| matches!(b.status, BrowserStatus::Connecting));
+        if browsing {
+            let browse: Vec<RequestId> = self
+                .requests
+                .iter()
+                .filter(|(_, p)| **p == Purpose::Browse(conn.clone()))
+                .map(|(r, _)| *r)
+                .collect();
+            cancelled.extend(browse);
+            self.end_browser(conn);
+        }
+        Effect::Batch(cancelled.into_iter().map(Effect::CancelConnect).collect())
     }
 
     // ---- connection manager ----
@@ -1726,6 +2010,16 @@ impl Workspace {
                 self.sidebar.select_group(&id);
                 Effect::None
             }
+            A::Reconnect(id) => self.request_reconnect(&id),
+            A::ConfirmReconnect => match self.reconnect_prompt.take() {
+                Some(prompt) => self.start_reconnect(&prompt.conn),
+                None => Effect::None,
+            },
+            A::DismissReconnect => {
+                self.reconnect_prompt = None;
+                Effect::None
+            }
+            A::CancelReconnect(id) => self.cancel_reconnect(&id),
             A::TrustHostKey => self.trust_host_key(),
             A::RejectHostKey => self.reject_host_key(),
             A::Import(action) => self.dispatch_import(action),
@@ -1853,6 +2147,7 @@ impl Workspace {
         if matches!(mode, FormMode::Edit(_)) {
             // The settings may have changed: the next open starts a browser on the new ones.
             self.end_browser(&id);
+            self.reconnects.remove(&id);
         }
         let secrets = match self.sidebar.profile(&id) {
             Some(new) => secret_ops(old.as_ref(), new, &valid.db_password, &valid.ssh_secret),
@@ -1890,6 +2185,10 @@ impl Workspace {
         match self.sidebar.delete_connection(&id) {
             Ok(profile) => {
                 self.end_browser(&id);
+                self.reconnects.remove(&id);
+                if self.reconnect_prompt.as_ref().is_some_and(|p| p.conn == id) {
+                    self.reconnect_prompt = None;
+                }
                 let secrets = profile
                     .secret_refs()
                     .iter()
@@ -3787,5 +4086,393 @@ mod tests {
         let effect = w.dispatch_connection(A::Delete(id));
         assert!(matches!(effect, Effect::CancelConnect(r) if r == request));
         assert!(matches!(w.dialog(), Some(Dialog::ConfirmDelete { .. })));
+    }
+}
+
+#[cfg(test)]
+mod reconnect_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use sqler_driver_api::sqler_core::{ConnectionConfig, DriverId, Query};
+    use sqler_driver_api::{
+        BoxFuture, CancelFlag, CancelHandle, DriverError, DriverRegistry, QueryStream,
+    };
+    use sqler_driver_sqlite::{DRIVER_ID, SqliteDriver};
+
+    use super::*;
+    use crate::connections::ConnectionAction as A;
+    use crate::query::{BufferSnapshot, RunMode};
+    use crate::sidebar::ConnectionStatus;
+    use crate::workspace::testing::FakeSession;
+    use crate::workspace::tx::TxEffect;
+
+    fn ws() -> Workspace {
+        let driver = DriverId::new("sqlite").unwrap();
+        Workspace::new(SidebarModel::from_connections(vec![
+            ConnectionConfig::new("a", driver.clone(), ":memory:"),
+            ConnectionConfig::new("b", driver, ":memory:"),
+        ]))
+    }
+
+    fn conn(w: &Workspace, index: usize) -> ConnectionId {
+        w.sidebar().entries()[index].id().clone()
+    }
+
+    fn flat(effect: Effect) -> Vec<Effect> {
+        match effect {
+            Effect::Batch(effects) => effects.into_iter().flat_map(flat).collect(),
+            Effect::None => Vec::new(),
+            other => vec![other],
+        }
+    }
+
+    fn connects(effects: &[Effect]) -> Vec<RequestId> {
+        effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Connect { request, .. } => Some(*request),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn reconnect_requests(w: &Workspace) -> Vec<RequestId> {
+        let mut found: Vec<RequestId> = w
+            .requests
+            .iter()
+            .filter(|(_, p)| matches!(p, Purpose::Reconnect { .. }))
+            .map(|(r, _)| *r)
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn close_all(effects: Vec<Effect>) -> usize {
+        let mut closed = 0;
+        for effect in effects {
+            if let Effect::CloseSession(session) = effect {
+                drop(session.close());
+                closed += 1;
+            }
+        }
+        closed
+    }
+
+    fn open_with(w: &mut Workspace, index: usize, session: Box<dyn Session>) -> TabId {
+        let Effect::Connect { request, .. } = w.dispatch(WorkspaceAction::OpenConnection(index))
+        else {
+            panic!("expected Connect");
+        };
+        let effect = w.connect_finished(request, Ok(session));
+        let id = w.tabs().active().map(crate::tabs::Tab::id).unwrap();
+        // The browser connects next; leave it as it is.
+        for request in connects(&flat(effect)) {
+            let (browser, _) = FakeSession::boxed();
+            drop(w.connect_finished(request, Ok(browser)));
+        }
+        id
+    }
+
+    fn open(w: &mut Workspace, index: usize) -> (TabId, Arc<AtomicBool>) {
+        let (session, closed) = FakeSession::boxed();
+        (open_with(w, index, session), closed)
+    }
+
+    fn run_job(job: crate::query::QueryJob) -> crate::query::QueryJobDone {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(job.run())
+    }
+
+    fn start(w: &mut Workspace, tab: TabId) -> crate::query::QueryJob {
+        match w.run_query(tab, RunMode::All, BufferSnapshot::at_cursor("select 1", 0)) {
+            Effect::RunQuery { job, .. } => job,
+            other => panic!("expected RunQuery, got {other:?}"),
+        }
+    }
+
+    /// A session that fails every statement.
+    struct DeadSession;
+
+    impl Session for DeadSession {
+        fn cancel_handle(&self) -> CancelHandle {
+            CancelFlag::new().handle()
+        }
+
+        fn execute<'s>(
+            &'s mut self,
+            _query: &'s Query,
+        ) -> BoxFuture<'s, Result<Box<dyn QueryStream + 's>, DriverError>> {
+            Box::pin(async { Err(DriverError::Unsupported("dead".into())) })
+        }
+
+        fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), DriverError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[test]
+    fn all_tabs_get_new_sessions() {
+        let mut w = ws();
+        let a = conn(&w, 0);
+        let (t1, old1) = open(&mut w, 0);
+        let (t2, old2) = open(&mut w, 0);
+        assert!(w.can_reconnect(&a));
+        let effects = flat(w.dispatch_connection(A::Reconnect(a.clone())));
+        let requests = connects(&effects);
+        assert_eq!(requests.len(), 3);
+        let purposes: Vec<Purpose> = requests.iter().map(|r| w.requests[r].clone()).collect();
+        let reconnects = purposes
+            .iter()
+            .filter(|p| matches!(p, Purpose::Reconnect { .. }))
+            .count();
+        let browses = purposes
+            .iter()
+            .filter(|p| matches!(p, Purpose::Browse(_)))
+            .count();
+        assert_eq!((reconnects, browses), (2, 1));
+        assert!(w.is_reconnecting(&a));
+        assert_eq!(
+            *w.sidebar().entries()[0].status(),
+            ConnectionStatus::Connecting
+        );
+        let mut closed = Vec::new();
+        let mut news = Vec::new();
+        for request in requests {
+            let (session, flag) = FakeSession::boxed();
+            news.push(flag);
+            closed.extend(flat(w.connect_finished(request, Ok(session))));
+        }
+        assert_eq!(close_all(closed), 2);
+        assert!(old1.load(Ordering::SeqCst) && old2.load(Ordering::SeqCst));
+        assert!(w.has_session(t1) && w.has_session(t2));
+        assert!(news.iter().all(|f| !f.load(Ordering::SeqCst)));
+        assert!(!w.is_reconnecting(&a));
+        assert_eq!(*w.sidebar().entries()[0].status(), ConnectionStatus::Idle);
+    }
+
+    #[test]
+    fn other_connections_untouched() {
+        let mut w = ws();
+        let a = conn(&w, 0);
+        let (_ta, _) = open(&mut w, 0);
+        let (tb, flag_b) = open(&mut w, 1);
+        let effects = flat(w.dispatch_connection(A::Reconnect(a)));
+        for request in connects(&effects) {
+            assert!(!matches!(&w.requests[&request], Purpose::Reconnect { tab, .. } if *tab == tb));
+            assert!(!matches!(&w.requests[&request], Purpose::Browse(c) if *c == conn(&w, 1)));
+        }
+        assert!(w.has_session(tb));
+        assert!(!flag_b.load(Ordering::SeqCst));
+        assert!(!w.is_reconnecting(&conn(&w, 1)));
+    }
+
+    #[test]
+    fn next_run_uses_new_session() {
+        let mut w = ws();
+        let a = conn(&w, 0);
+        let tab = open_with(&mut w, 0, Box::new(DeadSession));
+        let effects = flat(w.dispatch_connection(A::Reconnect(a)));
+        let request = reconnect_requests(&w)[0];
+        assert!(connects(&effects).contains(&request));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let new = runtime.block_on(async {
+            let mut registry = DriverRegistry::new();
+            registry.register(Box::new(SqliteDriver::new())).unwrap();
+            let config = ConnectionConfig::new("t", DriverId::new(DRIVER_ID).unwrap(), ":memory:");
+            registry.connect(&config).await.unwrap()
+        });
+        close_all(flat(w.connect_finished(request, Ok(new))));
+        // The grids stay alive: a dropped grid ends the run.
+        let Effect::RunQuery {
+            job,
+            mut events,
+            grids,
+        } = w.run_query(tab, RunMode::All, BufferSnapshot::at_cursor("select 1", 0))
+        else {
+            panic!("expected RunQuery");
+        };
+        let done = runtime.block_on(job.run());
+        let mut finished = false;
+        while let Ok(event) = events.try_recv() {
+            finished |= matches!(event, RunEvent::Finished { .. });
+            assert!(!matches!(event, RunEvent::Failed { .. }), "{event:?}");
+        }
+        assert!(finished);
+        drop(grids);
+        w.query_finished(done);
+    }
+
+    #[test]
+    fn failure_keeps_tabs_for_retry() {
+        let mut w = ws();
+        let a = conn(&w, 0);
+        let (tab, old) = open(&mut w, 0);
+        drop(w.dispatch_connection(A::Reconnect(a.clone())));
+        for request in reconnect_requests(&w) {
+            drop(w.connect_finished(request, Err(ConnectFailure::Aborted)));
+        }
+        assert!(w.has_session(tab));
+        assert!(!old.load(Ordering::SeqCst));
+        assert!(matches!(
+            w.sidebar().entries()[0].status(),
+            ConnectionStatus::Failed(_)
+        ));
+        drop(w.dispatch_connection(A::Reconnect(a)));
+        let requests = reconnect_requests(&w);
+        assert_eq!(requests.len(), 1);
+        let (session, _) = FakeSession::boxed();
+        assert_eq!(
+            close_all(flat(w.connect_finished(requests[0], Ok(session)))),
+            1
+        );
+        assert!(old.load(Ordering::SeqCst));
+        assert_eq!(*w.sidebar().entries()[0].status(), ConnectionStatus::Idle);
+    }
+
+    #[test]
+    fn running_query_is_cancelled_and_not_leaked() {
+        for new_first in [true, false] {
+            let mut w = ws();
+            let a = conn(&w, 0);
+            let (tab, old) = open(&mut w, 0);
+            let job = start(&mut w, tab);
+            assert!(matches!(
+                w.dispatch_connection(A::Reconnect(a.clone())),
+                Effect::None
+            ));
+            let prompt = w.reconnect_prompt().unwrap().clone();
+            assert_eq!(prompt.running, 1);
+            let effects = flat(w.dispatch_connection(A::ConfirmReconnect));
+            assert!(w.reconnect_prompt().is_none());
+            assert!(effects.iter().any(|e| matches!(e, Effect::CancelQuery(_))));
+            let request = reconnect_requests(&w)[0];
+            let (new, new_flag) = FakeSession::boxed();
+            let done = run_job(job);
+            if new_first {
+                assert_eq!(close_all(flat(w.connect_finished(request, Ok(new)))), 0);
+                assert!(w.has_session(tab));
+                drop(w.query_finished(done));
+                let stale = w.take_stale_sessions();
+                assert_eq!(stale.len(), 1);
+                for s in stale {
+                    drop(s.close());
+                }
+            } else {
+                drop(w.query_finished(done));
+                assert!(w.take_stale_sessions().is_empty());
+                assert_eq!(close_all(flat(w.connect_finished(request, Ok(new)))), 1);
+            }
+            assert!(old.load(Ordering::SeqCst));
+            assert!(!new_flag.load(Ordering::SeqCst));
+            assert!(w.has_session(tab));
+        }
+    }
+
+    #[test]
+    fn open_transaction_asks_first() {
+        let mut w = ws();
+        let a = conn(&w, 0);
+        let (tab, _) = open(&mut w, 0);
+        w.edit.follow(tab, TxEffect::Begin, true, false, false);
+        assert!(w.in_transaction(tab));
+        assert!(matches!(
+            w.dispatch_connection(A::Reconnect(a.clone())),
+            Effect::None
+        ));
+        assert_eq!(w.reconnect_prompt().unwrap().open_transactions, 1);
+        assert_eq!(reconnect_requests(&w), Vec::<RequestId>::new());
+        w.dispatch_connection(A::DismissReconnect);
+        assert!(w.reconnect_prompt().is_none());
+        assert_eq!(reconnect_requests(&w), Vec::<RequestId>::new());
+        assert!(w.in_transaction(tab));
+        drop(w.dispatch_connection(A::Reconnect(a)));
+        drop(w.dispatch_connection(A::ConfirmReconnect));
+        let request = reconnect_requests(&w)[0];
+        let (session, _) = FakeSession::boxed();
+        close_all(flat(w.connect_finished(request, Ok(session))));
+        assert!(!w.in_transaction(tab));
+    }
+
+    #[test]
+    fn applying_refuses() {
+        let mut w = ws();
+        let a = conn(&w, 0);
+        let (tab, _) = open(&mut w, 0);
+        w.edit.mark_applying(tab);
+        assert!(matches!(
+            w.dispatch_connection(A::Reconnect(a)),
+            Effect::None
+        ));
+        assert!(w.reconnect_prompt().is_none());
+        assert_eq!(reconnect_requests(&w), Vec::<RequestId>::new());
+        let notice = w.take_notice().unwrap();
+        assert!(notice.contains("applied"), "{notice}");
+    }
+
+    #[test]
+    fn cancel_reconnect_drops_requests_and_closes_late_session() {
+        let mut w = ws();
+        let a = conn(&w, 0);
+        let (tab, old) = open(&mut w, 0);
+        drop(w.dispatch_connection(A::Reconnect(a.clone())));
+        let request = reconnect_requests(&w)[0];
+        let effects = flat(w.dispatch_connection(A::CancelReconnect(a.clone())));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::CancelConnect(r) if *r == request))
+        );
+        assert!(!w.is_reconnecting(&a));
+        assert!(!w.is_request_live(request));
+        assert_eq!(*w.sidebar().entries()[0].status(), ConnectionStatus::Idle);
+        let (late, late_flag) = FakeSession::boxed();
+        assert_eq!(close_all(flat(w.connect_finished(request, Ok(late)))), 1);
+        assert!(late_flag.load(Ordering::SeqCst));
+        assert!(w.has_session(tab));
+        assert!(!old.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn closed_tab_closes_late_session() {
+        let mut w = ws();
+        let a = conn(&w, 0);
+        let (tab, old) = open(&mut w, 0);
+        drop(w.dispatch_connection(A::Reconnect(a)));
+        let request = reconnect_requests(&w)[0];
+        assert_eq!(close_all(flat(w.close_tab_now(tab))), 1);
+        assert!(old.load(Ordering::SeqCst));
+        let (late, late_flag) = FakeSession::boxed();
+        assert_eq!(close_all(flat(w.connect_finished(request, Ok(late)))), 1);
+        assert!(late_flag.load(Ordering::SeqCst));
+        assert!(!w.has_session(tab));
+    }
+
+    #[test]
+    fn no_statement_rerun() {
+        let mut w = ws();
+        let a = conn(&w, 0);
+        let (tab, _) = open(&mut w, 0);
+        let phase = w.query_tab(tab).unwrap().phase().clone();
+        let seed = w.editor_doc(tab).and_then(|d| d.seed().map(str::to_owned));
+        let effects = flat(w.dispatch_connection(A::Reconnect(a)));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RunQuery { .. })));
+        for request in reconnect_requests(&w) {
+            let (session, _) = FakeSession::boxed();
+            let done = flat(w.connect_finished(request, Ok(session)));
+            assert!(!done.iter().any(|e| matches!(e, Effect::RunQuery { .. })));
+            close_all(done);
+        }
+        assert_eq!(*w.query_tab(tab).unwrap().phase(), phase);
+        assert_eq!(
+            w.editor_doc(tab).and_then(|d| d.seed().map(str::to_owned)),
+            seed
+        );
     }
 }

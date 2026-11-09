@@ -675,6 +675,7 @@ impl WorkspaceView {
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.is_held
             && (self.ws.drop_dialog().is_some()
+                || self.ws.reconnect_prompt().is_some()
                 || (self.ws.import_wizard().is_some()
                     && crate::connections::import::ImportWizard::swallows_held_key(
                         &event.keystroke.key,
@@ -708,6 +709,16 @@ impl WorkspaceView {
             // Escape closes the dialog; a host-key prompt counts as "do not trust".
             cx.stop_propagation();
             self.dispatch_connection(ConnectionAction::Cancel, cx);
+            return;
+        }
+        if !was_open
+            && self.ws.reconnect_prompt().is_some()
+            && chord.key() == "escape"
+            && chord.modifiers() == Modifiers::default()
+        {
+            // Escape closes the reconnect confirmation; nothing is reconnected.
+            cx.stop_propagation();
+            self.dispatch_connection(ConnectionAction::DismissReconnect, cx);
             return;
         }
         if !was_open && self.ws.import_wizard().is_some() {
@@ -827,6 +838,7 @@ impl WorkspaceView {
         if self.palette.is_open()
             || self.ws.dialog().is_some()
             || self.ws.drop_dialog().is_some()
+            || self.ws.reconnect_prompt().is_some()
             || !self.sidebar_focus.contains_focused(window, cx)
         {
             return false;
@@ -858,6 +870,7 @@ impl WorkspaceView {
         let overlay = self.palette.is_open()
             || self.ws.dialog().is_some()
             || self.ws.drop_dialog().is_some()
+            || self.ws.reconnect_prompt().is_some()
             || self.query_overlay_tab().is_some()
             || self.history_overlay_open()
             || self.edit_overlay_open()
@@ -1300,6 +1313,10 @@ impl WorkspaceView {
         self.tasks.retain(|request, _| ws.is_request_live(*request));
         if let Some(notice) = self.ws.take_notice() {
             self.notices.push(notice);
+        }
+        // Sessions a reconnect replaced while a job had them on loan.
+        for session in self.ws.take_stale_sessions() {
+            self.bridge.close(session);
         }
         self.sync_plugin_contributions(cx);
         self.grids.retain(self.ws.tabs());
@@ -1899,6 +1916,7 @@ impl Render for WorkspaceView {
         let shell = self.shell(window, cx);
         let dialog = dialog_overlay(&self.ws, self.inputs.as_ref(), cx);
         let drop_dialog = drop_overlay(self.ws.drop_dialog(), cx);
+        let reconnect_dialog = crate::sidebar::view::reconnect_overlay(self, cx);
         let query_dialog = self
             .query_overlay_tab()
             .and_then(|tab| query_overlay(self, tab, cx));
@@ -1954,6 +1972,7 @@ impl Render for WorkspaceView {
             .child(shell)
             .children(dialog)
             .children(drop_dialog)
+            .children(reconnect_dialog)
             .children(query_dialog)
             .children(history_dialog)
             .children(edit_dialog)
