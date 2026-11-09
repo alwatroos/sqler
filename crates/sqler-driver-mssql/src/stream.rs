@@ -409,7 +409,10 @@ impl ChannelStream {
                 return Some(Err(if self.shared.was_cancelled() {
                     DriverError::Cancelled
                 } else {
-                    DriverError::Connection("the SQL Server connection was lost".to_owned())
+                    DriverError::ConnectionLost {
+                        message: "the SQL Server connection was lost".to_owned(),
+                        sent: true,
+                    }
                 }));
             }
         }

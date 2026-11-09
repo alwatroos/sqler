@@ -14,7 +14,8 @@ use sqler_driver_api::sqler_core::Environment;
 use sqler_sql::Dialect;
 use tokio::sync::mpsc::unbounded_channel;
 
-use super::state::{Effect, Workspace};
+use super::state::{Effect, Purpose, Workspace};
+use crate::connections::ConnectFailure;
 use crate::grid::edit::SchemaProbe;
 use crate::grid::{GridLimits, GridTab, grid_channel_with};
 use crate::query::{
@@ -24,11 +25,86 @@ use crate::query::{
 };
 use crate::tabs::{TabId, TabKind};
 
+/// Shown when the run is started again after the connection came back.
+pub(crate) const RESTORED_RETRY: &str = "Connection restored; running the query again.";
+/// Shown when the connection came back but the query may have run, so the user decides.
+pub(crate) const RESTORED_RUN_AGAIN: &str = "Connection lost and restored; run again.";
+/// Shown when the lost connection had an open transaction.
+pub(crate) const RESTORED_TX_LOST: &str = "Connection lost and restored; the open transaction was lost and its uncommitted changes are gone. Run again.";
+/// Shown when the re-run lost the connection too (one reconnect per run).
+pub(crate) const LOST_AGAIN: &str =
+    "The connection was lost again; run the query again to reconnect.";
+/// Shown when a run is requested while the reconnect is still going.
+pub(crate) const RECONNECTING: &str = "The connection is being restored; wait a moment.";
+/// Shown when no reconnect could be started.
+const LOST_NO_RECONNECT: &str = "Connection lost; open the connection again and run again.";
+/// Shown when the user cancels while the reconnect still runs.
+const RETRY_DROPPED: &str = "The query will not run again; the connection is still being restored.";
+
+/// A run that lost its connection and waits for the reconnect of its tab.
+pub(super) struct AutoRetry {
+    /// The statements to run again; `None` when the user has to run again.
+    pub(super) statements: Option<Vec<BoundStatement>>,
+    /// The notice to show when the connection is back.
+    pub(super) notice: &'static str,
+}
+
+/// What to do after a run lost its connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decision {
+    /// The user cancelled: nothing extra.
+    Nothing,
+    /// Show the notice; no reconnect.
+    Notice(&'static str),
+    /// Reconnect, then show the notice, or run again when `rerun`.
+    Reconnect { rerun: bool, notice: &'static str },
+}
+
+/// Decides what follows a lost connection at statement `pos` of a run.
+///
+/// Only the first statement can run again, so nothing else ran on the dead session in this run.
+#[allow(clippy::fn_params_excessive_bools)] // a pure truth table, named at the call
+fn decide(
+    pos: usize,
+    sent: bool,
+    read_only: bool,
+    in_tx: bool,
+    retry: bool,
+    cancelled: bool,
+) -> Decision {
+    if cancelled {
+        Decision::Nothing
+    } else if retry {
+        Decision::Notice(LOST_AGAIN)
+    } else if in_tx {
+        Decision::Reconnect {
+            rerun: false,
+            notice: RESTORED_TX_LOST,
+        }
+    } else if pos == 0 && (!sent || read_only) {
+        Decision::Reconnect {
+            rerun: true,
+            notice: RESTORED_RETRY,
+        }
+    } else {
+        Decision::Reconnect {
+            rerun: false,
+            notice: RESTORED_RUN_AGAIN,
+        }
+    }
+}
+
 /// A run in progress: what it takes to stop it.
 pub(super) struct ActiveRun {
     run: RunId,
     handle: CancelHandle,
     stop: RunStop,
+    /// The statements of the run, for a re-run after a reconnect.
+    statements: Vec<BoundStatement>,
+    /// Whether the session was inside a transaction when the run started.
+    in_tx: bool,
+    /// Whether this run is the automatic re-run.
+    retry: bool,
 }
 
 impl ActiveRun {
@@ -73,11 +149,16 @@ impl Workspace {
     /// own text; without one, `Statement` runs the statement at the cursor up to its `;`.
     #[allow(clippy::needless_pass_by_value)] // the editor hands its snapshot over
     pub fn run_query(&mut self, tab: TabId, mode: RunMode, buf: BufferSnapshot) -> Effect {
+        // A run asked for by the user is never the automatic re-run.
+        self.retry_marks.remove(&tab);
         let Some((dialect, prod)) = self.query_context(tab) else {
             return Effect::None;
         };
         if self.tabs.get(tab).map(crate::tabs::Tab::kind) != Some(TabKind::Query) {
             return self.query_notice("Open a query tab first.");
+        }
+        if self.auto_retry_pending(tab) {
+            return self.query_notice(RECONNECTING);
         }
         // Pending edits belong to the grids of the last run; a new run would replace them.
         if let Some(message) = self.run_blocked_by_edits(tab) {
@@ -255,6 +336,9 @@ impl Workspace {
             run,
             handle: session.cancel_handle(),
             stop: RunStop::new(&sinks),
+            statements: statements.to_vec(),
+            in_tx: self.in_transaction(tab),
+            retry: self.retry_marks.remove(&tab),
         };
         let (events, receiver) = unbounded_channel();
         let job = QueryJob {
@@ -305,7 +389,103 @@ impl Workspace {
                 }
                 None => Effect::None,
             },
-            _ => self.query_notice("No query is running."),
+            _ => {
+                if self.auto_retry_pending(tab) {
+                    self.auto_retries.remove(&tab);
+                    return self.query_notice(RETRY_DROPPED);
+                }
+                self.query_notice("No query is running.")
+            }
+        }
+    }
+
+    /// Whether a re-run waits for the reconnect of the tab. An entry without a running reconnect
+    /// is stale and dropped.
+    fn auto_retry_pending(&mut self, tab: TabId) -> bool {
+        if !self.auto_retries.contains_key(&tab) {
+            return false;
+        }
+        if self.reconnect_running(tab) {
+            return true;
+        }
+        self.auto_retries.remove(&tab);
+        false
+    }
+
+    /// Whether a reconnect request of the tab is in flight.
+    fn reconnect_running(&self, tab: TabId) -> bool {
+        self.requests
+            .values()
+            .any(|p| matches!(p, Purpose::Reconnect { tab: t, .. } if *t == tab))
+    }
+
+    /// What follows a run whose statement `pos` lost the connection. The dead session is already
+    /// back in the tab.
+    fn after_lost_run(&mut self, tab: TabId, active: ActiveRun, pos: usize, sent: bool) -> Effect {
+        let read_only = active
+            .statements
+            .first()
+            .is_some_and(|s| s.class.is_read_only());
+        let decision = decide(
+            pos,
+            sent,
+            read_only,
+            active.in_tx || self.in_transaction(tab),
+            active.retry,
+            active.stop.is_cancelled(),
+        );
+        match decision {
+            Decision::Nothing => Effect::None,
+            Decision::Notice(text) => self.query_notice(text),
+            Decision::Reconnect { rerun, notice } => {
+                let effect = self.reconnect_tab(tab);
+                if !self.reconnect_running(tab) {
+                    return self.query_notice(LOST_NO_RECONNECT);
+                }
+                self.auto_retries.insert(
+                    tab,
+                    AutoRetry {
+                        statements: rerun.then_some(active.statements),
+                        notice,
+                    },
+                );
+                effect
+            }
+        }
+    }
+
+    /// The reconnect of the tab succeeded: shows the notice and runs the statements again when the
+    /// lost run asked for it. On production a write opens the confirmation again.
+    pub(super) fn auto_retry_restored(&mut self, tab: TabId) -> Effect {
+        let Some(entry) = self.auto_retries.remove(&tab) else {
+            return Effect::None;
+        };
+        self.notice = Some(entry.notice.to_owned());
+        let Some(statements) = entry.statements else {
+            return Effect::None;
+        };
+        let prod = self.production(tab);
+        let Some(query) = self.queries.get_mut(&tab) else {
+            return Effect::None;
+        };
+        self.retry_marks.insert(tab);
+        match query.retry(statements, prod) {
+            Ok(Step::Start(statements)) => self.start_query(tab, &statements),
+            Ok(_) => Effect::None,
+            Err(err) => {
+                self.retry_marks.remove(&tab);
+                self.query_notice(err.to_string())
+            }
+        }
+    }
+
+    /// The reconnect of the tab failed: the run is not repeated and the tab keeps its dead
+    /// session. `failure` is `None` when a prompt shows the reason itself.
+    pub(super) fn auto_retry_failed(&mut self, tab: TabId, failure: Option<&ConnectFailure>) {
+        if self.auto_retries.remove(&tab).is_some()
+            && let Some(failure) = failure
+        {
+            self.notice = Some(format!("Could not restore the connection: {failure}"));
         }
     }
 
@@ -355,15 +535,26 @@ impl Workspace {
     /// The job ended and returned the session, which goes back to its tab (or is closed when the
     /// tab is gone).
     pub fn query_finished(&mut self, done: QueryJobDone) -> Effect {
-        let QueryJobDone { tab, run, session } = done;
-        if self.query_runs.get(&tab).is_some_and(|a| a.run == run) {
-            self.query_runs.remove(&tab);
-        }
+        let QueryJobDone {
+            tab,
+            run,
+            session,
+            lost_at,
+            lost_sent,
+        } = done;
+        let active = if self.query_runs.get(&tab).is_some_and(|a| a.run == run) {
+            self.query_runs.remove(&tab)
+        } else {
+            None
+        };
         match self.queries.get_mut(&tab) {
             Some(query) => {
                 query.finished(run);
                 self.restore_session(tab, session);
-                Effect::None
+                match (active, lost_at) {
+                    (Some(active), Some(pos)) => self.after_lost_run(tab, active, pos, lost_sent),
+                    _ => Effect::None,
+                }
             }
             None => Effect::CloseSession(session),
         }
@@ -749,5 +940,413 @@ mod tests {
         let (tab, _) = open(&mut w, 1);
         w.run_query(tab, RunMode::All, buf("delete from t"));
         assert_eq!(w.query_toolbar(tab).unwrap().run, RunState::Busy);
+    }
+
+    // ---- lost connection and automatic reconnect ----
+
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use sqler_driver_api::{
+        BoxFuture, CancelFlag, DriverError, QueryEvent, QueryStream, Session, sqler_core::Query,
+    };
+
+    use crate::connections::{ConnectFailure, ConnectionAction as A, HostKeyPrompt};
+
+    struct Events(VecDeque<Result<QueryEvent, DriverError>>);
+
+    impl QueryStream for Events {
+        fn next_event(&mut self) -> BoxFuture<'_, Option<Result<QueryEvent, DriverError>>> {
+            Box::pin(std::future::ready(self.0.pop_front()))
+        }
+    }
+
+    /// A session that answers the first `ok` statements and loses the connection after that,
+    /// either when executing or in the stream.
+    struct LostSession {
+        ok: usize,
+        calls: usize,
+        sent: bool,
+        in_stream: bool,
+        closed: Arc<AtomicBool>,
+    }
+
+    impl LostSession {
+        fn boxed(ok: usize, sent: bool) -> (Box<dyn Session>, Arc<AtomicBool>) {
+            Self::build(ok, sent, false)
+        }
+
+        fn build(ok: usize, sent: bool, in_stream: bool) -> (Box<dyn Session>, Arc<AtomicBool>) {
+            let closed = Arc::new(AtomicBool::new(false));
+            let session = Self {
+                ok,
+                calls: 0,
+                sent,
+                in_stream,
+                closed: closed.clone(),
+            };
+            (Box::new(session), closed)
+        }
+
+        fn lost(&self) -> DriverError {
+            DriverError::ConnectionLost {
+                message: "gone".into(),
+                sent: self.sent,
+            }
+        }
+    }
+
+    impl Session for LostSession {
+        fn cancel_handle(&self) -> CancelHandle {
+            CancelFlag::new().handle()
+        }
+
+        fn execute<'s>(
+            &'s mut self,
+            _query: &'s Query,
+        ) -> BoxFuture<'s, Result<Box<dyn QueryStream + 's>, DriverError>> {
+            self.calls += 1;
+            let result: Result<Box<dyn QueryStream + 's>, DriverError> = if self.calls <= self.ok {
+                Ok(Box::new(Events(VecDeque::from([
+                    Ok(QueryEvent::Columns(Vec::new())),
+                    Ok(QueryEvent::Done {
+                        rows_affected: Some(0),
+                    }),
+                ]))))
+            } else if self.in_stream {
+                Ok(Box::new(Events(VecDeque::from([
+                    Ok(QueryEvent::Columns(Vec::new())),
+                    Err(self.lost()),
+                ]))))
+            } else {
+                Err(self.lost())
+            };
+            Box::pin(std::future::ready(result))
+        }
+
+        fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), DriverError>> {
+            self.closed.store(true, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn open_with(w: &mut Workspace, index: usize, session: Box<dyn Session>) -> TabId {
+        let Effect::Connect { request, .. } = w.dispatch(WorkspaceAction::OpenConnection(index))
+        else {
+            panic!("expected Connect");
+        };
+        w.connect_finished(request, Ok(session));
+        w.tabs().active().map(crate::tabs::Tab::id).unwrap()
+    }
+
+    fn flat(effect: Effect) -> Vec<Effect> {
+        match effect {
+            Effect::Batch(effects) => effects.into_iter().flat_map(flat).collect(),
+            Effect::None => Vec::new(),
+            other => vec![other],
+        }
+    }
+
+    /// Runs the `RunQuery` effect to its end and applies its events and its result. Returns what
+    /// the job reported about a lost connection, and the effect of `query_finished`.
+    fn finish_run(w: &mut Workspace, tab: TabId, effect: Effect) -> (Option<usize>, bool, Effect) {
+        let Effect::RunQuery {
+            job, mut events, ..
+        } = effect
+        else {
+            panic!("expected RunQuery, got {effect:?}");
+        };
+        let run = job.run;
+        let done = run_job(job);
+        while let Ok(event) = events.try_recv() {
+            w.query_event(tab, run, event);
+        }
+        let (at, sent) = (done.lost_at, done.lost_sent);
+        (at, sent, w.query_finished(done))
+    }
+
+    fn run_text(w: &mut Workspace, tab: TabId, text: &str) -> Effect {
+        w.run_query(tab, RunMode::All, buf(text))
+    }
+
+    fn connect_request(effect: &Effect) -> RequestId {
+        match effect {
+            Effect::Connect { request, .. } => *request,
+            other => panic!("expected Connect, got {other:?}"),
+        }
+    }
+
+    fn run_effect(effects: Vec<Effect>) -> Effect {
+        effects
+            .into_iter()
+            .find(|e| matches!(e, Effect::RunQuery { .. }))
+            .unwrap_or(Effect::None)
+    }
+
+    const WRITE: &str = "insert into t values (1)";
+
+    #[test]
+    fn decide_truth_table() {
+        let again = Decision::Reconnect {
+            rerun: true,
+            notice: RESTORED_RETRY,
+        };
+        let user = Decision::Reconnect {
+            rerun: false,
+            notice: RESTORED_RUN_AGAIN,
+        };
+        let tx = Decision::Reconnect {
+            rerun: false,
+            notice: RESTORED_TX_LOST,
+        };
+        // (pos, sent, read_only, in_tx, retry, cancelled)
+        assert_eq!(decide(0, false, false, false, false, false), again);
+        assert_eq!(decide(0, true, true, false, false, false), again);
+        assert_eq!(decide(0, true, false, false, false, false), user);
+        assert_eq!(decide(1, false, true, false, false, false), user);
+        assert_eq!(decide(0, false, false, true, false, false), tx);
+        assert_eq!(
+            decide(0, false, true, false, true, false),
+            Decision::Notice(LOST_AGAIN)
+        );
+        assert_eq!(
+            decide(0, false, true, true, true, false),
+            Decision::Notice(LOST_AGAIN)
+        );
+        assert_eq!(decide(0, false, true, false, true, true), Decision::Nothing);
+    }
+
+    #[test]
+    fn an_unsent_write_reconnects_and_runs_again_once() {
+        let mut w = ws();
+        let (dead, _) = LostSession::boxed(0, false);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, WRITE);
+        let (at, sent, effect) = finish_run(&mut w, tab, effect);
+        assert_eq!((at, sent), (Some(0), false));
+        let request = connect_request(&effect);
+        let (fresh, _) = FakeSession::boxed();
+        let effects = flat(w.connect_finished(request, Ok(fresh)));
+        assert_eq!(w.take_notice().as_deref(), Some(RESTORED_RETRY));
+        assert!(effects.iter().any(|e| matches!(e, Effect::CloseSession(_))));
+        let run = run_effect(effects);
+        assert!(matches!(run, Effect::RunQuery { .. }));
+        assert!(w.query_tab(tab).unwrap().is_running());
+    }
+
+    #[test]
+    fn the_dead_session_is_closed() {
+        let mut w = ws();
+        let (dead, dead_closed) = LostSession::boxed(0, false);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, WRITE);
+        let (_, _, effect) = finish_run(&mut w, tab, effect);
+        let request = connect_request(&effect);
+        let (fresh, _) = FakeSession::boxed();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        for e in flat(w.connect_finished(request, Ok(fresh))) {
+            if let Effect::CloseSession(session) = e {
+                drop(rt.block_on(session.close()));
+            }
+        }
+        assert!(dead_closed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_sent_read_runs_again_but_a_sent_write_does_not() {
+        let mut w = ws();
+        let (dead, _) = LostSession::boxed(0, true);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, "select 1");
+        let (at, sent, effect) = finish_run(&mut w, tab, effect);
+        assert_eq!((at, sent), (Some(0), true));
+        let request = connect_request(&effect);
+        let (fresh, _) = FakeSession::boxed();
+        let run = run_effect(flat(w.connect_finished(request, Ok(fresh))));
+        assert!(matches!(run, Effect::RunQuery { .. }));
+        assert_eq!(w.take_notice().as_deref(), Some(RESTORED_RETRY));
+
+        let mut w = ws();
+        let (dead, _) = LostSession::boxed(0, true);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, WRITE);
+        let (_, _, effect) = finish_run(&mut w, tab, effect);
+        let request = connect_request(&effect);
+        let (fresh, _) = FakeSession::boxed();
+        let effects = flat(w.connect_finished(request, Ok(fresh)));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RunQuery { .. })));
+        assert_eq!(w.take_notice().as_deref(), Some(RESTORED_RUN_AGAIN));
+        assert_eq!(*w.query_tab(tab).unwrap().phase(), Phase::Idle);
+        assert!(w.has_session(tab));
+    }
+
+    #[test]
+    fn a_lost_open_transaction_is_not_run_again() {
+        let mut w = ws();
+        let (dead, _) = LostSession::boxed(1, false);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, "begin");
+        let (at, _, effect) = finish_run(&mut w, tab, effect);
+        assert_eq!(at, None);
+        assert!(matches!(effect, Effect::None));
+        assert!(w.in_transaction(tab));
+        let effect = run_text(&mut w, tab, "select 1");
+        let (at, sent, effect) = finish_run(&mut w, tab, effect);
+        assert_eq!((at, sent), (Some(0), false));
+        let request = connect_request(&effect);
+        let (fresh, _) = FakeSession::boxed();
+        let effects = flat(w.connect_finished(request, Ok(fresh)));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RunQuery { .. })));
+        assert_eq!(w.take_notice().as_deref(), Some(RESTORED_TX_LOST));
+    }
+
+    #[test]
+    fn a_second_loss_does_not_reconnect_again() {
+        let mut w = ws();
+        let (dead, _) = LostSession::boxed(0, false);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, "select 1");
+        let (_, _, effect) = finish_run(&mut w, tab, effect);
+        let request = connect_request(&effect);
+        let (also_dead, _) = LostSession::boxed(0, false);
+        let run = run_effect(flat(w.connect_finished(request, Ok(also_dead))));
+        let (at, _, effect) = finish_run(&mut w, tab, run);
+        assert_eq!(at, Some(0));
+        assert!(matches!(effect, Effect::None));
+        assert_eq!(w.take_notice().as_deref(), Some(LOST_AGAIN));
+        assert!(
+            w.requests
+                .values()
+                .all(|p| !matches!(p, Purpose::Reconnect { .. }))
+        );
+        assert!(w.auto_retries.is_empty());
+    }
+
+    #[test]
+    fn a_failed_reconnect_shows_the_failure_and_leaves_the_tab_usable() {
+        let mut w = ws();
+        let (dead, _) = LostSession::boxed(0, false);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, "select 1");
+        let (_, _, effect) = finish_run(&mut w, tab, effect);
+        let request = connect_request(&effect);
+        let failure = ConnectFailure::MissingSecret {
+            kind: sqler_config::SecretKind::DatabasePassword,
+        };
+        let text = failure.to_string();
+        assert!(matches!(
+            w.connect_finished(request, Err(failure)),
+            Effect::None
+        ));
+        assert_eq!(
+            w.take_notice().unwrap(),
+            format!("Could not restore the connection: {text}")
+        );
+        assert_eq!(*w.query_tab(tab).unwrap().phase(), Phase::Idle);
+        assert!(w.has_session(tab));
+        assert!(matches!(
+            run_text(&mut w, tab, "select 1"),
+            Effect::RunQuery { .. }
+        ));
+    }
+
+    #[test]
+    fn an_unknown_host_key_shows_its_prompt_and_no_notice() {
+        let mut w = ws();
+        let (dead, _) = LostSession::boxed(0, false);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, "select 1");
+        let (_, _, effect) = finish_run(&mut w, tab, effect);
+        let request = connect_request(&effect);
+        let prompt = HostKeyPrompt {
+            host: "h".into(),
+            port: 22,
+            algorithm: "ssh-ed25519".into(),
+            fingerprint: "SHA256:x".into(),
+            public_key: "ssh-ed25519 AAAA".into(),
+        };
+        w.connect_finished(request, Err(ConnectFailure::UnknownHostKey(prompt)));
+        assert!(matches!(
+            w.dialog(),
+            Some(crate::connections::Dialog::TrustHostKey { .. })
+        ));
+        assert_eq!(w.take_notice(), None);
+        assert!(w.auto_retries.is_empty());
+    }
+
+    #[test]
+    fn prod_asks_again_before_the_retried_write() {
+        let mut w = ws();
+        let (dead, _) = LostSession::boxed(0, false);
+        let tab = open_with(&mut w, 1, dead);
+        let effect = run_text(&mut w, tab, WRITE);
+        assert!(matches!(effect, Effect::None));
+        let effect = w.confirm_query(tab);
+        let (at, _, effect) = finish_run(&mut w, tab, effect);
+        assert_eq!(at, Some(0));
+        let request = connect_request(&effect);
+        let (fresh, _) = FakeSession::boxed();
+        let effects = flat(w.connect_finished(request, Ok(fresh)));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RunQuery { .. })));
+        assert!(matches!(
+            w.query_tab(tab).unwrap().phase(),
+            Phase::Confirming(_)
+        ));
+        assert!(matches!(w.confirm_query(tab), Effect::RunQuery { .. }));
+    }
+
+    #[test]
+    fn a_loss_after_the_first_statement_asks_to_run_again() {
+        let mut w = ws();
+        let (dead, _) = LostSession::build(1, true, true);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, "select 1; select 2");
+        let (at, sent, effect) = finish_run(&mut w, tab, effect);
+        assert_eq!((at, sent), (Some(1), true));
+        let request = connect_request(&effect);
+        let (fresh, _) = FakeSession::boxed();
+        let effects = flat(w.connect_finished(request, Ok(fresh)));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RunQuery { .. })));
+        assert_eq!(w.take_notice().as_deref(), Some(RESTORED_RUN_AGAIN));
+    }
+
+    #[test]
+    fn a_run_is_refused_while_the_reconnect_runs() {
+        let mut w = ws();
+        let (dead, _) = LostSession::boxed(0, false);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, "select 1");
+        let (_, _, effect) = finish_run(&mut w, tab, effect);
+        let _request = connect_request(&effect);
+        assert!(matches!(run_text(&mut w, tab, "select 2"), Effect::None));
+        assert_eq!(w.take_notice().as_deref(), Some(RECONNECTING));
+        // Cancel drops the pending re-run.
+        assert!(matches!(w.cancel_query(tab), Effect::None));
+        assert_eq!(w.take_notice().as_deref(), Some(RETRY_DROPPED));
+        assert!(w.auto_retries.is_empty());
+    }
+
+    #[test]
+    fn cancelling_the_reconnect_or_closing_the_tab_drops_the_retry() {
+        let mut w = ws();
+        let conn = w.sidebar().entries()[0].id().clone();
+        let (dead, _) = LostSession::boxed(0, false);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, "select 1");
+        let (_, _, _) = finish_run(&mut w, tab, effect);
+        assert_eq!(w.auto_retries.len(), 1);
+        w.dispatch_connection(A::CancelReconnect(conn));
+        assert!(w.auto_retries.is_empty());
+
+        let (dead, _) = LostSession::boxed(0, false);
+        let tab = open_with(&mut w, 0, dead);
+        let effect = run_text(&mut w, tab, "select 1");
+        let (_, _, _) = finish_run(&mut w, tab, effect);
+        assert_eq!(w.auto_retries.len(), 1);
+        w.dispatch(WorkspaceAction::CloseTab(tab));
+        assert!(w.auto_retries.is_empty() && w.retry_marks.is_empty());
     }
 }

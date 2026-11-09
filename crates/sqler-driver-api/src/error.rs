@@ -14,6 +14,15 @@ pub enum DriverError {
     /// A query failed.
     #[error("query failed: {0}")]
     Query(String),
+    /// The session's connection is gone (server restart or timeout, network, killed session).
+    /// `sent` is `false` only when the statement certainly did not execute.
+    #[error("connection lost: {message}")]
+    ConnectionLost {
+        /// Short text written by the driver; never holds a target, host or secret.
+        message: String,
+        /// Whether the statement may have reached the server.
+        sent: bool,
+    },
     /// The operation was cancelled.
     #[error("operation cancelled")]
     Cancelled,
@@ -38,6 +47,20 @@ pub enum DriverError {
     /// A domain-type error.
     #[error(transparent)]
     Core(#[from] CoreError),
+}
+
+impl DriverError {
+    /// Whether the session's connection is gone ([`DriverError::ConnectionLost`]).
+    #[must_use]
+    pub fn is_connection_lost(&self) -> bool {
+        matches!(self, Self::ConnectionLost { .. })
+    }
+
+    /// Whether the connection was lost and the statement certainly did not execute.
+    #[must_use]
+    pub fn lost_before_send(&self) -> bool {
+        matches!(self, Self::ConnectionLost { sent: false, .. })
+    }
 }
 
 #[cfg(test)]
@@ -76,6 +99,23 @@ mod tests {
             DriverError::Unavailable("x".into()).to_string(),
             "driver unavailable: x"
         );
+    }
+
+    #[test]
+    fn connection_lost_message_and_helpers() {
+        let sent = DriverError::ConnectionLost {
+            message: "gone".into(),
+            sent: true,
+        };
+        let unsent = DriverError::ConnectionLost {
+            message: "gone".into(),
+            sent: false,
+        };
+        assert_eq!(sent.to_string(), "connection lost: gone");
+        assert!(sent.is_connection_lost() && !sent.lost_before_send());
+        assert!(unsent.is_connection_lost() && unsent.lost_before_send());
+        let other = DriverError::Query("x".into());
+        assert!(!other.is_connection_lost() && !other.lost_before_send());
     }
 
     #[test]

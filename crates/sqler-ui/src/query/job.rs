@@ -57,6 +57,10 @@ pub struct QueryJobDone {
     pub run: RunId,
     /// The session, returned to its tab.
     pub session: Box<dyn Session>,
+    /// Position in `statements` of the statement whose connection was lost; `None` otherwise.
+    pub lost_at: Option<usize>,
+    /// Whether that statement may have reached the server (false when `lost_at` is `None`).
+    pub lost_sent: bool,
 }
 
 impl std::fmt::Debug for QueryJobDone {
@@ -64,6 +68,7 @@ impl std::fmt::Debug for QueryJobDone {
         f.debug_struct("QueryJobDone")
             .field("tab", &self.tab)
             .field("run", &self.run)
+            .field("lost_at", &self.lost_at)
             .finish_non_exhaustive()
     }
 }
@@ -118,6 +123,10 @@ impl QueryStream for FailedStream {
 fn copy_of(err: &DriverError) -> DriverError {
     match err {
         DriverError::Cancelled => DriverError::Cancelled,
+        DriverError::ConnectionLost { message, sent } => DriverError::ConnectionLost {
+            message: message.clone(),
+            sent: *sent,
+        },
         other => DriverError::Query(other.to_string()),
     }
 }
@@ -130,7 +139,7 @@ impl QueryJob {
     /// follows success, then, if the statement has a probe and the run is not being stopped, the
     /// probe's single read-only lookup runs on the same session and `Resolved` reports its answer
     /// (`None` when it failed). A cancellation reports `Cancelled` and stops; any other error
-    /// reports `Failed` (the sink gets it too) and stops; neither is followed by `Resolved`. The sinks of statements that did not run are
+    /// reports `Failed` (the sink gets it too) and stops (a lost connection also sets `lost_at` and `lost_sent` on the result); neither is followed by `Resolved`. The sinks of statements that did not run are
     /// dropped. The session is always returned; the job never panics.
     ///
     /// A statement whose grid fills its page pauses inside `ingest` and holds the run, and the
@@ -149,6 +158,7 @@ impl QueryJob {
                 events,
                 probes,
             } = self;
+            let (mut lost_at, mut lost_sent) = (None, false);
             for (position, (stmt, sink)) in statements.iter().zip(sinks).enumerate() {
                 let index = stmt.index;
                 if stop.is_cancelled() || sink.is_cancelled() {
@@ -179,6 +189,10 @@ impl QueryJob {
                         break;
                     }
                     Err(err) => {
+                        if err.is_connection_lost() {
+                            lost_at = Some(position);
+                            lost_sent = !err.lost_before_send();
+                        }
                         let _ = events.send(RunEvent::Failed {
                             index,
                             message: err.to_string(),
@@ -188,7 +202,13 @@ impl QueryJob {
                     }
                 }
             }
-            QueryJobDone { tab, run, session }
+            QueryJobDone {
+                tab,
+                run,
+                session,
+                lost_at,
+                lost_sent,
+            }
         })
     }
 }

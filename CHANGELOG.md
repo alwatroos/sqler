@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Reconnect a connection.** A new Reconnect button, context-menu item and command (`connection:reconnect`) give every open tab of a connection a new session and restart its object browser, without closing tabs or re-running statements. SQLer asks first when a transaction is open or a query is running, and a failed attempt keeps the old sessions.
+- **Reconnect on a dropped connection.** Running a query on a dropped connection reconnects first and re-runs it when that is safe.
 
 ### Security
 

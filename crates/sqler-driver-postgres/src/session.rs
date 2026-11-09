@@ -11,7 +11,7 @@ use sqlx::postgres::{PgConnectOptions, PgConnection};
 use sqlx::{Connection as _, Executor as _, Statement as _};
 
 use crate::cancel::PgCanceller;
-use crate::convert::{bind_params, column, query_error, sql_str};
+use crate::convert::{bind_params, column, query_error, query_error_unsent, sql_str};
 use crate::options::{connect_options, server_name_override};
 use crate::stream::PgQueryStream;
 
@@ -83,7 +83,7 @@ impl PgSession {
         let statement = (&mut self.conn)
             .prepare_with(sql_str(&query.sql), &param_types)
             .await
-            .map_err(|e| query_error(e, cancel.is_requested()))?;
+            .map_err(|e| query_error_unsent(e, cancel.is_requested()))?;
         let columns: Vec<_> = statement.columns().iter().map(column).collect();
         let stream = if columns.is_empty() {
             PgQueryStream::executing(Box::pin(bound.execute(&mut self.conn)), cancel)

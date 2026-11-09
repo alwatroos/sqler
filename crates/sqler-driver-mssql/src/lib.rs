@@ -72,7 +72,7 @@
 //! # Cancellation
 //! Cancel closes the connection: the statement ends with `DriverError::Cancelled`, the socket is
 //! dropped, and the server ends the statement and rolls back an open transaction. The next
-//! `execute` on that session fails with `DriverError::Connection` ("the SQL Server connection was
+//! `execute` on that session fails with `DriverError::ConnectionLost` ("the SQL Server connection was
 //! closed by a cancel; connect again"); connect again for a new session. A cancel that arrives
 //! while no statement is active does nothing.
 //!

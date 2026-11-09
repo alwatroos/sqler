@@ -95,6 +95,18 @@ A statement that returns columns shows them in the same grid as an opened table.
 
 While a run is active, the results area shows "Running…" (or "Cancelling…") and a Cancel button; the toolbar Cancel button and `query:cancel` do the same. The server-side statement is cancelled, the entry shows `Cancelled`, the rest of the script is not run, and the tab can run again at once. A cancelled statement may already have changed data if the database does not roll it back. Closing the tab or quitting also cancels a running query.
 
+## When the connection drops
+
+If the connection of a tab was lost (the server restarted or timed out, the network dropped, or the session was killed), SQLer reconnects the tab with the same path as **Reconnect** (see [Connections](connections.md)) and then decides whether to run the query again. It makes one attempt per run.
+
+- The query is run again, with the notice "Connection restored; running the query again.", when it certainly did not reach the server, or when its first statement is a read.
+- Otherwise the notice says "Connection lost and restored; run again." and nothing runs: the statement may have run, and SQLer does not risk running a write twice. This also holds when the loss happens at a later statement of a script.
+- If the session had an open transaction, nothing runs again. The notice says "Connection lost and restored; the open transaction was lost and its uncommitted changes are gone. Run again."
+- On a `prod` connection a repeated statement that is not a plain read asks for confirmation again.
+- If the repeated run loses the connection too, SQLer does not reconnect again: "The connection was lost again; run the query again to reconnect." If the reconnect fails, the notice reads "Could not restore the connection: " followed by the reason, and the tab stays usable. After you cancel a run, a loss does not reconnect; the next run does.
+
+Session state such as temporary tables, `SET` and `USE` is lost with the connection, and the repeated run starts without it. While the reconnect runs, a new run asks you to wait. See [ADR-0080](../adr/0080-lost-connection-and-auto-reconnect.md).
+
 ## Production connections
 
 On a connection marked `prod`, SQLer asks before any statement that is not classified as a plain read. This covers `INSERT`, `UPDATE`, `DELETE`, DDL, `CALL`, and anything SQLer cannot classify. A script gets one dialog, before anything runs, that lists each such statement with its exact text and its bound values. Cancel is focused. Declining runs nothing at all, including the reads of the same script. Other connections never ask.
