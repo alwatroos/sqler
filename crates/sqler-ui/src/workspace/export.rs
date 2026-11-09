@@ -205,6 +205,21 @@ impl Workspace {
         Effect::None
     }
 
+    /// Opens the export dialog with a format preselected, like [`Workspace::open_export`]. An
+    /// unknown format id leaves the dialog's default.
+    pub fn open_export_as(
+        &mut self,
+        target: ExportTarget,
+        facts: &GridFacts,
+        format: &str,
+    ) -> Effect {
+        let effect = self.open_export(target, facts);
+        if let Some(dialog) = self.exports.dialog.as_mut() {
+            dialog.set_format(format);
+        }
+        effect
+    }
+
     /// The export dialog on screen, if any.
     #[must_use]
     pub fn export_dialog(&self) -> Option<&ExportDialog> {
@@ -832,6 +847,35 @@ mod tests {
             w.open_export(target(tab, 0), &facts(true)),
             Effect::None
         ));
+        assert_eq!(
+            w.take_notice().as_deref(),
+            Some("An export is already running in this tab.")
+        );
+    }
+
+    #[test]
+    fn open_export_as_preselects_csv_and_refuses_like_open_export() {
+        let mut w = ws();
+        let tab = open(&mut w, 0);
+        let mut f = facts(true);
+        f.columns = 0;
+        assert!(matches!(
+            w.open_export_as(target(tab, 0), &f, sqler_export::CSV),
+            Effect::None
+        ));
+        assert_eq!(
+            w.take_notice().as_deref(),
+            Some("This result has nothing to export.")
+        );
+        assert!(w.export_dialog().is_none());
+
+        w.open_export_as(target(tab, 0), &facts(true), sqler_export::CSV);
+        assert_eq!(w.export_dialog().unwrap().form.format, "csv");
+        w.dismiss_export();
+
+        run(&mut w, tab, "select 1");
+        let _job = start_job(&mut w, tab, ExportScope::Fresh);
+        w.open_export_as(target(tab, 0), &facts(true), sqler_export::CSV);
         assert_eq!(
             w.take_notice().as_deref(),
             Some("An export is already running in this tab.")

@@ -67,7 +67,7 @@ Nothing in a value is interpreted: there are no links and no markup.
 
 ## Copy
 
-See [Export and copy](export.md#copy). The commands are `grid:copy` (Mod+C), `grid:copy-with-headers` (Mod+Shift+C), `grid:copy-as-markdown`, `grid:copy-as-json` and `grid:copy-as-insert`.
+See [Export and copy](export.md#copy). The commands are `grid:copy` (Mod+C), `grid:copy-with-headers` (Mod+Shift+C), `grid:copy-as-markdown`, `grid:copy-as-json` and `grid:copy-as-insert`. A right click on a cell also offers `grid:copy-value` (Copy Value) and `grid:copy-column` and `grid:copy-column-with-header`; the last two are in the menu of a column header too.
 
 ## Sort
 
@@ -107,7 +107,7 @@ Memory is gated on a result with 6 columns (the `grid_viewport` default); other 
 
 ## Export
 
-See [Export and copy](export.md#export). **Export Results...** (`grid:export`) writes the loaded rows, a selection or the whole result to a file.
+See [Export and copy](export.md#export). **Export Results...** (`grid:export`) writes the loaded rows, a selection or the whole result to a file. `grid:export-csv` (**Export as CSV…**, also in the right-click menu of a cell) opens the same dialog with CSV chosen.
 
 ## Editing
 

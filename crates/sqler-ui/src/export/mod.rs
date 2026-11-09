@@ -39,12 +39,15 @@ pub enum ExportCommand {
     Open,
     /// Cancel the running export of the active tab.
     Cancel,
+    /// Open the export dialog with CSV preselected.
+    OpenCsv,
 }
 
 /// The commands: ID and title.
 const COMMANDS: &[(&str, &str)] = &[
     ("grid:export", "Export Results…"),
     ("export:cancel", "Cancel Export"),
+    ("grid:export-csv", "Export Results as CSV…"),
 ];
 
 impl ExportCommand {
@@ -59,6 +62,7 @@ impl ExportCommand {
         let id = match self {
             Self::Open => COMMANDS[0].0,
             Self::Cancel => COMMANDS[1].0,
+            Self::OpenCsv => COMMANDS[2].0,
         };
         CommandId::new(id).expect("constant command ID is valid")
     }
@@ -67,9 +71,13 @@ impl ExportCommand {
 /// The export command behind a command ID, if it is one.
 #[must_use]
 pub fn action_for(id: &CommandId) -> Option<ExportCommand> {
-    [ExportCommand::Open, ExportCommand::Cancel]
-        .into_iter()
-        .find(|c| c.command_id() == *id)
+    [
+        ExportCommand::Open,
+        ExportCommand::Cancel,
+        ExportCommand::OpenCsv,
+    ]
+    .into_iter()
+    .find(|c| c.command_id() == *id)
 }
 
 /// Registers the export commands.
@@ -100,7 +108,11 @@ mod tests {
         let mut r = CommandRegistry::new();
         register_commands(&mut r).unwrap();
         assert_eq!(r.len(), COMMANDS.len());
-        for c in [ExportCommand::Open, ExportCommand::Cancel] {
+        for c in [
+            ExportCommand::Open,
+            ExportCommand::Cancel,
+            ExportCommand::OpenCsv,
+        ] {
             assert!(r.get(&c.command_id()).is_some(), "{c:?}");
             assert_eq!(action_for(&c.command_id()), Some(c));
         }
@@ -109,6 +121,11 @@ mod tests {
             ExportCommand::Cancel.command_id().to_string(),
             "export:cancel"
         );
+        assert_eq!(
+            ExportCommand::OpenCsv.command_id().to_string(),
+            "grid:export-csv"
+        );
+        assert_eq!(COMMANDS[2].1, "Export Results as CSV…");
         assert_eq!(
             action_for(&CommandId::new("grid:fetch-more").unwrap()),
             None

@@ -53,11 +53,11 @@ use crate::editor::{self, EditorAction, view::EditorViews};
 use crate::export::view::export_overlay;
 use crate::grid::edit::EditorKey;
 use crate::grid::view::{
-    GridProbe, GridViews, Table, action_for_command as grid_action_for, apply_action,
+    CellCopy, GridProbe, GridViews, Table, action_for_command as grid_action_for, apply_action,
 };
 use crate::grid::{
-    CopyFormat, GATHER_SLICE_CELLS, GridAction, InsertTarget, Motion, SYNC_CELLS, copy_key_format,
-    grid_key_action, success_notice,
+    CopyFormat, CopyJob, GATHER_SLICE_CELLS, GridAction, InsertTarget, Motion, SYNC_CELLS,
+    copy_key_format, grid_key_action, success_notice,
 };
 use crate::history::view::HistoryViews;
 use crate::history::{self, HistoryCommand, HistoryService};
@@ -1012,6 +1012,10 @@ impl WorkspaceView {
             self.palette.close();
             self.copy_grid(format, window, cx);
             grid_focus = self.active_table();
+        } else if let Some(copy) = CellCopy::from_command_id(id) {
+            self.palette.close();
+            self.copy_cells(copy, window, cx);
+            grid_focus = self.active_table();
         } else if let Some(grid_action) = grid_action_for(id) {
             self.palette.close();
             if grid_action == GridAction::FetchMore {
@@ -1092,13 +1096,56 @@ impl WorkspaceView {
             .or_else(|| self.ws_active_query())
             .and_then(|tab| self.ws.insert_target(tab))
             .unwrap_or_else(|| InsertTarget::placeholder(None));
-        let mut job = match table.read(cx).delegate().copy_job(format, target) {
+        let job = match table.read(cx).delegate().copy_job(format, target) {
             Ok(job) => job,
             Err(err) => {
                 window.push_notification(err.to_string(), cx);
                 return;
             }
         };
+        self.finish_copy(&table, job, window, cx);
+    }
+
+    /// Copies one cell value, or one column, of the shown grid to the clipboard. The cell or
+    /// column comes from the menu item that ran the command (one shot), else the active cell.
+    fn copy_cells(&mut self, copy: CellCopy, window: &mut Window, cx: &mut Context<Self>) {
+        self.copy_task = None;
+        let Some(table) = self.active_table() else {
+            window.push_notification("Open a results grid first.", cx);
+            return;
+        };
+        let target = table.update(cx, |state, _| state.delegate_mut().take_copy_target());
+        let Some(format) = copy.column_format() else {
+            match table.read(cx).delegate().copy_value_text(target) {
+                Ok(Some(text)) => self.apply(Effect::Copy(text), cx),
+                Ok(None) => window.push_notification("The value is NULL; nothing was copied.", cx),
+                Err(err) => window.push_notification(err.to_string(), cx),
+            }
+            return;
+        };
+        let insert = self
+            .ws_active_grid()
+            .or_else(|| self.ws_active_query())
+            .and_then(|tab| self.ws.insert_target(tab))
+            .unwrap_or_else(|| InsertTarget::placeholder(None));
+        match table
+            .read(cx)
+            .delegate()
+            .copy_column_job(format, target, insert)
+        {
+            Ok(job) => self.finish_copy(&table, job, window, cx),
+            Err(err) => window.push_notification(err.to_string(), cx),
+        }
+    }
+
+    /// Gathers, renders and copies a planned job: inline when small, in slices when large.
+    fn finish_copy(
+        &mut self,
+        table: &Table,
+        mut job: CopyJob,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let cells = job.cells();
         if cells <= SYNC_CELLS {
             table.read(cx).delegate().gather_copy(&mut job, usize::MAX);

@@ -127,6 +127,77 @@ impl CopyFormat {
     }
 }
 
+/// A copy of one cell or one column from the context menu of the grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellCopy {
+    /// The stored value of one cell, as the detail pane's Copy value.
+    Value,
+    /// Every loaded value of one column, as TSV without a header.
+    Column,
+    /// Every loaded value of one column, as TSV with the column name first.
+    ColumnWithHeader,
+}
+
+impl CellCopy {
+    /// Every cell copy, in menu order.
+    pub const ALL: [CellCopy; 3] = [Self::Value, Self::Column, Self::ColumnWithHeader];
+
+    fn id_str(self) -> &'static str {
+        match self {
+            Self::Value => "grid:copy-value",
+            Self::Column => "grid:copy-column",
+            Self::ColumnWithHeader => "grid:copy-column-with-header",
+        }
+    }
+
+    /// The ID of the command that runs this copy.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the IDs are constants checked by a unit test.
+    #[must_use]
+    #[allow(clippy::expect_used)] // constant IDs, validated by the `ids_are_valid` test
+    pub fn command_id(self) -> CommandId {
+        CommandId::new(self.id_str()).expect("constant command ID is valid")
+    }
+
+    /// The palette title.
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Value => "Results: Copy Value",
+            Self::Column => "Results: Copy Column",
+            Self::ColumnWithHeader => "Results: Copy Column with Header",
+        }
+    }
+
+    /// The label in the grid context menus.
+    #[must_use]
+    pub fn menu_label(self) -> &'static str {
+        match self {
+            Self::Value => "Copy Value",
+            Self::Column => "Copy Column",
+            Self::ColumnWithHeader => "Copy Column with Header",
+        }
+    }
+
+    /// The cell copy a command ID stands for, if it is one.
+    #[must_use]
+    pub fn from_command_id(id: &CommandId) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.command_id() == *id)
+    }
+
+    /// The format of a column copy; `None` for a value copy.
+    #[must_use]
+    pub fn column_format(self) -> Option<CopyFormat> {
+        match self {
+            Self::Value => None,
+            Self::Column => Some(CopyFormat::Tsv),
+            Self::ColumnWithHeader => Some(CopyFormat::TsvWithHeaders),
+        }
+    }
+}
+
 /// Registers the copy commands.
 ///
 /// # Errors
@@ -135,6 +206,9 @@ impl CopyFormat {
 pub fn register_copy_commands(registry: &mut CommandRegistry) -> Result<(), CommandError> {
     for f in CopyFormat::ALL {
         registry.register(Command::new(f.id_str(), f.title())?)?;
+    }
+    for c in CellCopy::ALL {
+        registry.register(Command::new(c.id_str(), c.title())?)?;
     }
     Ok(())
 }
@@ -736,6 +810,95 @@ mod tests {
             assert_eq!(r.get(&f.command_id()).unwrap().title(), f.title());
         }
         assert!(register_copy_commands(&mut r).is_err());
+    }
+
+    #[test]
+    fn cell_copy_ids_titles_and_formats() {
+        let mut seen = HashSet::new();
+        for c in CellCopy::ALL {
+            let id = c.command_id();
+            assert!(id.to_string().starts_with("grid:"), "{c:?}");
+            assert!(seen.insert(id.clone()), "duplicate {c:?}");
+            assert_eq!(CellCopy::from_command_id(&id), Some(c));
+        }
+        let titles: HashSet<_> = CellCopy::ALL.iter().map(|c| c.title()).collect();
+        assert_eq!(titles.len(), 3);
+        assert_eq!(CellCopy::Value.title(), "Results: Copy Value");
+        assert_eq!(
+            CellCopy::ColumnWithHeader.title(),
+            "Results: Copy Column with Header"
+        );
+        assert_eq!(CellCopy::Column.menu_label(), "Copy Column");
+        assert_eq!(CellCopy::Value.column_format(), None);
+        assert_eq!(CellCopy::Column.column_format(), Some(CopyFormat::Tsv));
+        assert_eq!(
+            CellCopy::ColumnWithHeader.column_format(),
+            Some(CopyFormat::TsvWithHeaders)
+        );
+        let copy = CommandId::new("grid:copy").unwrap();
+        assert_eq!(CellCopy::from_command_id(&copy), None);
+    }
+
+    #[test]
+    fn cell_copy_commands_register_without_collisions() {
+        let mut r = CommandRegistry::new();
+        crate::grid::register_commands(&mut r).unwrap();
+        crate::export::register_commands(&mut r).unwrap();
+        register_copy_commands(&mut r).unwrap();
+        for c in CellCopy::ALL {
+            assert_eq!(r.get(&c.command_id()).unwrap().title(), c.title());
+        }
+    }
+
+    #[test]
+    fn a_column_copy_follows_the_display_order_and_the_tsv_rules() {
+        let model = mixed_model();
+        let cols = layout(6);
+        let rows = Reversed(3);
+        let map = DisplayMap {
+            rows: &rows,
+            columns: &cols,
+        };
+        let column = |col: usize, format: CopyFormat| {
+            let mut s = Selection::default();
+            s.click_column(col, &map, false);
+            copy_now(&model, &map, &s, format, pg(), CopyLimits::DEFAULT)
+        };
+        // Display order is model rows 2, 1, 0.
+        assert_eq!(column(0, CopyFormat::Tsv).unwrap().text, "3\n2\n1");
+        // A NULL cell is NULL; a tab and line breaks are quoted.
+        assert_eq!(
+            column(4, CopyFormat::Tsv).unwrap().text,
+            "[]\nNULL\n\"{\"\"a\"\":[1,\"\"x\"\"]}\""
+        );
+        let note = column(3, CopyFormat::Tsv).unwrap();
+        assert_eq!(note.rows, 3);
+        assert_eq!(note.text, "NULL\nzażółć 🦀\n\"say \"\"hi\"\"\tthere\nbye\"");
+        assert!(!note.text.ends_with('\n'));
+        let with = column(0, CopyFormat::TsvWithHeaders).unwrap();
+        assert_eq!(with.text, "id\n3\n2\n1");
+        let reversed: Vec<Row> = mixed_rows().into_iter().rev().collect();
+        let col_rows: Vec<Row> = reversed.iter().map(|r| Row(vec![r.0[3].clone()])).collect();
+        assert_eq!(
+            note.text,
+            reference(CopyFormat::Tsv, &mixed_columns()[3..4], &col_rows, &pg())
+        );
+    }
+
+    #[test]
+    fn a_column_copy_of_an_empty_model_has_nothing_selected() {
+        let model = model_with(mixed_columns(), Vec::new());
+        let cols = layout(6);
+        let rows = IdentityRows(0);
+        let map = DisplayMap {
+            rows: &rows,
+            columns: &cols,
+        };
+        let mut s = Selection::default();
+        s.click_column(0, &map, false);
+        let err =
+            copy_now(&model, &map, &s, CopyFormat::Tsv, pg(), CopyLimits::DEFAULT).unwrap_err();
+        assert!(matches!(err, CopyError::NothingSelected));
     }
 
     #[test]
