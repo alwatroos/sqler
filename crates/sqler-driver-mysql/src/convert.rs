@@ -409,10 +409,41 @@ pub(crate) fn mysql_code(err: &sqlx::Error) -> Option<u16> {
 }
 
 /// Maps a `sqlx` error raised while preparing, executing or fetching.
+///
+/// A lost connection (see [`lost`]) is [`DriverError::ConnectionLost`] with `sent = true`.
 pub(crate) fn query_error(err: sqlx::Error) -> DriverError {
+    classify(err, true)
+}
+
+/// Like [`query_error`] for a failure before the statement was sent (`COM_STMT_PREPARE`):
+/// a lost connection is reported with `sent = false`.
+pub(crate) fn query_error_unsent(err: sqlx::Error) -> DriverError {
+    classify(err, false)
+}
+
+fn classify(err: sqlx::Error, sent: bool) -> DriverError {
+    if let Some(message) = lost(&err) {
+        return DriverError::ConnectionLost { message, sent };
+    }
     match err {
         sqlx::Error::Database(d) => DriverError::Query(d.message().to_owned()),
         other => DriverError::Backend(Box::new(other)),
+    }
+}
+
+/// The short text of an error that means the connection is gone, `None` for any other error.
+///
+/// Covers I/O errors, a crashed worker, and the server codes 1053 (shutdown), 1927
+/// (connection killed), 4031 (idle timeout), 2006 and 2013 (server gone, lost during query).
+fn lost(err: &sqlx::Error) -> Option<String> {
+    match err {
+        sqlx::Error::Io(e) => Some(e.kind().to_string()),
+        sqlx::Error::WorkerCrashed => Some("the connection worker stopped".to_owned()),
+        sqlx::Error::Database(d) => {
+            let code = mysql_code(err)?;
+            matches!(code, 1053 | 1927 | 4031 | 2006 | 2013).then(|| d.message().to_owned())
+        }
+        _ => None,
     }
 }
 
@@ -714,5 +745,16 @@ mod tests {
             DriverError::Backend(_)
         ));
         assert_eq!(mysql_code(&sqlx::Error::PoolClosed), None);
+    }
+
+    #[test]
+    fn io_and_worker_crash_are_lost() {
+        let io = sqlx::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
+        let e = query_error(io);
+        assert!(e.is_connection_lost() && !e.lost_before_send());
+        let io = sqlx::Error::Io(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
+        assert!(query_error_unsent(io).lost_before_send());
+        assert!(query_error(sqlx::Error::WorkerCrashed).is_connection_lost());
+        assert!(query_error_unsent(sqlx::Error::WorkerCrashed).lost_before_send());
     }
 }

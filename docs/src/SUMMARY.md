@@ -120,6 +120,7 @@
   - [ADR-0077: AI chat history store](adr/0077-ai-chat-history-store.md)
   - [ADR-0078: In-app update install](adr/0078-in-app-update-install.md)
   - [ADR-0079: Vendored sqlx-sqlite for libsqlite3-sys 0.39](adr/0079-vendored-sqlx-sqlite-for-libsqlite3-sys.md)
+  - [ADR-0080: Lost connection and automatic reconnect on a run](adr/0080-lost-connection-and-auto-reconnect.md)
 - [Plugin development](plugin-development/index.md)
   - [Tutorial](plugin-development/tutorial.md)
   - [Manifest](plugin-development/manifest.md)

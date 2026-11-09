@@ -155,8 +155,15 @@ pub(crate) fn sql_str(sql: &str) -> sqlx::SqlStr {
 }
 
 /// Maps a `sqlx` error raised while preparing, executing or fetching.
+///
+/// A crashed worker thread is [`DriverError::ConnectionLost`] (`sent = true`); a file database
+/// has no other lost-connection case.
 pub(crate) fn query_error(err: sqlx::Error) -> DriverError {
     match err {
+        sqlx::Error::WorkerCrashed => DriverError::ConnectionLost {
+            message: "the SQLite worker stopped".to_owned(),
+            sent: true,
+        },
         sqlx::Error::Database(d) => DriverError::Query(d.message().to_owned()),
         other => DriverError::Backend(Box::new(other)),
     }
@@ -242,6 +249,14 @@ mod tests {
         assert!(matches!(
             query_error(sqlx::Error::PoolClosed),
             DriverError::Backend(_)
+        ));
+    }
+
+    #[test]
+    fn worker_crash_is_lost() {
+        assert!(matches!(
+            query_error(sqlx::Error::WorkerCrashed),
+            DriverError::ConnectionLost { sent: true, .. }
         ));
     }
 }

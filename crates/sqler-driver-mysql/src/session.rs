@@ -15,7 +15,9 @@ use sqler_driver_api::{
 use sqlx::mysql::{MySqlConnectOptions, MySqlConnection, MySqlSslMode};
 use sqlx::{AssertSqlSafe, Connection as _, Executor as _, Row as _, Statement as _};
 
-use crate::convert::{ER_QUERY_INTERRUPTED, bind_params, column, mysql_code, query_error, sql_str};
+use crate::convert::{
+    ER_QUERY_INTERRUPTED, bind_params, column, mysql_code, query_error, query_error_unsent, sql_str,
+};
 use crate::stream::MySqlQueryStream;
 #[cfg(unix)]
 use crate::tls_bridge::TlsBridge;
@@ -163,6 +165,15 @@ impl MySqlCanceller {
         }
     }
 
+    /// Like [`Self::map_error`] for a failure while preparing: a lost connection is `sent = false`.
+    pub(crate) fn map_error_unsent(&self, err: sqlx::Error) -> DriverError {
+        if self.is_cancelled() || mysql_code(&err) == Some(ER_QUERY_INTERRUPTED) {
+            DriverError::Cancelled
+        } else {
+            query_error_unsent(err)
+        }
+    }
+
     async fn kill(&self) -> Result<(), DriverError> {
         let mut side = MySqlConnection::connect_with(&self.opts)
             .await
@@ -305,7 +316,7 @@ impl MySqlSession {
                     cancel,
                 )));
             }
-            Err(e) => return Err(cancel.map_error(e)),
+            Err(e) => return Err(cancel.map_error_unsent(e)),
         };
         let columns: Vec<_> = statement.columns().iter().map(column).collect();
         let bound = bind_params(&query.sql, &query.params)?;

@@ -107,9 +107,19 @@ mod tests {
 
         fn execute<'s>(
             &'s mut self,
-            _query: &'s Query,
+            query: &'s Query,
         ) -> BoxFuture<'s, Result<Box<dyn QueryStream + 's>, DriverError>> {
-            Box::pin(async { Err(DriverError::Unsupported("test".into())) })
+            let lost = query.sql == "lost";
+            Box::pin(async move {
+                if lost {
+                    Err(DriverError::ConnectionLost {
+                        message: "gone".into(),
+                        sent: false,
+                    })
+                } else {
+                    Err(DriverError::Unsupported("test".into()))
+                }
+            })
         }
 
         fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), DriverError>> {
@@ -178,5 +188,16 @@ mod tests {
         assert!(s.introspection().is_none());
         let q = Query::new("select 1");
         assert!(s.execute(&q).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_lost_connection_passes_through_unchanged() {
+        let (mut s, _, _) = session(false);
+        let q = Query::new("lost");
+        let err = s.execute(&q).await.err().unwrap();
+        assert!(matches!(
+            err,
+            DriverError::ConnectionLost { sent: false, ref message } if message == "gone"
+        ));
     }
 }

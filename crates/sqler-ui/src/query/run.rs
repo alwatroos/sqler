@@ -361,6 +361,20 @@ impl QueryTab {
         }
     }
 
+    /// Runs `bound` again after a reconnect (the same bound statements, no prompt).
+    ///
+    /// On `prod` a plan with a statement not classified read-only opens the confirmation again
+    /// ([`Step::Confirm`]); otherwise the result is [`Step::Start`].
+    ///
+    /// # Errors
+    /// [`RunError::Busy`] unless the tab is idle.
+    pub fn retry(&mut self, bound: Vec<BoundStatement>, prod: bool) -> Result<Step, RunError> {
+        if self.phase != Phase::Idle {
+            return Err(RunError::Busy);
+        }
+        Ok(self.after_bind(bound, prod))
+    }
+
     /// Closes the parameter prompt or the confirmation; nothing runs. No-op otherwise.
     pub fn dismiss(&mut self) {
         if matches!(self.phase, Phase::Prompting(_) | Phase::Confirming(_)) {
@@ -541,6 +555,44 @@ mod tests {
         assert_eq!(tab.results().len(), 2);
         assert_eq!(tab.results()[0].title, "#1 SELECT");
         assert_eq!(statuses(&tab)[0], &StatementStatus::Pending);
+    }
+
+    fn bound_of(text: &str) -> Vec<BoundStatement> {
+        let mut tab = QueryTab::new();
+        let Step::Start(bound) = tab.request(D, planned(text), false).unwrap() else {
+            panic!()
+        };
+        bound
+    }
+
+    #[test]
+    fn retry_asks_again_on_prod_for_a_write() {
+        let mut tab = QueryTab::new();
+        let step = tab.retry(bound_of("delete from t"), true).unwrap();
+        assert_eq!(step, Step::Confirm);
+        assert!(matches!(tab.phase(), Phase::Confirming(_)));
+        assert!(tab.confirm().is_some());
+    }
+
+    #[test]
+    fn retry_starts_read_only_on_prod_and_anything_on_dev() {
+        let mut tab = QueryTab::new();
+        assert!(matches!(
+            tab.retry(bound_of("select 1"), true),
+            Ok(Step::Start(_))
+        ));
+        assert!(matches!(
+            tab.retry(bound_of("delete from t"), false),
+            Ok(Step::Start(_))
+        ));
+        assert_eq!(tab.phase(), &Phase::Idle);
+    }
+
+    #[test]
+    fn retry_is_busy_unless_idle() {
+        let mut tab = QueryTab::new();
+        tab.request(D, planned("select :a"), false).unwrap();
+        assert_eq!(tab.retry(bound_of("select 1"), false), Err(RunError::Busy));
     }
 
     #[test]

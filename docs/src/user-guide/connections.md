@@ -267,6 +267,9 @@ keep their old sessions, the sidebar row shows the error, and you can try again.
 is running the button reads **Cancel reconnect** (`connection:cancel-reconnect`); it drops the
 attempts and keeps the old sessions.
 
+Running a query on a connection that dropped starts the same reconnect for that tab by itself, and runs
+the query again when that is safe; see [When the connection drops](running-queries.md#when-the-connection-drops).
+
 ### Delete
 
 Delete asks for confirmation, names the connection and says that its keychain entries are removed.

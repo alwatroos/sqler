@@ -288,8 +288,8 @@ fn cancel_ends_the_statement_and_the_session() {
         assert!(
             matches!(
                 err,
-                DriverError::Connection(ref m)
-                    if m == "the SQL Server connection was closed by a cancel; connect again"
+                DriverError::ConnectionLost { sent: false, ref message }
+                    if message == "the SQL Server connection was closed by a cancel; connect again"
             ),
             "{err:?}"
         );

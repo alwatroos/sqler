@@ -22,7 +22,7 @@ use super::browser::{BrowserJob, BrowserState, BrowserStatus, OpenDataJob};
 use super::edit::EditFlow;
 use super::export::ExportCenter;
 use super::history::HistoryWorkspace;
-use super::query::ActiveRun;
+use super::query::{ActiveRun, AutoRetry};
 use crate::ai::agent::{AgentMsg, AgentStart, AgentTabs};
 use crate::ai::session::{AiSessionStart, AiTurnJob};
 use crate::ai::{AiAudit, AuditPanel, AuditRead, NO_AUDIT};
@@ -581,6 +581,10 @@ pub struct Workspace {
     pub(super) queries: HashMap<TabId, QueryTab>,
     /// The query runs in progress; the session of such a tab is on loan to the job.
     pub(super) query_runs: HashMap<TabId, ActiveRun>,
+    /// Runs that wait for the reconnect after a lost connection, per tab.
+    pub(super) auto_retries: HashMap<TabId, AutoRetry>,
+    /// Tabs whose next run is the automatic re-run after a reconnect (a second loss ends it).
+    pub(super) retry_marks: HashSet<TabId>,
     /// The last run id handed out.
     pub(super) next_run: u64,
     /// The history tabs, saved queries and their dialogs.
@@ -688,6 +692,8 @@ impl Workspace {
             retry_seeds: HashMap::new(),
             queries: HashMap::new(),
             query_runs: HashMap::new(),
+            auto_retries: HashMap::new(),
+            retry_marks: HashSet::new(),
             next_run: 0,
             history: HistoryWorkspace::new(),
             audit: AuditPanel::default(),
@@ -1433,6 +1439,8 @@ impl Workspace {
         }
         self.object_crumbs.remove(&id);
         self.queries.remove(&id);
+        self.auto_retries.remove(&id);
+        self.retry_marks.remove(&id);
         self.history.forget_tab(id);
         self.cancel_tab_export(id);
         let cancel = self.cancel_query_run(id);
@@ -1858,6 +1866,7 @@ impl Workspace {
             && self.tabs.get(tab).is_some()
             && self.tab_conns.get(&tab) == Some(conn);
         if !alive {
+            self.auto_retries.remove(&tab);
             return match result {
                 Ok(session) => Effect::CloseSession(session),
                 Err(_) => Effect::None,
@@ -1867,12 +1876,18 @@ impl Workspace {
             Ok(new) => {
                 self.edit.session_gone(tab);
                 self.restored.remove(&tab);
-                match self.sessions.insert(tab, new) {
-                    Some(old) => Effect::CloseSession(old),
-                    None => Effect::None,
+                let old = self.sessions.insert(tab, new);
+                // A run that lost its connection waits for this session.
+                let retry = self.auto_retry_restored(tab);
+                match (old, retry) {
+                    (Some(old), Effect::None) => Effect::CloseSession(old),
+                    (Some(old), retry) => Effect::Batch(vec![Effect::CloseSession(old), retry]),
+                    (None, retry) => retry,
                 }
             }
             Err(ConnectFailure::UnknownHostKey(key)) => {
+                // The trust prompt shows itself; no notice.
+                self.auto_retry_failed(tab, None);
                 self.ask_host_key(
                     key,
                     Purpose::Reconnect {
@@ -1882,7 +1897,10 @@ impl Workspace {
                 );
                 Effect::None
             }
-            Err(_) => Effect::None,
+            Err(failure) => {
+                self.auto_retry_failed(tab, Some(&failure));
+                Effect::None
+            }
         }
     }
 
@@ -1906,6 +1924,9 @@ impl Workspace {
             }
         }
         self.reconnects.remove(conn);
+        let tab_conns = &self.tab_conns;
+        self.auto_retries
+            .retain(|tab, _| tab_conns.get(tab) != Some(conn));
         let browsing = self
             .browsers
             .get(conn)

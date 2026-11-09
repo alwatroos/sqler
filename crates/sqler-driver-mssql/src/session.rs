@@ -76,9 +76,9 @@ impl Shared {
 
     fn dead_error(&self) -> Option<DriverError> {
         if self.was_cancelled() {
-            Some(DriverError::Connection(CANCELLED_TEXT.to_owned()))
+            Some(lost_unsent(CANCELLED_TEXT))
         } else if self.closed.load(Ordering::SeqCst) {
-            Some(DriverError::Connection(CLOSED_TEXT.to_owned()))
+            Some(lost_unsent(CLOSED_TEXT))
         } else {
             None
         }
@@ -122,12 +122,33 @@ fn connect_text(e: &tiberius::error::Error) -> String {
     error_text(e)
 }
 
-/// The error for a failure while running a statement: server errors are query errors, the rest
-/// breaks the connection.
+/// The error for a session that was already dead before the request was sent.
+fn lost_unsent(text: &str) -> DriverError {
+    DriverError::ConnectionLost {
+        message: text.to_owned(),
+        sent: false,
+    }
+}
+
+/// The error for a failure while running a statement: server errors below severity 20 are query
+/// errors; the rest (I/O, protocol, fatal server errors) mean the connection is lost, and the
+/// statement may have reached the server.
 pub(crate) fn query_error(e: &tiberius::error::Error) -> DriverError {
     match e {
-        tiberius::error::Error::Server(_) => DriverError::Query(error_text(e)),
-        other => DriverError::Connection(other.to_string()),
+        tiberius::error::Error::Server(te) if te.class() < 20 => DriverError::Query(error_text(e)),
+        tiberius::error::Error::Server(_) => DriverError::ConnectionLost {
+            message: error_text(e),
+            sent: true,
+        },
+        tiberius::error::Error::Io { kind, .. } => DriverError::ConnectionLost {
+            message: kind.to_string(),
+            sent: true,
+        },
+        // Other variants may carry connection details: a fixed text only.
+        _ => DriverError::ConnectionLost {
+            message: "the SQL Server connection broke".to_owned(),
+            sent: true,
+        },
     }
 }
 
@@ -146,7 +167,7 @@ async fn worker(
                 let Some(conn) = client.as_mut() else {
                     let error = shared
                         .dead_error()
-                        .unwrap_or_else(|| DriverError::Connection(CLOSED_TEXT.to_owned()));
+                        .unwrap_or_else(|| lost_unsent(CLOSED_TEXT));
                     let _ = events.send(Err(error)).await;
                     continue;
                 };
@@ -231,7 +252,7 @@ impl MssqlSession {
         };
         if self.requests.send(request).await.is_err() {
             self.shared.finish();
-            return Err(DriverError::Connection(CLOSED_TEXT.to_owned()));
+            return Err(lost_unsent(CLOSED_TEXT));
         }
         Ok(Box::new(ChannelStream::new(rx, self.shared.clone())))
     }
@@ -292,5 +313,26 @@ mod tests {
         };
         assert!(!error_text(&e).contains("other.internal"));
         assert!(!connect_text(&e).contains("1433"));
+    }
+
+    #[test]
+    fn a_non_server_error_has_no_tiberius_text() {
+        let routing = tiberius::error::Error::Routing {
+            host: "other.internal".to_owned(),
+            port: 1433,
+        };
+        let io = tiberius::error::Error::Io {
+            kind: std::io::ErrorKind::ConnectionReset,
+            message: "secret detail".to_owned(),
+        };
+        for e in [routing, io] {
+            let DriverError::ConnectionLost { message, sent } = query_error(&e) else {
+                panic!("not lost");
+            };
+            assert!(sent);
+            assert!(!message.contains("other.internal"));
+            assert!(!message.contains("secret"));
+            assert!(!message.contains("tiberius"));
+        }
     }
 }

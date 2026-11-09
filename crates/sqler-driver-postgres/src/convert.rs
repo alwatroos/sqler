@@ -706,15 +706,46 @@ pub(crate) fn sql_str(sql: &str) -> sqlx::SqlStr {
 /// SQLSTATE `57014` is [`DriverError::Cancelled`] only when `cancelled` is set (the user asked);
 /// otherwise (a `statement_timeout`) it is a query error.
 pub(crate) fn query_error(err: sqlx::Error, cancelled: bool) -> DriverError {
+    classify(err, cancelled, true)
+}
+
+/// Like [`query_error`] for a failure before the statement was sent (Parse/Describe): a lost
+/// connection is reported with `sent = false`.
+pub(crate) fn query_error_unsent(err: sqlx::Error, cancelled: bool) -> DriverError {
+    classify(err, cancelled, false)
+}
+
+fn classify(err: sqlx::Error, cancelled: bool, sent: bool) -> DriverError {
+    if let sqlx::Error::Database(d) = &err
+        && cancelled
+        && d.code().as_deref() == Some(QUERY_CANCELED)
+    {
+        return DriverError::Cancelled;
+    }
+    if let Some(message) = lost(&err) {
+        return DriverError::ConnectionLost { message, sent };
+    }
     match err {
-        sqlx::Error::Database(d) => {
-            if cancelled && d.code().as_deref() == Some(QUERY_CANCELED) {
-                DriverError::Cancelled
-            } else {
-                DriverError::Query(d.message().to_owned())
-            }
-        }
+        sqlx::Error::Database(d) => DriverError::Query(d.message().to_owned()),
         other => DriverError::Backend(Box::new(other)),
+    }
+}
+
+/// The short text of an error that means the connection is gone, `None` for any other error.
+///
+/// Covers I/O errors, a crashed worker, a closed pool, SQLSTATE class `08` and the shutdown
+/// codes `57P01`, `57P02`, `57P03`. The text is the `io::ErrorKind` or the server message.
+fn lost(err: &sqlx::Error) -> Option<String> {
+    match err {
+        sqlx::Error::Io(e) => Some(e.kind().to_string()),
+        sqlx::Error::WorkerCrashed => Some("the connection worker stopped".to_owned()),
+        sqlx::Error::PoolClosed => Some("the connection is closed".to_owned()),
+        sqlx::Error::Database(d) => {
+            let code = d.code()?;
+            (code.starts_with("08") || matches!(&*code, "57P01" | "57P02" | "57P03"))
+                .then(|| d.message().to_owned())
+        }
+        _ => None,
     }
 }
 
@@ -1133,7 +1164,22 @@ mod tests {
     fn non_database_errors_are_backend() {
         assert!(matches!(
             query_error(sqlx::Error::PoolClosed, true),
+            DriverError::ConnectionLost { sent: true, .. }
+        ));
+        assert!(matches!(
+            query_error(sqlx::Error::RowNotFound, false),
             DriverError::Backend(_)
         ));
+    }
+
+    #[test]
+    fn io_and_worker_crash_are_lost() {
+        let io = sqlx::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
+        let e = query_error(io, false);
+        assert!(e.is_connection_lost() && !e.lost_before_send());
+        let io = sqlx::Error::Io(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
+        assert!(query_error_unsent(io, false).lost_before_send());
+        assert!(query_error(sqlx::Error::WorkerCrashed, false).is_connection_lost());
+        assert!(query_error_unsent(sqlx::Error::WorkerCrashed, false).lost_before_send());
     }
 }
