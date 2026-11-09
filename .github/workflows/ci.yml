@@ -619,7 +619,7 @@ jobs:
   # set). Linux only.
   duckdb:
     name: duckdb
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.full != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
