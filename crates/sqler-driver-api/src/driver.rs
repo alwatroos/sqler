@@ -35,7 +35,7 @@ pub trait Session: Send {
     ///
     /// The stream borrows the session, so one statement runs at a time.
     ///
-    /// Drivers report a lost connection as [`DriverError::ConnectionLost`](crate::DriverError::ConnectionLost),
+    /// Drivers report a lost connection as [`DriverError::ConnectionLost`],
     /// whether it surfaces from `execute` or from the stream; `sent` is `false` only when the
     /// statement certainly did not execute.
     fn execute<'s>(
