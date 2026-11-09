@@ -33,7 +33,7 @@ diff it against `release.yml`.
 
 | Target | Runner | Artifacts |
 | ------ | ------ | --------- |
-| `aarch64-apple-darwin` | `macos-14` | `sqler-app-aarch64-apple-darwin.tar.xz` |
+| `aarch64-apple-darwin` | `macos-15` (dist default; Amendment 6) | `sqler-app-aarch64-apple-darwin.tar.xz` |
 | `x86_64-apple-darwin` | `macos-15-intel` (native Intel, so the Metal shaders are not cross-compiled) | `sqler-app-x86_64-apple-darwin.tar.xz` |
 | `x86_64-pc-windows-msvc` | `windows-2022` | `sqler-app-x86_64-pc-windows-msvc.zip` and `.msi` |
 | `x86_64-unknown-linux-gnu` | `ubuntu-22.04` | `sqler-app-x86_64-unknown-linux-gnu.tar.xz` |
@@ -314,3 +314,9 @@ Delete `.github/workflows/release.yml`, `.github/scripts/release-guard.sh`, `dis
   new setup (cold caches) took 42 min in total (`build (x86_64-apple-darwin)` 37 min), and the second run (warm
   caches) took 16 min in total (`build (x86_64-apple-darwin)` 12 min). Every `Install dist` step took at most 6 s.
   The `sha256.sum` file names and the artifact names are identical to the baseline.
+
+## Amendment 6 (2026-11-09, release-macos-runner): aarch64 macOS build runner
+
+The Targets table named `macos-14` as the `aarch64-apple-darwin` build runner. That label is retired. cargo-dist 0.34
+defaults to `macos-15` for this target, as seen in dry run 42661787697 (`build (aarch64-apple-darwin)`, success).
+Nothing is pinned in `dist-workspace.toml`, and the other targets are unchanged.
