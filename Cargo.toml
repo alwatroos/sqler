@@ -144,8 +144,11 @@ todo = "deny"
 
 # ADR-0018: sqlx-mysql 0.9.0 with an aws-lc-rs backend for the MySQL RSA password exchange
 # (the upstream `rsa` backend is banned, RUSTSEC-2023-0071). 56-line diff in 4 files, see vendor/sqlx-mysql/README.md.
+# ADR-0079: sqlx-sqlite 0.9.0 with libsqlite3-sys relaxed to >=0.39.1 (RUSTSEC-2026-0459); 1-line diff,
+# see vendor/sqlx-sqlite/README.md.
 [patch.crates-io]
 sqlx-mysql = { path = "vendor/sqlx-mysql" }
+sqlx-sqlite = { path = "vendor/sqlx-sqlite" }
 
 # T14: the Linux release binary kept its ELF symbol table (.symtab + .strtab, about 23 MB of 78 MB on aarch64) and
 # was split over 16 codegen units. `strip = "symbols"` drops the table with no runtime effect (a panic backtrace
