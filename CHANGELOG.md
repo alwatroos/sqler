@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Updated the bundled SQLite library to fix a security advisory (RUSTSEC-2026-0459).
+
 ## [1.3.1] - 2026-11-03
 
 This is a maintenance release with no change to how SQLer looks or behaves.
