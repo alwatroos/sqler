@@ -24,10 +24,10 @@ notarised from 1.0.1.
 ### Job and gate
 
 A job `sign (macOS)` (id `sign-macos`) sits between `build` and `global artifacts` in `release.yml`. It runs only on
-publishing runs (`needs.plan.outputs.publishing == 'true'`, a `v*` tag push), on `macos-14`, in the GitHub environment
-`release`, whose deployment rule limits it to `v*` tags (the environment that already holds
-`SQLER_UPDATE_SIGNING_KEY`). It has `contents: read` and no token. It is the only job that reads the `APPLE_*` secrets; the `build`
-job, which also runs on pull requests, has a secret-free notice step only.
+publishing runs (`needs.plan.outputs.publishing == 'true'`, a `v*` tag push), on `macos-latest` (Amendment 3), in the
+GitHub environment `release`, whose deployment rule limits it to `v*` tags (the environment that already holds
+`SQLER_UPDATE_SIGNING_KEY`). It has `contents: read` and no token. It is the only job that reads the `APPLE_*`
+secrets; the `build` job, which also runs on pull requests, has a secret-free notice step only.
 
 The secrets live in the environment `release` and have these exact names:
 
@@ -192,3 +192,13 @@ Nothing else depends on them.
   ad-hoc `.dmg` fallback on a tag run.
 - Consequences: three notary submissions per macOS target (binary zip, app zip, `.dmg`), so six per run; the job
   timeout is 120 minutes. Dispatch dry runs hold no secrets and keep the ad-hoc `.dmg` from `build` (ADR-0075 amendment 1).
+
+## Amendment 3 (2026-11-09, release-macos-runner): `sign (macOS)` runs on `macos-latest`
+
+- GitHub stopped accepting `macos-14`: `sign (macOS)` in the v1.4.0 Release run 42661787697 was cancelled after about 3 s with "The
+  configuration 'macos-14-arm64-us-default' is not supported". The job now uses `macos-latest`, like every other macOS
+  job in the repo.
+- The signing tools are system tools found through `xcrun`, with no pinned Xcode, no `DEVELOPER_DIR` and no OS-version
+  path, so the image change needs no script change.
+- A dispatch dry run cannot start the job (it runs on `v*` tags only), so the first proof is the next tag run.
+- Rollback: set the label back. Fail closed, the environment, the secrets and the permissions are unchanged.
